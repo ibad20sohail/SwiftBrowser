@@ -17,11 +17,13 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.provider.Settings
 import android.speech.RecognizerIntent
 import android.text.Editable
 import android.text.TextWatcher
 import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.view.animation.DecelerateInterpolator
@@ -97,9 +99,6 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     private lateinit var urlMic: ImageButton
     private lateinit var urlClear: ImageButton
     private lateinit var videoBtn: View
-    private lateinit var shieldBtn: View
-    private lateinit var shieldIcon: ImageView
-    private lateinit var shieldBadge: TextView
     private lateinit var tabsCount: TextView
     private lateinit var menuBtn: ImageButton
     private lateinit var progress: ProgressBar
@@ -110,11 +109,15 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     private lateinit var suggestionsList: RecyclerView
     private lateinit var ptrIndicator: ImageView
     private lateinit var hud: TextView
-    private lateinit var speedChip: TextView
     private lateinit var findBar: View
     private lateinit var findEdit: EditText
     private lateinit var findCount: TextView
     private lateinit var switcher: TabSwitcherView
+    private lateinit var startup: View
+    private lateinit var tabSwipe: TabSwipe
+
+    /** The ⋮ menu; built once, when the app is idle after starting. */
+    private val quickMenu by lazy { QuickMenu(this, root) }
 
     private val handler = Handler(Looper.getMainLooper())
     private val suggestionAdapter = RowAdapter<Suggestion>(::bindSuggestion, ::onSuggestion)
@@ -130,7 +133,6 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     // What the toolbar currently shows, so repeated updates (progress, ad counter) touch no views.
     private var shownUrlText: String? = null
     private var shownUrlIcon = 0
-    private var shownShield = ""
     private var shownLoading = false
     private var styledIncognito: Boolean? = null
     private var homeShownFor: Tab? = null
@@ -143,8 +145,16 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     private var toolbarPx = 0
     private var toolbarShown = 0f
     private var toolbarWanted = true
-    private var toolbarAnimator: ValueAnimator? = null
     private var lastScrollY = -1f
+    private var lastUserScrollAt = 0L
+
+    // Toolbar contents are redrawn in batches, and not while the toolbar is hidden.
+    private var toolbarStale = false
+    private var toolbarRefreshPosted = false
+    private val toolbarRefresh = Runnable {
+        toolbarRefreshPosted = false
+        if (toolbarWanted && fullscreenTab == null) refreshToolbarNow() else toolbarStale = true
+    }
     private var scrollRun = 0f
 
     // Pull to refresh.
@@ -200,13 +210,13 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             if (r.resultCode == Activity.RESULT_OK && !text.isNullOrBlank()) navigate(text)
         }
 
-    private val adListener: () -> Unit = { handler.post { updateShield() } }
-
     private val current: Tab? get() = TabManager.current
 
     // ------------------------------------------------------------------ lifecycle
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // The manifest gives this screen the logo as its window while the app starts.
+        setTheme(R.style.Theme_Swift)
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
         prefs = SwiftApp.prefs
@@ -218,6 +228,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         setupPullToRefresh()
         setupHome()
         setupSwitcher()
+        setupTabSwipe()
 
         gecko.setActivityContextDelegate { this }
         // The toolbar floats over the page and slides away; the page is told how much of it is hidden.
@@ -236,7 +247,6 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             }
             result
         }
-        AdBlock.addListener(adListener)
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() = handleBack()
         })
@@ -259,6 +269,11 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             }
         }
         showCrashReportIfAny()
+        showStartupUntilReady()
+        Looper.myQueue().addIdleHandler {
+            quickMenu
+            false
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -288,7 +303,6 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
-        toolbarAnimator?.cancel()
         ptrSpin?.cancel()
         AdBlock.removeListener(adListener)
         if (TabManager.ui === this) TabManager.ui = null
@@ -319,9 +333,6 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         urlMic = findViewById(R.id.url_mic)
         urlClear = findViewById(R.id.url_clear)
         videoBtn = findViewById(R.id.video_btn)
-        shieldBtn = findViewById(R.id.shield_btn)
-        shieldIcon = findViewById(R.id.shield_icon)
-        shieldBadge = findViewById(R.id.shield_badge)
         tabsCount = findViewById(R.id.tabs_count)
         menuBtn = findViewById(R.id.menu_btn)
         progress = findViewById(R.id.progress)
@@ -333,11 +344,11 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         suggestionsList = findViewById(R.id.suggestions)
         ptrIndicator = findViewById(R.id.ptr_indicator)
         hud = findViewById(R.id.hud)
-        speedChip = findViewById(R.id.speed_chip)
         findBar = findViewById(R.id.find_bar)
         findEdit = findViewById(R.id.find_edit)
         findCount = findViewById(R.id.find_count)
         switcher = findViewById(R.id.tab_switcher)
+        startup = findViewById(R.id.startup)
         // Drawn above the pull-to-refresh circle, without a shadow on the page.
         appBar.elevation = dp(8f)
         appBar.outlineProvider = null
@@ -364,9 +375,11 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
     private fun setupToolbar() {
         profileChip.setOnClickListener { Sheets.profiles(this) }
-        shieldBtn.setOnClickListener { Sheets.shield(this) }
         findViewById<View>(R.id.tabs_btn).setOnClickListener { openTabSwitcher() }
-        menuBtn.setOnClickListener { Sheets.menu(this) }
+        menuBtn.setOnClickListener {
+            stopEditing()
+            quickMenu.open()
+        }
         videoBtn.setOnClickListener { current?.let { Sheets.videos(this, it) } }
         findViewById<View>(R.id.crash_reload).setOnClickListener {
             crashView.visibility = View.GONE
@@ -409,7 +422,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     fun startEditing() {
         if (fullscreenTab != null) return
         editing = true
-        showToolbar(animate = false)
+        showToolbar()
         val tab = current
         val text = when {
             tab == null || tab.isBlank -> ""
@@ -568,25 +581,6 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         }
     }
 
-    fun updateShield() {
-        val tab = current
-        val level = AdBlock.levelFor(tab?.url)
-        val badge = tab?.badge?.takeIf { level != AdLevel.OFF && it.isNotBlank() && it != "0" }
-        val key = "$level|$badge"
-        if (key == shownShield) return
-        shownShield = key
-        shieldIcon.setImageResource(if (level == AdLevel.OFF) R.drawable.ic_shield_off else R.drawable.ic_shield)
-        shieldIcon.imageTintList = ColorStateList.valueOf(
-            ContextCompat.getColor(this, if (level == AdLevel.OFF) R.color.shield_off else R.color.shield_on),
-        )
-        if (badge != null) {
-            shieldBadge.text = badge
-            shieldBadge.visibility = View.VISIBLE
-        } else {
-            shieldBadge.visibility = View.GONE
-        }
-    }
-
     private fun updateProfileChip() {
         val p = Profiles.current()
         profileChip.text = Profiles.initial(p)
@@ -672,8 +666,6 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         }
         val urlVisibility = if (show && !editing) View.INVISIBLE else View.VISIBLE
         if (urlBox.visibility != urlVisibility) urlBox.visibility = urlVisibility
-        val shieldVisibility = if (show) View.GONE else View.VISIBLE
-        if (shieldBtn.visibility != shieldVisibility) shieldBtn.visibility = shieldVisibility
     }
 
     // ------------------------------------------------------------------ tab switcher
@@ -698,6 +690,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
     fun openTabSwitcher() {
         if (switcher.isOpen) return
+        quickMenu.close()
         stopEditing()
         closeFind()
         val tab = current
@@ -712,14 +705,23 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         }
     }
 
-    private val thumbnailRunnable = Runnable {
-        val tab = current
-        if (tab != null && !tab.loading && !switcher.isOpen && fullscreenTab == null) captureThumbnail(tab, null)
+    private var thumbnailTries = 0
+
+    private val thumbnailRunnable: Runnable = Runnable {
+        val tab = current ?: return@Runnable
+        if (tab.loading || switcher.isOpen || fullscreenTab != null) return@Runnable
+        // Reading the screen back holds up drawing for a moment; wait until scrolling stops.
+        if (SystemClock.uptimeMillis() - lastUserScrollAt < 1500 && thumbnailTries++ < 10) {
+            handler.postDelayed(thumbnailRunnable, 1500)
+            return@Runnable
+        }
+        captureThumbnail(tab, null)
     }
 
     /** Pictures for the tab grid are taken once a page has settled after loading. */
     private fun scheduleThumbnail(tab: Tab) {
         if (tab.isHome) return
+        thumbnailTries = 0
         handler.removeCallbacks(thumbnailRunnable)
         handler.postDelayed(thumbnailRunnable, 2000)
     }
@@ -744,7 +746,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         cancelPullRefresh()
         lastScrollY = -1f
         shownLoading = tab.loading
-        showToolbar(animate = false)
+        showToolbar()
         applyIncognitoStyle(tab.incognito)
         updateAll()
         if (isNew) animateNewTab(tab)
@@ -770,7 +772,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     override fun onTabUpdated(tab: Tab) {
         if (tab !== current) return
         syncSession(tab)
-        if (tab.loading && !shownLoading) {
+        val pageStarted = tab.loading && !shownLoading
+        if (pageStarted) {
             if (themeReloadTab === tab) themeReloadStarted = true
             // A new page: bring the toolbar back like Chrome does.
             lastScrollY = -1f
@@ -786,20 +789,36 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         }
         shownLoading = tab.loading
         updateHome(tab)
+        if (pageStarted) refreshToolbarNow() else requestToolbarRefresh()
+        if (switcher.isOpen) switcher.refreshTab(tab)
+    }
+
+    /**
+     * Progress, the ad counter and the address change many times while a page loads or scrolls.
+     * Every toolbar redraw makes the app's window draw a frame, which competes with the page for
+     * the GPU and holds up touch handling, so they are drawn at most about 6 times a second.
+     */
+    private fun requestToolbarRefresh() {
+        if (toolbarRefreshPosted) return
+        toolbarRefreshPosted = true
+        handler.postDelayed(toolbarRefresh, 160)
+    }
+
+    private fun refreshToolbarNow() {
+        val tab = current ?: return
+        toolbarStale = false
         updateUrlBar()
         updateProgress()
-        updateShield()
         val video = if (tab.media.isNotEmpty() && fullscreenTab == null && !tab.isHome) View.VISIBLE else View.GONE
         if (videoBtn.visibility != video) videoBtn.visibility = video
-        if (switcher.isOpen) switcher.refreshTab(tab)
     }
 
     private fun updateAll() {
         val tab = current ?: return
         shownUrlText = null
         shownUrlIcon = 0
-        shownShield = ""
         onTabUpdated(tab)
+        refreshToolbarNow()
         onTabsChanged()
     }
 
@@ -870,8 +889,6 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         sheet.setOnDismissListener {
             view.releaseSession()
             session.close()
-            shownShield = ""
-            updateShield()
         }
         session.contentDelegate = object : GeckoSession.ContentDelegate {
             override fun onCloseRequest(s: GeckoSession) = sheet.dismiss()
@@ -890,26 +907,26 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         gecko.setVerticalClipping((shown - toolbarPx).roundToInt())
     }
 
-    private fun showToolbar(animate: Boolean = true) = moveToolbar(true, animate)
+    private fun showToolbar() = setToolbarWanted(true)
 
-    private fun hideToolbar() = moveToolbar(false, true)
+    private fun hideToolbar() = setToolbarWanted(false)
 
-    private fun moveToolbar(show: Boolean, animate: Boolean) {
+    /**
+     * The toolbar snaps in and out in a single frame. Sliding it would redraw the app's window and
+     * move the page's surface on every frame of the slide, right while the page is scrolling.
+     */
+    private fun setToolbarWanted(show: Boolean) {
+        // In full screen the toolbar stays away; leaving full screen brings it back.
+        if (fullscreenTab != null) return
         val target = if (show) toolbarPx.toFloat() else 0f
-        if (toolbarWanted == show && (toolbarAnimator?.isRunning == true || toolbarShown == target)) return
+        if (toolbarWanted == show && toolbarShown == target) return
         toolbarWanted = show
-        toolbarAnimator?.cancel()
-        toolbarAnimator = null
-        if (!animate) {
-            applyToolbarShown(target)
-            return
-        }
-        toolbarAnimator = ValueAnimator.ofFloat(toolbarShown, target).apply {
-            duration = 180
-            interpolator = DecelerateInterpolator()
-            addUpdateListener { applyToolbarShown(it.animatedValue as Float) }
-            start()
-        }
+        applyToolbarShown(target)
+        // The engine may shift the scroll position by the toolbar's height to keep the content
+        // still; start measuring scrolling afresh so that shift isn't taken for the user's.
+        lastScrollY = -1f
+        scrollRun = 0f
+        if (show && toolbarStale) refreshToolbarNow()
     }
 
     private fun canAutoHideToolbar(): Boolean {
@@ -919,7 +936,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     }
 
     override fun onPageScroll(tab: Tab, scrollY: Float, byUser: Boolean) {
-        if (tab !== current) return
+        if (tab !== current || fullscreenTab != null) return
+        if (byUser) lastUserScrollAt = SystemClock.uptimeMillis()
         val last = lastScrollY
         lastScrollY = scrollY
         if (!toolbarWanted && (scrollY <= toolbarPx / 2f || !canAutoHideToolbar())) {
@@ -1254,27 +1272,31 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     }
 
     private fun enterFullscreen(tab: Tab) {
-        fullscreenTab = tab
+        quickMenu.close()
         stopEditing()
         cancelPullRefresh()
-        toolbarAnimator?.cancel()
-        appBar.visibility = View.GONE
         applyToolbarShown(0f)
+        fullscreenTab = tab
+        appBar.visibility = View.GONE
+        // The video gets the whole screen: no room is kept for the toolbar, as in Firefox. Without
+        // this the page stays laid out below a toolbar-high empty strip.
+        gecko.setDynamicToolbarMaxHeight(0)
+        gecko.setVerticalClipping(0)
         findBar.visibility = View.GONE
         videoBtn.visibility = View.GONE
         hideSystemBars()
         if (prefs.autoLandscape) requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
         gestureLayer.gesturesEnabled = prefs.videoGestures
         updateKeepScreenOn()
-        showSpeedChip()
     }
 
     private fun exitFullscreen() {
         if (fullscreenTab == null) return
         fullscreenTab = null
         appBar.visibility = View.VISIBLE
+        gecko.setDynamicToolbarMaxHeight(toolbarPx)
         toolbarWanted = false
-        showToolbar(animate = false)
+        showToolbar()
         WindowCompat.getInsetsController(window, window.decorView).show(WindowInsetsCompat.Type.systemBars())
         requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         gestureLayer.gesturesEnabled = false
@@ -1282,7 +1304,6 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
         }
         hud.visibility = View.GONE
-        speedChip.visibility = View.GONE
         updateKeepScreenOn()
         updateAll()
     }
@@ -1308,12 +1329,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     }
 
     private val hideHud = Runnable { hud.visibility = View.GONE }
-    private val hideSpeedChip = Runnable { speedChip.visibility = View.GONE }
 
     private fun setupGestures() {
-        speedChip.setOnClickListener {
-            current?.let { Sheets.speed(this, it) }
-        }
         gestureLayer.listener = object : GestureFrameLayout.Listener {
             override fun onSwipe(leftSide: Boolean, delta: Float) {
                 if (leftSide) changeBrightness(delta) else changeVolume(delta)
@@ -1323,20 +1340,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
                 handler.removeCallbacks(hideHud)
                 handler.postDelayed(hideHud, 700)
             }
-
-            override fun onTap() {
-                if (fullscreenTab != null) showSpeedChip()
-            }
         }
-    }
-
-    private fun showSpeedChip() {
-        val tab = current ?: return
-        speedChip.text = "Speed ${formatSpeed(tab.speed)}"
-        speedChip.setCompoundDrawablesRelativeWithIntrinsicBounds(tinted(R.drawable.ic_speed), null, null, null)
-        speedChip.visibility = View.VISIBLE
-        handler.removeCallbacks(hideSpeedChip)
-        handler.postDelayed(hideSpeedChip, 3000)
     }
 
     fun formatSpeed(rate: Double): String =
@@ -1431,6 +1435,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     private fun handleBack() {
         val tab = current
         when {
+            quickMenu.isOpen -> quickMenu.close()
             switcher.isOpen -> switcher.close()
             fullscreenTab != null -> tab?.session?.exitFullScreen() ?: exitFullscreen()
             findBar.visibility == View.VISIBLE -> closeFind()
@@ -1441,6 +1446,84 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             tab.parentId != null && TabManager.tabs.any { it.id == tab.parentId } -> TabManager.close(tab)
             else -> moveTaskToBack(true)
         }
+    }
+
+    // ------------------------------------------------------------------ start-up screen
+
+    /** Hides the start-up screen once the ad blocker is ready. */
+    private val adListener: () -> Unit = { handler.post { if (startupDone()) hideStartup() } }
+
+    private val hideStartupRunnable = Runnable { hideStartup() }
+
+    /**
+     * When the app starts, the open page waits for the engine and the ad blocker, so that no ads
+     * slip through before its filters are loaded. Meanwhile the logo and a spinner are shown instead
+     * of an empty page. The home page needs neither, so it shows straight away.
+     */
+    private fun showStartupUntilReady() {
+        val tab = current
+        if (tab == null || tab.isHome || startupDone()) return
+        startup.visibility = View.VISIBLE
+        AdBlock.addListener(adListener)
+        // Pages stop waiting after this long too (see TabManager), so the screen does as well.
+        handler.postDelayed(hideStartupRunnable, 8000)
+    }
+
+    private fun startupDone() = AdBlock.ready || AdBlock.global == AdLevel.OFF
+
+    private fun hideStartup() {
+        AdBlock.removeListener(adListener)
+        handler.removeCallbacks(hideStartupRunnable)
+        if (startup.visibility != View.VISIBLE) return
+        startup.animate().alpha(0f).setDuration(200).withEndAction { startup.visibility = View.GONE }.start()
+    }
+
+    // ------------------------------------------------------------------ swipe the toolbar to switch tabs
+
+    private fun setupTabSwipe() {
+        val host = object : TabSwipe.Host {
+            override fun canSwipeTabs(rawX: Float, rawY: Float): Boolean {
+                val tab = current ?: return false
+                if (editing || fullscreenTab != null || switcher.isOpen || quickMenu.isOpen) return false
+                if (startup.visibility == View.VISIBLE || findBar.visibility == View.VISIBLE) return false
+                if (!toolbarWanted || toolbarShown < toolbarPx || TabManager.groupOf(tab).size < 2) return false
+                val at = IntArray(2)
+                appBar.getLocationOnScreen(at)
+                return rawX >= at[0] && rawX < at[0] + appBar.width && rawY >= at[1] && rawY < at[1] + appBar.height
+            }
+
+            override fun neighbourTab(next: Boolean): Tab? {
+                val tab = current ?: return null
+                val group = TabManager.groupOf(tab)
+                val i = group.indexOf(tab)
+                return if (i < 0) null else group.getOrNull(if (next) i + 1 else i - 1)
+            }
+
+            override fun switchToTab(tab: Tab) {
+                if (tab !== current && tab in TabManager.tabs) TabManager.select(tab)
+            }
+
+            override fun backgroundOf(tab: Tab): Int =
+                color(if (tab.incognito) R.color.incognito_bg else if (tab.isHome) R.color.home_bg else R.color.page_bg)
+        }
+        tabSwipe = TabSwipe(host, findViewById(R.id.swipe_peek), findViewById(R.id.swipe_peek_image), findViewById(R.id.swipe_peek_title))
+    }
+
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean = when (tabSwipe.onTouchEvent(ev)) {
+        TabSwipe.Result.PASS -> super.dispatchTouchEvent(ev)
+        TabSwipe.Result.STARTED -> {
+            // The address bar and buttons under the finger let go of the touch.
+            val cancel = MotionEvent.obtain(ev)
+            cancel.action = MotionEvent.ACTION_CANCEL
+            super.dispatchTouchEvent(cancel)
+            cancel.recycle()
+            true
+        }
+        TabSwipe.Result.CONSUMED -> true
+    }
+
+    override fun onPageDrawn(tab: Tab, contentful: Boolean) {
+        if (tab === current) tabSwipe.onPageDrawn(tab, contentful)
     }
 
     // ------------------------------------------------------------------ helpers

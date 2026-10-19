@@ -100,6 +100,12 @@ interface BrowserUi {
     /** The page asks for the toolbar to be shown or hidden (e.g. to reveal a focused field). */
     fun onToolbarRequest(tab: Tab, show: Boolean)
 
+    /**
+     * The engine has drawn the tab's page since it was put on screen; [contentful] once some of the
+     * page's content is drawn, after it has (re)loaded, not just its background.
+     */
+    fun onPageDrawn(tab: Tab, contentful: Boolean)
+
     /** Lets the user choose files for a page's upload field; null when cancelled. */
     fun pickFiles(mimeTypes: Array<String>, multiple: Boolean, callback: (List<android.net.Uri>?) -> Unit)
 }

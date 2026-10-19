@@ -18,12 +18,14 @@ class Prefs(ctx: Context) {
         get() = AdLevel.fromKey(sp.getString(AD_LEVEL, AdLevel.HIGH.key))
         set(v) = sp.edit { putString(AD_LEVEL, v.key) }
 
+    /** Full-screen videos turn the screen to landscape. Off: the phone's own auto-rotate decides. */
     var autoLandscape: Boolean
-        get() = sp.getBoolean(AUTO_LANDSCAPE, true)
+        get() = sp.getBoolean(AUTO_LANDSCAPE, false)
         set(v) = sp.edit { putBoolean(AUTO_LANDSCAPE, v) }
 
+    /** Swipes on full-screen videos change brightness and volume. */
     var videoGestures: Boolean
-        get() = sp.getBoolean(VIDEO_GESTURES, true)
+        get() = sp.getBoolean(VIDEO_GESTURES, false)
         set(v) = sp.edit { putBoolean(VIDEO_GESTURES, v) }
 
     var hlsToMp4: Boolean
@@ -33,6 +35,19 @@ class Prefs(ctx: Context) {
     var confirmDownloads: Boolean
         get() = sp.getBoolean(CONFIRM_DOWNLOADS, true)
         set(v) = sp.edit { putBoolean(CONFIRM_DOWNLOADS, v) }
+
+    /**
+     * Let silent videos start by themselves, such as the previews that play in YouTube's feed while
+     * scrolling. Off by default: decoding them makes scrolling choppy on this phone.
+     */
+    var autoplayMuted: Boolean
+        get() = sp.getBoolean(AUTOPLAY_MUTED, false)
+        set(v) = sp.edit { putBoolean(AUTOPLAY_MUTED, v) }
+
+    /** Show the engine's drawing-speed meter (frames per second and frame times) on pages. */
+    var showDrawSpeed: Boolean
+        get() = sp.getBoolean(SHOW_DRAW_SPEED, false)
+        set(v) = sp.edit { putBoolean(SHOW_DRAW_SPEED, v) }
 
     var searchSuggestions: Boolean
         get() = sp.getBoolean(SEARCH_SUGGESTIONS, true)
@@ -47,9 +62,12 @@ class Prefs(ctx: Context) {
         get() = sp.getBoolean(PULL_TO_REFRESH, true)
         set(v) = sp.edit { putBoolean(PULL_TO_REFRESH, v) }
 
-    /** Draw pages on the CPU instead of the GPU (applies after a restart). */
+    /** Set at start-up: this phone's graphics chip draws pages slower than its CPU (see GpuInfo). */
+    var autoSoftwareRendering = false
+
+    /** Draw pages on the CPU instead of the GPU (applies after a restart). Automatic until changed. */
     var softwareRendering: Boolean
-        get() = sp.getBoolean(SOFTWARE_RENDERING, false)
+        get() = if (sp.contains(SOFTWARE_RENDERING)) sp.getBoolean(SOFTWARE_RENDERING, false) else autoSoftwareRendering
         set(v) = sp.edit { putBoolean(SOFTWARE_RENDERING, v) }
 
     /** How many tabs keep their page loaded in memory; the others reload when opened. */
@@ -73,6 +91,8 @@ class Prefs(ctx: Context) {
         const val VIDEO_GESTURES = "video_gestures"
         const val HLS_TO_MP4 = "hls_to_mp4"
         const val CONFIRM_DOWNLOADS = "confirm_downloads"
+        const val AUTOPLAY_MUTED = "autoplay_muted"
+        const val SHOW_DRAW_SPEED = "show_draw_speed"
         const val SEARCH_SUGGESTIONS = "search_suggestions"
         const val HIDE_TOOLBAR = "hide_toolbar_on_scroll"
         const val PULL_TO_REFRESH = "pull_to_refresh"

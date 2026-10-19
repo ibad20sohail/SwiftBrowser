@@ -43,11 +43,15 @@ object Engine {
     /** Lets the UI start activities for Gecko (used by passkeys / WebAuthn). */
     var activityDelegate: GeckoRuntime.ActivityDelegate? = null
 
+    private lateinit var app: Application
+
     fun init(app: Application, prefs: Prefs) {
+        this.app = app
         // uBlock Origin does the blocking: its malware and tracker lists replace Firefox's
         // Safe Browsing and tracking-protection lists, which cost CPU on every request and
         // over 10 MB of storage.
         removeSafeBrowsingData(app)
+        val startupConfig = writeStartupConfig(prefs.softwareRendering)
         val contentBlocking = ContentBlocking.Settings.Builder()
             .antiTracking(ContentBlocking.AntiTracking.NONE)
             .enhancedTrackingProtectionLevel(ContentBlocking.EtpLevel.NONE)
@@ -65,6 +69,7 @@ object Engine {
             .remoteDebuggingEnabled(BuildConfig.DEBUG)
             .lowMemoryDetection(true)
             .loginAutofillEnabled(false)
+            .configFilePath(startupConfig)
             .build()
         runtime = GeckoRuntime.create(app, settings)
         runtime.delegate = GeckoRuntime.Delegate {
@@ -102,18 +107,63 @@ object Engine {
             // Firefox's own tracker and Safe Browsing lists: uBlock Origin covers them. This stops
             // their downloads (over 10 MB, refreshed every hour).
             SetGeckoPreference.setBoolPref("browser.safebrowsing.update.enabled", false, BRANCH),
-            // Draw pages with the CPU instead of the GPU. Some old phone GPUs are slower.
-            SetGeckoPreference.setBoolPref("gfx.webrender.software", prefs.softwareRendering, BRANCH),
+            // Pages with touch handlers make scrolling wait for their (busy) script to answer;
+            // start scrolling after 300 ms at most instead of 600.
+            SetGeckoPreference.setIntPref("apz.content_response_timeout", 300, BRANCH),
+            // No glow at the ends of pages: it is drawn by the app's window, frame by frame.
+            SetGeckoPreference.setBoolPref("apz.overscroll.enabled", false, BRANCH),
+            // Phones like this have no AV1 video hardware, and decoding AV1 with the CPU makes
+            // videos stutter. Without it YouTube and others send H.264, which the hardware plays.
+            SetGeckoPreference.setBoolPref("media.av1.enabled", false, BRANCH),
+            // The numbers shown by the drawing-speed meter (Settings → Performance).
+            SetGeckoPreference.setStringPref("gfx.webrender.debug.profiler-ui", DRAW_SPEED_UI, BRANCH),
+            SetGeckoPreference.setBoolPref("gfx.webrender.debug.profiler", prefs.showDrawSpeed, BRANCH),
+            SetGeckoPreference.setBoolPref("gfx.webrender.debug.gpu-time-queries", prefs.showDrawSpeed, BRANCH),
         )
         GeckoPreferenceController.setGeckoPrefs(list).accept({ result ->
             val failed = result?.filterValues { !it }?.keys.orEmpty()
             if (failed.isNotEmpty()) L.w("Engine prefs not set: $failed")
         }, { e -> L.w("Engine prefs failed", e) })
+        // The drawing method comes from the start-up config; a value saved by Swift 1.1 in the
+        // profile would override it.
+        GeckoPreferenceController.clearGeckoUserPref(SOFTWARE_RENDERING_PREF)
     }
 
-    /** Takes effect after the app restarts. */
+    private const val SOFTWARE_RENDERING_PREF = "gfx.webrender.software"
+
+    /**
+     * Settings the engine must have before it starts, such as the drawing method: it is fixed when
+     * the graphics process starts, so setting it later would only apply after a restart.
+     */
+    private fun writeStartupConfig(softwareRendering: Boolean): String {
+        val file = File(app.filesDir, "gecko-startup.yaml")
+        val text = "prefs:\n  $SOFTWARE_RENDERING_PREF: $softwareRendering\n"
+        try {
+            if (!file.exists() || file.readText() != text) file.writeText(text)
+        } catch (e: Exception) {
+            L.w("Could not write the engine start-up config", e)
+        }
+        return file.path
+    }
+
+    /** Draw pages with the CPU instead of the GPU. Takes effect after the app restarts. */
     fun setSoftwareRendering(enabled: Boolean) {
-        GeckoPreferenceController.setGeckoPref("gfx.webrender.software", enabled, BRANCH)
+        writeStartupConfig(enabled)
+        GeckoPreferenceController.clearGeckoUserPref(SOFTWARE_RENDERING_PREF)
+    }
+
+    /** Frames per second, the time each frame takes and what it was spent on. */
+    private const val DRAW_SPEED_UI =
+        "FPS,Frame CPU total,Renderer,GPU,Texture cache update,Shader build time,Rendered picture tiles,Draw calls,Color passes,Alpha passes"
+
+    /** Shows or hides the drawing-speed meter on pages, immediately. GPU timing is measured only meanwhile. */
+    fun setDrawSpeedMeter(enabled: Boolean) {
+        GeckoPreferenceController.setGeckoPrefs(
+            listOf(
+                SetGeckoPreference.setBoolPref("gfx.webrender.debug.profiler", enabled, BRANCH),
+                SetGeckoPreference.setBoolPref("gfx.webrender.debug.gpu-time-queries", enabled, BRANCH),
+            ),
+        )
     }
 
     /** Lists downloaded before updates were turned off (e.g. by version 1.0). Runs before the engine starts. */

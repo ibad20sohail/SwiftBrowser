@@ -21,7 +21,6 @@ class GestureFrameLayout @JvmOverloads constructor(
     interface Listener {
         fun onSwipe(leftSide: Boolean, delta: Float)
         fun onSwipeEnd()
-        fun onTap()
     }
 
     interface PullListener {
@@ -43,7 +42,6 @@ class GestureFrameLayout @JvmOverloads constructor(
     private var tracking = false
     private var dragging = false
     private var leftSide = false
-    private var moved = false
 
     private var pullCandidate = false
     private var pulling = false
@@ -134,7 +132,6 @@ class GestureFrameLayout @JvmOverloads constructor(
                 downY = ev.y
                 lastY = ev.y
                 dragging = false
-                moved = false
                 // Leave the top and bottom edges to the player controls and system bars.
                 tracking = ev.y > height * 0.12f && ev.y < height * 0.85f
                 leftSide = ev.x < width / 2f
@@ -143,7 +140,6 @@ class GestureFrameLayout @JvmOverloads constructor(
             MotionEvent.ACTION_MOVE -> {
                 val dx = ev.x - downX
                 val dy = ev.y - downY
-                if (abs(dx) > slop || abs(dy) > slop) moved = true
                 if (tracking && !dragging && abs(dy) > slop * 2 && abs(dy) > abs(dx) * 2) {
                     dragging = true
                     lastY = ev.y
@@ -151,7 +147,6 @@ class GestureFrameLayout @JvmOverloads constructor(
                     return true
                 }
             }
-            MotionEvent.ACTION_UP -> if (!moved) listener?.onTap()
         }
         return false
     }

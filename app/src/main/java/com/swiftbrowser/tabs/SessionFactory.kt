@@ -3,6 +3,7 @@ package com.swiftbrowser.tabs
 import android.Manifest
 import android.os.Handler
 import android.os.Looper
+import com.swiftbrowser.SwiftApp
 import com.swiftbrowser.adblock.AdBlock
 import com.swiftbrowser.adblock.AdLevel
 import com.swiftbrowser.adblock.NavPolicy
@@ -251,6 +252,14 @@ class TabDelegates(private val tab: Tab) :
         changed()
     }
 
+    override fun onFirstComposite(session: GeckoSession) {
+        ui?.onPageDrawn(tab, contentful = false)
+    }
+
+    override fun onFirstContentfulPaint(session: GeckoSession) {
+        ui?.onPageDrawn(tab, contentful = true)
+    }
+
     override fun onShowDynamicToolbar(session: GeckoSession) {
         ui?.onToolbarRequest(tab, true)
     }
@@ -341,7 +350,10 @@ class TabDelegates(private val tab: Tab) :
 
     override fun onContentPermissionRequest(session: GeckoSession, perm: ContentPermission): GeckoResult<Int>? {
         return when (perm.permission) {
-            GeckoSession.PermissionDelegate.PERMISSION_AUTOPLAY_INAUDIBLE,
+            // Silent videos that start by themselves (e.g. YouTube feed previews while scrolling).
+            GeckoSession.PermissionDelegate.PERMISSION_AUTOPLAY_INAUDIBLE -> GeckoResult.fromValue(
+                if (SwiftApp.prefs.autoplayMuted) ContentPermission.VALUE_ALLOW else ContentPermission.VALUE_DENY,
+            )
             GeckoSession.PermissionDelegate.PERMISSION_PERSISTENT_STORAGE,
             GeckoSession.PermissionDelegate.PERMISSION_MEDIA_KEY_SYSTEM_ACCESS,
             GeckoSession.PermissionDelegate.PERMISSION_STORAGE_ACCESS,

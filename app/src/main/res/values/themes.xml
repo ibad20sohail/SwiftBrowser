@@ -15,6 +15,11 @@
         <item name="bottomSheetDialogTheme">@style/Theme.Swift.BottomSheet</item>
     </style>
 
+    <!-- The browser screen's theme while the app starts: the logo instead of an empty window. -->
+    <style name="Theme.Swift.Launch">
+        <item name="android:windowBackground">@drawable/bg_launch</item>
+    </style>
+
     <style name="Theme.Swift.BottomSheet" parent="ThemeOverlay.Material3.BottomSheetDialog">
         <item name="bottomSheetStyle">@style/Swift.BottomSheetStyle</item>
     </style>

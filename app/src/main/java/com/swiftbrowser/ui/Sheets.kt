@@ -8,11 +8,9 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.EditText
-import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
-import androidx.appcompat.widget.SwitchCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -41,7 +39,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** The bottom sheets opened from the toolbar. */
+/** The bottom sheets opened from the toolbar and the menu. */
 object Sheets {
 
     private fun Context.dp(v: Int) = (v * resources.displayMetrics.density).toInt()
@@ -111,24 +109,6 @@ object Sheets {
         setOnClickListener { onClick() }
     }
 
-    private fun switchRow(ctx: Context, icon: Int, text: String, checked: Boolean, onChange: (Boolean) -> Unit): View {
-        val box = LinearLayout(ctx).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPaddingRelative(0, 0, ctx.dp(16), 0)
-            setBackgroundResource(RowHolder.selectableBackground(ctx))
-        }
-        val sw = SwitchCompat(ctx).apply { isChecked = checked }
-        val tv = row(ctx, icon, text) { sw.toggle() }.apply {
-            layoutParams = LinearLayout.LayoutParams(0, ctx.dp(48), 1f)
-            background = null
-        }
-        box.addView(tv)
-        box.addView(sw)
-        sw.setOnCheckedChangeListener { _, isChecked -> onChange(isChecked) }
-        return box
-    }
-
     private fun chips(ctx: Context, labels: List<String>, selected: Int, onSelect: (Int) -> Unit): ChipGroup =
         ChipGroup(ctx).apply {
             isSingleSelection = true
@@ -152,87 +132,7 @@ object Sheets {
             }
         }
 
-    // ------------------------------------------------------------------ menu
-
-    fun menu(a: MainActivity) {
-        val tab = TabManager.current ?: return
-        val col = column(a)
-        lateinit var dialog: BottomSheetDialog
-
-        val icons = LinearLayout(a).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(a.dp(8), 0, a.dp(8), a.dp(4))
-        }
-        fun iconButton(res: Int, desc: String, enabled: Boolean, tint: Int = R.color.text_secondary, onClick: () -> Unit) {
-            icons.addView(ImageButton(a).apply {
-                layoutParams = LinearLayout.LayoutParams(0, a.dp(52), 1f)
-                setImageResource(res)
-                imageTintList = ColorStateList.valueOf(a.color(tint))
-                setBackgroundResource(RowHolder.selectableBackground(a))
-                contentDescription = desc
-                isEnabled = enabled
-                alpha = if (enabled) 1f else 0.35f
-                setOnClickListener {
-                    dialog.dismiss()
-                    onClick()
-                }
-            })
-        }
-        iconButton(R.drawable.ic_back, "Back", tab.canGoBack) { TabManager.goBack(tab) }
-        iconButton(R.drawable.ic_forward, "Forward", tab.canGoForward) { TabManager.goForward(tab) }
-        if (tab.loading) iconButton(R.drawable.ic_close, "Stop", true) { tab.session?.stop() }
-        else iconButton(R.drawable.ic_refresh, "Reload", !tab.isBlank) { TabManager.reload(tab) }
-        val pid = tab.profileId
-        val url = tab.url
-        val bookmarked = UrlUtils.isHttp(url) && SwiftApp.db.isBookmarked(pid, url)
-        iconButton(
-            if (bookmarked) R.drawable.ic_star else R.drawable.ic_star_border,
-            if (bookmarked) "Remove bookmark" else "Add bookmark",
-            UrlUtils.isHttp(url), if (bookmarked) R.color.accent else R.color.text_secondary,
-        ) {
-            if (bookmarked) {
-                TabManager.io.execute { SwiftApp.db.removeBookmark(pid, url) }
-                a.snack("Bookmark removed")
-            } else {
-                val title = tab.title
-                TabManager.io.execute { SwiftApp.db.addBookmark(pid, url, title) }
-                a.snack("Bookmarked")
-            }
-        }
-        iconButton(R.drawable.ic_share, "Share", UrlUtils.isHttp(url)) { a.share(url) }
-        col.addView(icons)
-
-        col.addView(row(a, R.drawable.ic_add, "New tab") { dialog.dismiss(); TabManager.newTab(incognito = false) })
-        col.addView(row(a, R.drawable.ic_incognito, "New incognito tab") { dialog.dismiss(); TabManager.newTab(incognito = true) })
-        col.addView(row(a, R.drawable.ic_bookmarks, "Bookmarks") { dialog.dismiss(); a.openList(BookmarksActivity::class.java) })
-        col.addView(row(a, R.drawable.ic_history, "History") { dialog.dismiss(); a.openList(HistoryActivity::class.java) })
-        col.addView(row(a, R.drawable.ic_download, "Downloads") { dialog.dismiss(); a.openDownloads() })
-        col.addView(row(a, R.drawable.ic_find, "Find in page") { dialog.dismiss(); a.openFind() })
-        col.addView(row(a, R.drawable.ic_speed, "Playback speed (${a.formatSpeed(tab.speed)})") {
-            dialog.dismiss()
-            speed(a, tab)
-        })
-        col.addView(switchRow(a, R.drawable.ic_desktop, "Desktop site", tab.desktop) { on ->
-            dialog.dismiss()
-            TabManager.setDesktop(tab, on)
-        })
-        col.addView(switchRow(a, R.drawable.ic_dark, "Dark mode", SwiftApp.prefs.darkMode) { on ->
-            dialog.dismiss()
-            setDarkMode(on)
-        })
-        col.addView(row(a, R.drawable.ic_close, if (tab.incognito) "Close incognito tabs" else "Close all tabs") {
-            dialog.dismiss()
-            val incognito = tab.incognito
-            MaterialAlertDialogBuilder(a)
-                .setMessage(if (incognito) "Close all incognito tabs?" else "Close all tabs in ${Profiles.current().name}?")
-                .setPositiveButton("Close all") { _, _ -> TabManager.closeAll(incognito) }
-                .setNegativeButton(android.R.string.cancel, null)
-                .show()
-        })
-        col.addView(row(a, R.drawable.ic_settings, "Settings") { dialog.dismiss(); a.openList(SettingsActivity::class.java) })
-        dialog = sheet(a, col)
-        dialog.show()
-    }
+    // ------------------------------------------------------------------ dark mode
 
     fun setDarkMode(on: Boolean) {
         if (SwiftApp.prefs.darkMode == on) return
@@ -266,7 +166,6 @@ object Sheets {
         col.addView(chips(a, levels.map { it.label }, levels.indexOf(AdBlock.global)) { i ->
             AdBlock.setGlobal(levels[i])
             globalDesc.text = levels[i].summary
-            a.updateShield()
         })
         col.addView(globalDesc)
 
@@ -279,7 +178,6 @@ object Sheets {
                 val level = if (i == 0) null else levels[i - 1]
                 AdBlock.setOverride(site, level)
                 siteDesc.text = level?.summary ?: "Uses the level chosen for all sites."
-                a.updateShield()
             })
             col.addView(siteDesc)
             col.addView(note(a, "Changes apply when the page reloads. Filter lists always follow the all-sites level."))

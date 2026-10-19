@@ -11,14 +11,19 @@ ad-heavy sites on an old phone (Moto E4, Android 7.1.2).
   - Has its own **pop-up and redirect blocker**, which stops the "tap anywhere opens an ad" trick.
 - **Profiles**: each profile has its own Google login, cookies, history, bookmarks and tabs.
 - **Incognito tabs**: no history, and cookies and site data go away when the last one closes.
-- **Tabs** in a two-column grid with page previews, like Chrome. Only a few stay loaded to save
-  memory; the rest restore when opened.
+- **Tabs** in a two-column grid with page previews, like Chrome. Swipe sideways on the toolbar
+  to go to the next or previous tab. Only a few stay loaded to save memory; the rest restore when
+  opened.
+- **Menu** (⋮) that slides up from the bottom: a row of buttons for the page and one for the app,
+  both scrolling sideways. Per-site ad blocking is in it too; everything else is in Settings.
 - **Home page** for new tabs: a Google search box (with voice search) and shortcuts to the most
   visited sites.
 - **Toolbar that hides while scrolling down**, and pull down at the top of a page to reload.
 - **Video**:
-  - Full-screen videos turn to landscape automatically.
-  - Swipe gestures control brightness (left side) and volume (right side).
+  - Full-screen videos use the whole screen and follow the phone's auto-rotate. Turning them to
+    landscape automatically, and swipe gestures for brightness (left side) and volume (right
+    side), can be switched on in Settings → Video.
+  - Sites get H.264 video, which the phone's video hardware plays, instead of AV1.
   - Playback speed can be set from 0.5x to 3x.
   - Videos a page plays can be downloaded, including HLS (`.m3u8`) streams. These are saved as
     MP4 when possible.
@@ -27,8 +32,13 @@ ad-heavy sites on an old phone (Moto E4, Android 7.1.2).
 - **Google search** with suggestions in the address bar.
 - **Tuned for a 2 GB phone**: uBlock Origin runs in its own process, filter lists update only
   while the app is in the background, the web cache is capped, and Firefox's own Safe Browsing
-  lists are off (uBlock Origin covers them). Pages can be drawn with the CPU instead of the GPU
-  (Settings → Performance) for phones whose graphics chip is slow.
+  lists are off (uBlock Origin covers them). Silent videos don't start by themselves (YouTube
+  feed previews), and the app's own toolbar is redrawn as little as possible while a page scrolls.
+- **Start-up screen**: the logo while the app starts, and a loading screen while an open page
+  waits for the ad blocker to load its filters.
+- **Drawing method**: on Adreno 3xx graphics chips, where Firefox's GPU drawing is slow on
+  text-heavy pages, pages are drawn with the CPU by default (videos still go through the GPU).
+  Settings → Performance switches it and can show a drawing-speed meter for comparing.
 
 ## Build
 

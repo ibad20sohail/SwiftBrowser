@@ -70,6 +70,9 @@ browser.webRequest.onHeadersReceived.addListener(details => {
   if (ct.includes('mpegurl') || HLS_EXT.test(url)) {
     kind = 'hls';
   } else if (details.type === 'media' || ct.startsWith('video/') || FILE_EXT.test(url)) {
+    // Pieces of adaptive streams (YouTube etc.) are fetched by script and can't be saved as files;
+    // reporting each of them only costs work while the video plays.
+    if (details.type === 'xmlhttprequest' && !FILE_EXT.test(url)) { return; }
     if (SEGMENT_EXT.test(url) || /mp2t|iso\.segment|mpeg2/.test(ct)) { return; }
     if (ct.startsWith('text/') || ct.includes('json') || ct.includes('html') || ct.startsWith('audio/')) { return; }
     if (!ct.startsWith('video/') && !FILE_EXT.test(url)) { return; }

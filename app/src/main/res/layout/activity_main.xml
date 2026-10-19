@@ -79,6 +79,37 @@
                 android:background="@color/page_bg"
                 android:visibility="gone" />
 
+            <!-- The next or previous tab, sliding in while the toolbar is swiped sideways. -->
+            <FrameLayout
+                android:id="@+id/swipe_peek"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:layout_marginTop="@dimen/toolbar_height"
+                android:background="@color/page_bg"
+                android:elevation="6dp"
+                android:visibility="gone">
+
+                <ImageView
+                    android:id="@+id/swipe_peek_image"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:importantForAccessibility="no"
+                    android:scaleType="fitStart" />
+
+                <TextView
+                    android:id="@+id/swipe_peek_title"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="center"
+                    android:ellipsize="end"
+                    android:gravity="center"
+                    android:maxLines="2"
+                    android:paddingStart="32dp"
+                    android:paddingEnd="32dp"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="18sp" />
+            </FrameLayout>
+
             <androidx.recyclerview.widget.RecyclerView
                 android:id="@+id/suggestions"
                 android:layout_width="match_parent"
@@ -117,23 +148,6 @@
                 android:paddingBottom="14dp"
                 android:textColor="#FFFFFFFF"
                 android:textSize="18sp"
-                android:visibility="gone" />
-
-            <TextView
-                android:id="@+id/speed_chip"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_gravity="top|center_horizontal"
-                android:layout_marginTop="12dp"
-                android:background="@drawable/bg_hud"
-                android:drawablePadding="6dp"
-                android:gravity="center_vertical"
-                android:paddingStart="14dp"
-                android:paddingTop="8dp"
-                android:paddingEnd="14dp"
-                android:paddingBottom="8dp"
-                android:textColor="#FFFFFFFF"
-                android:textSize="14sp"
                 android:visibility="gone" />
 
             <FrameLayout
@@ -251,38 +265,6 @@
                     </FrameLayout>
 
                     <FrameLayout
-                        android:id="@+id/shield_btn"
-                        android:layout_width="40dp"
-                        android:layout_height="40dp"
-                        android:background="?attr/selectableItemBackgroundBorderless"
-                        android:contentDescription="Ad blocking">
-
-                        <ImageView
-                            android:id="@+id/shield_icon"
-                            android:layout_width="24dp"
-                            android:layout_height="24dp"
-                            android:layout_gravity="center"
-                            android:importantForAccessibility="no"
-                            android:src="@drawable/ic_shield" />
-
-                        <TextView
-                            android:id="@+id/shield_badge"
-                            android:layout_width="wrap_content"
-                            android:layout_height="16dp"
-                            android:layout_gravity="top|end"
-                            android:layout_marginTop="2dp"
-                            android:background="@drawable/bg_badge"
-                            android:gravity="center"
-                            android:minWidth="16dp"
-                            android:paddingStart="3dp"
-                            android:paddingEnd="3dp"
-                            android:textColor="#FFFFFFFF"
-                            android:textSize="9sp"
-                            android:textStyle="bold"
-                            android:visibility="gone" />
-                    </FrameLayout>
-
-                    <FrameLayout
                         android:id="@+id/tabs_btn"
                         android:layout_width="40dp"
                         android:layout_height="40dp"
@@ -381,4 +363,50 @@
         android:layout_height="match_parent"
         android:elevation="8dp"
         android:visibility="gone" />
+
+    <!-- Shown when the app starts until the engine and the ad blocker are ready. -->
+    <FrameLayout
+        android:id="@+id/startup"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@color/page_bg"
+        android:clickable="true"
+        android:elevation="20dp"
+        android:focusable="true"
+        android:visibility="gone">
+
+        <!-- Where Android drew the logo while the app started: the middle of the whole screen,
+             which is lower than the middle of this view by half the navigation bar minus half the
+             status bar. -->
+        <ImageView
+            android:layout_width="96dp"
+            android:layout_height="96dp"
+            android:layout_gravity="center"
+            android:layout_marginTop="12dp"
+            android:importantForAccessibility="no"
+            android:src="@drawable/ic_launcher" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:layout_marginTop="132dp"
+            android:gravity="center_horizontal"
+            android:orientation="vertical">
+
+            <ProgressBar
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:indeterminate="true"
+                android:indeterminateTint="@color/accent" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:text="Starting the ad blocker…"
+                android:textColor="@color/text_secondary"
+                android:textSize="14sp" />
+        </LinearLayout>
+    </FrameLayout>
 </FrameLayout>

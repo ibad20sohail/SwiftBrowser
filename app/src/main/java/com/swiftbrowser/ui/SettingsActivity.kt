@@ -31,6 +31,7 @@ import com.swiftbrowser.core.Profiles
 import com.swiftbrowser.core.UrlUtils
 import com.swiftbrowser.download.Downloads
 import com.swiftbrowser.engine.Engine
+import com.swiftbrowser.engine.GpuInfo
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -131,7 +132,7 @@ class SettingsActivity : AppCompatActivity() {
         }
 
         section("Video") {
-            switch(R.drawable.ic_rotate, purple, "Rotate full-screen videos", "Full-screen videos turn to landscape", prefs.autoLandscape) {
+            switch(R.drawable.ic_rotate, purple, "Rotate full-screen videos", "Full-screen videos turn to landscape. Off: the phone's auto-rotate decides.", prefs.autoLandscape) {
                 prefs.autoLandscape = it
             }
             switch(R.drawable.ic_gesture, purple, "Swipe gestures", "In full screen, swipe on the left for brightness, on the right for volume", prefs.videoGestures) {
@@ -140,6 +141,11 @@ class SettingsActivity : AppCompatActivity() {
             switch(R.drawable.ic_movie, purple, "Save streams as MP4", "Convert downloaded video streams to MP4 (otherwise .ts)", prefs.hlsToMp4) {
                 prefs.hlsToMp4 = it
             }
+            switch(
+                R.drawable.ic_play, purple, "Play silent videos by themselves",
+                "Like the previews in YouTube's feed. Off makes scrolling smoother on this phone.",
+                prefs.autoplayMuted,
+            ) { prefs.autoplayMuted = it }
         }
 
         section("Downloads") {
@@ -154,11 +160,24 @@ class SettingsActivity : AppCompatActivity() {
             tabsSummary = action(R.drawable.ic_memory, amber, "Tabs kept in memory", liveTabsText(prefs.maxLiveTabs)) {
                 chooseLiveTabs { tabsSummary.text = liveTabsText(it) }
             }
+            val gpu = GpuInfo.renderer(this@SettingsActivity).ifBlank { "unknown" }
             switch(
                 R.drawable.ic_layers, amber, "Draw pages with the CPU",
-                "Try this if scrolling is choppy: some old phone graphics chips are slower than the CPU. Restarts Swift.",
+                if (prefs.autoSoftwareRendering) {
+                    "On by default for this phone's graphics chip ($gpu), which is slow at drawing pages with a lot of text. Turn off to compare. Restarts Swift."
+                } else {
+                    "Try this if scrolling is choppy. Graphics chip: $gpu. Restarts Swift."
+                },
                 prefs.softwareRendering,
             ) { on -> confirmRenderingChange(on) }
+            switch(
+                R.drawable.ic_speed, amber, "Show drawing speed",
+                "Shows frames per second and how long each frame takes, on top of pages. For comparing the two drawing methods.",
+                prefs.showDrawSpeed,
+            ) { on ->
+                prefs.showDrawSpeed = on
+                Engine.setDrawSpeedMeter(on)
+            }
         }
 
         section("Privacy & storage") {
@@ -393,7 +412,7 @@ class SettingsActivity : AppCompatActivity() {
     private fun updateSiteLevelsSummary() {
         val n = AdBlock.overrides().size
         siteLevelsSummary?.text =
-            if (n == 0) "None yet. Set one from the shield button while on a site." else "$n ${if (n == 1) "site" else "sites"}"
+            if (n == 0) "None yet. Set one from the menu (⋮ → Ad blocker) while on a site." else "$n ${if (n == 1) "site" else "sites"}"
         siteLevelsSummary?.visibility = View.VISIBLE
     }
 

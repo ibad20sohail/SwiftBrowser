@@ -21,6 +21,7 @@ import com.swiftbrowser.core.Prefs
 import com.swiftbrowser.core.Profiles
 import com.swiftbrowser.download.Downloads
 import com.swiftbrowser.engine.Engine
+import com.swiftbrowser.engine.GpuInfo
 import com.swiftbrowser.tabs.TabManager
 import com.swiftbrowser.tabs.Thumbnails
 import com.swiftbrowser.ui.MainActivity
@@ -45,6 +46,7 @@ class SwiftApp : Application() {
         Thumbnails.init(this)
         TabManager.init(db, prefs)
         Thumbnails.cleanup(TabManager.tabs.map { it.id }.toSet())
+        prefs.autoSoftwareRendering = GpuInfo.prefersSoftwareRendering(GpuInfo.renderer(this))
         Engine.init(this, prefs)
         L.d("Swift ${BuildConfig.VERSION_NAME} started")
     }
@@ -53,12 +55,16 @@ class SwiftApp : Application() {
     private fun migratePrefs() {
         val sp = prefs.sp
         val version = sp.getInt("prefs_version", 1)
-        if (version < 2) {
-            sp.edit {
-                // 1.0 kept 3 pages in memory; 2 suits a 2 GB phone better.
-                remove(Prefs.MAX_LIVE_TABS)
-                putInt("prefs_version", 2)
-            }
+        if (version >= 3) return
+        sp.edit {
+            // 1.0 kept 3 pages in memory; 2 suits a 2 GB phone better.
+            if (version < 2) remove(Prefs.MAX_LIVE_TABS)
+            // From 1.2 the drawing method is chosen for the phone's graphics chip unless changed.
+            remove(Prefs.SOFTWARE_RENDERING)
+            // From 1.2 full-screen videos neither force landscape nor add swipe gestures by default.
+            remove(Prefs.AUTO_LANDSCAPE)
+            remove(Prefs.VIDEO_GESTURES)
+            putInt("prefs_version", 3)
         }
     }
 

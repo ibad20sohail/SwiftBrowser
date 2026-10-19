@@ -21,8 +21,8 @@ android {
         applicationId = "com.swiftbrowser.app"
         minSdk = 24
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1"
     }
 
     flavorDimensions += "abi"
@@ -78,8 +78,14 @@ android {
     }
 
     packaging {
-        // Compress native libraries inside the APK (smaller file to copy to the phone).
-        jniLibs { useLegacyPackaging = true }
+        jniLibs {
+            // Keep the engine's native libraries uncompressed in the APK so Android loads them
+            // straight from it instead of unpacking a second copy: the APK file is larger, but the
+            // installed app takes about 60 MB less space on the phone.
+            useLegacyPackaging = false
+            // Only used to analyse crash dumps for Mozilla's crash reporter, which Swift doesn't use.
+            excludes += "**/libminidump_analyzer.so"
+        }
     }
 
     lint {
@@ -94,6 +100,9 @@ kotlin {
     }
 }
 
+// Configurations for one flavour + build type combination must be declared before use.
+val emuDebugImplementation by configurations.creating
+
 dependencies {
     // Firefox engine. 143 is the last release that supports Android 7.
     val geckoview = "143.0.20251003115653"
@@ -104,8 +113,10 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.7.1")
     implementation("androidx.activity:activity-ktx:1.10.1")
     implementation("androidx.recyclerview:recyclerview:1.4.0")
-    implementation("androidx.preference:preference-ktx:1.2.1")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.9.2")
     implementation("com.google.android.material:material:1.12.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
+
+    // Reports leaked screens and objects in test builds on the PC emulator only.
+    emuDebugImplementation("com.squareup.leakcanary:leakcanary-android:2.14")
 }

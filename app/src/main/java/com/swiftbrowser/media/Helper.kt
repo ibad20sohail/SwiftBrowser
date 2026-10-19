@@ -1,6 +1,9 @@
 package com.swiftbrowser.media
 
+import android.os.Handler
+import android.os.Looper
 import com.swiftbrowser.adblock.NavPolicy
+import com.swiftbrowser.core.Favicons
 import com.swiftbrowser.core.L
 import com.swiftbrowser.tabs.Tab
 import com.swiftbrowser.tabs.TabManager
@@ -107,6 +110,7 @@ object Helper {
                 }
             }
             "click" -> tab.lastClick = NavPolicy.Click(msg.optString("href"), System.currentTimeMillis())
+            "icon" -> if (!tab.incognito) Favicons.onPageIcon(msg.optString("page"), msg.optString("href").ifBlank { null })
             "playing" -> Unit
         }
     }
@@ -185,6 +189,8 @@ object Helper {
     private var nextHeaderRequest = 1
     private val headerCallbacks = HashMap<Int, (Map<String, String>) -> Unit>()
 
+    private val main = Handler(Looper.getMainLooper())
+
     /** Request headers the page used for [url] (cookies, referer), if the extension saw it. */
     fun lookupHeaders(url: String, callback: (Map<String, String>) -> Unit) {
         val port = backgroundPort
@@ -194,6 +200,8 @@ object Helper {
         }
         val id = nextHeaderRequest++
         headerCallbacks[id] = callback
+        // Don't wait (or keep the caller's screen in memory) if the extension never answers.
+        main.postDelayed({ headerCallbacks.remove(id)?.invoke(emptyMap()) }, 2000)
         try {
             port.postMessage(JSONObject().put("type", "headers").put("id", id).put("url", url))
         } catch (e: Exception) {

@@ -10,7 +10,12 @@ ad-heavy sites on an old phone (Moto E4, Android 7.1.2).
   - Uses a bundled **uBlock Origin**, with the app switching its filter lists and rules.
   - Has its own **pop-up and redirect blocker**, which stops the "tap anywhere opens an ad" trick.
 - **Profiles**: each profile has its own Google login, cookies, history, bookmarks and tabs.
-- **Tabs**: only a few stay loaded to save memory; the rest restore when opened.
+- **Incognito tabs**: no history, and cookies and site data go away when the last one closes.
+- **Tabs** in a two-column grid with page previews, like Chrome. Only a few stay loaded to save
+  memory; the rest restore when opened.
+- **Home page** for new tabs: a Google search box (with voice search) and shortcuts to the most
+  visited sites.
+- **Toolbar that hides while scrolling down**, and pull down at the top of a page to reload.
 - **Video**:
   - Full-screen videos turn to landscape automatically.
   - Swipe gestures control brightness (left side) and volume (right side).
@@ -20,6 +25,10 @@ ad-heavy sites on an old phone (Moto E4, Android 7.1.2).
 - **Downloads** with pause/resume and notifications.
 - **Dark / light mode**. Sites that support dark mode follow it.
 - **Google search** with suggestions in the address bar.
+- **Tuned for a 2 GB phone**: uBlock Origin runs in its own process, filter lists update only
+  while the app is in the background, the web cache is capped, and Firefox's own Safe Browsing
+  lists are off (uBlock Origin covers them). Pages can be drawn with the CPU instead of the GPU
+  (Settings → Performance) for phones whose graphics chip is slow.
 
 ## Build
 
@@ -57,7 +66,7 @@ signed with the same key.
 | `.../adblock` | Ad-block levels, the uBlock Origin bridge and the pop-up/redirect policy |
 | `.../media` | Bridge to the helper extension: video detection, playback speed, tap tracking |
 | `.../download` | Download manager, HLS downloader, TS→MP4 remuxer, notification service |
-| `.../ui` | Activities, bottom sheets and dialogs |
+| `.../ui` | Activities, home page, tab grid, settings, bottom sheets and dialogs |
 | `app/src/main/assets/extensions/ublock` | uBlock Origin 1.75.0, patched by `tools/update_ublock.py` |
 | `app/src/main/assets/extensions/helper` | Small built-in extension used by the app |
 | `tools/` | uBlock Origin update and patch script |

@@ -42,6 +42,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--version", default="1.75.0")
     ap.add_argument("--xpi")
+    ap.add_argument(
+        "--locales", default="en",
+        help="comma-separated uBO UI languages to keep (default: en); 'all' keeps every language",
+    )
     args = ap.parse_args()
 
     data = open(args.xpi, "rb").read() if args.xpi else fetch(args.version)
@@ -62,6 +66,14 @@ def main():
             os.makedirs(os.path.dirname(target), exist_ok=True)
             with z.open(info) as src, open(target, "wb") as dst:
                 shutil.copyfileobj(src, dst)
+
+    if args.locales != "all":
+        keep = {code.strip() for code in args.locales.split(",") if code.strip()}
+        keep.add("en")  # default_locale must exist
+        locales_dir = os.path.join(DEST, "_locales")
+        for code in os.listdir(locales_dir):
+            if code not in keep:
+                shutil.rmtree(os.path.join(locales_dir, code))
 
     manifest_path = os.path.join(DEST, "manifest.json")
     with open(manifest_path, encoding="utf-8") as f:

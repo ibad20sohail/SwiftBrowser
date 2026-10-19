@@ -1,7 +1,8 @@
 'use strict';
 
 // Runs in every frame. Reports real link taps (so the app can tell a link the
-// user tapped from a script hijacking the tap) and applies the playback speed.
+// user tapped from a script hijacking the tap), applies the playback speed and,
+// in the top frame, tells the app the page's icon.
 (function () {
   if (window.__swiftHelper) { return; }
   window.__swiftHelper = true;
@@ -11,6 +12,14 @@
   let port = null;
   let tabId = -1;
   let rate = 1;
+
+  function hello() {
+    try {
+      port.postMessage({ type: 'hello', top: isTop, tabId, url: location.href });
+    } catch (e) {
+      port = null;
+    }
+  }
 
   function connect() {
     if (port !== null) { return port; }
@@ -22,7 +31,7 @@
     }
     port.onMessage.addListener(onNative);
     port.onDisconnect.addListener(() => { port = null; });
-    port.postMessage({ type: 'hello', top: isTop, tabId, url: location.href });
+    hello();
     return port;
   }
 
@@ -57,6 +66,29 @@
     }
   }
 
+  // The page's best icon for tab cards and home page shortcuts: a PNG/ICO of
+  // roughly 48-192 px if declared, otherwise the app falls back to /favicon.ico.
+  function reportIcon() {
+    let best = '';
+    let bestScore = -1;
+    for (const link of document.querySelectorAll('link[rel][href]')) {
+      const rel = (link.getAttribute('rel') || '').toLowerCase();
+      if (!/(^|\s)(icon|apple-touch-icon|apple-touch-icon-precomposed)(\s|$)/.test(rel)) { continue; }
+      const href = link.href || '';
+      if (href === '' || href.length > 100000) { continue; }
+      const type = (link.getAttribute('type') || '').toLowerCase();
+      if (type.includes('svg') || /\.svg(?:[?#]|$)/i.test(href) || href.startsWith('data:image/svg')) { continue; }
+      const m = /(\d+)\s*x\s*(\d+)/i.exec(link.getAttribute('sizes') || '');
+      const size = m ? parseInt(m[1], 10) : (rel.includes('apple-touch') ? 180 : 32);
+      const score = size >= 48 ? 1000 - Math.abs(size - 96) : size;
+      if (score > bestScore) {
+        bestScore = score;
+        best = href;
+      }
+    }
+    send({ type: 'icon', href: best, page: location.href });
+  }
+
   // Capture phase on window: runs before the page's own click handlers.
   window.addEventListener('click', ev => {
     if (!ev.isTrusted) { return; }
@@ -79,7 +111,16 @@
   if (isTop) {
     browser.runtime.sendMessage({ type: 'whoami' }).then(r => {
       if (r && typeof r.tabId === 'number') { tabId = r.tabId; }
-      connect();
+      // A tap may have connected before the answer came; introduce this frame again with its tab.
+      if (port !== null) { hello(); } else { connect(); }
     }, () => { connect(); });
+
+    if (location.protocol === 'http:' || location.protocol === 'https:') {
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', reportIcon, { once: true });
+      } else {
+        reportIcon();
+      }
+    }
   }
 })();

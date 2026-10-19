@@ -217,6 +217,13 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 1) {
         ) { rowToHistory(it) }
     }
 
+    /** The most recently visited pages, for the home page shortcuts. */
+    fun recentVisits(profileId: Long, limit: Int): List<HistoryRow> =
+        query(
+            "SELECT id, url, title, last_visit, visits FROM history WHERE profile_id = ? ORDER BY last_visit DESC LIMIT $limit",
+            arrayOf("$profileId"),
+        ) { rowToHistory(it) }
+
     private fun rowToHistory(c: Cursor) = HistoryRow(c.getLong(0), c.str(1), c.str(2), c.getLong(3), c.getInt(4))
 
     fun deleteHistory(id: Long) {

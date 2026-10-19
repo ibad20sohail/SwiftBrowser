@@ -28,9 +28,11 @@ object SessionFactory {
     val prompts = Prompts()
 
     fun create(tab: Tab): GeckoSession {
-        val settings = GeckoSessionSettings.Builder()
-            .contextId(Profiles.contextId(tab.profileId))
-            .usePrivateMode(false)
+        val builder = GeckoSessionSettings.Builder()
+        // Incognito tabs share Gecko's private-browsing storage, which is wiped when the last one closes.
+        if (!tab.incognito) builder.contextId(Profiles.contextId(tab.profileId))
+        val settings = builder
+            .usePrivateMode(tab.incognito)
             .userAgentMode(
                 if (tab.desktop) GeckoSessionSettings.USER_AGENT_MODE_DESKTOP else GeckoSessionSettings.USER_AGENT_MODE_MOBILE,
             )
@@ -47,6 +49,7 @@ object SessionFactory {
         session.setHistoryDelegate(d)
         session.setPermissionDelegate(d)
         session.setMediaSessionDelegate(d)
+        session.setCompositorScrollDelegate(d)
         session.setPromptDelegate(prompts)
         tab.session = session
         attachExtensions(tab, session)
@@ -70,11 +73,21 @@ object SessionFactory {
 
 /** Receives uBlock Origin's badge (blocked count) and opens its popup panel. */
 class UboActionDelegate(private val tab: Tab?) : WebExtension.ActionDelegate {
+    private val handler = Handler(Looper.getMainLooper())
+    private var pending = false
+
     override fun onBrowserAction(extension: WebExtension, session: GeckoSession?, action: WebExtension.Action) {
         val t = tab ?: return
         t.uboAction = action
+        if (t.badge == action.badgeText) return
         t.badge = action.badgeText
-        TabManager.notifyTabUpdated(t)
+        // The count changes with nearly every blocked request; redraw the toolbar at most 3 times a second.
+        if (pending) return
+        pending = true
+        handler.postDelayed({
+            pending = false
+            TabManager.notifyTabUpdated(t)
+        }, 300)
     }
 
     override fun onTogglePopup(extension: WebExtension, action: WebExtension.Action): GeckoResult<GeckoSession>? =
@@ -99,6 +112,7 @@ class TabDelegates(private val tab: Tab) :
     GeckoSession.ContentDelegate,
     GeckoSession.HistoryDelegate,
     GeckoSession.PermissionDelegate,
+    GeckoSession.CompositorScrollDelegate,
     MediaSession.Delegate {
 
     private val handler = Handler(Looper.getMainLooper())
@@ -112,6 +126,8 @@ class TabDelegates(private val tab: Tab) :
         session: GeckoSession, url: String?, perms: MutableList<ContentPermission>, hasUserGesture: Boolean,
     ) {
         if (url == null) return
+        // The engine's own blank page while a tab starts up; the tab keeps the address it is loading.
+        if (url == "about:blank" && !tab.isBlank && tab.loading) return
         tab.url = url
         TabManager.scheduleSave(tab)
         changed()
@@ -219,7 +235,8 @@ class TabDelegates(private val tab: Tab) :
     }
 
     override fun onSessionStateChange(session: GeckoSession, sessionState: GeckoSession.SessionState) {
-        tab.state = sessionState.toString()
+        // Called often (scrolling, typing); serialized later, off the main thread.
+        tab.sessionState = sessionState
         TabManager.scheduleSave(tab)
     }
 
@@ -228,10 +245,28 @@ class TabDelegates(private val tab: Tab) :
     override fun onTitleChange(session: GeckoSession, title: String?) {
         tab.title = title.orEmpty()
         if (UrlUtils.isHttp(tab.url) && tab.title.isNotBlank()) {
-            TabManager.setHistoryTitle(tab.profileId, tab.url, tab.title)
+            TabManager.setHistoryTitle(tab, tab.url, tab.title)
         }
         TabManager.scheduleSave(tab)
         changed()
+    }
+
+    override fun onShowDynamicToolbar(session: GeckoSession) {
+        ui?.onToolbarRequest(tab, true)
+    }
+
+    override fun onHideDynamicToolbar(session: GeckoSession) {
+        ui?.onToolbarRequest(tab, false)
+    }
+
+    // ------------------------------------------------------------------ scrolling
+
+    override fun onScrollChanged(session: GeckoSession, update: GeckoSession.ScrollPositionUpdate) {
+        if (tab !== TabManager.current) return
+        ui?.onPageScroll(
+            tab, update.scrollY * update.zoom,
+            update.source == GeckoSession.ScrollPositionUpdate.SOURCE_USER_INTERACTION,
+        )
     }
 
     override fun onFullScreen(session: GeckoSession, fullScreen: Boolean) {
@@ -297,8 +332,8 @@ class TabDelegates(private val tab: Tab) :
             GeckoSession.HistoryDelegate.VISIT_REDIRECT_SOURCE_PERMANENT or
             GeckoSession.HistoryDelegate.VISIT_UNRECOVERABLE_ERROR
         if (flags and GeckoSession.HistoryDelegate.VISIT_TOP_LEVEL == 0 || flags and skip != 0) return null
-        if (!UrlUtils.isHttp(url)) return null
-        TabManager.recordVisit(tab.profileId, url)
+        if (!UrlUtils.isHttp(url) || tab.incognito) return null
+        TabManager.recordVisit(tab, url)
         return GeckoResult.fromValue(true)
     }
 

@@ -13,6 +13,5 @@
         <item name="android:textColorPrimary">@color/text_primary</item>
         <item name="android:textColorSecondary">@color/text_secondary</item>
         <item name="bottomSheetDialogTheme">@style/Theme.Swift.BottomSheet</item>
-        <item name="preferenceTheme">@style/PreferenceThemeOverlay</item>
     </style>
 </resources>

@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Swift Helper",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "description": "Video detection, playback speed and tap tracking for the Swift browser.",
   "browser_specific_settings": {
     "gecko": { "id": "helper@swiftbrowser.app" }
@@ -21,6 +21,7 @@
     "nativeMessagingFromContent",
     "geckoViewAddons",
     "webRequest",
+    "webNavigation",
     "tabs",
     "<all_urls>"
   ]

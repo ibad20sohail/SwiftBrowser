@@ -202,7 +202,8 @@ object Sheets {
         iconButton(R.drawable.ic_share, "Share", UrlUtils.isHttp(url)) { a.share(url) }
         col.addView(icons)
 
-        col.addView(row(a, R.drawable.ic_add, "New tab") { dialog.dismiss(); TabManager.newTab() })
+        col.addView(row(a, R.drawable.ic_add, "New tab") { dialog.dismiss(); TabManager.newTab(incognito = false) })
+        col.addView(row(a, R.drawable.ic_incognito, "New incognito tab") { dialog.dismiss(); TabManager.newTab(incognito = true) })
         col.addView(row(a, R.drawable.ic_bookmarks, "Bookmarks") { dialog.dismiss(); a.openList(BookmarksActivity::class.java) })
         col.addView(row(a, R.drawable.ic_history, "History") { dialog.dismiss(); a.openList(HistoryActivity::class.java) })
         col.addView(row(a, R.drawable.ic_download, "Downloads") { dialog.dismiss(); a.openDownloads() })
@@ -219,14 +220,27 @@ object Sheets {
             dialog.dismiss()
             setDarkMode(on)
         })
+        col.addView(row(a, R.drawable.ic_close, if (tab.incognito) "Close incognito tabs" else "Close all tabs") {
+            dialog.dismiss()
+            val incognito = tab.incognito
+            MaterialAlertDialogBuilder(a)
+                .setMessage(if (incognito) "Close all incognito tabs?" else "Close all tabs in ${Profiles.current().name}?")
+                .setPositiveButton("Close all") { _, _ -> TabManager.closeAll(incognito) }
+                .setNegativeButton(android.R.string.cancel, null)
+                .show()
+        })
         col.addView(row(a, R.drawable.ic_settings, "Settings") { dialog.dismiss(); a.openList(SettingsActivity::class.java) })
         dialog = sheet(a, col)
         dialog.show()
     }
 
     fun setDarkMode(on: Boolean) {
+        if (SwiftApp.prefs.darkMode == on) return
         SwiftApp.prefs.darkMode = on
+        // Pages that support dark mode switch right away; sites that choose their colours when
+        // the page loads (Google, YouTube) follow after the reload done when the screen restarts.
         Engine.setDark(on)
+        SwiftApp.reloadAfterThemeChange = true
         SwiftApp.applyNightMode(on)
     }
 
@@ -287,7 +301,7 @@ object Sheets {
         }
         if (!tab.isBlank) button("Reload page") { TabManager.reload(tab) }
         tab.uboAction?.let { action -> button("uBlock Origin panel (element zapper, logger)") { action.click() } }
-        AdBlock.extension?.metaData?.optionsPageUrl?.let { url -> button("uBlock Origin settings") { TabManager.newTab(url) } }
+        AdBlock.extension?.metaData?.optionsPageUrl?.let { url -> button("uBlock Origin settings") { TabManager.newTab(url, incognito = false) } }
         button("Update filter lists now") {
             AdBlock.updateFilterLists()
             a.snack("Updating filter lists…")
@@ -295,80 +309,6 @@ object Sheets {
         col.addView(buttons)
         dialog = sheet(a, col)
         dialog.show()
-    }
-
-    // ------------------------------------------------------------------ tabs
-
-    fun tabs(a: MainActivity) {
-        val col = column(a)
-        lateinit var dialog: BottomSheetDialog
-        val list = RecyclerView(a).apply {
-            layoutManager = LinearLayoutManager(a)
-            isNestedScrollingEnabled = false
-        }
-        val title = TextView(a)
-        lateinit var adapter: RowAdapter<Tab>
-        fun refresh() {
-            val tabs = TabManager.profileTabs()
-            adapter.items = tabs
-            title.text = "${tabs.size} ${if (tabs.size == 1) "tab" else "tabs"} • ${Profiles.current().name}"
-        }
-        adapter = RowAdapter(
-            bind = { h, t ->
-                h.set(R.drawable.ic_tab, t.displayTitle, if (t.isBlank) null else UrlUtils.display(t.url))
-                if (t === TabManager.current) h.itemView.setBackgroundResource(R.drawable.bg_current_tab)
-                h.setAction(R.drawable.ic_close, "Close tab") {
-                    TabManager.close(t)
-                    refresh()
-                }
-            },
-            onClick = { t ->
-                dialog.dismiss()
-                TabManager.select(t)
-            },
-        )
-        list.adapter = adapter
-
-        val top = LinearLayout(a).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(a.dp(20), a.dp(8), a.dp(8), a.dp(8))
-        }
-        title.apply {
-            textSize = 16f
-            setTypeface(typeface, Typeface.BOLD)
-            setTextColor(a.color(R.color.text_primary))
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        }
-        top.addView(title)
-        top.addView(MaterialButton(a, null, androidx.appcompat.R.attr.borderlessButtonStyle).apply {
-            text = "Close all"
-            setOnClickListener {
-                MaterialAlertDialogBuilder(a)
-                    .setMessage("Close all tabs in this profile?")
-                    .setPositiveButton("Close all") { _, _ ->
-                        dialog.dismiss()
-                        TabManager.closeAll(Profiles.currentId)
-                    }
-                    .setNegativeButton(android.R.string.cancel, null)
-                    .show()
-            }
-        })
-        top.addView(MaterialButton(a).apply {
-            text = "New tab"
-            setIconResource(R.drawable.ic_add)
-            setOnClickListener {
-                dialog.dismiss()
-                TabManager.newTab()
-            }
-        })
-        col.addView(top)
-        col.addView(list)
-        refresh()
-        dialog = sheet(a, col)
-        dialog.show()
-        val idx = adapter.items.indexOf(TabManager.current)
-        if (idx > 3) list.scrollToPosition(idx)
     }
 
     // ------------------------------------------------------------------ profiles
@@ -418,7 +358,7 @@ object Sheets {
         })
         col.addView(row(a, R.drawable.ic_person, "Sign in to Google in ${Profiles.current().name}") {
             dialog.dismiss()
-            TabManager.newTab("https://accounts.google.com/")
+            TabManager.newTab("https://accounts.google.com/", incognito = false)
         })
         dialog = sheet(a, col)
         dialog.show()
@@ -539,7 +479,9 @@ object Sheets {
     /** What a detected HLS playlist contains; cached per URL while the app runs. */
     private class StreamInfo(val summary: String, val variantUrls: List<String>)
 
-    private val streamInfo = HashMap<String, StreamInfo>()
+    private val streamInfo = object : LinkedHashMap<String, StreamInfo>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, StreamInfo>?) = size > 60
+    }
 
     /** Blocking; reads the playlist to describe it. */
     private fun inspectStream(m: MediaItem): StreamInfo = try {

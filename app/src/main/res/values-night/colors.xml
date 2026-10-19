@@ -12,4 +12,25 @@
     <color name="shield_on">#FF81C995</color>
     <color name="shield_off">#FF9AA0A6</color>
     <color name="overlay_bg">#CC000000</color>
+
+    <color name="home_bg">#FF202124</color>
+    <color name="home_search_bg">#FF303134</color>
+    <color name="home_search_stroke">#FF303134</color>
+    <color name="tile_bg">#FF35363A</color>
+
+    <color name="switcher_bg">#FF202124</color>
+    <color name="tab_card_bg">#FF35363A</color>
+    <color name="tab_thumb_bg">#FF2A2B2E</color>
+    <color name="toggle_selected">#FF394457</color>
+
+    <color name="settings_bg">#FF202124</color>
+    <color name="card_bg">#FF2D2E31</color>
+
+    <color name="ptr_bg">#FF3C4043</color>
+
+    <color name="incognito_bg">#FF202124</color>
+    <color name="incognito_toolbar">#FF202124</color>
+    <color name="incognito_url">#FF3C4043</color>
+    <color name="incognito_text">#FFE8EAED</color>
+    <color name="incognito_hint">#FF9AA0A6</color>
 </resources>

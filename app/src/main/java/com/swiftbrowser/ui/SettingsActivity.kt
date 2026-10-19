@@ -1,115 +1,410 @@
 package com.swiftbrowser.ui
 
 import android.content.Intent
-import android.content.SharedPreferences
+import android.content.res.ColorStateList
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
-import android.widget.FrameLayout
+import android.view.Gravity
+import android.view.View
+import android.view.ViewGroup
+import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.ScrollView
+import android.widget.TextView
+import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
+import androidx.core.graphics.ColorUtils
 import androidx.lifecycle.lifecycleScope
-import androidx.preference.Preference
-import androidx.preference.PreferenceFragmentCompat
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.google.android.material.materialswitch.MaterialSwitch
+import com.google.android.material.radiobutton.MaterialRadioButton
 import com.swiftbrowser.BuildConfig
 import com.swiftbrowser.R
 import com.swiftbrowser.SwiftApp
 import com.swiftbrowser.adblock.AdBlock
+import com.swiftbrowser.adblock.AdLevel
 import com.swiftbrowser.core.Prefs
 import com.swiftbrowser.core.Profiles
+import com.swiftbrowser.core.UrlUtils
 import com.swiftbrowser.download.Downloads
 import com.swiftbrowser.engine.Engine
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.mozilla.geckoview.StorageController
+import java.io.File
 
+/** Settings, grouped in cards. */
 class SettingsActivity : AppCompatActivity() {
+
+    private lateinit var prefs: Prefs
+    private lateinit var column: LinearLayout
+    private var siteLevelsSummary: TextView? = null
+    private var storageSummary: TextView? = null
+    private var cacheBytes = 0L
+    private val levelRows = ArrayList<Pair<AdLevel, View>>()
+
+    private val blue by lazy { 0xFF1A73E8.toInt() }
+    private val green by lazy { 0xFF188038.toInt() }
+    private val red by lazy { 0xFFD93025.toInt() }
+    private val amber by lazy { 0xFFE37400.toInt() }
+    private val purple by lazy { 0xFF9334E6.toInt() }
+    private val teal by lazy { 0xFF00897B.toInt() }
+    private val grey by lazy { 0xFF5F6368.toInt() }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        prefs = SwiftApp.prefs
+        val bg = color(R.color.settings_bg)
+        window.statusBarColor = bg
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(bg)
+        }
         val toolbar = MaterialToolbar(this).apply {
             title = "Settings"
             setNavigationIcon(R.drawable.ic_back)
             setNavigationOnClickListener { finish() }
-            setBackgroundResource(R.color.toolbar_bg)
+            setBackgroundColor(bg)
         }
-        root.addView(toolbar, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, (56 * resources.displayMetrics.density).toInt()))
-        val container = FrameLayout(this).apply { id = R.id.content }
-        root.addView(container, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
+        root.addView(toolbar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(56)))
+        column = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), dp(4), dp(12), dp(28))
+        }
+        val scroll = ScrollView(this).apply { addView(column) }
+        root.addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         setContentView(root)
-        if (savedInstanceState == null) {
-            supportFragmentManager.beginTransaction().replace(R.id.content, SettingsFragment()).commit()
-        }
+        build()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        updateSiteLevelsSummary()
+        computeStorage()
     }
 
     fun openInBrowser(url: String) {
         setResult(RESULT_OK, Intent().putExtra(MainActivity.EXTRA_URL, url).putExtra(MainActivity.EXTRA_NEW_TAB, true))
         finish()
     }
-}
 
-class SettingsFragment : PreferenceFragmentCompat(), SharedPreferences.OnSharedPreferenceChangeListener {
+    private fun build() {
+        column.addView(headerCard())
 
-    override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
-        setPreferencesFromResource(R.xml.settings, rootKey)
-
-        click("site_levels") { showSiteLevels() }
-        click("ubo_settings") {
-            val url = AdBlock.extension?.metaData?.optionsPageUrl
-            if (url != null) (activity as? SettingsActivity)?.openInBrowser(url)
+        section("Appearance") {
+            switch(R.drawable.ic_dark, blue, "Dark mode", "Websites that support dark mode turn dark too", prefs.darkMode) {
+                Sheets.setDarkMode(it)
+            }
         }
-        click("update_lists") {
-            AdBlock.updateFilterLists()
-            it.summary = "Updating… (this takes a minute in the background)"
+
+        section("Search") {
+            info(R.drawable.ic_search, green, "Search engine", "Google")
+            switch(R.drawable.ic_lightbulb, amber, "Search suggestions", "Google suggests searches while you type", prefs.searchSuggestions) {
+                prefs.searchSuggestions = it
+            }
         }
-        click("clear_data") { clearData() }
-        findPreference<Preference>("download_folder")?.summary =
-            Downloads.directory().path.replace("/storage/emulated/0", "Phone storage")
-        findPreference<Preference>("about")?.summary =
-            "Version ${BuildConfig.VERSION_NAME} • Firefox engine (GeckoView) 143 • uBlock Origin ${AdBlock.uboVersion}"
-        updateSiteLevelsSummary()
+
+        section("Ad blocking") {
+            add(levelChooser())
+            siteLevelsSummary = action(R.drawable.ic_shield, red, "Sites with their own level", "") { showSiteLevels() }
+            action(R.drawable.ic_ublock, red, "uBlock Origin dashboard", "Filter lists, your own filters and rules") {
+                AdBlock.extension?.metaData?.optionsPageUrl?.let { openInBrowser(it) }
+            }
+            action(R.drawable.ic_refresh, red, "Update filter lists now", "Lists also update by themselves every few days") {
+                AdBlock.updateFilterLists()
+                toast("Updating filter lists in the background")
+            }
+        }
+
+        section("Browsing") {
+            switch(R.drawable.ic_toolbar, blue, "Hide toolbar while scrolling", "Scroll up a little to bring it back", prefs.hideToolbarOnScroll) {
+                prefs.hideToolbarOnScroll = it
+            }
+            switch(R.drawable.ic_refresh, blue, "Pull down to refresh", "At the top of a page, drag down to reload it", prefs.pullToRefresh) {
+                prefs.pullToRefresh = it
+            }
+        }
+
+        section("Video") {
+            switch(R.drawable.ic_rotate, purple, "Rotate full-screen videos", "Full-screen videos turn to landscape", prefs.autoLandscape) {
+                prefs.autoLandscape = it
+            }
+            switch(R.drawable.ic_gesture, purple, "Swipe gestures", "In full screen, swipe on the left for brightness, on the right for volume", prefs.videoGestures) {
+                prefs.videoGestures = it
+            }
+            switch(R.drawable.ic_movie, purple, "Save streams as MP4", "Convert downloaded video streams to MP4 (otherwise .ts)", prefs.hlsToMp4) {
+                prefs.hlsToMp4 = it
+            }
+        }
+
+        section("Downloads") {
+            switch(R.drawable.ic_download, teal, "Ask before downloading", "Stops sites from starting downloads by themselves", prefs.confirmDownloads) {
+                prefs.confirmDownloads = it
+            }
+            info(R.drawable.ic_folder, teal, "Download folder", Downloads.directory().path.replace("/storage/emulated/0", "Phone storage"))
+        }
+
+        section("Performance") {
+            lateinit var tabsSummary: TextView
+            tabsSummary = action(R.drawable.ic_memory, amber, "Tabs kept in memory", liveTabsText(prefs.maxLiveTabs)) {
+                chooseLiveTabs { tabsSummary.text = liveTabsText(it) }
+            }
+            switch(
+                R.drawable.ic_layers, amber, "Draw pages with the CPU",
+                "Try this if scrolling is choppy: some old phone graphics chips are slower than the CPU. Restarts Swift.",
+                prefs.softwareRendering,
+            ) { on -> confirmRenderingChange(on) }
+        }
+
+        section("Privacy & storage") {
+            action(R.drawable.ic_delete, grey, "Clear browsing data", "History, cookies and cached files of ${Profiles.current().name}") { clearData() }
+            storageSummary = action(R.drawable.ic_storage, grey, "Storage used", "Calculating…") { clearCache() }
+        }
+
+        section("About") {
+            info(
+                R.drawable.ic_info, grey, "Swift ${BuildConfig.VERSION_NAME}",
+                "Firefox engine (GeckoView 143) • uBlock Origin ${AdBlock.uboVersion}",
+            )
+        }
     }
 
-    private fun click(key: String, action: (Preference) -> Unit) {
-        findPreference<Preference>(key)?.setOnPreferenceClickListener {
-            action(it)
-            true
+    // ------------------------------------------------------------------ building blocks
+
+    private fun headerCard(): View = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        background = ContextCompat.getDrawable(this@SettingsActivity, R.drawable.bg_settings_card)
+        setPadding(dp(18), dp(16), dp(18), dp(16))
+        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            topMargin = dp(8)
+        }
+        addView(ImageView(this@SettingsActivity).apply { setImageResource(R.drawable.ic_launcher) }, LinearLayout.LayoutParams(dp(48), dp(48)))
+        addView(LinearLayout(this@SettingsActivity).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), 0, 0, 0)
+            addView(TextView(this@SettingsActivity).apply {
+                text = "Swift"
+                textSize = 22f
+                setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL))
+                setTextColor(color(R.color.text_primary))
+            })
+            addView(TextView(this@SettingsActivity).apply {
+                text = "Profile: ${Profiles.current().name} • Ad blocking: ${AdBlock.global.label}"
+                textSize = 13f
+                setTextColor(color(R.color.text_secondary))
+            })
+        })
+    }
+
+    private inner class Section(val card: LinearLayout) {
+        fun add(view: View) {
+            if (card.childCount > 0) {
+                card.addView(View(this@SettingsActivity).apply { setBackgroundColor(color(R.color.divider)) },
+                    LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 1).apply { marginStart = dp(70) })
+            }
+            card.addView(view)
+        }
+
+        /** A row that opens something; returns its summary so it can be updated. */
+        fun action(icon: Int, tint: Int, title: String, summary: String, onClick: () -> Unit): TextView {
+            val (row, sub) = row(icon, tint, title, summary)
+            row.isClickable = true
+            row.setBackgroundResource(RowHolder.selectableBackground(this@SettingsActivity))
+            row.setOnClickListener { onClick() }
+            row.addView(ImageView(this@SettingsActivity).apply {
+                setImageResource(R.drawable.ic_chevron_right)
+                imageTintList = ColorStateList.valueOf(color(R.color.text_secondary))
+            }, LinearLayout.LayoutParams(dp(20), dp(20)))
+            add(row)
+            return sub
+        }
+
+        fun info(icon: Int, tint: Int, title: String, summary: String) {
+            add(row(icon, tint, title, summary).first)
+        }
+
+        fun switch(icon: Int, tint: Int, title: String, summary: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+            val (row, _) = row(icon, tint, title, summary)
+            val sw = MaterialSwitch(this@SettingsActivity).apply { isChecked = checked }
+            row.addView(sw)
+            row.isClickable = true
+            row.setBackgroundResource(RowHolder.selectableBackground(this@SettingsActivity))
+            row.setOnClickListener { sw.toggle() }
+            sw.setOnCheckedChangeListener { _, on -> onChange(on) }
+            add(row)
         }
     }
 
-    override fun onResume() {
-        super.onResume()
-        preferenceManager.sharedPreferences?.registerOnSharedPreferenceChangeListener(this)
-    }
-
-    override fun onPause() {
-        preferenceManager.sharedPreferences?.unregisterOnSharedPreferenceChangeListener(this)
-        super.onPause()
-    }
-
-    override fun onSharedPreferenceChanged(sp: SharedPreferences?, key: String?) {
-        when (key) {
-            Prefs.DARK_MODE -> Sheets.setDarkMode(SwiftApp.prefs.darkMode)
-            Prefs.AD_LEVEL -> AdBlock.setGlobal(SwiftApp.prefs.adLevel)
+    private fun section(title: String, build: Section.() -> Unit) {
+        column.addView(TextView(this).apply {
+            text = title
+            textSize = 14f
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(color(R.color.accent))
+            setPadding(dp(16), dp(22), dp(16), dp(8))
+        })
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = ContextCompat.getDrawable(this@SettingsActivity, R.drawable.bg_settings_card)
+            clipToOutline = true
         }
+        Section(card).build()
+        column.addView(card)
+    }
+
+    /** Icon in a tinted circle, title and summary. Returns the row and its summary view. */
+    private fun row(icon: Int, tint: Int, title: String, summary: String?): Pair<LinearLayout, TextView> {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            minimumHeight = dp(64)
+            setPadding(dp(16), dp(10), dp(14), dp(10))
+        }
+        row.addView(ImageView(this).apply {
+            setImageResource(icon)
+            imageTintList = ColorStateList.valueOf(tint)
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(ColorUtils.setAlphaComponent(tint, 0x2A))
+            }
+            setPadding(dp(8), dp(8), dp(8), dp(8))
+        }, LinearLayout.LayoutParams(dp(38), dp(38)))
+        val texts = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), 0, dp(10), 0)
+        }
+        texts.addView(TextView(this).apply {
+            text = title
+            textSize = 16f
+            setTextColor(color(R.color.text_primary))
+        })
+        val sub = TextView(this).apply {
+            text = summary
+            textSize = 13f
+            setTextColor(color(R.color.text_secondary))
+            setPadding(0, dp(2), 0, 0)
+            visibility = if (summary.isNullOrEmpty()) View.GONE else View.VISIBLE
+        }
+        texts.addView(sub)
+        row.addView(texts, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        return row to sub
+    }
+
+    /** The four blocking levels with their descriptions; the chosen one is highlighted. */
+    private fun levelChooser(): View {
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), dp(12), dp(12), dp(8))
+        }
+        box.addView(TextView(this).apply {
+            text = "Blocking level for all sites"
+            textSize = 13f
+            setTextColor(color(R.color.text_secondary))
+            setPadding(dp(4), 0, 0, dp(8))
+        })
+        levelRows.clear()
+        for (level in AdLevel.entries) {
+            val option = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setBackgroundResource(R.drawable.bg_level_option)
+                setPadding(dp(6), dp(10), dp(14), dp(10))
+                isClickable = true
+                setOnClickListener {
+                    AdBlock.setGlobal(level)
+                    updateLevelRows()
+                }
+            }
+            option.addView(MaterialRadioButton(this).apply {
+                isClickable = false
+                isFocusable = false
+                tag = "radio"
+            })
+            option.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                addView(TextView(this@SettingsActivity).apply {
+                    text = level.label
+                    textSize = 15f
+                    setTypeface(typeface, Typeface.BOLD)
+                    setTextColor(color(R.color.text_primary))
+                })
+                addView(TextView(this@SettingsActivity).apply {
+                    text = level.summary
+                    textSize = 13f
+                    setTextColor(color(R.color.text_secondary))
+                })
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            box.addView(option, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                bottomMargin = dp(6)
+            })
+            levelRows += level to option
+        }
+        updateLevelRows()
+        return box
+    }
+
+    private fun updateLevelRows() {
+        val current = AdBlock.global
+        for ((level, view) in levelRows) {
+            view.isSelected = level == current
+            (view.findViewWithTag<View>("radio") as? MaterialRadioButton)?.isChecked = level == current
+        }
+    }
+
+    // ------------------------------------------------------------------ actions
+
+    private fun liveTabsText(n: Int) = when (n) {
+        1 -> "1 tab — least memory; other tabs reload when opened"
+        2 -> "2 tabs (recommended for this phone)"
+        else -> "$n tabs — switching is faster, uses more memory"
+    }
+
+    private fun chooseLiveTabs(onChosen: (Int) -> Unit) {
+        val options = (1..4).toList()
+        val labels = options.map { liveTabsText(it) }.toTypedArray()
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Tabs kept in memory")
+            .setSingleChoiceItems(labels, options.indexOf(prefs.maxLiveTabs)) { d, which ->
+                prefs.maxLiveTabs = options[which]
+                onChosen(options[which])
+                d.dismiss()
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun confirmRenderingChange(on: Boolean) {
+        prefs.softwareRendering = on
+        Engine.setSoftwareRendering(on)
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Restart Swift?")
+            .setMessage("The new drawing method is used after Swift restarts. Your tabs stay open.")
+            .setPositiveButton("Restart now") { _, _ -> SwiftApp.restart(this) }
+            .setNegativeButton("Later", null)
+            .show()
     }
 
     private fun updateSiteLevelsSummary() {
         val n = AdBlock.overrides().size
-        findPreference<Preference>("site_levels")?.summary =
-            if (n == 0) "None. Set one from the shield button while on a site." else "$n ${if (n == 1) "site" else "sites"}"
+        siteLevelsSummary?.text =
+            if (n == 0) "None yet. Set one from the shield button while on a site." else "$n ${if (n == 1) "site" else "sites"}"
+        siteLevelsSummary?.visibility = View.VISIBLE
     }
 
     private fun showSiteLevels() {
-        val ctx = requireContext()
         val entries = AdBlock.overrides().entries.toList()
         if (entries.isEmpty()) {
-            MaterialAlertDialogBuilder(ctx).setMessage("No sites have their own level yet.")
+            MaterialAlertDialogBuilder(this).setMessage("No sites have their own level yet.")
                 .setPositiveButton(android.R.string.ok, null).show()
             return
         }
-        MaterialAlertDialogBuilder(ctx)
+        MaterialAlertDialogBuilder(this)
             .setTitle("Tap a site to reset it")
             .setItems(entries.map { "${it.key} — ${it.value.label}" }.toTypedArray()) { _, which ->
                 AdBlock.setOverride(entries[which].key, null)
@@ -120,22 +415,64 @@ class SettingsFragment : PreferenceFragmentCompat(), SharedPreferences.OnSharedP
     }
 
     private fun clearData() {
-        val ctx = requireContext()
         val profile = Profiles.current()
         val labels = arrayOf("History", "Cookies and site data (signs you out)", "Cached images and files")
         val checked = booleanArrayOf(true, false, true)
-        MaterialAlertDialogBuilder(ctx)
+        MaterialAlertDialogBuilder(this)
             .setTitle("Clear data • ${profile.name}")
             .setMultiChoiceItems(labels, checked) { _, which, isChecked -> checked[which] = isChecked }
             .setPositiveButton("Clear") { _, _ ->
                 if (checked[1]) Engine.runtime.storageController.clearDataForSessionContext(Profiles.contextId(profile.id))
                 if (checked[2]) Engine.runtime.storageController.clearData(StorageController.ClearFlags.ALL_CACHES)
-                if (checked[0]) {
-                    lifecycleScope.launch { withContext(Dispatchers.IO) { SwiftApp.db.clearHistory(profile.id) } }
+                if (checked[0]) lifecycleScope.launch { withContext(Dispatchers.IO) { SwiftApp.db.clearHistory(profile.id) } }
+                toast("Cleared")
+                lifecycleScope.launch {
+                    delay(1500)
+                    computeStorage()
                 }
-                android.widget.Toast.makeText(ctx, "Cleared", android.widget.Toast.LENGTH_SHORT).show()
             }
             .setNegativeButton(android.R.string.cancel, null)
             .show()
     }
+
+    private fun clearCache() {
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Free up space?")
+            .setMessage(
+                "Cached images and files (${UrlUtils.formatBytes(cacheBytes)}) are deleted. " +
+                    "Pages load from the network again; logins and settings stay.",
+            )
+            .setPositiveButton("Clear cache") { _, _ ->
+                Engine.runtime.storageController.clearData(StorageController.ClearFlags.ALL_CACHES)
+                lifecycleScope.launch {
+                    delay(1500)
+                    computeStorage()
+                }
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun computeStorage() {
+        val summary = storageSummary ?: return
+        lifecycleScope.launch {
+            val (cache, data) = withContext(Dispatchers.IO) {
+                sizeOf(cacheDir) to sizeOf(File(filesDir, "mozilla"))
+            }
+            cacheBytes = cache
+            summary.text = "Cache ${UrlUtils.formatBytes(cache)} • Sites and ad-block lists ${UrlUtils.formatBytes(data)}. Tap to clear the cache."
+        }
+    }
+
+    private fun sizeOf(f: File): Long {
+        if (!f.exists()) return 0
+        if (f.isFile) return f.length()
+        return f.listFiles()?.sumOf { sizeOf(it) } ?: 0
+    }
+
+    private fun toast(text: String) = Toast.makeText(this, text, Toast.LENGTH_SHORT).show()
+
+    private fun color(res: Int) = ContextCompat.getColor(this, res)
+
+    private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 }

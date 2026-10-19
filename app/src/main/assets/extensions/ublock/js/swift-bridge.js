@@ -44,8 +44,80 @@ const sameSet = (a, b) => {
     return true;
 };
 
+/*
+ * Settings tuned for a slow phone. Applied on every connect; only changed
+ * values are written.
+ *  - Never pause the whole network while filter lists load: on a slow phone a
+ *    list reload could leave pages and searches hanging for a long time. The
+ *    app waits briefly for uBO at startup instead.
+ *  - Ignore generic cosmetic filters: skips scanning every DOM change on busy
+ *    pages (YouTube etc.). Network blocking and site-specific hiding still apply.
+ *  - Save the fast-start "selfie" 5 s after filters load (default 53 s), so a
+ *    quickly closed app doesn't recompile every list on the next launch.
+ *  - No list updates on uBO's own timer: rebuilding the filters after an update
+ *    keeps uBO busy for a long time on a slow phone, and pages wait for it
+ *    meanwhile. The app asks for updates ('update') while it is in the
+ *    background instead.
+ */
+const tuneForPhone = ( ) => {
+    const us = µb.userSettings;
+    if ( us.suspendUntilListsAreLoaded !== false ) {
+        µb.changeUserSettings('suspendUntilListsAreLoaded', false);
+    }
+    if ( us.ignoreGenericCosmeticFilters !== true ) {
+        µb.changeUserSettings('ignoreGenericCosmeticFilters', true);
+    }
+    if ( us.autoUpdate !== false ) {
+        µb.changeUserSettings('autoUpdate', false);
+    }
+    const hs = µb.hiddenSettings;
+    if ( hs.selfieDelayInSeconds !== 5 ) {
+        µb.changeHiddenSettings(Object.assign({}, hs, {
+            selfieDelayInSeconds: 5,
+        }));
+    }
+};
+
+/*
+ * uBO holds every network request while it (re)loads filter lists: at launch,
+ * when the list selection changes and after its automatic list updates. On a
+ * slow phone that can take tens of seconds, so pages and searches appear to
+ * hang, and if loading never finishes nothing loads until the app's data is
+ * cleared. Release held requests after a short moment instead; they are then
+ * filtered with whatever is already loaded.
+ */
+const MAX_SUSPEND_MS = 1500;
+
+const limitNetworkSuspension = ( ) => {
+    const net = vAPI.net;
+    if ( net instanceof Object === false || net.swiftLimited === true ) { return; }
+    net.swiftLimited = true;
+    const suspend = net.suspend.bind(net);
+    let timer;
+    net.suspend = function() {
+        suspend();
+        clearTimeout(timer);
+        timer = setTimeout(( ) => {
+            if ( net.suspendDepth !== 0 ) {
+                net.unsuspend({ all: true });
+            }
+        }, MAX_SUSPEND_MS);
+    };
+    // A suspension that started before this module loaded.
+    if ( net.suspendDepth !== 0 ) {
+        timer = setTimeout(( ) => {
+            if ( net.suspendDepth !== 0 ) {
+                net.unsuspend({ all: true });
+            }
+        }, MAX_SUSPEND_MS);
+    }
+};
+
+limitNetworkSuspension();
+
 const apply = async msg => {
     await µb.isReadyPromise;
+    tuneForPhone();
     let reloaded = false;
 
     if ( Array.isArray(msg.lists) && msg.lists.length !== 0 ) {

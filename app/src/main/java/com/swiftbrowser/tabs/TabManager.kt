@@ -9,6 +9,7 @@ import com.swiftbrowser.core.Prefs
 import com.swiftbrowser.core.Profiles
 import com.swiftbrowser.engine.Engine
 import com.swiftbrowser.media.Helper
+import org.mozilla.geckoview.GeckoResult
 import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.GeckoSessionSettings
 import org.mozilla.geckoview.WebExtension
@@ -16,8 +17,9 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
 /**
- * All tabs of all profiles. Only a few tabs keep a live engine session (see Prefs.maxLiveTabs);
- * the rest are "suspended": their history and scroll position are saved and restored on demand.
+ * All tabs of all profiles plus the incognito tabs. Only a few tabs keep a live engine session
+ * (see Prefs.maxLiveTabs); the rest are "suspended": their history and scroll position are kept
+ * and restored on demand. Tabs showing the home page have no session at all.
  */
 object TabManager {
     private lateinit var db: Db
@@ -26,6 +28,17 @@ object TabManager {
     private val main = Handler(Looper.getMainLooper())
     private val dirty = LinkedHashSet<Tab>()
     private val saveRunnable = Runnable { flushSaves() }
+    private var nextIncognitoId = -1L
+
+    /**
+     * How long a page waits for uBlock Origin's filters at app start before loading anyway: pages
+     * the user just asked for wait briefly, pages restored at start a little longer.
+     */
+    private const val USER_WAIT_MS = 3000L
+    private const val RESTORE_WAIT_MS = 8000L
+
+    private fun adblockWait(tab: Tab) =
+        if (System.currentTimeMillis() - tab.userNavAt < 2000) USER_WAIT_MS else RESTORE_WAIT_MS
 
     val tabs = ArrayList<Tab>()
 
@@ -49,23 +62,29 @@ object TabManager {
         L.d("Restored ${tabs.size} tabs")
     }
 
-    fun profileTabs(profileId: Long = Profiles.currentId): List<Tab> = tabs.filter { it.profileId == profileId }
+    fun profileTabs(profileId: Long = Profiles.currentId): List<Tab> =
+        tabs.filter { !it.incognito && it.profileId == profileId }
+
+    fun incognitoTabs(): List<Tab> = tabs.filter { it.incognito }
+
+    /** The tabs listed together with [tab]: its profile's tabs, or the incognito tabs. */
+    fun groupOf(tab: Tab): List<Tab> = if (tab.incognito) incognitoTabs() else profileTabs(tab.profileId)
 
     fun bySession(session: GeckoSession): Tab? = tabs.firstOrNull { it.session === session }
 
     /** The tab to show for the current profile; creates a blank one if the profile has none. */
     fun ensureCurrent(): Tab {
         val pid = Profiles.currentId
-        current?.let { if (it.profileId == pid && tabs.contains(it)) return it }
-        val tab = profileTabs(pid).maxByOrNull { it.lastUsed } ?: createTab("about:blank", pid, null, false)
+        current?.let { if (tabs.contains(it) && (it.incognito || it.profileId == pid)) return it }
+        val tab = profileTabs(pid).maxByOrNull { it.lastUsed } ?: createTab("about:blank", pid, null, false, false)
         select(tab)
         return tab
     }
 
-    private fun createTab(url: String, profileId: Long, parent: Tab?, desktop: Boolean): Tab {
+    private fun createTab(url: String, profileId: Long, parent: Tab?, desktop: Boolean, incognito: Boolean): Tab {
         val now = System.currentTimeMillis()
-        val id = db.insertTab(profileId, url, parent?.id, now, desktop)
-        val tab = Tab(id, profileId, url, "", null, parent?.id, now, desktop)
+        val id = if (incognito) nextIncognitoId-- else db.insertTab(profileId, url, parent?.id, now, desktop)
+        val tab = Tab(id, profileId, url, "", null, parent?.id, now, desktop, incognito)
         val parentIndex = if (parent != null) tabs.indexOf(parent) else -1
         if (parentIndex >= 0) tabs.add(parentIndex + 1, tab) else tabs.add(tab)
         return tab
@@ -75,10 +94,17 @@ object TabManager {
         url: String = "about:blank",
         parent: Tab? = null,
         select: Boolean = true,
+        incognito: Boolean = parent?.incognito ?: false,
         profileId: Long = parent?.profileId ?: Profiles.currentId,
     ): Tab {
-        val tab = createTab(url, profileId, parent, parent?.desktop ?: false)
-        if (select) select(tab) else ui?.onTabsChanged()
+        val tab = createTab(url, profileId, parent, parent?.desktop ?: false, incognito)
+        if (!tab.isBlank) tab.userNavAt = System.currentTimeMillis()
+        if (select) {
+            select(tab)
+        } else {
+            ui?.onTabsChanged()
+            ui?.onTabOpenedInBackground(tab)
+        }
         return tab
     }
 
@@ -96,34 +122,60 @@ object TabManager {
         current = tab
         tab.lastUsed = System.currentTimeMillis()
         scheduleSave(tab)
-        val session = ensureLive(tab)
-        if (session.isOpen) {
-            session.setActive(true)
-            session.setFocused(true)
-            Engine.runtime.webExtensionController.setTabActive(session, true)
+        if (!tab.isHome) {
+            val session = ensureLive(tab)
+            if (session.isOpen) activate(session)
         }
         ui?.onTabSelected(tab)
         ui?.onTabsChanged()
         trimLiveSessions()
     }
 
+    private fun activate(session: GeckoSession) {
+        session.setActive(true)
+        session.setFocused(true)
+        Engine.runtime.webExtensionController.setTabActive(session, true)
+    }
+
     /** Returns the tab's session, creating and restoring it if the tab was suspended. */
     fun ensureLive(tab: Tab): GeckoSession {
-        tab.session?.let { return it }
+        tab.session?.let { s ->
+            if (s.isOpen) return s
+            // Closed behind our back (e.g. its process died): start over.
+            detachSession(tab)
+        }
         val session = SessionFactory.create(tab)
         session.open(Engine.runtime)
         tab.crashed = false
-        val state = tab.state?.let { GeckoSession.SessionState.fromString(it) }
+        if (tab === current) activate(session)
+        val state = tab.sessionState ?: tab.state?.let { GeckoSession.SessionState.fromString(it) }
         if (state != null || !tab.isBlank) {
-            AdBlock.whenReady(ADBLOCK_WAIT_MS) {
-                if (tab.session !== session) return@whenReady
+            // Show progress right away, even while uBlock Origin is still starting.
+            tab.loading = true
+            tab.progress = 5
+            AdBlock.whenReady(adblockWait(tab)) {
+                if (tab.session !== session || !session.isOpen) return@whenReady
                 if (state != null) session.restoreState(state) else session.loadUri(tab.url)
             }
         }
         return session
     }
 
-    private const val ADBLOCK_WAIT_MS = 12000L
+    private fun detachSession(tab: Tab) {
+        val session = tab.session ?: return
+        ui?.releaseSession(session)
+        try {
+            session.close()
+        } catch (e: Exception) {
+            L.w("close failed", e)
+        }
+        tab.session = null
+        tab.loading = false
+        tab.playing = false
+        tab.mediaSession = null
+        tab.uboAction = null
+        Helper.detachTab(tab)
+    }
 
     private fun trimLiveSessions() {
         val max = prefs.maxLiveTabs
@@ -140,19 +192,7 @@ object TabManager {
     /** Frees a background tab's engine session; it is restored when the tab is opened again. */
     fun suspend(tab: Tab) {
         if (tab === current) return
-        val session = tab.session ?: return
-        ui?.releaseSession(session)
-        try {
-            session.close()
-        } catch (e: Exception) {
-            L.w("close failed", e)
-        }
-        tab.session = null
-        tab.loading = false
-        tab.playing = false
-        tab.mediaSession = null
-        tab.uboAction = null
-        Helper.detachTab(tab)
+        detachSession(tab)
     }
 
     fun suspendBackgroundTabs() {
@@ -162,53 +202,74 @@ object TabManager {
     fun close(tab: Tab) {
         val wasCurrent = tab === current
         tabs.remove(tab)
-        tab.session?.let { s ->
-            ui?.releaseSession(s)
-            try {
-                s.close()
-            } catch (e: Exception) {
-                L.w("close failed", e)
-            }
-        }
-        tab.session = null
-        Helper.detachTab(tab)
+        detachSession(tab)
         dirty.remove(tab)
-        io.execute { db.deleteTab(tab.id) }
+        Thumbnails.remove(tab)
+        if (!tab.incognito) io.execute { db.deleteTab(tab.id) }
         if (wasCurrent) {
             current = null
-            val siblings = profileTabs(tab.profileId)
-            val next = siblings.firstOrNull { it.id == tab.parentId }
-                ?: siblings.maxByOrNull { it.lastUsed }
-                ?: createTab("about:blank", tab.profileId, null, false)
-            select(next)
+            select(nextAfterClosing(tab))
         } else {
             ui?.onTabsChanged()
         }
     }
 
-    fun closeAll(profileId: Long) {
-        for (t in profileTabs(profileId)) if (t !== current) close(t)
-        current?.let { if (it.profileId == profileId) close(it) }
+    private fun nextAfterClosing(tab: Tab): Tab {
+        val siblings = groupOf(tab)
+        siblings.firstOrNull { it.id == tab.parentId }?.let { return it }
+        siblings.maxByOrNull { it.lastUsed }?.let { return it }
+        // The last incognito tab closed: back to the normal tabs.
+        val pid = Profiles.currentId
+        return profileTabs(pid).maxByOrNull { it.lastUsed } ?: createTab("about:blank", pid, null, false, false)
+    }
+
+    fun closeAll(incognito: Boolean) {
+        val group = if (incognito) incognitoTabs() else profileTabs()
+        for (t in group) if (t !== current) close(t)
+        current?.let { if (it in group) close(it) }
     }
 
     /** Navigates [tab] to [url] on the user's behalf. */
     fun load(tab: Tab, url: String) {
         tab.userNavAt = System.currentTimeMillis()
+        if (tab.isHome) tab.leftHome = true
+        // A blank tab gets an empty session here; the address is set after, so it loads only once.
         val session = ensureLive(tab)
-        AdBlock.whenReady(ADBLOCK_WAIT_MS) {
-            if (tab.session === session) session.loadUri(url)
-        }
         if (tab.isBlank) tab.url = url
+        tab.loading = true
+        tab.progress = 5
+        AdBlock.whenReady(USER_WAIT_MS) {
+            if (tab.session === session && session.isOpen) session.loadUri(url)
+        }
         notifyTabUpdated(tab)
+    }
+
+    /** Back on the first page of a tab opened from the home page shows the home page again. */
+    fun returnHome(tab: Tab) {
+        detachSession(tab)
+        tab.url = "about:blank"
+        tab.title = ""
+        tab.state = null
+        tab.sessionState = null
+        tab.leftHome = false
+        tab.canGoBack = false
+        tab.canGoForward = false
+        tab.progress = 100
+        tab.badge = null
+        tab.media.clear()
+        scheduleSave(tab)
+        if (tab === current) ui?.onTabSelected(tab)
+        ui?.onTabsChanged()
     }
 
     fun reload(tab: Tab) {
         tab.userNavAt = System.currentTimeMillis()
-        if (tab.session == null) {
-            select(tab)
+        val session = tab.session
+        if (session == null || !session.isOpen) {
+            if (!tab.isHome) select(tab)
             return
         }
-        tab.session?.reload()
+        session.reload()
     }
 
     fun goBack(tab: Tab) {
@@ -226,9 +287,8 @@ object TabManager {
         tab.crashed = false
         tab.userNavAt = System.currentTimeMillis()
         if (tab === current) {
-            val session = ensureLive(tab)
+            if (!tab.isHome) ensureLive(tab)
             ui?.onTabSelected(tab)
-            if (session.isOpen) session.setActive(true)
         }
     }
 
@@ -250,7 +310,7 @@ object TabManager {
 
     /** Web content called window.open() or followed a target=_blank link, and the policy allowed it. */
     fun openPopup(opener: Tab, uri: String): GeckoSession {
-        val tab = createTab(uri, opener.profileId, opener, opener.desktop)
+        val tab = createTab(uri, opener.profileId, opener, opener.desktop, opener.incognito)
         tab.approvedUrl = uri
         tab.lastClick = opener.lastClick
         val session = SessionFactory.create(tab) // Gecko opens it itself
@@ -260,7 +320,7 @@ object TabManager {
 
     /** An extension (uBlock Origin) opened a page such as its dashboard or logger. */
     fun openForExtension(url: String?): GeckoSession {
-        val tab = createTab(url ?: "about:blank", Profiles.currentId, current, false)
+        val tab = createTab(url ?: "about:blank", Profiles.currentId, current, false, false)
         val session = SessionFactory.create(tab)
         select(tab)
         return session
@@ -269,32 +329,28 @@ object TabManager {
     // ------------------------------------------------------------------ profiles
 
     fun switchProfile(id: Long) {
-        if (id == Profiles.currentId && current?.profileId == id) return
+        if (id == Profiles.currentId && current?.profileId == id && current?.incognito == false) return
         val previous = current
         Profiles.setCurrent(id)
-        val target = profileTabs(id).maxByOrNull { it.lastUsed } ?: createTab("about:blank", id, null, false)
+        val target = profileTabs(id).maxByOrNull { it.lastUsed } ?: createTab("about:blank", id, null, false, false)
         select(target)
         // Other profiles' pages don't need to stay in memory.
-        tabs.filter { it.profileId != id && it.session != null }.forEach { suspend(it) }
-        if (previous != null && previous.profileId != id) suspend(previous)
+        tabs.filter { !it.incognito && it.profileId != id && it.session != null }.forEach { suspend(it) }
+        if (previous != null && !previous.incognito && previous.profileId != id) suspend(previous)
         ui?.onTabsChanged()
     }
 
     fun deleteProfile(id: Long) {
         if (Profiles.all().size <= 1) return
         for (t in profileTabs(id)) {
-            t.session?.let { s ->
-                ui?.releaseSession(s)
-                s.close()
-            }
-            t.session = null
-            Helper.detachTab(t)
+            detachSession(t)
             tabs.remove(t)
             dirty.remove(t)
+            Thumbnails.remove(t)
         }
         Engine.runtime.storageController.clearDataForSessionContext(Profiles.contextId(id))
         Profiles.delete(id)
-        if (current?.profileId == id) current = null
+        if (current?.let { !it.incognito && it.profileId == id } == true) current = null
         ensureCurrent()
         ui?.onTabsChanged()
     }
@@ -312,10 +368,10 @@ object TabManager {
             ext.tabDelegate = object : WebExtension.TabDelegate {
                 override fun onNewTab(
                     source: WebExtension, createDetails: WebExtension.CreateTabDetails,
-                ) = org.mozilla.geckoview.GeckoResult.fromValue(openForExtension(createDetails.url))
+                ) = GeckoResult.fromValue(openForExtension(createDetails.url))
 
                 override fun onOpenOptionsPage(source: WebExtension) {
-                    source.metaData.optionsPageUrl?.let { newTab(it) }
+                    source.metaData.optionsPageUrl?.let { newTab(it, incognito = false) }
                 }
             }
         }
@@ -323,12 +379,16 @@ object TabManager {
 
     // ------------------------------------------------------------------ history & persistence
 
-    fun recordVisit(profileId: Long, url: String) {
-        io.execute { db.recordVisit(profileId, url, "") }
+    fun recordVisit(tab: Tab, url: String) {
+        if (tab.incognito) return
+        val pid = tab.profileId
+        io.execute { db.recordVisit(pid, url, "") }
     }
 
-    fun setHistoryTitle(profileId: Long, url: String, title: String) {
-        io.execute { db.setHistoryTitle(profileId, url, title) }
+    fun setHistoryTitle(tab: Tab, url: String, title: String) {
+        if (tab.incognito) return
+        val pid = tab.profileId
+        io.execute { db.setHistoryTitle(pid, url, title) }
     }
 
     fun notifyTabUpdated(tab: Tab) {
@@ -336,21 +396,31 @@ object TabManager {
     }
 
     fun scheduleSave(tab: Tab) {
+        if (tab.incognito) return
         dirty.add(tab)
-        main.removeCallbacks(saveRunnable)
-        main.postDelayed(saveRunnable, 1500)
+        if (dirty.size == 1) {
+            main.removeCallbacks(saveRunnable)
+            main.postDelayed(saveRunnable, 2000)
+        }
     }
+
+    private class SaveRow(
+        val id: Long, val url: String, val title: String,
+        val sessionState: GeckoSession.SessionState?, val state: String?, val lastUsed: Long, val desktop: Boolean,
+    )
 
     fun flushSaves() {
         main.removeCallbacks(saveRunnable)
         if (dirty.isEmpty()) return
-        val rows = dirty.filter { tabs.contains(it) }.map { t ->
-            arrayOf<Any?>(t.id, t.url, t.title, t.state, t.lastUsed, t.desktop)
+        val rows = dirty.filter { tabs.contains(it) && !it.incognito }.map { t ->
+            SaveRow(t.id, t.url, t.title, t.sessionState, t.state, t.lastUsed, t.desktop)
         }
         dirty.clear()
         io.execute {
             for (r in rows) {
-                db.updateTab(r[0] as Long, r[1] as String, r[2] as String, r[3] as String?, r[4] as Long, r[5] as Boolean)
+                // Turning the engine's state into text can take a while for long histories.
+                val state = r.sessionState?.toString() ?: r.state
+                db.updateTab(r.id, r.url, r.title, state, r.lastUsed, r.desktop)
             }
         }
     }

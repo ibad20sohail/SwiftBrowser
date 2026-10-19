@@ -22,12 +22,12 @@ enum class AdLevel(val key: String, val label: String, val summary: String) {
     ),
     HIGH(
         "high", "High",
-        "Also blocks pop-ups and redirects to other sites, overlays, cookie notices and other annoyances.",
+        "Also blocks pop-ups and redirects to other sites, mobile ads and ad overlays.",
     ),
     EXTREME(
         "extreme", "Extreme",
-        "Also blocks all third-party scripts and frames. Strongest, but can stop video players. " +
-            "If a video won't load, set that site to High.",
+        "Also hides cookie notices and other annoyances, and blocks all third-party scripts and frames. " +
+            "Strongest, but can stop video players: if a video won't load, set that site to High.",
     );
 
     companion object {
@@ -63,13 +63,14 @@ object AdBlock {
         "user-filters", "ublock-filters", "ublock-badware", "ublock-privacy", "ublock-unbreak",
         "ublock-quick-fixes", "easylist", "easyprivacy", "urlhaus-1", "plowe-0",
     )
-    // The 167k-entry phishing list is only in Extreme: it costs tens of MB of RAM on a 2 GB phone,
-    // and the malware list (urlhaus-1) is already on at every level.
+    // Every list costs memory and filtering time on a 2 GB phone, so High sticks to ads, pop-ups and
+    // overlays. Annoyance lists and the 167k-entry phishing list are only in Extreme; the malware
+    // list (urlhaus-1) is on at every level.
     private val HIGH_EXTRA = listOf(
         "adguard-mobile", "adguard-popup-overlays", "adguard-mobile-app-banners",
-        "ublock-annoyances", "ublock-cookies-easylist", "fanboy-cookiemonster",
     )
     private val EXTREME_EXTRA = listOf(
+        "ublock-annoyances", "ublock-cookies-easylist", "fanboy-cookiemonster",
         "curben-phishing", "adguard-generic", "adguard-spyware-url", "adguard-other-annoyances", "adguard-widgets",
         "easylist-annoyances", "easylist-notifications", "easylist-newsletters", "easylist-chat",
         "adguard-social", "fanboy-social", "block-lan",
@@ -219,13 +220,32 @@ object AdBlock {
         }
     }
 
-    fun updateFilterLists() {
-        try {
-            port?.postMessage(JSONObject().put("type", "update"))
+    /** Downloads newer versions of filter lists that are due, then rebuilds the filters. */
+    fun updateFilterLists(): Boolean {
+        val p = port ?: return false
+        return try {
+            p.postMessage(JSONObject().put("type", "update"))
+            true
         } catch (e: Exception) {
             L.w("uBO update failed", e)
+            false
         }
     }
+
+    /**
+     * Lists are updated while the app is in the background (uBO's own timer is off): rebuilding
+     * the filters keeps uBO busy for a while on a slow phone, and pages would wait for it.
+     */
+    fun updateInBackground() {
+        if (!ready) return
+        val now = System.currentTimeMillis()
+        val last = prefs.sp.getLong(LAST_UPDATE_CHECK, 0)
+        if (now - last < UPDATE_CHECK_INTERVAL_MS) return
+        if (updateFilterLists()) prefs.sp.edit().putLong(LAST_UPDATE_CHECK, now).apply()
+    }
+
+    private const val LAST_UPDATE_CHECK = "ubo_last_update_check"
+    private const val UPDATE_CHECK_INTERVAL_MS = 6L * 3600 * 1000
 
     private fun dynamicRules(g: AdLevel): String {
         val rules = ArrayList(BEHIND_THE_SCENE)

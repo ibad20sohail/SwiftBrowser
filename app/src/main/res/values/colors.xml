@@ -12,4 +12,30 @@
     <color name="shield_on">#FF188038</color>
     <color name="shield_off">#FF80868B</color>
     <color name="overlay_bg">#CC000000</color>
+
+    <!-- Home page -->
+    <color name="home_bg">#FFFFFFFF</color>
+    <color name="home_search_bg">#FFFFFFFF</color>
+    <color name="home_search_stroke">#FFDADCE0</color>
+    <color name="tile_bg">#FFF1F3F4</color>
+
+    <!-- Tab switcher -->
+    <color name="switcher_bg">#FFF1F3F4</color>
+    <color name="tab_card_bg">#FFFFFFFF</color>
+    <color name="tab_thumb_bg">#FFE8EAED</color>
+    <color name="toggle_selected">#FFD3E3FD</color>
+
+    <!-- Settings -->
+    <color name="settings_bg">#FFF1F3F4</color>
+    <color name="card_bg">#FFFFFFFF</color>
+
+    <!-- Pull to refresh -->
+    <color name="ptr_bg">#FFFFFFFF</color>
+
+    <!-- Incognito looks the same in light and dark mode -->
+    <color name="incognito_bg">#FF202124</color>
+    <color name="incognito_toolbar">#FF202124</color>
+    <color name="incognito_url">#FF3C4043</color>
+    <color name="incognito_text">#FFE8EAED</color>
+    <color name="incognito_hint">#FF9AA0A6</color>
 </resources>

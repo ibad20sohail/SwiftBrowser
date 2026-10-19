@@ -1,19 +1,22 @@
 'use strict';
 
-// Detects video streams/files that pages load and reports them to the app,
-// together with the request headers needed to download them later.
+// Detects video streams/files that pages load and reports them to the app.
+//
+// Kept deliberately cheap: one listener, only for request types that can carry
+// video (no images, scripts, styles or fonts), and no request-header capture.
+// The page or player frame that loaded the video is used as the Referer when
+// downloading, which is what most video hosts check.
 
 const NATIVE_APP = 'swift';
-const TYPES = ['main_frame', 'sub_frame', 'media', 'xmlhttprequest', 'object', 'other'];
-const WANTED_HEADERS = new Set(['referer', 'origin', 'cookie', 'user-agent', 'authorization']);
+const TYPES = ['media', 'xmlhttprequest', 'other'];
 const FILE_EXT = /\.(mp4|m4v|webm|mkv|mov|avi|flv|3gp)(?:[?#]|$)/i;
-const SEGMENT_EXT = /\.(ts|m4s|m4a|aac|mp3|vtt|webvtt|srt|key|jpg|png)(?:[?#]|$)/i;
+const SEGMENT_EXT = /\.(ts|m4s|m4a|aac|mp3|vtt|webvtt|srt|key|jpg|jpeg|png|gif|webp)(?:[?#]|$)/i;
 const HLS_EXT = /\.m3u8(?:[?#]|$)/i;
+const MIN_FILE_SIZE = 1024 * 1024;
 
 let port = null;
-const requestHeaders = new Map(); // requestId -> headers
-const seen = new Map();           // tabId -> Set(url)
-const recent = new Map();         // url -> headers (small LRU, for download resumes)
+const seen = new Map();   // tabId -> Set(url)
+const referers = new Map(); // media url -> referer (small LRU, for download resumes)
 
 function connect() {
   try {
@@ -38,60 +41,48 @@ function post(msg) {
 function onNative(msg) {
   if (!msg || typeof msg !== 'object') { return; }
   if (msg.type === 'headers') {
-    post({ type: 'headers', id: msg.id, headers: recent.get(msg.url) || null });
+    const referer = referers.get(msg.url);
+    post({ type: 'headers', id: msg.id, headers: referer ? { referer } : null });
   }
 }
 
-function header(list, name) {
+function contentType(list) {
   if (!list) { return ''; }
-  for (const h of list) {
-    if (h.name.toLowerCase() === name) { return h.value || ''; }
+  for (let i = 0; i < list.length; i++) {
+    const h = list[i];
+    if (h.name.length === 12 && h.name.toLowerCase() === 'content-type') { return (h.value || '').toLowerCase(); }
   }
   return '';
 }
 
-function remember(url, headers) {
-  recent.delete(url);
-  recent.set(url, headers);
-  if (recent.size > 300) {
-    recent.delete(recent.keys().next().value);
+function headerValue(list, name) {
+  for (let i = 0; i < list.length; i++) {
+    if (list[i].name.toLowerCase() === name) { return list[i].value || ''; }
   }
+  return '';
 }
 
-browser.webRequest.onBeforeSendHeaders.addListener(details => {
-  if (details.tabId < 0) { return; }
-  if (details.type === 'main_frame') { seen.delete(details.tabId); }
-  const h = {};
-  for (const { name, value } of details.requestHeaders || []) {
-    const n = name.toLowerCase();
-    if (WANTED_HEADERS.has(n) && value) { h[n] = value; }
-  }
-  requestHeaders.set(details.requestId, h);
-  remember(details.url, h);
-}, { urls: ['<all_urls>'], types: TYPES }, ['requestHeaders']);
-
 browser.webRequest.onHeadersReceived.addListener(details => {
-  const h = requestHeaders.get(details.requestId) || {};
-  requestHeaders.delete(details.requestId);
   if (details.tabId < 0 || details.statusCode >= 400) { return; }
   const url = details.url;
-  const ct = header(details.responseHeaders, 'content-type').toLowerCase();
+  const ct = contentType(details.responseHeaders);
   let kind = null;
   if (ct.includes('mpegurl') || HLS_EXT.test(url)) {
     kind = 'hls';
-  } else if (ct.startsWith('video/') && !/mp2t|iso\.segment|mpeg2/.test(ct) && !SEGMENT_EXT.test(url)) {
-    kind = 'file';
-  } else if (FILE_EXT.test(url) && !ct.startsWith('text/') && !ct.includes('json') && !ct.includes('html')) {
+  } else if (details.type === 'media' || ct.startsWith('video/') || FILE_EXT.test(url)) {
+    if (SEGMENT_EXT.test(url) || /mp2t|iso\.segment|mpeg2/.test(ct)) { return; }
+    if (ct.startsWith('text/') || ct.includes('json') || ct.includes('html') || ct.startsWith('audio/')) { return; }
+    if (!ct.startsWith('video/') && !FILE_EXT.test(url)) { return; }
     kind = 'file';
   }
   if (kind === null) { return; }
 
-  let size = parseInt(header(details.responseHeaders, 'content-length'), 10);
-  const range = /\/(\d+)\s*$/.exec(header(details.responseHeaders, 'content-range'));
+  let size = parseInt(headerValue(details.responseHeaders, 'content-length'), 10);
+  const range = /\/(\d+)\s*$/.exec(headerValue(details.responseHeaders, 'content-range'));
   if (range) { size = parseInt(range[1], 10); }
   if (!Number.isFinite(size)) { size = -1; }
   // Tiny files are usually ad clips or previews.
-  if (kind === 'file' && size > 0 && size < 1024 * 1024) { return; }
+  if (kind === 'file' && size > 0 && size < MIN_FILE_SIZE) { return; }
 
   let set = seen.get(details.tabId);
   if (!set) {
@@ -102,6 +93,11 @@ browser.webRequest.onHeadersReceived.addListener(details => {
   if (set.has(key)) { return; }
   set.add(key);
 
+  const referer = details.documentUrl || details.originUrl || '';
+  referers.delete(url);
+  referers.set(url, referer);
+  if (referers.size > 200) { referers.delete(referers.keys().next().value); }
+
   post({
     type: 'media',
     tabId: details.tabId,
@@ -109,15 +105,16 @@ browser.webRequest.onHeadersReceived.addListener(details => {
     kind,
     mime: ct,
     size,
-    headers: h,
+    headers: referer ? { referer } : {},
     frameUrl: details.documentUrl || '',
     originUrl: details.originUrl || '',
   });
 }, { urls: ['<all_urls>'], types: TYPES }, ['responseHeaders']);
 
-browser.webRequest.onErrorOccurred.addListener(details => {
-  requestHeaders.delete(details.requestId);
-}, { urls: ['<all_urls>'], types: TYPES });
+// A new page in the tab starts a new list of videos.
+browser.webNavigation.onCommitted.addListener(details => {
+  if (details.frameId === 0) { seen.delete(details.tabId); }
+});
 
 browser.tabs.onRemoved.addListener(tabId => { seen.delete(tabId); });
 

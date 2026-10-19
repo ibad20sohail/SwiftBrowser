@@ -11,157 +11,7 @@
         android:layout_height="match_parent"
         android:orientation="vertical">
 
-        <LinearLayout
-            android:id="@+id/toolbar"
-            android:layout_width="match_parent"
-            android:layout_height="56dp"
-            android:background="@color/toolbar_bg"
-            android:gravity="center_vertical"
-            android:orientation="horizontal"
-            android:paddingStart="8dp"
-            android:paddingEnd="2dp">
-
-            <TextView
-                android:id="@+id/profile_chip"
-                android:layout_width="30dp"
-                android:layout_height="30dp"
-                android:layout_marginEnd="6dp"
-                android:background="@drawable/bg_circle"
-                android:gravity="center"
-                android:textColor="#FFFFFFFF"
-                android:textSize="14sp"
-                android:textStyle="bold" />
-
-            <LinearLayout
-                android:id="@+id/url_box"
-                android:layout_width="0dp"
-                android:layout_height="40dp"
-                android:layout_weight="1"
-                android:background="@drawable/bg_url"
-                android:gravity="center_vertical"
-                android:orientation="horizontal"
-                android:paddingStart="10dp"
-                android:paddingEnd="2dp">
-
-                <ImageView
-                    android:id="@+id/url_icon"
-                    android:layout_width="16dp"
-                    android:layout_height="16dp"
-                    android:layout_marginEnd="6dp"
-                    android:importantForAccessibility="no"
-                    android:src="@drawable/ic_search"
-                    app:tint="@color/text_secondary" />
-
-                <EditText
-                    android:id="@+id/url_edit"
-                    android:layout_width="0dp"
-                    android:layout_height="match_parent"
-                    android:layout_weight="1"
-                    android:background="@null"
-                    android:hint="@string/url_hint"
-                    android:imeOptions="actionGo|flagNoExtractUi"
-                    android:importantForAutofill="no"
-                    android:inputType="textUri"
-                    android:selectAllOnFocus="true"
-                    android:singleLine="true"
-                    android:textColor="@color/text_primary"
-                    android:textColorHint="@color/text_secondary"
-                    android:textSize="15sp" />
-
-                <ImageButton
-                    android:id="@+id/url_clear"
-                    android:layout_width="32dp"
-                    android:layout_height="32dp"
-                    android:background="?attr/selectableItemBackgroundBorderless"
-                    android:contentDescription="Clear"
-                    android:src="@drawable/ic_close"
-                    android:visibility="gone" />
-            </LinearLayout>
-
-            <FrameLayout
-                android:id="@+id/video_btn"
-                android:layout_width="40dp"
-                android:layout_height="40dp"
-                android:background="?attr/selectableItemBackgroundBorderless"
-                android:contentDescription="Videos on this page"
-                android:visibility="gone">
-
-                <ImageView
-                    android:layout_width="24dp"
-                    android:layout_height="24dp"
-                    android:layout_gravity="center"
-                    android:importantForAccessibility="no"
-                    android:src="@drawable/ic_download"
-                    app:tint="@color/accent" />
-            </FrameLayout>
-
-            <FrameLayout
-                android:id="@+id/shield_btn"
-                android:layout_width="40dp"
-                android:layout_height="40dp"
-                android:background="?attr/selectableItemBackgroundBorderless"
-                android:contentDescription="Ad blocking">
-
-                <ImageView
-                    android:id="@+id/shield_icon"
-                    android:layout_width="24dp"
-                    android:layout_height="24dp"
-                    android:layout_gravity="center"
-                    android:importantForAccessibility="no"
-                    android:src="@drawable/ic_shield" />
-
-                <TextView
-                    android:id="@+id/shield_badge"
-                    android:layout_width="wrap_content"
-                    android:layout_height="16dp"
-                    android:layout_gravity="top|end"
-                    android:layout_marginTop="2dp"
-                    android:background="@drawable/bg_badge"
-                    android:gravity="center"
-                    android:minWidth="16dp"
-                    android:paddingStart="3dp"
-                    android:paddingEnd="3dp"
-                    android:textColor="#FFFFFFFF"
-                    android:textSize="9sp"
-                    android:textStyle="bold"
-                    android:visibility="gone" />
-            </FrameLayout>
-
-            <FrameLayout
-                android:id="@+id/tabs_btn"
-                android:layout_width="40dp"
-                android:layout_height="40dp"
-                android:background="?attr/selectableItemBackgroundBorderless"
-                android:contentDescription="Tabs">
-
-                <TextView
-                    android:id="@+id/tabs_count"
-                    android:layout_width="22dp"
-                    android:layout_height="22dp"
-                    android:layout_gravity="center"
-                    android:background="@drawable/bg_tab_count"
-                    android:gravity="center"
-                    android:textColor="@color/text_primary"
-                    android:textSize="11sp"
-                    android:textStyle="bold" />
-            </FrameLayout>
-
-            <ImageButton
-                android:id="@+id/menu_btn"
-                style="@style/Swift.ToolbarButton"
-                android:contentDescription="Menu"
-                android:src="@drawable/ic_more" />
-        </LinearLayout>
-
-        <ProgressBar
-            android:id="@+id/progress"
-            style="?android:attr/progressBarStyleHorizontal"
-            android:layout_width="match_parent"
-            android:layout_height="3dp"
-            android:max="100"
-            android:progressTint="@color/accent"
-            android:visibility="invisible" />
-
+        <!-- The page fills this area; the toolbar floats on top and slides away while scrolling. -->
         <FrameLayout
             android:id="@+id/content"
             android:layout_width="match_parent"
@@ -173,16 +23,24 @@
                 android:layout_width="match_parent"
                 android:layout_height="match_parent">
 
-                <org.mozilla.geckoview.GeckoView
+                <com.swiftbrowser.ui.SwiftGeckoView
                     android:id="@+id/gecko"
                     android:layout_width="match_parent"
                     android:layout_height="match_parent" />
             </com.swiftbrowser.ui.GestureFrameLayout>
 
+            <com.swiftbrowser.ui.HomeView
+                android:id="@+id/home"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:layout_marginTop="@dimen/toolbar_height"
+                android:visibility="gone" />
+
             <LinearLayout
                 android:id="@+id/crash_view"
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
+                android:layout_marginTop="@dimen/toolbar_height"
                 android:background="@color/page_bg"
                 android:gravity="center"
                 android:orientation="vertical"
@@ -212,14 +70,38 @@
                     android:text="Reload" />
             </LinearLayout>
 
+            <!-- Fades out over the page when a new tab opens. -->
+            <View
+                android:id="@+id/page_cover"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:layout_marginTop="@dimen/toolbar_height"
+                android:background="@color/page_bg"
+                android:visibility="gone" />
+
             <androidx.recyclerview.widget.RecyclerView
                 android:id="@+id/suggestions"
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
+                android:layout_marginTop="@dimen/toolbar_height"
                 android:background="@color/toolbar_bg"
                 android:clipToPadding="false"
                 android:paddingBottom="8dp"
                 android:visibility="gone" />
+
+            <ImageView
+                android:id="@+id/ptr_indicator"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:layout_gravity="top|center_horizontal"
+                android:layout_marginTop="16dp"
+                android:background="@drawable/bg_ptr"
+                android:elevation="4dp"
+                android:importantForAccessibility="no"
+                android:padding="8dp"
+                android:src="@drawable/ic_refresh"
+                android:visibility="gone"
+                app:tint="@color/accent" />
 
             <TextView
                 android:id="@+id/hud"
@@ -253,6 +135,189 @@
                 android:textColor="#FFFFFFFF"
                 android:textSize="14sp"
                 android:visibility="gone" />
+
+            <FrameLayout
+                android:id="@+id/app_bar"
+                android:layout_width="match_parent"
+                android:layout_height="@dimen/toolbar_height"
+                android:layout_gravity="top">
+
+                <LinearLayout
+                    android:id="@+id/toolbar"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:background="@color/toolbar_bg"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:paddingStart="8dp"
+                    android:paddingEnd="2dp">
+
+                    <FrameLayout
+                        android:layout_width="36dp"
+                        android:layout_height="36dp"
+                        android:layout_marginEnd="4dp">
+
+                        <TextView
+                            android:id="@+id/profile_chip"
+                            android:layout_width="30dp"
+                            android:layout_height="30dp"
+                            android:layout_gravity="center"
+                            android:background="@drawable/bg_circle"
+                            android:gravity="center"
+                            android:textColor="#FFFFFFFF"
+                            android:textSize="14sp"
+                            android:textStyle="bold" />
+
+                        <ImageView
+                            android:id="@+id/incognito_icon"
+                            android:layout_width="26dp"
+                            android:layout_height="26dp"
+                            android:layout_gravity="center"
+                            android:contentDescription="Incognito"
+                            android:src="@drawable/ic_incognito"
+                            android:visibility="gone"
+                            app:tint="@color/incognito_text" />
+                    </FrameLayout>
+
+                    <LinearLayout
+                        android:id="@+id/url_box"
+                        android:layout_width="0dp"
+                        android:layout_height="40dp"
+                        android:layout_weight="1"
+                        android:background="@drawable/bg_url"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal"
+                        android:paddingStart="12dp"
+                        android:paddingEnd="2dp">
+
+                        <ImageView
+                            android:id="@+id/url_icon"
+                            android:layout_width="18dp"
+                            android:layout_height="18dp"
+                            android:layout_marginEnd="8dp"
+                            android:importantForAccessibility="no"
+                            android:src="@drawable/ic_google_g" />
+
+                        <EditText
+                            android:id="@+id/url_edit"
+                            android:layout_width="0dp"
+                            android:layout_height="match_parent"
+                            android:layout_weight="1"
+                            android:background="@null"
+                            android:hint="@string/url_hint"
+                            android:imeOptions="actionGo|flagNoExtractUi"
+                            android:importantForAutofill="no"
+                            android:inputType="textUri"
+                            android:selectAllOnFocus="true"
+                            android:singleLine="true"
+                            android:textColor="@color/text_primary"
+                            android:textColorHint="@color/text_secondary"
+                            android:textSize="15sp" />
+
+                        <ImageButton
+                            android:id="@+id/url_mic"
+                            android:layout_width="36dp"
+                            android:layout_height="36dp"
+                            android:background="?attr/selectableItemBackgroundBorderless"
+                            android:contentDescription="Search by voice"
+                            android:src="@drawable/ic_mic"
+                            android:visibility="gone" />
+
+                        <ImageButton
+                            android:id="@+id/url_clear"
+                            android:layout_width="36dp"
+                            android:layout_height="36dp"
+                            android:background="?attr/selectableItemBackgroundBorderless"
+                            android:contentDescription="Clear"
+                            android:src="@drawable/ic_close"
+                            android:visibility="gone" />
+                    </LinearLayout>
+
+                    <FrameLayout
+                        android:id="@+id/video_btn"
+                        android:layout_width="40dp"
+                        android:layout_height="40dp"
+                        android:background="?attr/selectableItemBackgroundBorderless"
+                        android:contentDescription="Videos on this page"
+                        android:visibility="gone">
+
+                        <ImageView
+                            android:layout_width="24dp"
+                            android:layout_height="24dp"
+                            android:layout_gravity="center"
+                            android:importantForAccessibility="no"
+                            android:src="@drawable/ic_download"
+                            app:tint="@color/accent" />
+                    </FrameLayout>
+
+                    <FrameLayout
+                        android:id="@+id/shield_btn"
+                        android:layout_width="40dp"
+                        android:layout_height="40dp"
+                        android:background="?attr/selectableItemBackgroundBorderless"
+                        android:contentDescription="Ad blocking">
+
+                        <ImageView
+                            android:id="@+id/shield_icon"
+                            android:layout_width="24dp"
+                            android:layout_height="24dp"
+                            android:layout_gravity="center"
+                            android:importantForAccessibility="no"
+                            android:src="@drawable/ic_shield" />
+
+                        <TextView
+                            android:id="@+id/shield_badge"
+                            android:layout_width="wrap_content"
+                            android:layout_height="16dp"
+                            android:layout_gravity="top|end"
+                            android:layout_marginTop="2dp"
+                            android:background="@drawable/bg_badge"
+                            android:gravity="center"
+                            android:minWidth="16dp"
+                            android:paddingStart="3dp"
+                            android:paddingEnd="3dp"
+                            android:textColor="#FFFFFFFF"
+                            android:textSize="9sp"
+                            android:textStyle="bold"
+                            android:visibility="gone" />
+                    </FrameLayout>
+
+                    <FrameLayout
+                        android:id="@+id/tabs_btn"
+                        android:layout_width="40dp"
+                        android:layout_height="40dp"
+                        android:background="?attr/selectableItemBackgroundBorderless"
+                        android:contentDescription="Tabs">
+
+                        <TextView
+                            android:id="@+id/tabs_count"
+                            android:layout_width="22dp"
+                            android:layout_height="22dp"
+                            android:layout_gravity="center"
+                            android:background="@drawable/bg_tab_count"
+                            android:gravity="center"
+                            android:textColor="@color/text_primary"
+                            android:textSize="11sp"
+                            android:textStyle="bold" />
+                    </FrameLayout>
+
+                    <ImageButton
+                        android:id="@+id/menu_btn"
+                        style="@style/Swift.ToolbarButton"
+                        android:contentDescription="Menu"
+                        android:src="@drawable/ic_more" />
+                </LinearLayout>
+
+                <ProgressBar
+                    android:id="@+id/progress"
+                    style="?android:attr/progressBarStyleHorizontal"
+                    android:layout_width="match_parent"
+                    android:layout_height="3dp"
+                    android:layout_gravity="bottom"
+                    android:max="100"
+                    android:progressTint="@color/accent"
+                    android:visibility="invisible" />
+            </FrameLayout>
         </FrameLayout>
 
         <LinearLayout
@@ -260,6 +325,7 @@
             android:layout_width="match_parent"
             android:layout_height="52dp"
             android:background="@color/toolbar_bg"
+            android:elevation="4dp"
             android:gravity="center_vertical"
             android:orientation="horizontal"
             android:paddingStart="12dp"
@@ -308,4 +374,11 @@
                 android:src="@drawable/ic_close" />
         </LinearLayout>
     </LinearLayout>
+
+    <com.swiftbrowser.ui.TabSwitcherView
+        android:id="@+id/tab_switcher"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:elevation="8dp"
+        android:visibility="gone" />
 </FrameLayout>

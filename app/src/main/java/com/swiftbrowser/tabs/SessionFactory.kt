@@ -1,0 +1,377 @@
+package com.swiftbrowser.tabs
+
+import android.Manifest
+import android.os.Handler
+import android.os.Looper
+import com.swiftbrowser.adblock.AdBlock
+import com.swiftbrowser.adblock.AdLevel
+import com.swiftbrowser.adblock.NavPolicy
+import com.swiftbrowser.core.L
+import com.swiftbrowser.core.Profiles
+import com.swiftbrowser.core.UrlUtils
+import com.swiftbrowser.engine.Engine
+import com.swiftbrowser.media.Helper
+import com.swiftbrowser.ui.ErrorPage
+import com.swiftbrowser.ui.Prompts
+import org.mozilla.geckoview.AllowOrDeny
+import org.mozilla.geckoview.GeckoResult
+import org.mozilla.geckoview.GeckoSession
+import org.mozilla.geckoview.GeckoSession.NavigationDelegate.LoadRequest
+import org.mozilla.geckoview.GeckoSession.PermissionDelegate.ContentPermission
+import org.mozilla.geckoview.GeckoSessionSettings
+import org.mozilla.geckoview.MediaSession
+import org.mozilla.geckoview.WebExtension
+import org.mozilla.geckoview.WebRequestError
+import org.mozilla.geckoview.WebResponse
+
+object SessionFactory {
+    val prompts = Prompts()
+
+    fun create(tab: Tab): GeckoSession {
+        val settings = GeckoSessionSettings.Builder()
+            .contextId(Profiles.contextId(tab.profileId))
+            .usePrivateMode(false)
+            .userAgentMode(
+                if (tab.desktop) GeckoSessionSettings.USER_AGENT_MODE_DESKTOP else GeckoSessionSettings.USER_AGENT_MODE_MOBILE,
+            )
+            .viewportMode(
+                if (tab.desktop) GeckoSessionSettings.VIEWPORT_MODE_DESKTOP else GeckoSessionSettings.VIEWPORT_MODE_MOBILE,
+            )
+            .suspendMediaWhenInactive(true)
+            .build()
+        val session = GeckoSession(settings)
+        val d = TabDelegates(tab)
+        session.setNavigationDelegate(d)
+        session.setProgressDelegate(d)
+        session.setContentDelegate(d)
+        session.setHistoryDelegate(d)
+        session.setPermissionDelegate(d)
+        session.setMediaSessionDelegate(d)
+        session.setPromptDelegate(prompts)
+        tab.session = session
+        attachExtensions(tab, session)
+        return session
+    }
+
+    fun attachExtensions(tab: Tab, session: GeckoSession) {
+        AdBlock.extension?.let { ext ->
+            session.webExtensionController.setActionDelegate(ext, UboActionDelegate(tab))
+            session.webExtensionController.setTabDelegate(ext, object : WebExtension.SessionTabDelegate {
+                // uBlock Origin closes tabs it identifies as ad pop-ups.
+                override fun onCloseTab(source: WebExtension?, session: GeckoSession): GeckoResult<AllowOrDeny> {
+                    TabManager.bySession(session)?.let { TabManager.close(it) }
+                    return GeckoResult.allow()
+                }
+            })
+        }
+        Helper.attachSession(tab, session)
+    }
+}
+
+/** Receives uBlock Origin's badge (blocked count) and opens its popup panel. */
+class UboActionDelegate(private val tab: Tab?) : WebExtension.ActionDelegate {
+    override fun onBrowserAction(extension: WebExtension, session: GeckoSession?, action: WebExtension.Action) {
+        val t = tab ?: return
+        t.uboAction = action
+        t.badge = action.badgeText
+        TabManager.notifyTabUpdated(t)
+    }
+
+    override fun onTogglePopup(extension: WebExtension, action: WebExtension.Action): GeckoResult<GeckoSession>? =
+        openPopup()
+
+    override fun onOpenPopup(extension: WebExtension, action: WebExtension.Action): GeckoResult<GeckoSession>? =
+        openPopup()
+
+    private fun openPopup(): GeckoResult<GeckoSession>? {
+        val ui = TabManager.ui ?: return null
+        val session = GeckoSession(GeckoSessionSettings.Builder().build())
+        session.setPromptDelegate(SessionFactory.prompts)
+        session.open(Engine.runtime)
+        ui.showExtensionPopup(session)
+        return GeckoResult.fromValue(session)
+    }
+}
+
+class TabDelegates(private val tab: Tab) :
+    GeckoSession.NavigationDelegate,
+    GeckoSession.ProgressDelegate,
+    GeckoSession.ContentDelegate,
+    GeckoSession.HistoryDelegate,
+    GeckoSession.PermissionDelegate,
+    MediaSession.Delegate {
+
+    private val handler = Handler(Looper.getMainLooper())
+    private val ui: BrowserUi? get() = TabManager.ui
+
+    private fun changed() = TabManager.notifyTabUpdated(tab)
+
+    // ------------------------------------------------------------------ navigation
+
+    override fun onLocationChange(
+        session: GeckoSession, url: String?, perms: MutableList<ContentPermission>, hasUserGesture: Boolean,
+    ) {
+        if (url == null) return
+        tab.url = url
+        TabManager.scheduleSave(tab)
+        changed()
+    }
+
+    override fun onCanGoBack(session: GeckoSession, canGoBack: Boolean) {
+        tab.canGoBack = canGoBack
+        changed()
+    }
+
+    override fun onCanGoForward(session: GeckoSession, canGoForward: Boolean) {
+        tab.canGoForward = canGoForward
+        changed()
+    }
+
+    override fun onLoadRequest(session: GeckoSession, request: LoadRequest): GeckoResult<AllowOrDeny>? {
+        val url = request.uri
+        if (!UrlUtils.isWebScheme(url)) {
+            // intent://, market://, tel:, whatsapp: ... Ask first; silent attempts are ad tricks.
+            val level = AdBlock.levelFor(tab.url)
+            if (request.hasUserGesture || level < AdLevel.HIGH) ui?.onExternalApp(tab, url)
+            return GeckoResult.deny()
+        }
+        // The first load of a pop-up that the policy already allowed in its opener.
+        tab.approvedUrl?.let { approved ->
+            if (request.target != GeckoSession.NavigationDelegate.TARGET_WINDOW_NEW &&
+                UrlUtils.stripFragment(approved) == UrlUtils.stripFragment(url)
+            ) {
+                tab.approvedUrl = null
+                return null
+            }
+        }
+        val level = AdBlock.levelFor(request.triggerUri ?: tab.url)
+        return if (request.target == GeckoSession.NavigationDelegate.TARGET_WINDOW_NEW) {
+            decide(url, popup = true) { waited ->
+                NavPolicy.popup(level, request, tab.lastClick, System.currentTimeMillis(), waited)
+            }
+        } else {
+            decide(url, popup = false) { waited ->
+                NavPolicy.navigation(level, request, tab.lastClick, System.currentTimeMillis(), tab.userNavAt, waited)
+            }
+        }
+    }
+
+    private fun decide(url: String, popup: Boolean, eval: (Boolean) -> NavPolicy.Decision): GeckoResult<AllowOrDeny>? {
+        return when (eval(false)) {
+            NavPolicy.Decision.ALLOW -> null
+            NavPolicy.Decision.BLOCK -> {
+                L.d("Blocked ${if (popup) "pop-up" else "redirect"}: $url")
+                ui?.onBlocked(tab, url, popup)
+                GeckoResult.deny()
+            }
+            NavPolicy.Decision.WAIT -> {
+                // The tap report from the page may still be on its way; decide a moment later.
+                val result = GeckoResult<AllowOrDeny>()
+                handler.postDelayed({
+                    if (eval(true) == NavPolicy.Decision.ALLOW) {
+                        result.complete(AllowOrDeny.ALLOW)
+                    } else {
+                        L.d("Blocked ${if (popup) "pop-up" else "redirect"}: $url")
+                        ui?.onBlocked(tab, url, popup)
+                        result.complete(AllowOrDeny.DENY)
+                    }
+                }, 300)
+                result
+            }
+        }
+    }
+
+    override fun onSubframeLoadRequest(session: GeckoSession, request: LoadRequest): GeckoResult<AllowOrDeny>? {
+        // Frames trying to open apps (intent://, market://) are always ad tricks.
+        return if (!UrlUtils.isWebScheme(request.uri)) GeckoResult.deny() else null
+    }
+
+    override fun onNewSession(session: GeckoSession, uri: String): GeckoResult<GeckoSession>? =
+        GeckoResult.fromValue(TabManager.openPopup(tab, uri))
+
+    override fun onLoadError(session: GeckoSession, uri: String?, error: WebRequestError): GeckoResult<String>? =
+        GeckoResult.fromValue(ErrorPage.create(uri, error))
+
+    // ------------------------------------------------------------------ progress
+
+    override fun onPageStart(session: GeckoSession, url: String) {
+        tab.loading = true
+        tab.progress = 5
+        tab.media.clear()
+        if (tab === TabManager.current && session.isOpen) session.setActive(true)
+        changed()
+    }
+
+    override fun onPageStop(session: GeckoSession, success: Boolean) {
+        tab.loading = false
+        tab.progress = 100
+        changed()
+    }
+
+    override fun onProgressChange(session: GeckoSession, progress: Int) {
+        tab.progress = progress
+        changed()
+    }
+
+    override fun onSecurityChange(session: GeckoSession, securityInfo: GeckoSession.ProgressDelegate.SecurityInformation) {
+        tab.secure = securityInfo.isSecure
+        changed()
+    }
+
+    override fun onSessionStateChange(session: GeckoSession, sessionState: GeckoSession.SessionState) {
+        tab.state = sessionState.toString()
+        TabManager.scheduleSave(tab)
+    }
+
+    // ------------------------------------------------------------------ content
+
+    override fun onTitleChange(session: GeckoSession, title: String?) {
+        tab.title = title.orEmpty()
+        if (UrlUtils.isHttp(tab.url) && tab.title.isNotBlank()) {
+            TabManager.setHistoryTitle(tab.profileId, tab.url, tab.title)
+        }
+        TabManager.scheduleSave(tab)
+        changed()
+    }
+
+    override fun onFullScreen(session: GeckoSession, fullScreen: Boolean) {
+        tab.fullscreen = fullScreen
+        ui?.onFullScreen(tab, fullScreen)
+    }
+
+    override fun onContextMenu(
+        session: GeckoSession, screenX: Int, screenY: Int, element: GeckoSession.ContentDelegate.ContextElement,
+    ) {
+        ui?.onContextMenu(tab, element)
+    }
+
+    override fun onExternalResponse(session: GeckoSession, response: WebResponse) {
+        val u = ui
+        if (u != null) {
+            u.onExternalResponse(tab, response)
+        } else {
+            try {
+                response.body?.close()
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    override fun onCloseRequest(session: GeckoSession) {
+        // Only pages opened by script may close themselves.
+        if (tab.parentId != null && tab.session === session) TabManager.close(tab)
+    }
+
+    override fun onCrash(session: GeckoSession) = onDead(session, crashed = true)
+
+    override fun onKill(session: GeckoSession) = onDead(session, crashed = false)
+
+    private fun onDead(session: GeckoSession, crashed: Boolean) {
+        L.w("Tab ${tab.id} content process ${if (crashed) "crashed" else "was killed"}")
+        if (tab.session !== session) return
+        ui?.releaseSession(session)
+        try {
+            session.close()
+        } catch (_: Exception) {
+        }
+        tab.session = null
+        tab.loading = false
+        tab.playing = false
+        Helper.detachTab(tab)
+        if (tab === TabManager.current) {
+            if (crashed) {
+                tab.crashed = true
+                ui?.onTabCrashed(tab)
+            } else {
+                TabManager.revive(tab)
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------ history
+
+    override fun onVisited(
+        session: GeckoSession, url: String, lastVisitedURL: String?, flags: Int,
+    ): GeckoResult<Boolean>? {
+        val skip = GeckoSession.HistoryDelegate.VISIT_REDIRECT_SOURCE or
+            GeckoSession.HistoryDelegate.VISIT_REDIRECT_SOURCE_PERMANENT or
+            GeckoSession.HistoryDelegate.VISIT_UNRECOVERABLE_ERROR
+        if (flags and GeckoSession.HistoryDelegate.VISIT_TOP_LEVEL == 0 || flags and skip != 0) return null
+        if (!UrlUtils.isHttp(url)) return null
+        TabManager.recordVisit(tab.profileId, url)
+        return GeckoResult.fromValue(true)
+    }
+
+    // ------------------------------------------------------------------ permissions
+
+    override fun onContentPermissionRequest(session: GeckoSession, perm: ContentPermission): GeckoResult<Int>? {
+        return when (perm.permission) {
+            GeckoSession.PermissionDelegate.PERMISSION_AUTOPLAY_INAUDIBLE,
+            GeckoSession.PermissionDelegate.PERMISSION_PERSISTENT_STORAGE,
+            GeckoSession.PermissionDelegate.PERMISSION_MEDIA_KEY_SYSTEM_ACCESS,
+            GeckoSession.PermissionDelegate.PERMISSION_STORAGE_ACCESS,
+            -> GeckoResult.fromValue(ContentPermission.VALUE_ALLOW)
+            // Sound only after the user presses play; stops noisy auto-playing ads.
+            GeckoSession.PermissionDelegate.PERMISSION_AUTOPLAY_AUDIBLE -> GeckoResult.fromValue(ContentPermission.VALUE_DENY)
+            // Notification prompts on these sites are spam.
+            GeckoSession.PermissionDelegate.PERMISSION_DESKTOP_NOTIFICATION -> GeckoResult.fromValue(ContentPermission.VALUE_DENY)
+            GeckoSession.PermissionDelegate.PERMISSION_GEOLOCATION -> SessionFactory.prompts.askPermission(
+                "Allow ${UrlUtils.host(perm.uri) ?: "this site"} to use your location?",
+            )
+            else -> GeckoResult.fromValue(ContentPermission.VALUE_DENY)
+        }
+    }
+
+    override fun onAndroidPermissionsRequest(
+        session: GeckoSession, permissions: Array<out String>?, callback: GeckoSession.PermissionDelegate.Callback,
+    ) {
+        val wanted = permissions?.filter {
+            it == Manifest.permission.ACCESS_FINE_LOCATION || it == Manifest.permission.ACCESS_COARSE_LOCATION
+        }.orEmpty()
+        val u = ui
+        if (wanted.isEmpty() || u == null) {
+            callback.reject()
+            return
+        }
+        u.requestAndroidPermissions(wanted.toTypedArray()) { granted -> if (granted) callback.grant() else callback.reject() }
+    }
+
+    override fun onMediaPermissionRequest(
+        session: GeckoSession,
+        uri: String,
+        video: Array<out GeckoSession.PermissionDelegate.MediaSource>?,
+        audio: Array<out GeckoSession.PermissionDelegate.MediaSource>?,
+        callback: GeckoSession.PermissionDelegate.MediaCallback,
+    ) {
+        callback.reject()
+    }
+
+    // ------------------------------------------------------------------ media
+
+    override fun onActivated(session: GeckoSession, mediaSession: MediaSession) {
+        tab.mediaSession = mediaSession
+    }
+
+    override fun onDeactivated(session: GeckoSession, mediaSession: MediaSession) {
+        if (tab.mediaSession === mediaSession) tab.mediaSession = null
+        setPlaying(false)
+    }
+
+    override fun onPlay(session: GeckoSession, mediaSession: MediaSession) = setPlaying(true)
+
+    override fun onPause(session: GeckoSession, mediaSession: MediaSession) = setPlaying(false)
+
+    override fun onStop(session: GeckoSession, mediaSession: MediaSession) = setPlaying(false)
+
+    private fun setPlaying(playing: Boolean) {
+        if (tab.playing == playing) return
+        tab.playing = playing
+        ui?.onPlayingChanged(tab)
+    }
+
+    override fun onFullscreen(
+        session: GeckoSession, mediaSession: MediaSession, enabled: Boolean, meta: MediaSession.ElementMetadata?,
+    ) {
+        if (enabled && meta != null) ui?.onVideoFullscreen(tab, meta.width, meta.height)
+    }
+}

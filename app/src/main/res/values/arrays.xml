@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string-array name="ad_levels">
+        <item>Off</item>
+        <item>Balanced</item>
+        <item>High</item>
+        <item>Extreme</item>
+    </string-array>
+    <string-array name="ad_level_keys">
+        <item>off</item>
+        <item>balanced</item>
+        <item>high</item>
+        <item>extreme</item>
+    </string-array>
+    <string-array name="live_tabs">
+        <item>1</item>
+        <item>2</item>
+        <item>3</item>
+        <item>4</item>
+        <item>5</item>
+    </string-array>
+</resources>

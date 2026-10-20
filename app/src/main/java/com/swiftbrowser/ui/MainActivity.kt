@@ -281,6 +281,11 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         showCrashReportIfAny()
         showProblemIfAny()
         showStartupUntilReady()
+        applySystemBars()
+        // The menu was open when the screen restarted for a dark mode switch: it stays open.
+        if (savedInstanceState?.getBoolean(STATE_MENU_OPEN) == true) {
+            root.post { if (!isFinishing) quickMenu.open(animate = false) }
+        }
         Looper.myQueue().addIdleHandler {
             quickMenu
             false
@@ -296,6 +301,11 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handleIntent(intent)
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putBoolean(STATE_MENU_OPEN, quickMenu.isOpen)
     }
 
     override fun onStart() {
@@ -1376,7 +1386,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         gecko.setDynamicToolbarMaxHeight(toolbarPx)
         toolbarWanted = false
         showToolbar()
-        WindowCompat.getInsetsController(window, window.decorView).show(WindowInsetsCompat.Type.systemBars())
+        applySystemBars()
         requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         gestureLayer.gesturesEnabled = false
         window.attributes = window.attributes.apply {
@@ -1394,10 +1404,23 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         }
     }
 
+    /**
+     * Full screen browsing (menu or Settings): Android's status and navigation bars are hidden; a
+     * swipe in from the top or bottom edge shows them for a moment over the page.
+     */
+    fun applySystemBars() {
+        // A full-screen video keeps them hidden either way.
+        if (fullscreenTab != null) return
+        if (prefs.fullScreen) hideSystemBars()
+        else WindowCompat.getInsetsController(window, window.decorView).show(WindowInsetsCompat.Type.systemBars())
+    }
+
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         // Dialogs (e.g. playback speed) bring the system bars back on Android 7; hide them again.
-        if (hasFocus && fullscreenTab != null) hideSystemBars()
+        // Also follows a change made in Settings.
+        if (!hasFocus) return
+        if (fullscreenTab != null) hideSystemBars() else applySystemBars()
     }
 
     override fun onVideoFullscreen(tab: Tab, width: Long, height: Long) {
@@ -1776,6 +1799,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
     companion object {
         private const val TOOLBAR_SETTLE_MS = 300L
+        private const val STATE_MENU_OPEN = "menu_open"
 
         const val EXTRA_URL = "url"
         const val EXTRA_NEW_TAB = "new_tab"

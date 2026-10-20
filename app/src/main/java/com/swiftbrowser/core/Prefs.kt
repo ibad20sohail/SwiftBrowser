@@ -104,10 +104,22 @@ class Prefs(ctx: Context) {
         get() = sp.getBoolean(EDGE_SWIPE, true)
         set(v) = sp.edit { putBoolean(EDGE_SWIPE, v) }
 
-    /** Sites shown in Lite mode: no animations, shadows or filters. */
-    var liteSites: Set<String>
+    /** Sites that had Lite mode in 1.4, when it was chosen per site. */
+    private val liteSites: Set<String>
         get() = sp.getStringSet(LITE_SITES, emptySet())?.toSet() ?: emptySet()
-        set(v) = sp.edit { putStringSet(LITE_SITES, v) }
+
+    /**
+     * Lite mode on every site: no animations, shadows or blur. Whoever used it on a site in 1.4
+     * (when it was per site) has it on.
+     */
+    var liteMode: Boolean
+        get() = if (sp.contains(LITE_MODE)) sp.getBoolean(LITE_MODE, false) else liteSites.isNotEmpty()
+        set(v) = sp.edit { putBoolean(LITE_MODE, v) }
+
+    /** Browsing without Android's status and navigation bars (a swipe from the edge shows them). */
+    var fullScreen: Boolean
+        get() = sp.getBoolean(FULL_SCREEN, false)
+        set(v) = sp.edit { putBoolean(FULL_SCREEN, v) }
 
     /** When Swift last asked GitHub for a newer version. */
     var lastUpdateCheck: Long
@@ -136,6 +148,8 @@ class Prefs(ctx: Context) {
         const val BACKGROUND_PLAY = "background_play"
         const val EDGE_SWIPE = "edge_swipe"
         const val LITE_SITES = "lite_sites"
+        const val LITE_MODE = "lite_mode"
+        const val FULL_SCREEN = "full_screen"
         const val LAST_UPDATE_CHECK = "last_update_check"
     }
 }

@@ -44,32 +44,26 @@ function onNative(msg) {
     const referer = referers.get(msg.url);
     post({ type: 'headers', id: msg.id, headers: referer ? { referer } : null });
   } else if (msg.type === 'lite') {
-    setLiteSites(Array.isArray(msg.sites) ? msg.sites : []);
+    setLite(msg.all === true);
   }
 }
 
 // ---------------------------------------------------------------- Lite mode
 
-// The sites the user switched to Lite mode get perf/lite.css from the first byte of every page.
+// With Lite mode on, every page gets perf/lite.css from its first byte.
 let liteRegistration = null;
 let liteQueue = Promise.resolve();
 
-function setLiteSites(sites) {
+function setLite(on) {
   liteQueue = liteQueue.then(async () => {
     if (liteRegistration) {
       try { await liteRegistration.unregister(); } catch (e) { }
       liteRegistration = null;
     }
-    const matches = [];
-    for (const site of sites) {
-      if (typeof site === 'string' && /^[a-z0-9.-]+$/i.test(site)) {
-        matches.push('*://' + site + '/*', '*://*.' + site + '/*');
-      }
-    }
-    if (matches.length === 0) { return; }
+    if (!on) { return; }
     try {
       liteRegistration = await browser.contentScripts.register({
-        matches,
+        matches: ['http://*/*', 'https://*/*'],
         css: [{ file: '/perf/lite.css' }],
         allFrames: true,
         runAt: 'document_start',

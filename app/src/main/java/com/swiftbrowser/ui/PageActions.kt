@@ -38,18 +38,15 @@ object PageActions {
 
     // ------------------------------------------------------------------ Lite mode
 
-    fun isLite(tab: Tab): Boolean = UrlUtils.site(tab.url)?.let { it in SwiftApp.prefs.liteSites } == true
-
-    /** Lite mode for the page's site: no animations, shadows or filters. Reloads the page. */
-    fun toggleLite(a: MainActivity, tab: Tab) {
-        val site = UrlUtils.site(tab.url) ?: return
-        val prefs = SwiftApp.prefs
-        val on = site !in prefs.liteSites
-        prefs.liteSites = if (on) prefs.liteSites + site else prefs.liteSites - site
-        Helper.sendLiteSites()
+    /** Lite mode on all sites (no animations, shadows or blur), or off. Reloads the open page. */
+    fun setLite(a: MainActivity, on: Boolean) {
+        SwiftApp.prefs.liteMode = on
+        Helper.sendLiteMode()
+        val tab = TabManager.current
         // The extension registers the style asynchronously; give it a moment before reloading.
-        a.window.decorView.postDelayed({ if (tab.session != null) TabManager.reload(tab) }, 300)
-        a.snack(if (on) "Lite mode on for $site" else "Lite mode off for $site")
+        if (tab != null && UrlUtils.isHttp(tab.url)) {
+            a.window.decorView.postDelayed({ if (tab.session != null) TabManager.reload(tab) }, 300)
+        }
     }
 
     // ------------------------------------------------------------------ save for offline

@@ -51,7 +51,6 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var prefs: Prefs
     private lateinit var column: LinearLayout
     private var siteLevelsSummary: TextView? = null
-    private var liteSummary: TextView? = null
     private var storageSummary: TextView? = null
     private var cacheBytes = 0L
     private val levelRows = ArrayList<Pair<AdLevel, View>>()
@@ -93,7 +92,6 @@ class SettingsActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         updateSiteLevelsSummary()
-        updateLiteSummary()
         computeStorage()
     }
 
@@ -116,6 +114,9 @@ class SettingsActivity : AppCompatActivity() {
             switch(R.drawable.ic_zoom, blue, "Zoom on all sites", "Pinch to zoom even where a site turns it off", prefs.forceZoom) {
                 prefs.forceZoom = it
                 Engine.setForceZoom(it)
+            }
+            switch(R.drawable.ic_fullscreen, blue, "Full screen", "Hide the phone's status and navigation bars; swipe in from the top or bottom edge to see them", prefs.fullScreen) {
+                prefs.fullScreen = it
             }
         }
 
@@ -194,7 +195,14 @@ class SettingsActivity : AppCompatActivity() {
                 },
                 prefs.softwareRendering,
             ) { on -> confirmRenderingChange(on) }
-            liteSummary = action(R.drawable.ic_lite, amber, "Lite mode sites", "") { showLiteSites() }
+            switch(
+                R.drawable.ic_lite, amber, "Lite mode",
+                "All sites without animations, shadows or blur: much smoother scrolling on this phone; some sites look plainer.",
+                prefs.liteMode,
+            ) {
+                prefs.liteMode = it
+                Helper.sendLiteMode()
+            }
             switch(
                 R.drawable.ic_speed, amber, "Show drawing speed",
                 "Shows frames per second and how long each frame takes, on top of pages. For comparing the two drawing methods.",
@@ -426,41 +434,6 @@ class SettingsActivity : AppCompatActivity() {
                 toast("Pages use the new size when they reload")
             }
             .setNegativeButton(android.R.string.cancel, null)
-            .show()
-    }
-
-    private fun updateLiteSummary() {
-        val n = prefs.liteSites.size
-        liteSummary?.text = if (n == 0) {
-            "None yet. Turn it on for a slow site from the menu (⋮ → Lite mode): no animations, shadows or blur."
-        } else {
-            "$n ${if (n == 1) "site" else "sites"} without animations, shadows or blur"
-        }
-        liteSummary?.visibility = View.VISIBLE
-    }
-
-    private fun showLiteSites() {
-        val sites = prefs.liteSites.sorted()
-        if (sites.isEmpty()) {
-            MaterialAlertDialogBuilder(this).setMessage("No sites use Lite mode yet. Turn it on for a slow site from the menu (⋮ → Lite mode).")
-                .setPositiveButton(android.R.string.ok, null).show()
-            return
-        }
-        MaterialAlertDialogBuilder(this)
-            .setTitle("Lite mode sites")
-            .setItems(sites.toTypedArray()) { _, which ->
-                val site = sites[which]
-                MaterialAlertDialogBuilder(this)
-                    .setMessage("Show $site normally again?")
-                    .setPositiveButton("Turn off Lite mode") { _, _ ->
-                        prefs.liteSites = prefs.liteSites - site
-                        Helper.sendLiteSites()
-                        updateLiteSummary()
-                    }
-                    .setNegativeButton(android.R.string.cancel, null)
-                    .show()
-            }
-            .setNegativeButton("Close", null)
             .show()
     }
 

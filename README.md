@@ -5,7 +5,7 @@ ad-heavy sites on an old phone (Moto E4, Android 7.1.2).
 
 ## Download
 
-**[Download Swift 1.4 (APK)](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v1.4/Swift-1.4.apk)**
+**[Download Swift 1.5 (APK)](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v1.5/Swift-1.5.apk)**
 for Android 7 and newer (32-bit ARM, about 150 MB). It installs over an earlier Swift and keeps
 tabs and settings. From 1.4 on, Swift can also update itself: Settings → Check for updates.
 
@@ -24,12 +24,15 @@ are attached to the releases because GitHub doesn't accept files over 100 MB in 
   to go to the next or previous tab, and a closed tab can be brought back with Undo. How many
   stay loaded is a setting (1 to 10, 2 by default); the others show their last picture straight
   away and reload their page when opened.
-- **Menu** (⋮) that slides up from the bottom: rows of buttons that scroll sideways, for the page,
-  how it is shown and the app. Per-site ad blocking is in it too; everything else is in Settings.
+- **Menu** (⋮) that slides up from the bottom: the page's main actions as a row of icons, four
+  switches (Lite mode, dark mode, desktop site, full screen) that keep the menu open, and two pages
+  of buttons swiped sideways. Swipe it down, tap outside it or press back to close it.
 - **Reader view**: a clean, light version of article pages (Mozilla's Readability), with text size
   buttons, in light or dark.
-- **Lite mode** per site, from the menu: no animations, shadows or blur, for sites that are slow
-  on the phone.
+- **Lite mode**, one switch for all sites (menu or Settings): no animations, shadows or blur, so
+  heavy sites scroll smoothly on the phone. It stays on until it is turned off.
+- **Full screen** (menu or Settings): browsing without the phone's status and navigation bars; a
+  swipe in from the top or bottom edge shows them for a moment.
 - **Save offline**: saves a page as a PDF in Downloads, to read without internet in Swift's own
   PDF viewer.
 - **Add to Home screen**: a shortcut to the page on the phone's home screen.

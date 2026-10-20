@@ -190,7 +190,7 @@ object Diagnostics {
         val prefs = SwiftApp.prefs
         val tabs = TabManager.tabs
         val extra = "Settings: tabs kept in memory ${prefs.maxLiveTabs}, pages drawn with ${if (prefs.softwareRendering) "CPU" else "GPU"}, " +
-            "ad blocking ${AdBlock.global.label}, Lite mode sites ${prefs.liteSites.size}, " +
+            "ad blocking ${AdBlock.global.label}, Lite mode ${prefs.liteMode}, full screen ${prefs.fullScreen}, " +
             "background play ${prefs.backgroundPlay}, text size ${(prefs.textScale * 100).toInt()}%\n" +
             "Tabs: ${tabs.size} open, ${tabs.count { it.session != null }} loaded; current: ${TabManager.current?.url?.take(200)}"
         share(activity, extra)

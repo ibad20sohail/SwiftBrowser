@@ -48,7 +48,7 @@ object Helper {
         ext.setMessageDelegate(object : WebExtension.MessageDelegate {
             override fun onConnect(port: WebExtension.Port) {
                 backgroundPort = port
-                sendLiteSites()
+                sendLiteMode()
                 port.setDelegate(object : WebExtension.PortDelegate {
                     override fun onPortMessage(message: Any, port: WebExtension.Port) {
                         (message as? JSONObject)?.let { onBackgroundMessage(it) }
@@ -169,14 +169,13 @@ object Helper {
     fun isReaderUrl(url: String?): Boolean =
         url != null && url.startsWith("moz-extension://") && url.contains("/reader/view.html")
 
-    /** Sends the Lite mode sites to the extension, which styles their pages from the start. */
-    fun sendLiteSites() {
+    /** Tells the extension whether pages get the Lite mode style, from their first byte on. */
+    fun sendLiteMode() {
         val port = backgroundPort ?: return
-        val sites = org.json.JSONArray(SwiftApp.prefs.liteSites.toList())
         try {
-            port.postMessage(JSONObject().put("type", "lite").put("sites", sites))
+            port.postMessage(JSONObject().put("type", "lite").put("all", SwiftApp.prefs.liteMode))
         } catch (e: Exception) {
-            L.w("Couldn't send Lite mode sites", e)
+            L.w("Couldn't send Lite mode", e)
         }
     }
 

@@ -129,4 +129,11 @@ object Thumbnails {
         absent.remove(tab.id)
         if (!tab.incognito) exec.execute { file(tab.id).delete() }
     }
+
+    /** A closed tab came back as [to]: it keeps [from]'s picture. */
+    fun move(from: Tab, to: Tab) {
+        cache.remove(from.id)?.let { cache.put(to.id, it) }
+        absent.remove(from.id)
+        if (!from.incognito) exec.execute { file(from.id).renameTo(file(to.id)) }
+    }
 }

@@ -257,7 +257,7 @@ class TabSwitcherView @JvmOverloads constructor(
             }
 
             h.itemView.setOnClickListener { listener?.onTabChosen(tab) }
-            h.close.setOnClickListener { TabManager.close(tab) }
+            h.close.setOnClickListener { TabManager.close(tab, undoable = true) }
             h.itemView.contentDescription = card.title
         }
     }
@@ -267,7 +267,7 @@ class TabSwitcherView @JvmOverloads constructor(
 
         override fun onSwiped(vh: RecyclerView.ViewHolder, direction: Int) {
             val tab = (vh as CardHolder).tab ?: return
-            TabManager.close(tab)
+            TabManager.close(tab, undoable = true)
         }
 
         override fun onChildDraw(

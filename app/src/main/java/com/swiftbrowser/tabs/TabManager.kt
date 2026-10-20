@@ -123,6 +123,7 @@ object TabManager {
         tab.lastUsed = System.currentTimeMillis()
         scheduleSave(tab)
         if (!tab.isHome) {
+            tab.wokeUp = tab.session == null && (tab.sessionState != null || tab.state != null)
             val session = ensureLive(tab)
             if (session.isOpen) activate(session)
         }
@@ -199,19 +200,60 @@ object TabManager {
         tabs.filter { it.session != null && it !== current && !it.playing }.forEach { suspend(it) }
     }
 
-    fun close(tab: Tab) {
+    /** The tab closed last from the tab grid, until the next one is closed; see [undoClose]. */
+    private class Closed(val tab: Tab, val index: Int, val wasCurrent: Boolean, val replacement: Tab?)
+
+    private var lastClosed: Closed? = null
+
+    /** Closes [tab]. An [undoable] close (from the tab grid) can be taken back with [undoClose]. */
+    fun close(tab: Tab, undoable: Boolean = false) {
         val wasCurrent = tab === current
+        val index = tabs.indexOf(tab)
         tabs.remove(tab)
         detachSession(tab)
         dirty.remove(tab)
-        Thumbnails.remove(tab)
+        forgetClosed()
+        if (!undoable) Thumbnails.remove(tab)
         if (!tab.incognito) io.execute { db.deleteTab(tab.id) }
+        var replacement: Tab? = null
         if (wasCurrent) {
             current = null
-            select(nextAfterClosing(tab))
+            val before = tabs.size
+            val next = nextAfterClosing(tab)
+            if (tabs.size > before) replacement = next
+            select(next)
         } else {
             ui?.onTabsChanged()
         }
+        if (undoable) {
+            lastClosed = Closed(tab, index, wasCurrent, replacement)
+            ui?.onTabClosed(tab)
+        }
+    }
+
+    /** Brings back the tab closed last from the tab grid, with its history. */
+    fun undoClose(): Tab? {
+        val c = lastClosed ?: return null
+        lastClosed = null
+        val old = c.tab
+        if (Profiles.all().none { it.id == old.profileId }) return null
+        val now = System.currentTimeMillis()
+        val id = if (old.incognito) nextIncognitoId-- else db.insertTab(old.profileId, old.url, old.parentId, now, old.desktop)
+        val tab = Tab(id, old.profileId, old.url, old.title, old.state, old.parentId, now, old.desktop, old.incognito)
+        tab.sessionState = old.sessionState
+        tab.speed = old.speed
+        tabs.add(c.index.coerceIn(0, tabs.size), tab)
+        Thumbnails.move(old, tab)
+        scheduleSave(tab)
+        if (c.wasCurrent) select(tab) else ui?.onTabsChanged()
+        // The blank tab opened because the last tab had closed goes again if it wasn't used.
+        c.replacement?.let { r -> if (r in tabs && r.isHome) close(r) }
+        return tab
+    }
+
+    private fun forgetClosed() {
+        lastClosed?.let { Thumbnails.remove(it.tab) }
+        lastClosed = null
     }
 
     private fun nextAfterClosing(tab: Tab): Tab {

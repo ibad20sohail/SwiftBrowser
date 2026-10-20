@@ -79,6 +79,7 @@ import org.mozilla.geckoview.GeckoRuntime
 import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.GeckoView
 import org.mozilla.geckoview.WebResponse
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
 class MainActivity : AppCompatActivity(), BrowserUi {
@@ -156,6 +157,13 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         if (toolbarWanted && fullscreenTab == null) refreshToolbarNow() else toolbarStale = true
     }
     private var scrollRun = 0f
+
+    // When the toolbar appears or goes, the engine moves the page by its height so that the content
+    // stays where it is. That move arrives with a later scroll update, possibly after some of the
+    // user's own scrolling, and must not be taken for it (or the toolbar flips back and forth).
+    private var expectedShift = 0f
+    private var shiftExpectedUntil = 0L
+    private var toolbarToggledAt = 0L
 
     // Pull to refresh.
     private var ptrRefreshing = false
@@ -749,7 +757,12 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         showToolbar()
         applyIncognitoStyle(tab.incognito)
         updateAll()
-        if (isNew) animateNewTab(tab)
+        if (isNew) {
+            animateNewTab(tab)
+        } else if (tab.wokeUp) {
+            tab.wokeUp = false
+            tabSwipe.coverUntilDrawn(tab)
+        }
     }
 
     /** Shows the tab's engine session in the page view (or nothing for the home page). */
@@ -826,6 +839,10 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         seenTabs.add(tab.id)
         bumpTabCount()
         snack("Opened in a new tab", "Switch") { TabManager.select(tab) }
+    }
+
+    override fun onTabClosed(tab: Tab) {
+        snack(if (tab.incognito) "Incognito tab closed" else "Tab closed", "Undo") { TabManager.undoClose() }
     }
 
     override fun releaseSession(session: GeckoSession) {
@@ -922,9 +939,10 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         if (toolbarWanted == show && toolbarShown == target) return
         toolbarWanted = show
         applyToolbarShown(target)
-        // The engine may shift the scroll position by the toolbar's height to keep the content
-        // still; start measuring scrolling afresh so that shift isn't taken for the user's.
-        lastScrollY = -1f
+        val now = SystemClock.uptimeMillis()
+        expectedShift = if (show) toolbarPx.toFloat() else -toolbarPx.toFloat()
+        shiftExpectedUntil = now + 1000
+        toolbarToggledAt = now
         scrollRun = 0f
         if (show && toolbarStale) refreshToolbarNow()
     }
@@ -946,14 +964,28 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             showToolbar()
             return
         }
-        if (last < 0f || !byUser || !canAutoHideToolbar()) return
-        val dy = scrollY - last
-        if (dy == 0f) return
+        if (last < 0f) return
+        var dy = scrollY - last
+        if (expectedShift != 0f) {
+            if (SystemClock.uptimeMillis() > shiftExpectedUntil) {
+                expectedShift = 0f
+            } else if (dy * expectedShift > 0f && abs(dy) >= abs(expectedShift) / 2) {
+                // The engine's move, plus whatever the user scrolled in the same frame.
+                dy -= expectedShift
+                expectedShift = 0f
+            }
+        }
+        if (!byUser || dy == 0f || !canAutoHideToolbar()) return
+        // Right after the toolbar moved, let the page settle before it may move again.
+        if (SystemClock.uptimeMillis() - toolbarToggledAt < TOOLBAR_SETTLE_MS) return
         if ((dy > 0f) != (scrollRun > 0f)) scrollRun = 0f
         scrollRun += dy
-        if (toolbarWanted && scrollRun > dp(24f) && scrollY > toolbarPx) {
+        // A deliberate scroll is needed, not a nudge: about a finger's width down to hide, a bit
+        // less up to bring it back. Hiding only well below the top, so the page's move can't take
+        // it back to where the toolbar would show again.
+        if (toolbarWanted && scrollRun > dp(64f) && scrollY > toolbarPx * 2) {
             hideToolbar()
-        } else if (!toolbarWanted && scrollRun < -dp(12f)) {
+        } else if (!toolbarWanted && scrollRun < -dp(48f)) {
             showToolbar()
         }
     }
@@ -1584,6 +1616,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     }
 
     companion object {
+        private const val TOOLBAR_SETTLE_MS = 300L
+
         const val EXTRA_URL = "url"
         const val EXTRA_NEW_TAB = "new_tab"
 

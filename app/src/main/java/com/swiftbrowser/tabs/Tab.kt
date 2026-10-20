@@ -54,6 +54,9 @@ class Tab(
     /** When the user last navigated on purpose (typed URL, back/forward, reload). */
     var userNavAt = 0L
 
+    /** Selected while asleep (no engine session): its page is being loaded again. */
+    var wokeUp = false
+
     /** A pop-up allowed by NavPolicy may load exactly this address once without a second check. */
     var approvedUrl: String? = null
 
@@ -79,6 +82,9 @@ interface BrowserUi {
 
     /** A new tab was opened in the background. */
     fun onTabOpenedInBackground(tab: Tab)
+
+    /** A tab was closed from the tab grid; the user may undo it (TabManager.undoClose). */
+    fun onTabClosed(tab: Tab)
 
     /** Detach [session] from the screen before it gets closed. */
     fun releaseSession(session: GeckoSession)

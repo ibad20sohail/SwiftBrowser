@@ -137,7 +137,16 @@ object Engine {
      */
     private fun writeStartupConfig(softwareRendering: Boolean): String {
         val file = File(app.filesDir, "gecko-startup.yaml")
-        val text = "prefs:\n  $SOFTWARE_RENDERING_PREF: $softwareRendering\n"
+        val text = buildString {
+            append("prefs:\n")
+            append("  $SOFTWARE_RENDERING_PREF: $softwareRendering\n")
+            // Frosted glass (backdrop-filter, e.g. YouTube's bottom bar and the badges on every
+            // thumbnail) blurs whatever scrolls under it on every frame: far too slow on this
+            // phone, on the GPU and the CPU alike. Sites show their plain see-through colour.
+            append("  layout.css.backdrop-filter.enabled: false\n")
+            // Sites that have a version without decorative animations use it.
+            append("  ui.prefersReducedMotion: 1\n")
+        }
         try {
             if (!file.exists() || file.readText() != text) file.writeText(text)
         } catch (e: Exception) {

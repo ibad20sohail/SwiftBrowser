@@ -127,6 +127,34 @@ class TabSwipe(
         return if (dragging) Result.CONSUMED else Result.PASS
     }
 
+    /**
+     * [tab] was asleep and loads its page again: show its last picture meanwhile, as if it had
+     * stayed open, until some of the page is drawn.
+     */
+    fun coverUntilDrawn(tab: Tab) {
+        if (switching != null || tracking) return
+        peek.animate().cancel()
+        pictures.clear()
+        switching = tab
+        needContent = true
+        target = tab
+        Thumbnails.load(tab) { bmp ->
+            if (switching !== tab) return@load
+            if (bmp == null) {
+                // Nothing to show: no cover at all is better than a plain one.
+                reset()
+                switching = null
+                return@load
+            }
+            pictures[tab.id] = bmp
+            showPicture(tab)
+            peek.translationX = 0f
+            peek.alpha = 1f
+            peek.visibility = View.VISIBLE
+        }
+        peek.postDelayed(stopWaiting, 3000)
+    }
+
     /** The engine has drawn [tab]'s page: its picture can go. */
     fun onPageDrawn(tab: Tab, contentful: Boolean) {
         if (switching === tab && (contentful || !needContent)) fadeOut()

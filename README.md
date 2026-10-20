@@ -3,6 +3,15 @@
 A lightweight Android browser with uBlock Origin built in. It is made for watching videos on
 ad-heavy sites on an old phone (Moto E4, Android 7.1.2).
 
+## Download
+
+**[Download Swift 1.3 (APK)](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v1.3/Swift-1.3.apk)**
+for Android 7 and newer (32-bit ARM, about 150 MB). It installs over an earlier Swift and keeps
+tabs and settings.
+
+Older versions: [all releases](https://github.com/ibad20sohail/SwiftBrowser/releases). The APKs
+are attached to the releases because GitHub doesn't accept files over 100 MB in the repository.
+
 ## Features
 
 - **Firefox engine (GeckoView 143)**: the newest engine that still runs on Android 7.
@@ -12,13 +21,15 @@ ad-heavy sites on an old phone (Moto E4, Android 7.1.2).
 - **Profiles**: each profile has its own Google login, cookies, history, bookmarks and tabs.
 - **Incognito tabs**: no history, and cookies and site data go away when the last one closes.
 - **Tabs** in a two-column grid with page previews, like Chrome. Swipe sideways on the toolbar
-  to go to the next or previous tab. Only a few stay loaded to save memory; the rest restore when
-  opened.
+  to go to the next or previous tab, and a closed tab can be brought back with Undo. How many
+  stay loaded is a setting (1 to 10, 2 by default); the others show their last picture straight
+  away and reload their page when opened.
 - **Menu** (⋮) that slides up from the bottom: a row of buttons for the page and one for the app,
   both scrolling sideways. Per-site ad blocking is in it too; everything else is in Settings.
 - **Home page** for new tabs: a Google search box (with voice search) and shortcuts to the most
   visited sites.
-- **Toolbar that hides while scrolling down**, and pull down at the top of a page to reload.
+- **Toolbar that hides while scrolling down** (after a deliberate scroll, not a nudge) and comes
+  back when scrolling up, and pull down at the top of a page to reload.
 - **Video**:
   - Full-screen videos use the whole screen and follow the phone's auto-rotate. Turning them to
     landscape automatically, and swipe gestures for brightness (left side) and volume (right
@@ -34,6 +45,9 @@ ad-heavy sites on an old phone (Moto E4, Android 7.1.2).
   while the app is in the background, the web cache is capped, and Firefox's own Safe Browsing
   lists are off (uBlock Origin covers them). Silent videos don't start by themselves (YouTube
   feed previews), and the app's own toolbar is redrawn as little as possible while a page scrolls.
+- **Lighter pages**: frosted-glass effects (CSS `backdrop-filter`) are off, sites that offer a
+  version without decorative animations get it, and YouTube's and TheFlixer's large blur effects
+  are left out. Each of these makes scrolling several times more work on a slow phone.
 - **Start-up screen**: the logo while the app starts, and a loading screen while an open page
   waits for the ad blocker to load its filters.
 - **Drawing method**: on Adreno 3xx graphics chips, where Firefox's GPU drawing is slow on

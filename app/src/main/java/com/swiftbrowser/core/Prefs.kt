@@ -72,7 +72,7 @@ class Prefs(ctx: Context) {
 
     /** How many tabs keep their page loaded in memory; the others reload when opened. */
     var maxLiveTabs: Int
-        get() = sp.getString(MAX_LIVE_TABS, "2")?.toIntOrNull()?.coerceIn(1, 4) ?: 2
+        get() = sp.getString(MAX_LIVE_TABS, "2")?.toIntOrNull()?.coerceIn(1, MAX_LIVE_TABS_LIMIT) ?: 2
         set(v) = sp.edit { putString(MAX_LIVE_TABS, v.toString()) }
 
     var currentProfileId: Long
@@ -98,6 +98,7 @@ class Prefs(ctx: Context) {
         const val PULL_TO_REFRESH = "pull_to_refresh"
         const val SOFTWARE_RENDERING = "software_rendering"
         const val MAX_LIVE_TABS = "max_live_tabs"
+        const val MAX_LIVE_TABS_LIMIT = 10
         const val CURRENT_PROFILE = "current_profile"
         const val HIDDEN_TILES = "hidden_tiles"
     }

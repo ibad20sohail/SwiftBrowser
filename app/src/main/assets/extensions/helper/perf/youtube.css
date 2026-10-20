@@ -1,0 +1,12 @@
+/*
+ * Swift: YouTube's decorative blurs (a blurred copy behind thumbnails, glows on touch) are very
+ * slow to draw on a phone like the Moto E4 and make the feed scroll in jumps. Without them the
+ * page looks the same apart from plain backgrounds.
+ */
+.ytThumbnailViewModelBlurredImage,
+.custom-thumbnail-background-container .custom-thumbnail,
+.contribYtLightShapeStaticWashLight,
+.ytLightTouchFeedbackShapeTouchLight,
+.ytLightTouchFeedbackShapeHoverLight {
+  display: none !important;
+}

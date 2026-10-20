@@ -381,11 +381,12 @@ class SettingsActivity : AppCompatActivity() {
     private fun liveTabsText(n: Int) = when (n) {
         1 -> "1 tab — least memory; other tabs reload when opened"
         2 -> "2 tabs (recommended for this phone)"
-        else -> "$n tabs — switching is faster, uses more memory"
+        in 3..4 -> "$n tabs — switching is faster, uses more memory"
+        else -> "$n tabs — a lot of memory; Android may close Swift's pages or other apps"
     }
 
     private fun chooseLiveTabs(onChosen: (Int) -> Unit) {
-        val options = (1..4).toList()
+        val options = (1..Prefs.MAX_LIVE_TABS_LIMIT).toList()
         val labels = options.map { liveTabsText(it) }.toTypedArray()
         MaterialAlertDialogBuilder(this)
             .setTitle("Tabs kept in memory")

@@ -57,10 +57,12 @@ import com.swiftbrowser.SwiftApp
 import com.swiftbrowser.adblock.AdBlock
 import com.swiftbrowser.adblock.AdLevel
 import com.swiftbrowser.core.Crash
+import com.swiftbrowser.core.Diagnostics
 import com.swiftbrowser.core.L
 import com.swiftbrowser.core.Prefs
 import com.swiftbrowser.core.Profiles
 import com.swiftbrowser.core.TopSites
+import com.swiftbrowser.core.Updates
 import com.swiftbrowser.core.UrlUtils
 import com.swiftbrowser.download.Downloads
 import com.swiftbrowser.engine.Engine
@@ -277,11 +279,18 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             }
         }
         showCrashReportIfAny()
+        showProblemIfAny()
         showStartupUntilReady()
         Looper.myQueue().addIdleHandler {
             quickMenu
             false
         }
+        setupEdgeSwipe()
+        // A newer Swift on GitHub? Asked at most once a day, a while after starting.
+        handler.postDelayed({
+            if (!isFinishing) Updates.checkNow(prefs, force = false) { r -> offerUpdate(r) }
+        }, 15_000)
+        Downloads.addListener(updateDownloadListener)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -291,6 +300,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
     override fun onStart() {
         super.onStart()
+        Diagnostics.setOnScreen(true)
         if (!switcher.isOpen) current?.session?.let { if (it.isOpen) it.setActive(true) }
     }
 
@@ -302,9 +312,12 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
     override fun onStop() {
         super.onStop()
+        Diagnostics.setOnScreen(false)
         TabManager.flushSaves()
         if (!isChangingConfigurations) {
-            current?.session?.let { if (it.isOpen) it.setActive(false) }
+            // A playing page stays active so its video or music goes on (background play).
+            val keepPlaying = prefs.backgroundPlay && current?.playing == true
+            current?.session?.let { if (it.isOpen && !keepPlaying) it.setActive(false) }
             AdBlock.updateInBackground()
         }
     }
@@ -313,11 +326,13 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         handler.removeCallbacksAndMessages(null)
         ptrSpin?.cancel()
         AdBlock.removeListener(adListener)
+        Downloads.removeListener(updateDownloadListener)
         if (TabManager.ui === this) TabManager.ui = null
         if (Engine.activityDelegate != null) Engine.activityDelegate = null
         home.listener = null
         switcher.listener = null
         gestureLayer.pullListener = null
+        gestureLayer.edgeListener = null
         gestureLayer.listener = null
         gestureLayer.page = null
         gecko.releaseSession()
@@ -364,6 +379,20 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
     private fun handleIntent(intent: Intent?) {
         intent ?: return
+        val tabId = intent.getLongExtra(EXTRA_TAB_ID, Long.MIN_VALUE)
+        if (tabId != Long.MIN_VALUE) {
+            intent.removeExtra(EXTRA_TAB_ID)
+            TabManager.tabs.firstOrNull { it.id == tabId }?.let { t ->
+                switcher.close()
+                if (t !== current) TabManager.select(t)
+            }
+            return
+        }
+        intent.getStringExtra(EXTRA_OPEN_FILE)?.let { path ->
+            intent.removeExtra(EXTRA_OPEN_FILE)
+            openFileInTab(path)
+            return
+        }
         val url = when (intent.action) {
             Intent.ACTION_VIEW -> intent.dataString
             Intent.ACTION_SEND -> intent.getStringExtra(Intent.EXTRA_TEXT)?.let { text ->
@@ -474,6 +503,15 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         openInCurrent(url)
     }
 
+    /** A file Swift saved (a page as PDF): the engine shows it. */
+    fun openFileInTab(path: String) {
+        stopEditing()
+        switcher.close()
+        TabManager.newTab(android.net.Uri.fromFile(java.io.File(path)).toString(), incognito = false)
+    }
+
+    override fun showMessage(text: String) = snack(text)
+
     fun openInCurrent(url: String) {
         val tab = current
         if (tab == null) {
@@ -560,12 +598,20 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         val tab = current
         val url = tab?.url
         val query = UrlUtils.googleQuery(url)
-        val text = query ?: UrlUtils.display(url)
+        val reader = Helper.isReaderUrl(url)
+        val saved = url?.startsWith("file://") == true
+        val text = when {
+            reader -> "Reader view · ${tab?.title.orEmpty()}"
+            saved -> "Saved page · " + Uri.decode(url.orEmpty().substringAfterLast('/')).removeSuffix(".pdf")
+            else -> query ?: UrlUtils.display(url)
+        }
         if (text != shownUrlText) {
             shownUrlText = text
             urlEdit.setText(text)
         }
         val icon = when {
+            reader -> R.drawable.ic_reader
+            saved -> R.drawable.ic_offline
             tab == null || tab.isBlank || query != null -> R.drawable.ic_google_g
             tab.secure -> R.drawable.ic_lock
             else -> R.drawable.ic_globe
@@ -602,6 +648,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         styledIncognito = incognito
         val bg = color(if (incognito) R.color.incognito_toolbar else R.color.toolbar_bg)
         toolbar.setBackgroundColor(bg)
+        findViewById<View>(R.id.toolbar_divider).setBackgroundColor(color(if (incognito) R.color.incognito_url else R.color.divider))
         window.statusBarColor = bg
         val night = resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES
         WindowCompat.getInsetsController(window, window.decorView).isAppearanceLightStatusBars = !incognito && !night
@@ -1558,6 +1605,93 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         if (tab === current) tabSwipe.onPageDrawn(tab, contentful)
     }
 
+    // ------------------------------------------------------------------ updates
+
+    fun offerUpdate(r: Updates.Release) {
+        snack("Swift ${r.version} is available", "Update") { confirmUpdate(r) }
+    }
+
+    /** What's new, then the download; Android's installer opens when it is done. */
+    fun confirmUpdate(r: Updates.Release) {
+        val size = if (r.size > 0) " (${UrlUtils.formatBytes(r.size)})" else ""
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Update to Swift ${r.version}?")
+            .setMessage(r.notes.ifBlank { "A new version of Swift is available." }.take(1500) +
+                "\n\nThe update$size downloads now; then Android asks to install it. Tabs and settings are kept.")
+            .setPositiveButton("Download") { _, _ ->
+                withStorage {
+                    val item = Downloads.startUrl(Profiles.currentId, r.apkUrl, r.apkName, "application/vnd.android.package-archive", emptyMap(), null)
+                    Updates.downloadId = item.id
+                    snack("Downloading Swift ${r.version}…", "View") { openDownloads() }
+                }
+            }
+            .setNegativeButton("Later", null)
+            .show()
+    }
+
+    private val updateDownloadListener: () -> Unit = {
+        val id = Updates.downloadId
+        val item = if (id >= 0) Downloads.get(id) else null
+        if (item != null && item.status == Downloads.DONE) {
+            Updates.downloadId = -1
+            DownloadsActivity.openFileIntent(this, item)?.let { intent ->
+                try {
+                    startActivity(intent)
+                } catch (_: Exception) {
+                    snack("Open the downloaded update from Downloads to install it")
+                }
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------ swipe from the edges
+
+    private lateinit var edgeArrow: ImageView
+
+    /** Swiping in from the left edge of a page goes back, from the right edge forward. */
+    private fun setupEdgeSwipe() {
+        val size = dp(44f).toInt()
+        edgeArrow = ImageView(this).apply {
+            setBackgroundResource(R.drawable.bg_ptr)
+            elevation = dp(4f)
+            val pad = dp(10f).toInt()
+            setPadding(pad, pad, pad, pad)
+            visibility = View.GONE
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }
+        root.addView(edgeArrow, FrameLayout.LayoutParams(size, size, android.view.Gravity.CENTER_VERTICAL or android.view.Gravity.START))
+        gestureLayer.edgeListener = object : GestureFrameLayout.EdgeListener {
+            override fun canEdgeSwipe(fromLeft: Boolean): Boolean {
+                val tab = current ?: return false
+                return prefs.edgeSwipe && fullscreenTab == null && !editing && !tab.isHome && tab.session != null &&
+                    (if (fromLeft) tab.canGoBack else tab.canGoForward)
+            }
+
+            override fun onEdgeSwipe(fromLeft: Boolean, distance: Float) {
+                val trigger = dp(96f)
+                val progress = (distance / trigger).coerceIn(0f, 1f)
+                val travel = size + dp(20f)
+                edgeArrow.animate().cancel()
+                edgeArrow.visibility = View.VISIBLE
+                edgeArrow.setImageResource(if (fromLeft) R.drawable.ic_back else R.drawable.ic_forward)
+                edgeArrow.translationX = if (fromLeft) -size + progress * travel else root.width - progress * travel
+                edgeArrow.alpha = 0.35f + 0.65f * progress
+                edgeArrow.imageTintList = ColorStateList.valueOf(color(if (progress >= 1f) R.color.accent else R.color.text_secondary))
+            }
+
+            override fun onEdgeSwipeEnd(fromLeft: Boolean, distance: Float) {
+                val tab = current
+                if (distance >= dp(96f) && tab != null) {
+                    if (fromLeft) TabManager.goBack(tab) else TabManager.goForward(tab)
+                }
+                val out = if (fromLeft) -size.toFloat() else root.width.toFloat()
+                edgeArrow.animate().translationX(out).alpha(0f).setDuration(160).withEndAction {
+                    edgeArrow.visibility = View.GONE
+                }.start()
+            }
+        }
+    }
+
     // ------------------------------------------------------------------ helpers
 
     fun snack(text: String, action: String? = null, onAction: (() -> Unit)? = null) {
@@ -1605,6 +1739,31 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         L.d("Showed crash report")
     }
 
+    /** The previous run ended badly (not by a crash in the app's own code, see above). */
+    private fun showProblemIfAny() {
+        val problem = Diagnostics.problem ?: return
+        val detail = Diagnostics.problemDetail
+        Diagnostics.clearProblem()
+        val (title, text) = when (problem) {
+            Diagnostics.Problem.CLOSED_BY_ANDROID -> "Swift was closed while you used it" to
+                "Android closed Swift while it was on screen. On a 2 GB phone that almost always means the phone ran out of memory " +
+                "(very heavy pages such as Google's AI answers can do that).\n\nTo make it less likely: keep fewer tabs in memory " +
+                "(Settings → Performance), close tabs you don't need, and close other apps.\n\nIf it keeps happening, send a report."
+            Diagnostics.Problem.ENGINE_CRASH -> "Swift's engine crashed" to
+                "The Firefox engine inside Swift crashed last time" + (detail?.let { ":\n$it" } ?: ".") +
+                "\n\nSending a report helps find out why."
+        }
+        MaterialAlertDialogBuilder(this)
+            .setTitle(title)
+            .setMessage(text)
+            .setPositiveButton("OK", null)
+            .setNeutralButton("Send report") { _, _ -> shareProblemReport() }
+            .show()
+    }
+
+    /** The problem report with this run's settings; see Diagnostics. */
+    fun shareProblemReport() = Diagnostics.shareReport(this)
+
     /** For the video sheet: picks a quality of an HLS stream, then downloads it. */
     fun startHlsDownload(tab: Tab, playlistUrl: String, headers: Map<String, String>, quality: String?) {
         withStorage {
@@ -1620,6 +1779,12 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
         const val EXTRA_URL = "url"
         const val EXTRA_NEW_TAB = "new_tab"
+
+        /** Opens this tab (from the playback notification). */
+        const val EXTRA_TAB_ID = "tab_id"
+
+        /** Opens this file in a new tab (a page saved as PDF, from Downloads). */
+        const val EXTRA_OPEN_FILE = "open_file"
 
         /** The square outline around the tab count, in [color]. */
         fun tabCountBackground(ctx: Context, color: Int) = android.graphics.drawable.GradientDrawable().apply {

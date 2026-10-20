@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Reader view</title>
+  <link rel="stylesheet" href="view.css">
+</head>
+<body>
+  <div class="bar">
+    <a id="original" class="original" href="#">Original page</a>
+    <span class="spacer"></span>
+    <button id="smaller" class="size" aria-label="Smaller text">A&#8722;</button>
+    <button id="bigger" class="size" aria-label="Bigger text">A+</button>
+  </div>
+  <main>
+    <p id="site" class="site"></p>
+    <h1 id="title"></h1>
+    <p id="byline" class="byline"></p>
+    <article id="content"></article>
+    <p id="missing" class="missing" hidden>This article is no longer available. Open the original page and choose reader view again.</p>
+  </main>
+  <script src="view.js"></script>
+</body>
+</html>

@@ -52,6 +52,9 @@ abstract class ListActivity : AppCompatActivity() {
         search = findViewById(R.id.list_search)
         toolbar.setNavigationIcon(R.drawable.ic_back)
         toolbar.setNavigationOnClickListener { finish() }
+        toolbar.setSubtitleTextAppearance(this, com.google.android.material.R.style.TextAppearance_Material3_BodyMedium)
+        toolbar.setSubtitleTextColor(androidx.core.content.ContextCompat.getColor(this, R.color.text_secondary))
+        window.statusBarColor = androidx.core.content.ContextCompat.getColor(this, R.color.page_bg)
         list.layoutManager = LinearLayoutManager(this)
     }
 
@@ -277,6 +280,15 @@ class DownloadsActivity : ListActivity() {
     }
 
     private fun open(d: Downloads.Item) {
+        if (PageActions.isSavedPage(d)) {
+            // PDFs (pages saved for offline reading among them) open in Swift's own viewer.
+            startActivity(
+                Intent(this, MainActivity::class.java).putExtra(MainActivity.EXTRA_OPEN_FILE, d.filePath)
+                    .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            )
+            finish()
+            return
+        }
         val intent = openFileIntent(this, d)
         if (intent == null) {
             Snackbar.make(list, "File not found", Snackbar.LENGTH_SHORT).show()

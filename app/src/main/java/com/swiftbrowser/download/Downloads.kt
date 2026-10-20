@@ -215,6 +215,41 @@ object Downloads {
         return item
     }
 
+    /**
+     * A file Swift wrote itself (a page saved for offline reading): listed with the downloads.
+     * [write] fills the file; it runs off the main thread, and [done] gets the item or null.
+     */
+    fun saveFile(
+        profileId: Long, fileName: String, mime: String, pageUrl: String?, write: (File) -> Unit, done: (Item?) -> Unit,
+    ) {
+        val item = create(profileId, KIND_FILE, pageUrl ?: "", fileName, mime, -1, emptyMap(), pageUrl, JSONObject())
+        item.status = RUNNING
+        changed(immediate = true)
+        scope.launch {
+            val ok = try {
+                write(File(item.filePath))
+                true
+            } catch (e: Exception) {
+                L.w("Saving ${item.fileName} failed", e)
+                false
+            }
+            if (ok) {
+                val f = File(item.filePath)
+                item.done = f.length()
+                item.total = item.done
+                item.status = DONE
+                MediaScannerConnection.scanFile(app, arrayOf(item.filePath), null, null)
+            } else {
+                File(item.filePath).delete()
+                item.status = FAILED
+                item.error = "Couldn't save the page"
+            }
+            persist(item)
+            changed(immediate = true)
+            main.post { done(if (ok) item else null) }
+        }
+    }
+
     /** [playlistUrl] must be a media playlist (a chosen quality), not a master playlist. */
     fun startHls(profileId: Long, playlistUrl: String, title: String, headers: Map<String, String>, pageUrl: String?): Item {
         val name = UrlUtils.sanitizeFileName(title).removeSuffix(".mp4").removeSuffix(".ts") + ".ts"

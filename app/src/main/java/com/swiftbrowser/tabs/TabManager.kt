@@ -2,13 +2,16 @@ package com.swiftbrowser.tabs
 
 import android.os.Handler
 import android.os.Looper
+import com.swiftbrowser.SwiftApp
 import com.swiftbrowser.adblock.AdBlock
 import com.swiftbrowser.core.Db
+import com.swiftbrowser.core.Diagnostics
 import com.swiftbrowser.core.L
 import com.swiftbrowser.core.Prefs
 import com.swiftbrowser.core.Profiles
 import com.swiftbrowser.engine.Engine
 import com.swiftbrowser.media.Helper
+import com.swiftbrowser.media.Playback
 import org.mozilla.geckoview.GeckoResult
 import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.GeckoSessionSettings
@@ -176,10 +179,15 @@ object TabManager {
         tab.mediaSession = null
         tab.uboAction = null
         Helper.detachTab(tab)
+        SwiftApp.instance?.let { Playback.onMediaGone(it, tab) }
     }
 
     private fun trimLiveSessions() {
-        val max = prefs.maxLiveTabs
+        // Whatever the setting says, when the phone is close to running out of memory only the
+        // open tab keeps its page: otherwise Android closes Swift altogether.
+        val low = prefs.maxLiveTabs > 1 && Diagnostics.memoryLow()
+        if (low) L.d("Memory low (${Diagnostics.memoryText()}): keeping only the open tab loaded")
+        val max = if (low) 1 else prefs.maxLiveTabs
         val others = tabs.filter { it.session != null && it !== current }.sortedBy { it.lastUsed }
         var live = others.size + if (current?.session != null) 1 else 0
         for (t in others) {
@@ -194,6 +202,11 @@ object TabManager {
     fun suspend(tab: Tab) {
         if (tab === current) return
         detachSession(tab)
+    }
+
+    /** Background play was switched on or off: pages that are already open follow it. */
+    fun applyBackgroundPlay(on: Boolean) {
+        for (t in tabs) t.session?.settings?.suspendMediaWhenInactive = !on
     }
 
     fun suspendBackgroundTabs() {

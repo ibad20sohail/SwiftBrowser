@@ -12,6 +12,7 @@ import com.swiftbrowser.core.Profiles
 import com.swiftbrowser.core.UrlUtils
 import com.swiftbrowser.engine.Engine
 import com.swiftbrowser.media.Helper
+import com.swiftbrowser.media.Playback
 import com.swiftbrowser.ui.ErrorPage
 import com.swiftbrowser.ui.Prompts
 import org.mozilla.geckoview.AllowOrDeny
@@ -40,7 +41,9 @@ object SessionFactory {
             .viewportMode(
                 if (tab.desktop) GeckoSessionSettings.VIEWPORT_MODE_DESKTOP else GeckoSessionSettings.VIEWPORT_MODE_MOBILE,
             )
-            .suspendMediaWhenInactive(true)
+            // A page that isn't on screen (another tab, Swift in the background) stops its media,
+            // unless background play is on: then video and music go on.
+            .suspendMediaWhenInactive(!SwiftApp.prefs.backgroundPlay)
             .build()
         val session = GeckoSession(settings)
         val d = TabDelegates(tab)
@@ -396,12 +399,18 @@ class TabDelegates(private val tab: Tab) :
     // ------------------------------------------------------------------ media
 
     override fun onActivated(session: GeckoSession, mediaSession: MediaSession) {
+        L.d("Media session active in tab ${tab.id}")
         tab.mediaSession = mediaSession
     }
 
     override fun onDeactivated(session: GeckoSession, mediaSession: MediaSession) {
         if (tab.mediaSession === mediaSession) tab.mediaSession = null
         setPlaying(false)
+        SwiftApp.instance?.let { Playback.onMediaGone(it, tab) }
+    }
+
+    override fun onMetadata(session: GeckoSession, mediaSession: MediaSession, meta: MediaSession.Metadata) {
+        SwiftApp.instance?.let { Playback.onMetadata(it, tab, meta.title, meta.artist) }
     }
 
     override fun onPlay(session: GeckoSession, mediaSession: MediaSession) = setPlaying(true)
@@ -412,8 +421,10 @@ class TabDelegates(private val tab: Tab) :
 
     private fun setPlaying(playing: Boolean) {
         if (tab.playing == playing) return
+        L.d("Tab ${tab.id} ${if (playing) "playing" else "stopped playing"}")
         tab.playing = playing
         ui?.onPlayingChanged(tab)
+        SwiftApp.instance?.let { Playback.onPlayingChanged(it, tab) }
     }
 
     override fun onFullscreen(

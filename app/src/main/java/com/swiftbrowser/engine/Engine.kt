@@ -6,6 +6,7 @@ import android.os.Process
 import androidx.core.content.edit
 import com.swiftbrowser.BuildConfig
 import com.swiftbrowser.adblock.AdBlock
+import com.swiftbrowser.core.Diagnostics
 import com.swiftbrowser.core.L
 import com.swiftbrowser.core.Prefs
 import com.swiftbrowser.media.Helper
@@ -70,10 +71,17 @@ object Engine {
             .lowMemoryDetection(true)
             .loginAutofillEnabled(false)
             .configFilePath(startupConfig)
+            // Engine crashes are noted (in a process of their own) for the problem report.
+            .crashHandler(CrashReportService::class.java)
+            // Text size is Swift's own setting (Settings → Appearance), not the phone's.
+            .automaticFontSizeAdjustment(false)
+            .fontSizeFactor(prefs.textScale)
+            .forceUserScalableEnabled(prefs.forceZoom)
             .build()
         runtime = GeckoRuntime.create(app, settings)
         runtime.delegate = GeckoRuntime.Delegate {
             L.e("Gecko runtime shut down")
+            Diagnostics.markCleanExit()
             Process.killProcess(Process.myPid())
         }
         runtime.activityDelegate = GeckoRuntime.ActivityDelegate { pending ->
@@ -95,8 +103,8 @@ object Engine {
             SetGeckoPreference.setIntPref("browser.cache.disk.capacity", 40 * 1024, BRANCH),
             // Keep one previous page ready for an instant Back; each kept page holds its memory.
             SetGeckoPreference.setIntPref("browser.sessionhistory.max_total_viewers", 1, BRANCH),
-            // Decoded images held in memory per process.
-            SetGeckoPreference.setIntPref("image.mem.surfacecache.max_size_kb", 96 * 1024, BRANCH),
+            // Decoded images held in memory per process: 48 MB is plenty for a 720p screen.
+            SetGeckoPreference.setIntPref("image.mem.surfacecache.max_size_kb", 48 * 1024, BRANCH),
             // No guessing and prefetching of pages that may never be opened.
             SetGeckoPreference.setBoolPref("network.predictor.enabled", false, BRANCH),
             SetGeckoPreference.setBoolPref("network.prefetch-next", false, BRANCH),
@@ -146,6 +154,9 @@ object Engine {
             append("  layout.css.backdrop-filter.enabled: false\n")
             // Sites that have a version without decorative animations use it.
             append("  ui.prefersReducedMotion: 1\n")
+            // All tabs share one engine process for web pages (Firefox allows 8). Each extra
+            // process costs 60-100 MB, which a 2 GB phone doesn't have: Android then closes Swift.
+            append("  dom.ipc.processCount: 1\n")
         }
         try {
             if (!file.exists() || file.readText() != text) file.writeText(text)
@@ -153,6 +164,16 @@ object Engine {
             L.w("Could not write the engine start-up config", e)
         }
         return file.path
+    }
+
+    /** Text size on all sites, 1 = as designed. Pages pick it up when they (re)load. */
+    fun setTextScale(scale: Float) {
+        runtime.settings.setFontSizeFactor(scale)
+    }
+
+    /** Pinch-zooming even on sites that turn it off. */
+    fun setForceZoom(on: Boolean) {
+        runtime.settings.setForceUserScalableEnabled(on)
     }
 
     /** Draw pages with the CPU instead of the GPU. Takes effect after the app restarts. */

@@ -19,21 +19,23 @@
                 android:layout_width="wrap_content"
                 android:layout_height="40dp"
                 android:layout_gravity="start|center_vertical"
-                android:background="?attr/selectableItemBackground"
+                android:layout_marginStart="6dp"
+                android:background="@drawable/bg_pill_button"
                 android:drawablePadding="6dp"
                 android:fontFamily="sans-serif-medium"
                 android:gravity="center_vertical"
-                android:paddingStart="10dp"
-                android:paddingEnd="12dp"
+                android:paddingStart="12dp"
+                android:paddingEnd="16dp"
                 android:text="New tab"
-                android:textColor="@color/text_primary"
+                android:textColor="@color/on_accent_container"
                 android:textSize="15sp" />
 
             <LinearLayout
                 android:id="@+id/switcher_toggle"
                 android:layout_width="wrap_content"
                 android:layout_height="40dp"
-                android:layout_gravity="center"
+                android:layout_gravity="end|center_vertical"
+                android:layout_marginEnd="6dp"
                 android:background="@drawable/bg_toggle"
                 android:orientation="horizontal"
                 android:padding="3dp">

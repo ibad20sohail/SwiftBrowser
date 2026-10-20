@@ -57,6 +57,9 @@
     if (msg.type === 'speed') {
       rate = Number(msg.rate) || 1;
       applyRate();
+    } else if (msg.type === 'reader') {
+      // Only the page itself, not its frames; the background script does the work.
+      if (isTop) { browser.runtime.sendMessage({ type: 'reader-start' }); }
     } else if (msg.type === 'seek') {
       for (const v of videos()) {
         if (!v.paused && Number.isFinite(v.duration)) {

@@ -154,8 +154,18 @@ class TabSwitcherView @JvmOverloads constructor(
         val dark = showingIncognito
         setBackgroundColor(color(if (dark) R.color.incognito_bg else R.color.switcher_bg))
         val text = color(if (dark) R.color.incognito_text else R.color.text_primary)
-        newTab.setTextColor(text)
-        val plus = ContextCompat.getDrawable(context, R.drawable.ic_add)?.mutate()?.also { it.setTint(text) }
+        // "New tab" is a tonal pill button.
+        val pillText = color(if (dark) R.color.incognito_text else R.color.on_accent_container)
+        newTab.setTextColor(pillText)
+        newTab.background = android.graphics.drawable.RippleDrawable(
+            ColorStateList.valueOf(0x22000000),
+            GradientDrawable().apply {
+                cornerRadius = dp(20).toFloat()
+                setColor(color(if (dark) R.color.incognito_url else R.color.accent_container))
+            },
+            null,
+        )
+        val plus = ContextCompat.getDrawable(context, R.drawable.ic_add)?.mutate()?.also { it.setTint(pillText) }
         newTab.setCompoundDrawablesRelativeWithIntrinsicBounds(plus, null, null, null)
         toggle.background = GradientDrawable().apply {
             cornerRadius = dp(20).toFloat()
@@ -219,9 +229,11 @@ class TabSwitcherView @JvmOverloads constructor(
             val tab = card.tab
             h.tab = tab
             val dark = showingIncognito
+            // Outlined rather than shadowed: just as clear, and nothing extra to draw.
             h.itemView.background = GradientDrawable().apply {
-                cornerRadius = dp(14).toFloat()
+                cornerRadius = dp(18).toFloat()
                 setColor(color(if (dark) R.color.incognito_url else R.color.tab_card_bg))
+                setStroke(dp(1), color(if (dark) R.color.incognito_url else R.color.outline))
             }
             h.title.text = card.title
             h.title.setTextColor(color(if (dark) R.color.incognito_text else R.color.text_primary))

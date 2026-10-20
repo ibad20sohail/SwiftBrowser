@@ -43,6 +43,64 @@ function onNative(msg) {
   if (msg.type === 'headers') {
     const referer = referers.get(msg.url);
     post({ type: 'headers', id: msg.id, headers: referer ? { referer } : null });
+  } else if (msg.type === 'lite') {
+    setLiteSites(Array.isArray(msg.sites) ? msg.sites : []);
+  }
+}
+
+// ---------------------------------------------------------------- Lite mode
+
+// The sites the user switched to Lite mode get perf/lite.css from the first byte of every page.
+let liteRegistration = null;
+let liteQueue = Promise.resolve();
+
+function setLiteSites(sites) {
+  liteQueue = liteQueue.then(async () => {
+    if (liteRegistration) {
+      try { await liteRegistration.unregister(); } catch (e) { }
+      liteRegistration = null;
+    }
+    const matches = [];
+    for (const site of sites) {
+      if (typeof site === 'string' && /^[a-z0-9.-]+$/i.test(site)) {
+        matches.push('*://' + site + '/*', '*://*.' + site + '/*');
+      }
+    }
+    if (matches.length === 0) { return; }
+    try {
+      liteRegistration = await browser.contentScripts.register({
+        matches,
+        css: [{ file: '/perf/lite.css' }],
+        allFrames: true,
+        runAt: 'document_start',
+      });
+    } catch (e) {
+      liteRegistration = null;
+    }
+  });
+}
+
+// ---------------------------------------------------------------- reader view
+
+// Articles parsed for reader view, by id, until the reader page has fetched them (a few kept).
+const articles = new Map();
+let nextArticle = 1;
+
+async function startReader(tabId) {
+  try {
+    await browser.tabs.executeScript(tabId, { file: '/reader/Readability.js' });
+    const results = await browser.tabs.executeScript(tabId, { file: '/reader/parse.js' });
+    const article = results && results[0];
+    if (!article) {
+      post({ type: 'reader-failed', tabId });
+      return;
+    }
+    const id = String(nextArticle++);
+    articles.set(id, article);
+    while (articles.size > 6) { articles.delete(articles.keys().next().value); }
+    post({ type: 'reader-ready', tabId, url: browser.runtime.getURL('reader/view.html') + '#' + id });
+  } catch (e) {
+    post({ type: 'reader-failed', tabId });
   }
 }
 
@@ -125,6 +183,13 @@ browser.tabs.onRemoved.addListener(tabId => { seen.delete(tabId); });
 browser.runtime.onMessage.addListener((msg, sender) => {
   if (msg && msg.type === 'whoami') {
     return Promise.resolve({ tabId: sender.tab ? sender.tab.id : -1 });
+  }
+  if (msg && msg.type === 'reader-start' && sender.tab) {
+    startReader(sender.tab.id);
+    return undefined;
+  }
+  if (msg && msg.type === 'reader-get') {
+    return Promise.resolve(articles.get(String(msg.id)) || null);
   }
   return undefined;
 });

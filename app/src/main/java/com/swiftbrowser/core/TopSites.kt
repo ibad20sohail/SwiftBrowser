@@ -31,8 +31,9 @@ object TopSites {
 
     fun key(host: String): String = host.lowercase(Locale.ROOT).removePrefix("www.").removePrefix("m.")
 
+    /** "en.m.wikipedia.org" → "Wikipedia": the site's own name, not its language or mobile prefix. */
     fun label(key: String): String =
-        NAMES[key] ?: key.substringBefore('.').replaceFirstChar { it.titlecase(Locale.ROOT) }
+        NAMES[key] ?: UrlUtils.siteOfHost(key).substringBefore('.').replaceFirstChar { it.titlecase(Locale.ROOT) }
 
     /** Blocking; reads history. */
     fun load(db: Db, profileId: Long, hidden: Set<String>, max: Int = 8): List<Tile> {

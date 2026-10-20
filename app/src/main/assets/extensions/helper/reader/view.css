@@ -1,0 +1,87 @@
+:root {
+  --bg: #ffffff;
+  --text: #1b1c20;
+  --muted: #646a76;
+  --link: #1b66e4;
+  --rule: #e4e7ec;
+  --button: #eef1f6;
+  --size: 19px;
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #15171c;
+    --text: #e6e8ec;
+    --muted: #a3a9b4;
+    --link: #8ab4ff;
+    --rule: #2a2e36;
+    --button: #262a31;
+  }
+}
+
+html { background: var(--bg); }
+
+body {
+  margin: 0;
+  color: var(--text);
+  background: var(--bg);
+  font: var(--size)/1.65 Georgia, "Noto Serif", serif;
+  -webkit-text-size-adjust: none;
+  text-size-adjust: none;
+}
+
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--rule);
+  font: 15px/1 Roboto, "Noto Sans", sans-serif;
+}
+
+.spacer { flex: 1; }
+
+.original { color: var(--link); text-decoration: none; padding: 8px 0; }
+
+.size {
+  min-width: 44px;
+  height: 36px;
+  border: 0;
+  border-radius: 18px;
+  background: var(--button);
+  color: var(--text);
+  font: 600 15px Roboto, sans-serif;
+}
+
+main { max-width: 680px; margin: 0 auto; padding: 18px 20px 64px; }
+
+.site { margin: 0 0 6px; color: var(--muted); font: 14px Roboto, sans-serif; letter-spacing: .02em; }
+
+h1 { margin: 0 0 10px; font: 700 1.45em/1.25 Roboto, "Noto Sans", sans-serif; }
+
+.byline { margin: 0 0 22px; color: var(--muted); font: 14px Roboto, sans-serif; }
+
+.byline:empty { display: none; }
+
+article { overflow-wrap: break-word; }
+
+article img, article video, article figure, article picture { max-width: 100%; height: auto; }
+
+article figure { margin: 1.2em 0; }
+
+article figcaption { color: var(--muted); font: 14px/1.4 Roboto, sans-serif; margin-top: 6px; }
+
+article a { color: var(--link); }
+
+article pre, article code { font-size: .85em; white-space: pre-wrap; }
+
+article blockquote { margin: 1em 0; padding-left: 14px; border-left: 3px solid var(--rule); color: var(--muted); }
+
+article table { display: block; overflow-x: auto; border-collapse: collapse; font-size: .85em; }
+
+article td, article th { border: 1px solid var(--rule); padding: 4px 8px; }
+
+article hr { border: 0; border-top: 1px solid var(--rule); }
+
+.missing { color: var(--muted); font: 16px Roboto, sans-serif; }

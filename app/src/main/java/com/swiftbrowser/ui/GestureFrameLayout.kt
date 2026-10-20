@@ -10,6 +10,7 @@ import kotlin.math.abs
 /**
  * Wraps the page.
  *  - Pull to refresh: dragging down at the top of a page reloads it, as in Chrome.
+ *  - Swiping in from the left edge goes back, from the right edge forward.
  *  - Full-screen video: vertical swipes on the left half change brightness, on the right half
  *    volume (like MX Player). Taps and other gestures still reach the page, so the site's own
  *    player controls keep working.
@@ -23,6 +24,13 @@ class GestureFrameLayout @JvmOverloads constructor(
         fun onSwipeEnd()
     }
 
+    interface EdgeListener {
+        /** Whether a swipe from this edge would do anything now. */
+        fun canEdgeSwipe(fromLeft: Boolean): Boolean
+        fun onEdgeSwipe(fromLeft: Boolean, distance: Float)
+        fun onEdgeSwipeEnd(fromLeft: Boolean, distance: Float)
+    }
+
     interface PullListener {
         /** Whether a pull may start now (page at the top, toolbar shown, ...). */
         fun canPull(): Boolean
@@ -33,6 +41,7 @@ class GestureFrameLayout @JvmOverloads constructor(
     var gesturesEnabled = false
     var listener: Listener? = null
     var pullListener: PullListener? = null
+    var edgeListener: EdgeListener? = null
     var page: SwiftGeckoView? = null
 
     private val slop = ViewConfiguration.get(context).scaledTouchSlop
@@ -47,12 +56,22 @@ class GestureFrameLayout @JvmOverloads constructor(
     private var pulling = false
     private var pullStartY = 0f
 
+    /** Only the outermost strip of the page starts an edge swipe, so pages keep their own swipes. */
+    private val edgeWidth = 20 * resources.displayMetrics.density
+    private var edgeCandidate = false
+    private var edgeFromLeft = false
+    private var edgeDragging = false
+    private var edgeDownX = 0f
+    private var edgeDownY = 0f
+
     override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
         if (gesturesEnabled) return interceptVideoGesture(ev)
+        if (interceptEdge(ev)) return true
         return interceptPull(ev)
     }
 
     override fun onTouchEvent(ev: MotionEvent): Boolean {
+        if (edgeDragging) return handleEdge(ev)
         if (pulling) return handlePull(ev)
         if (!dragging) return super.onTouchEvent(ev)
         when (ev.actionMasked) {
@@ -64,6 +83,53 @@ class GestureFrameLayout @JvmOverloads constructor(
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 dragging = false
                 listener?.onSwipeEnd()
+            }
+        }
+        return true
+    }
+
+    // ------------------------------------------------------------------ swipe from the edges
+
+    private fun interceptEdge(ev: MotionEvent): Boolean {
+        when (ev.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                edgeDragging = false
+                edgeDownX = ev.x
+                edgeDownY = ev.y
+                edgeFromLeft = ev.x < edgeWidth
+                val fromRight = ev.x > width - edgeWidth
+                edgeCandidate = (edgeFromLeft || fromRight) && edgeListener?.canEdgeSwipe(edgeFromLeft) == true
+            }
+            MotionEvent.ACTION_POINTER_DOWN -> edgeCandidate = false
+            MotionEvent.ACTION_MOVE -> {
+                if (!edgeCandidate) return false
+                val inward = if (edgeFromLeft) ev.x - edgeDownX else edgeDownX - ev.x
+                val dy = abs(ev.y - edgeDownY)
+                if (dy > slop * 2 && dy > inward) {
+                    edgeCandidate = false
+                } else if (inward > slop && inward > dy * 1.5f) {
+                    edgeCandidate = false
+                    edgeDragging = true
+                    parent?.requestDisallowInterceptTouchEvent(true)
+                    return true
+                }
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> edgeCandidate = false
+        }
+        return false
+    }
+
+    private fun handleEdge(ev: MotionEvent): Boolean {
+        val distance = (if (edgeFromLeft) ev.x - edgeDownX else edgeDownX - ev.x).coerceAtLeast(0f)
+        when (ev.actionMasked) {
+            MotionEvent.ACTION_MOVE -> edgeListener?.onEdgeSwipe(edgeFromLeft, distance)
+            MotionEvent.ACTION_UP -> {
+                edgeDragging = false
+                edgeListener?.onEdgeSwipeEnd(edgeFromLeft, distance)
+            }
+            MotionEvent.ACTION_CANCEL -> {
+                edgeDragging = false
+                edgeListener?.onEdgeSwipeEnd(edgeFromLeft, 0f)
             }
         }
         return true

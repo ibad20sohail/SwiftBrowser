@@ -84,6 +84,36 @@ class Prefs(ctx: Context) {
         get() = sp.getStringSet(HIDDEN_TILES, emptySet())?.toSet() ?: emptySet()
         set(v) = sp.edit { putStringSet(HIDDEN_TILES, v) }
 
+    /** Text size on all sites (1 = as the site designed it). */
+    var textScale: Float
+        get() = sp.getFloat(TEXT_SCALE, 1f).coerceIn(0.5f, 2f)
+        set(v) = sp.edit { putFloat(TEXT_SCALE, v) }
+
+    /** Pinch-zooming allowed even on sites that turn it off. */
+    var forceZoom: Boolean
+        get() = sp.getBoolean(FORCE_ZOOM, false)
+        set(v) = sp.edit { putBoolean(FORCE_ZOOM, v) }
+
+    /** Videos and music keep playing when Swift is in the background or the screen is off. */
+    var backgroundPlay: Boolean
+        get() = sp.getBoolean(BACKGROUND_PLAY, true)
+        set(v) = sp.edit { putBoolean(BACKGROUND_PLAY, v) }
+
+    /** Swiping in from the left or right edge of a page goes back or forward. */
+    var edgeSwipe: Boolean
+        get() = sp.getBoolean(EDGE_SWIPE, true)
+        set(v) = sp.edit { putBoolean(EDGE_SWIPE, v) }
+
+    /** Sites shown in Lite mode: no animations, shadows or filters. */
+    var liteSites: Set<String>
+        get() = sp.getStringSet(LITE_SITES, emptySet())?.toSet() ?: emptySet()
+        set(v) = sp.edit { putStringSet(LITE_SITES, v) }
+
+    /** When Swift last asked GitHub for a newer version. */
+    var lastUpdateCheck: Long
+        get() = sp.getLong(LAST_UPDATE_CHECK, 0L)
+        set(v) = sp.edit { putLong(LAST_UPDATE_CHECK, v) }
+
     companion object {
         const val DARK_MODE = "dark_mode"
         const val AD_LEVEL = "ad_level"
@@ -101,5 +131,11 @@ class Prefs(ctx: Context) {
         const val MAX_LIVE_TABS_LIMIT = 10
         const val CURRENT_PROFILE = "current_profile"
         const val HIDDEN_TILES = "hidden_tiles"
+        const val TEXT_SCALE = "text_scale"
+        const val FORCE_ZOOM = "force_zoom"
+        const val BACKGROUND_PLAY = "background_play"
+        const val EDGE_SWIPE = "edge_swipe"
+        const val LITE_SITES = "lite_sites"
+        const val LAST_UPDATE_CHECK = "last_update_check"
     }
 }

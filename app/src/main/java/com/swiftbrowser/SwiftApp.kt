@@ -15,6 +15,7 @@ import androidx.core.content.edit
 import com.swiftbrowser.adblock.AdBlock
 import com.swiftbrowser.core.Crash
 import com.swiftbrowser.core.Db
+import com.swiftbrowser.core.Diagnostics
 import com.swiftbrowser.core.Favicons
 import com.swiftbrowser.core.L
 import com.swiftbrowser.core.Prefs
@@ -35,6 +36,7 @@ class SwiftApp : Application() {
         if (!isMainProcess()) return
         instance = this
         Crash.install(this)
+        Diagnostics.onAppStart(this)
         prefs = Prefs(this)
         migratePrefs()
         db = Db(this)
@@ -71,9 +73,14 @@ class SwiftApp : Application() {
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
         if (instance == null) return
-        if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
-            L.d("Low memory ($level): suspending background tabs")
+        // Android is about to start closing apps (while Swift runs, or while it is in the
+        // background): Swift could be next, so it frees the pages of background tabs (they reload
+        // when opened) and saves its log. Merely leaving the app (UI_HIDDEN) isn't a reason.
+        val running = level in ComponentCallbacks2.TRIM_MEMORY_RUNNING_MODERATE..ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL
+        if (running || level >= ComponentCallbacks2.TRIM_MEMORY_BACKGROUND) {
+            L.d("Memory getting low ($level), ${Diagnostics.memoryText()}: suspending background tabs")
             TabManager.suspendBackgroundTabs()
+            Diagnostics.flushLog()
         }
     }
 
@@ -115,6 +122,7 @@ class SwiftApp : Application() {
                 val am = activity.getSystemService(Context.ALARM_SERVICE) as AlarmManager
                 am.set(AlarmManager.ELAPSED_REALTIME, SystemClock.elapsedRealtime() + 400, pending)
                 activity.runOnUiThread {
+                    Diagnostics.markCleanExit()
                     activity.finishAffinity()
                     Process.killProcess(Process.myPid())
                 }

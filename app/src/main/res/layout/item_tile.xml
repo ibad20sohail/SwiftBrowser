@@ -10,14 +10,14 @@
     android:paddingBottom="10dp">
 
     <FrameLayout
-        android:layout_width="52dp"
-        android:layout_height="52dp"
+        android:layout_width="56dp"
+        android:layout_height="56dp"
         android:background="@drawable/bg_tile">
 
         <ImageView
             android:id="@+id/tile_icon"
-            android:layout_width="28dp"
-            android:layout_height="28dp"
+            android:layout_width="30dp"
+            android:layout_height="30dp"
             android:layout_gravity="center"
             android:importantForAccessibility="no"
             android:visibility="gone" />

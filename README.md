@@ -5,9 +5,9 @@ ad-heavy sites on an old phone (Moto E4, Android 7.1.2).
 
 ## Download
 
-**[Download Swift 1.3 (APK)](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v1.3/Swift-1.3.apk)**
+**[Download Swift 1.4 (APK)](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v1.4/Swift-1.4.apk)**
 for Android 7 and newer (32-bit ARM, about 150 MB). It installs over an earlier Swift and keeps
-tabs and settings.
+tabs and settings. From 1.4 on, Swift can also update itself: Settings → Check for updates.
 
 Older versions: [all releases](https://github.com/ibad20sohail/SwiftBrowser/releases). The APKs
 are attached to the releases because GitHub doesn't accept files over 100 MB in the repository.
@@ -24,8 +24,16 @@ are attached to the releases because GitHub doesn't accept files over 100 MB in 
   to go to the next or previous tab, and a closed tab can be brought back with Undo. How many
   stay loaded is a setting (1 to 10, 2 by default); the others show their last picture straight
   away and reload their page when opened.
-- **Menu** (⋮) that slides up from the bottom: a row of buttons for the page and one for the app,
-  both scrolling sideways. Per-site ad blocking is in it too; everything else is in Settings.
+- **Menu** (⋮) that slides up from the bottom: rows of buttons that scroll sideways, for the page,
+  how it is shown and the app. Per-site ad blocking is in it too; everything else is in Settings.
+- **Reader view**: a clean, light version of article pages (Mozilla's Readability), with text size
+  buttons, in light or dark.
+- **Lite mode** per site, from the menu: no animations, shadows or blur, for sites that are slow
+  on the phone.
+- **Save offline**: saves a page as a PDF in Downloads, to read without internet in Swift's own
+  PDF viewer.
+- **Add to Home screen**: a shortcut to the page on the phone's home screen.
+- **Swipe from the edges**: from the left edge of a page to go back, from the right to go forward.
 - **Home page** for new tabs: a Google search box (with voice search) and shortcuts to the most
   visited sites.
 - **Toolbar that hides while scrolling down** (after a deliberate scroll, not a nudge) and comes
@@ -35,16 +43,24 @@ are attached to the releases because GitHub doesn't accept files over 100 MB in 
     landscape automatically, and swipe gestures for brightness (left side) and volume (right
     side), can be switched on in Settings → Video.
   - Sites get H.264 video, which the phone's video hardware plays, instead of AV1.
+  - Background play: videos and music keep playing when you leave Swift or turn the screen off,
+    with play/pause in the notifications.
   - Playback speed can be set from 0.5x to 3x.
   - Videos a page plays can be downloaded, including HLS (`.m3u8`) streams. These are saved as
     MP4 when possible.
 - **Downloads** with pause/resume and notifications.
-- **Dark / light mode**. Sites that support dark mode follow it.
+- **Dark / light mode**, with a calm palette in both. Sites that support dark mode follow it.
+- **Text size** for all sites, and **zoom** even on sites that turn it off.
 - **Google search** with suggestions in the address bar.
 - **Tuned for a 2 GB phone**: uBlock Origin runs in its own process, filter lists update only
   while the app is in the background, the web cache is capped, and Firefox's own Safe Browsing
   lists are off (uBlock Origin covers them). Silent videos don't start by themselves (YouTube
   feed previews), and the app's own toolbar is redrawn as little as possible while a page scrolls.
+  All tabs share one engine process for pages, decoded images are capped at 48 MB, and when the
+  phone runs low on memory only the open tab stays loaded.
+- **Problem reports**: engine crashes and Android closing Swift (usually for lack of memory) are
+  noted, and Settings → Send a problem report shares them with the app's log (nothing is sent by
+  itself).
 - **Lighter pages**: frosted-glass effects (CSS `backdrop-filter`) are off, sites that offer a
   version without decorative animations get it, and YouTube's and TheFlixer's large blur effects
   are left out. Each of these makes scrolling several times more work on a slow phone.

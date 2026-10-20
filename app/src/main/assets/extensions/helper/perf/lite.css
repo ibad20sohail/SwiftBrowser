@@ -1,0 +1,18 @@
+/*
+ * Swift Lite mode (chosen per site from the menu): no motion, shadows or filters, the parts of a
+ * page that cost the most to draw on a slow phone. Animations jump to their end instead of being
+ * removed, so content that fades or slides in still shows up.
+ */
+*, *::before, *::after {
+  animation-duration: 0s !important;
+  animation-delay: 0s !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0s !important;
+  transition-delay: 0s !important;
+  box-shadow: none !important;
+  text-shadow: none !important;
+  filter: none !important;
+  backdrop-filter: none !important;
+  mix-blend-mode: normal !important;
+  scroll-behavior: auto !important;
+}

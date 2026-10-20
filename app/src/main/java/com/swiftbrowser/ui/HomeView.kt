@@ -38,6 +38,7 @@ class HomeView @JvmOverloads constructor(
     private val search: LinearLayout
     private val hint: TextView
     private val tilesBox: LinearLayout
+    private val tilesTitle: View
     private var incognito = false
     private var generation = 0
     private val tileViews = HashMap<String, View>()
@@ -52,6 +53,7 @@ class HomeView @JvmOverloads constructor(
         search = findViewById(R.id.home_search)
         hint = findViewById(R.id.home_search_hint)
         tilesBox = findViewById(R.id.home_tiles)
+        tilesTitle = findViewById(R.id.home_tiles_title)
         search.setOnClickListener { listener?.onSearchBoxClicked() }
         findViewById<View>(R.id.home_mic).setOnClickListener { listener?.onVoiceSearch() }
     }
@@ -89,9 +91,10 @@ class HomeView @JvmOverloads constructor(
         logo.visibility = if (incognito) View.GONE else View.VISIBLE
         incognitoBox.visibility = if (incognito) View.VISIBLE else View.GONE
         tilesBox.visibility = if (incognito) View.GONE else View.VISIBLE
+        if (incognito) tilesTitle.visibility = View.GONE
         if (incognito) {
             search.background = GradientDrawable().apply {
-                cornerRadius = dp(28).toFloat()
+                cornerRadius = dp(27).toFloat()
                 setColor(color(R.color.incognito_url))
             }
             hint.setTextColor(color(R.color.incognito_hint))
@@ -120,6 +123,7 @@ class HomeView @JvmOverloads constructor(
     private fun bindTiles(tiles: List<TopSites.Tile>) {
         tilesBox.removeAllViews()
         tileViews.clear()
+        tilesTitle.visibility = if (tiles.isEmpty() || incognito) View.GONE else View.VISIBLE
         val inflater = LayoutInflater.from(context)
         for (rowTiles in tiles.chunked(4)) {
             val row = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
@@ -129,7 +133,7 @@ class HomeView @JvmOverloads constructor(
                 val letter = v.findViewById<TextView>(R.id.tile_letter)
                 letter.text = t.label.take(1).uppercase()
                 letter.background = GradientDrawable().apply {
-                    shape = GradientDrawable.OVAL
+                    cornerRadius = dp(18).toFloat()
                     setColor(letterColor(t.key))
                 }
                 v.setOnClickListener { listener?.onTileClicked(t.url) }

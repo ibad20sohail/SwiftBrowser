@@ -112,6 +112,9 @@ interface BrowserUi {
      */
     fun onPageDrawn(tab: Tab, contentful: Boolean)
 
+    /** A short message at the bottom of the screen. */
+    fun showMessage(text: String)
+
     /** Lets the user choose files for a page's upload field; null when cancelled. */
     fun pickFiles(mimeTypes: Array<String>, multiple: Boolean, callback: (List<android.net.Uri>?) -> Unit)
 }

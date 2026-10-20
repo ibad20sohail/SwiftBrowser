@@ -2,6 +2,7 @@ package com.swiftbrowser.media
 
 import android.os.Handler
 import android.os.Looper
+import com.swiftbrowser.SwiftApp
 import com.swiftbrowser.adblock.NavPolicy
 import com.swiftbrowser.core.Favicons
 import com.swiftbrowser.core.L
@@ -47,6 +48,7 @@ object Helper {
         ext.setMessageDelegate(object : WebExtension.MessageDelegate {
             override fun onConnect(port: WebExtension.Port) {
                 backgroundPort = port
+                sendLiteSites()
                 port.setDelegate(object : WebExtension.PortDelegate {
                     override fun onPortMessage(message: Any, port: WebExtension.Port) {
                         (message as? JSONObject)?.let { onBackgroundMessage(it) }
@@ -134,6 +136,47 @@ object Helper {
                 val cb = headerCallbacks.remove(id) ?: return
                 cb(toMap(msg.optJSONObject("headers")))
             }
+            "reader-ready" -> {
+                val tab = tabsByExtId[msg.optInt("tabId", -1)] ?: return
+                val url = msg.optString("url")
+                if (url.startsWith("moz-extension://") && tab.session != null) TabManager.load(tab, url)
+            }
+            "reader-failed" -> {
+                val tab = tabsByExtId[msg.optInt("tabId", -1)] ?: return
+                if (tab === TabManager.current) TabManager.ui?.showMessage("This page has no article to show in reader view")
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------ reader view and Lite mode
+
+    /** Shows the page's article in reader view (the extension finds it with Readability). */
+    fun startReader(tab: Tab): Boolean {
+        val msg = JSONObject().put("type", "reader")
+        var sent = false
+        for (p in tab.helperPorts.toList()) {
+            try {
+                p.postMessage(msg)
+                sent = true
+            } catch (_: Exception) {
+                tab.helperPorts.remove(p)
+            }
+        }
+        return sent
+    }
+
+    /** Reader view pages are the extension's own; they show as such in the address bar. */
+    fun isReaderUrl(url: String?): Boolean =
+        url != null && url.startsWith("moz-extension://") && url.contains("/reader/view.html")
+
+    /** Sends the Lite mode sites to the extension, which styles their pages from the start. */
+    fun sendLiteSites() {
+        val port = backgroundPort ?: return
+        val sites = org.json.JSONArray(SwiftApp.prefs.liteSites.toList())
+        try {
+            port.postMessage(JSONObject().put("type", "lite").put("sites", sites))
+        } catch (e: Exception) {
+            L.w("Couldn't send Lite mode sites", e)
         }
     }
 

@@ -26,18 +26,24 @@ import com.swiftbrowser.R
 import com.swiftbrowser.SwiftApp
 import com.swiftbrowser.adblock.AdBlock
 import com.swiftbrowser.adblock.AdLevel
+import com.swiftbrowser.core.Diagnostics
 import com.swiftbrowser.core.Prefs
 import com.swiftbrowser.core.Profiles
+import com.swiftbrowser.core.Updates
 import com.swiftbrowser.core.UrlUtils
 import com.swiftbrowser.download.Downloads
 import com.swiftbrowser.engine.Engine
 import com.swiftbrowser.engine.GpuInfo
+import com.swiftbrowser.media.Helper
+import com.swiftbrowser.media.PlaybackService
+import com.swiftbrowser.tabs.TabManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.mozilla.geckoview.StorageController
 import java.io.File
+import kotlin.math.roundToInt
 
 /** Settings, grouped in cards. */
 class SettingsActivity : AppCompatActivity() {
@@ -45,6 +51,7 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var prefs: Prefs
     private lateinit var column: LinearLayout
     private var siteLevelsSummary: TextView? = null
+    private var liteSummary: TextView? = null
     private var storageSummary: TextView? = null
     private var cacheBytes = 0L
     private val levelRows = ArrayList<Pair<AdLevel, View>>()
@@ -86,6 +93,7 @@ class SettingsActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         updateSiteLevelsSummary()
+        updateLiteSummary()
         computeStorage()
     }
 
@@ -100,6 +108,14 @@ class SettingsActivity : AppCompatActivity() {
         section("Appearance") {
             switch(R.drawable.ic_dark, blue, "Dark mode", "Websites that support dark mode turn dark too", prefs.darkMode) {
                 Sheets.setDarkMode(it)
+            }
+            lateinit var textSummary: TextView
+            textSummary = action(R.drawable.ic_text_size, blue, "Text size", textSizeText(prefs.textScale)) {
+                chooseTextSize { textSummary.text = textSizeText(it) }
+            }
+            switch(R.drawable.ic_zoom, blue, "Zoom on all sites", "Pinch to zoom even where a site turns it off", prefs.forceZoom) {
+                prefs.forceZoom = it
+                Engine.setForceZoom(it)
             }
         }
 
@@ -129,9 +145,17 @@ class SettingsActivity : AppCompatActivity() {
             switch(R.drawable.ic_refresh, blue, "Pull down to refresh", "At the top of a page, drag down to reload it", prefs.pullToRefresh) {
                 prefs.pullToRefresh = it
             }
+            switch(R.drawable.ic_gesture, blue, "Swipe from the edges", "From the left edge of a page to go back, from the right to go forward", prefs.edgeSwipe) {
+                prefs.edgeSwipe = it
+            }
         }
 
         section("Video") {
+            switch(R.drawable.ic_headphones, purple, "Background play", "Videos and music keep playing when you leave Swift or turn the screen off, with play/pause in the notifications", prefs.backgroundPlay) {
+                prefs.backgroundPlay = it
+                TabManager.applyBackgroundPlay(it)
+                PlaybackService.sync(this@SettingsActivity)
+            }
             switch(R.drawable.ic_rotate, purple, "Rotate full-screen videos", "Full-screen videos turn to landscape. Off: the phone's auto-rotate decides.", prefs.autoLandscape) {
                 prefs.autoLandscape = it
             }
@@ -170,6 +194,7 @@ class SettingsActivity : AppCompatActivity() {
                 },
                 prefs.softwareRendering,
             ) { on -> confirmRenderingChange(on) }
+            liteSummary = action(R.drawable.ic_lite, amber, "Lite mode sites", "") { showLiteSites() }
             switch(
                 R.drawable.ic_speed, amber, "Show drawing speed",
                 "Shows frames per second and how long each frame takes, on top of pages. For comparing the two drawing methods.",
@@ -190,6 +215,12 @@ class SettingsActivity : AppCompatActivity() {
                 R.drawable.ic_info, grey, "Swift ${BuildConfig.VERSION_NAME}",
                 "Firefox engine (GeckoView 143) • uBlock Origin ${AdBlock.uboVersion}",
             )
+            action(R.drawable.ic_update, grey, "Check for updates", "New versions come from GitHub; installing keeps your tabs and settings") {
+                checkForUpdates()
+            }
+            action(R.drawable.ic_report, grey, "Send a problem report", "What Swift noted about crashes and memory, to send by WhatsApp or e-mail") {
+                Diagnostics.shareReport(this@SettingsActivity)
+            }
         }
     }
 
@@ -263,10 +294,11 @@ class SettingsActivity : AppCompatActivity() {
     private fun section(title: String, build: Section.() -> Unit) {
         column.addView(TextView(this).apply {
             text = title
-            textSize = 14f
-            setTypeface(typeface, Typeface.BOLD)
+            textSize = 13.5f
+            letterSpacing = 0.02f
+            setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL))
             setTextColor(color(R.color.accent))
-            setPadding(dp(16), dp(22), dp(16), dp(8))
+            setPadding(dp(18), dp(24), dp(16), dp(8))
         })
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -377,6 +409,84 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     // ------------------------------------------------------------------ actions
+
+    private fun textSizeText(scale: Float) = "${(scale * 100).roundToInt()}%" + if (scale == 1f) " (as sites designed it)" else ""
+
+    private fun chooseTextSize(onChosen: (Float) -> Unit) {
+        val options = floatArrayOf(0.8f, 0.9f, 1f, 1.1f, 1.25f, 1.5f)
+        val labels = options.map { textSizeText(it) }.toTypedArray()
+        val checked = options.indexOfFirst { kotlin.math.abs(it - prefs.textScale) < 0.01f }
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Text size")
+            .setSingleChoiceItems(labels, checked) { d, which ->
+                prefs.textScale = options[which]
+                Engine.setTextScale(options[which])
+                onChosen(options[which])
+                d.dismiss()
+                toast("Pages use the new size when they reload")
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun updateLiteSummary() {
+        val n = prefs.liteSites.size
+        liteSummary?.text = if (n == 0) {
+            "None yet. Turn it on for a slow site from the menu (⋮ → Lite mode): no animations, shadows or blur."
+        } else {
+            "$n ${if (n == 1) "site" else "sites"} without animations, shadows or blur"
+        }
+        liteSummary?.visibility = View.VISIBLE
+    }
+
+    private fun showLiteSites() {
+        val sites = prefs.liteSites.sorted()
+        if (sites.isEmpty()) {
+            MaterialAlertDialogBuilder(this).setMessage("No sites use Lite mode yet. Turn it on for a slow site from the menu (⋮ → Lite mode).")
+                .setPositiveButton(android.R.string.ok, null).show()
+            return
+        }
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Lite mode sites")
+            .setItems(sites.toTypedArray()) { _, which ->
+                val site = sites[which]
+                MaterialAlertDialogBuilder(this)
+                    .setMessage("Show $site normally again?")
+                    .setPositiveButton("Turn off Lite mode") { _, _ ->
+                        prefs.liteSites = prefs.liteSites - site
+                        Helper.sendLiteSites()
+                        updateLiteSummary()
+                    }
+                    .setNegativeButton(android.R.string.cancel, null)
+                    .show()
+            }
+            .setNegativeButton("Close", null)
+            .show()
+    }
+
+    private fun checkForUpdates() {
+        toast("Checking for updates…")
+        Updates.latest { r ->
+            when {
+                r == null -> toast("Couldn't reach GitHub. Check the internet connection.")
+                !Updates.isNewer(r.version, BuildConfig.VERSION_NAME) -> toast("Swift ${BuildConfig.VERSION_NAME} is the newest version")
+                else -> {
+                    val size = if (r.size > 0) " (${UrlUtils.formatBytes(r.size)})" else ""
+                    MaterialAlertDialogBuilder(this)
+                        .setTitle("Update to Swift ${r.version}?")
+                        .setMessage(r.notes.ifBlank { "A new version of Swift is available." }.take(1500) +
+                            "\n\nThe update$size downloads now; then Android asks to install it. Tabs and settings are kept.")
+                        .setPositiveButton("Download") { _, _ ->
+                            val item = Downloads.startUrl(Profiles.currentId, r.apkUrl, r.apkName, "application/vnd.android.package-archive", emptyMap(), null)
+                            Updates.downloadId = item.id
+                            toast("Downloading Swift ${r.version}… Android asks to install it when it's done.")
+                        }
+                        .setNegativeButton("Later", null)
+                        .show()
+                }
+            }
+        }
+    }
 
     private fun liveTabsText(n: Int) = when (n) {
         1 -> "1 tab — least memory; other tabs reload when opened"

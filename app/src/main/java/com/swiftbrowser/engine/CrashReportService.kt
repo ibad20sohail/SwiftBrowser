@@ -82,7 +82,7 @@ class CrashReportService : Service() {
             val nm = getSystemService(NotificationManager::class.java)
             nm.createNotificationChannel(NotificationChannel("crash", "Crash notes", NotificationManager.IMPORTANCE_MIN))
             val n = NotificationCompat.Builder(this, "crash")
-                .setSmallIcon(R.drawable.ic_notify)
+                .setSmallIcon(R.drawable.ic_notify_logo)
                 .setContentTitle("Noting a crash")
                 .build()
             startForeground(77, n)

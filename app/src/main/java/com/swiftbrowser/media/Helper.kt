@@ -48,7 +48,7 @@ object Helper {
         ext.setMessageDelegate(object : WebExtension.MessageDelegate {
             override fun onConnect(port: WebExtension.Port) {
                 backgroundPort = port
-                sendLiteMode()
+                sendLook()
                 port.setDelegate(object : WebExtension.PortDelegate {
                     override fun onPortMessage(message: Any, port: WebExtension.Port) {
                         (message as? JSONObject)?.let { onBackgroundMessage(it) }
@@ -114,6 +114,8 @@ object Helper {
             "click" -> tab.lastClick = NavPolicy.Click(msg.optString("href"), System.currentTimeMillis())
             "icon" -> if (!tab.incognito) Favicons.onPageIcon(msg.optString("page"), msg.optString("href").ifBlank { null })
             "playing" -> Unit
+            "video-pos" -> WatchPositions.onPosition(tab, msg)
+            "video-start" -> WatchPositions.onStart(tab, msg)
         }
     }
 
@@ -169,13 +171,17 @@ object Helper {
     fun isReaderUrl(url: String?): Boolean =
         url != null && url.startsWith("moz-extension://") && url.contains("/reader/view.html")
 
-    /** Tells the extension whether pages get the Lite mode style, from their first byte on. */
-    fun sendLiteMode() {
+    /**
+     * Tells the extension which styles pages get from their first byte on: Lite mode, and the
+     * lighter YouTube and TheFlixer (unless sites are shown as designed).
+     */
+    fun sendLook() {
         val port = backgroundPort ?: return
+        val prefs = SwiftApp.prefs
         try {
-            port.postMessage(JSONObject().put("type", "lite").put("all", SwiftApp.prefs.liteMode))
+            port.postMessage(JSONObject().put("type", "look").put("lite", prefs.liteMode).put("fixes", !prefs.sitesAsDesigned))
         } catch (e: Exception) {
-            L.w("Couldn't send Lite mode", e)
+            L.w("Couldn't send the look", e)
         }
     }
 
@@ -218,12 +224,27 @@ object Helper {
         }
     }
 
+    /** Skips the full-screen video forward or back (double-tap on its sides). */
     fun seek(tab: Tab, deltaSeconds: Double) {
-        val msg = JSONObject().put("type", "seek").put("delta", deltaSeconds)
+        postToFrames(tab, JSONObject().put("type", "seek").put("delta", deltaSeconds))
+    }
+
+    /** Double speed while a finger is held on the full-screen video, back to normal when let go. */
+    fun holdSpeed(tab: Tab, on: Boolean) {
+        postToFrames(tab, JSONObject().put("type", "rate-hold").put("on", on))
+    }
+
+    /** Continue watching: the video [length] seconds long goes to [position]. */
+    fun resume(tab: Tab, position: Double, length: Double) {
+        postToFrames(tab, JSONObject().put("type", "resume").put("t", position).put("d", length))
+    }
+
+    private fun postToFrames(tab: Tab, msg: JSONObject) {
         for (p in tab.helperPorts.toList()) {
             try {
                 p.postMessage(msg)
             } catch (_: Exception) {
+                tab.helperPorts.remove(p)
             }
         }
     }

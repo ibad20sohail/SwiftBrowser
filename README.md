@@ -5,7 +5,7 @@ ad-heavy sites on an old phone (Moto E4, Android 7.1.2).
 
 ## Download
 
-**[Download Swift 1.5 (APK)](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v1.5/Swift-1.5.apk)**
+**[Download Swift 1.6 (APK)](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v1.6/Swift-1.6.apk)**
 for Android 7 and newer (32-bit ARM, about 150 MB). It installs over an earlier Swift and keeps
 tabs and settings. From 1.4 on, Swift can also update itself: Settings → Check for updates.
 
@@ -20,10 +20,18 @@ are attached to the releases because GitHub doesn't accept files over 100 MB in 
   - Has its own **pop-up and redirect blocker**, which stops the "tap anywhere opens an ad" trick.
 - **Profiles**: each profile has its own Google login, cookies, history, bookmarks and tabs.
 - **Incognito tabs**: no history, and cookies and site data go away when the last one closes.
-- **Tabs** in a two-column grid with page previews, like Chrome. Swipe sideways on the toolbar
-  to go to the next or previous tab, and a closed tab can be brought back with Undo. How many
-  stay loaded is a setting (1 to 10, 2 by default); the others show their last picture straight
-  away and reload their page when opened.
+- **Tabs** in a two-column grid with page previews, like Chrome:
+  - Hold a tab and drag it to move it. Hold it over another tab for a moment and let go to
+    **group** them. A group is one card; tap it to see its tabs, rename it, pick a colour, add a
+    tab, ungroup or close it. Links opened from a grouped tab join its group, and the tab button
+    takes the group's colour.
+  - **Search** your tabs by title or address.
+  - Tabs not opened for 14 days (a setting) wait under **Inactive tabs**, with Close all.
+  - A closed tab (or group) can be brought back with Undo, and **Recent tabs** in the menu keeps
+    the last 50 closed tabs with their back history.
+  - Swipe sideways on the toolbar to go to the next or previous tab.
+  - How many tabs stay loaded is a setting (1 to 10, 2 by default); the others show their last
+    picture straight away and reload their page when opened.
 - **Menu** (⋮) that slides up from the bottom: the page's main actions as a row of icons, four
   switches (Lite mode, dark mode, desktop site, full screen) that keep the menu open, and two pages
   of buttons swiped sideways. Swipe it down, tap outside it or press back to close it.
@@ -31,6 +39,9 @@ are attached to the releases because GitHub doesn't accept files over 100 MB in 
   buttons, in light or dark.
 - **Lite mode**, one switch for all sites (menu or Settings): no animations, shadows or blur, so
   heavy sites scroll smoothly on the phone. It stays on until it is turned off.
+- **Show sites as designed** (Settings → Speed & memory): for newer phones, turns off Swift's
+  changes for slow phones (no glass blur, fewer animations, lighter YouTube and TheFlixer). It is
+  on by itself on phones with 4 GB of memory or more and a fast graphics chip.
 - **Full screen** (menu or Settings): browsing without the phone's status and navigation bars; a
   swipe in from the top or bottom edge shows them for a moment.
 - **Save offline**: saves a page as a PDF in Downloads, to read without internet in Swift's own
@@ -49,9 +60,17 @@ are attached to the releases because GitHub doesn't accept files over 100 MB in 
   - Background play: videos and music keep playing when you leave Swift or turn the screen off,
     with play/pause in the notifications.
   - Playback speed can be set from 0.5x to 3x.
+  - In full screen, double-tap the left or right side to skip 10 seconds (keep tapping to skip
+    more), and hold a finger down for double speed.
+  - **Continue watching**: Swift remembers where long videos were left off and offers to continue
+    from there, even after a reload or reopening the tab.
   - Videos a page plays can be downloaded, including HLS (`.m3u8`) streams. These are saved as
     MP4 when possible.
 - **Downloads** with pause/resume and notifications.
+- **Settings** in the app's own look: the most used switches as tiles, seven topics that show
+  what is set, and a search box.
+- **Hide cookie pop-ups**: one switch (Settings → Ad blocking) for uBlock Origin's cookie-notice
+  lists.
 - **Dark / light mode**, with a calm palette in both. Sites that support dark mode follow it.
 - **Text size** for all sites, and **zoom** even on sites that turn it off.
 - **Google search** with suggestions in the address bar.

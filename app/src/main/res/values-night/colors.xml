@@ -40,4 +40,14 @@
     <color name="incognito_url">#FF2F2A47</color>
     <color name="incognito_text">#FFECE9F7</color>
     <color name="incognito_hint">#FFA7A2C2</color>
+
+    <!-- Tab group colours (1.6), as in Chrome. -->
+    <color name="group_grey">#FFBDC1C6</color>
+    <color name="group_blue">#FF8AB4F8</color>
+    <color name="group_red">#FFF28B82</color>
+    <color name="group_yellow">#FFFDD663</color>
+    <color name="group_green">#FF81C995</color>
+    <color name="group_pink">#FFFF8BCB</color>
+    <color name="group_purple">#FFC58AF9</color>
+    <color name="group_cyan">#FF78D9EC</color>
 </resources>

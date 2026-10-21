@@ -56,6 +56,12 @@ abstract class ListActivity : AppCompatActivity() {
         toolbar.setSubtitleTextColor(androidx.core.content.ContextCompat.getColor(this, R.color.text_secondary))
         window.statusBarColor = androidx.core.content.ContextCompat.getColor(this, R.color.page_bg)
         list.layoutManager = LinearLayoutManager(this)
+        SystemBars.keepHidden(this)
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) SystemBars.apply(this)
     }
 
     protected fun showEmpty(isEmpty: Boolean, text: String) {

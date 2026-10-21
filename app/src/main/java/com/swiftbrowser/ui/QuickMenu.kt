@@ -75,6 +75,7 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
     private val adBlock: Item
     private val speed: Item
     private val closeAll: Item
+    private val addToGroup: Item
 
     init {
         panel.orientation = LinearLayout.VERTICAL
@@ -149,8 +150,15 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
         adBlock = item(page2, R.drawable.ic_shield, "Ad blocker") { Sheets.shield(a) }
         speed = item(page2, R.drawable.ic_speed, "Speed") { Sheets.speed(a, it) }
         closeAll = item(page2, R.drawable.ic_close, "Close all tabs") { confirmCloseAll(it) }
+        addToGroup = item(page2, R.drawable.ic_layers, "Add to group") { Sheets.chooseGroup(a, it) }
+        item(page2, R.drawable.ic_reopen, "Recent tabs") { Sheets.recentlyClosed(a) }
         pager.addPage(page1)
         pager.addPage(page2)
+        // A last row with fewer buttons keeps them in their columns.
+        for (p in listOf(page1, page2)) {
+            val last = p.getChildAt(p.childCount - 1) as? LinearLayout ?: continue
+            while (last.childCount < 4) last.addView(View(a), LinearLayout.LayoutParams(0, dp(84), 1f))
+        }
         panel.addView(pager, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
             topMargin = dp(2)
         })
@@ -221,7 +229,7 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
             else -> UrlUtils.display(tab.url)
         }
         if (tab.isHome && !tab.incognito) {
-            headerIcon.setImageResource(R.drawable.ic_launcher)
+            headerIcon.setImageResource(R.drawable.ic_logo)
             headerIcon.imageTintList = null
         } else {
             headerIcon.setImageResource(if (tab.incognito) R.drawable.ic_incognito else R.drawable.ic_globe)
@@ -260,6 +268,7 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
         )
         speed.set(R.drawable.ic_speed, "Speed ${a.formatSpeed(tab.speed)}")
         closeAll.set(R.drawable.ic_close, if (tab.incognito) "Close incognito" else "Close all tabs")
+        addToGroup.set(R.drawable.ic_layers, if (tab.groupId != null) "Move to group" else "Add to group")
     }
 
     private fun toggleBookmark(tab: Tab) {

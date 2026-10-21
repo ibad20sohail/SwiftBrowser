@@ -49,6 +49,8 @@ class SwiftApp : Application() {
         TabManager.init(db, prefs)
         Thumbnails.cleanup(TabManager.tabs.map { it.id }.toSet())
         prefs.autoSoftwareRendering = GpuInfo.prefersSoftwareRendering(GpuInfo.renderer(this))
+        // Phones with plenty of memory and a graphics chip that draws fast show sites as designed.
+        prefs.autoSitesAsDesigned = !prefs.autoSoftwareRendering && totalMemory() >= 3_500_000_000L
         Engine.init(this, prefs)
         L.d("Swift ${BuildConfig.VERSION_NAME} started")
     }
@@ -82,6 +84,11 @@ class SwiftApp : Application() {
             TabManager.suspendBackgroundTabs()
             Diagnostics.flushLog()
         }
+    }
+
+    private fun totalMemory(): Long {
+        val am = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        return ActivityManager.MemoryInfo().also { am.getMemoryInfo(it) }.totalMem
     }
 
     private fun isMainProcess(): Boolean {

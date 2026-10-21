@@ -43,36 +43,60 @@ function onNative(msg) {
   if (msg.type === 'headers') {
     const referer = referers.get(msg.url);
     post({ type: 'headers', id: msg.id, headers: referer ? { referer } : null });
-  } else if (msg.type === 'lite') {
-    setLite(msg.all === true);
+  } else if (msg.type === 'look') {
+    lookFromApp = true;
+    setLook(msg.lite === true, msg.fixes !== false);
   }
 }
 
-// ---------------------------------------------------------------- Lite mode
+// ---------------------------------------------------------------- how sites look
 
-// With Lite mode on, every page gets perf/lite.css from its first byte.
-let liteRegistration = null;
-let liteQueue = Promise.resolve();
+// Styles pages get from their first byte on:
+//  - lite: Lite mode, every page without animations, shadows or blur;
+//  - youtube, theflixer: lighter versions of these two sites (no big blurs), unless the app
+//    shows sites as designed.
+// The last choice is kept, so pages loading before the app has said it again look the same.
+const STYLES = {
+  lite: { matches: ['http://*/*', 'https://*/*'], css: [{ file: '/perf/lite.css' }], allFrames: true },
+  youtube: { matches: ['*://*.youtube.com/*'], css: [{ file: '/perf/youtube.css' }] },
+  theflixer: {
+    matches: ['http://*/*', 'https://*/*'],
+    includeGlobs: ['*://theflixer.*', '*://*.theflixer.*'],
+    css: [{ file: '/perf/theflixer.css' }],
+  },
+};
+const registrations = new Map();
+let lookQueue = Promise.resolve();
+let lookFromApp = false;
 
-function setLite(on) {
-  liteQueue = liteQueue.then(async () => {
-    if (liteRegistration) {
-      try { await liteRegistration.unregister(); } catch (e) { }
-      liteRegistration = null;
+function setStyle(name, on) {
+  lookQueue = lookQueue.then(async () => {
+    const old = registrations.get(name);
+    if (on === (old !== undefined)) { return; }
+    if (old) {
+      registrations.delete(name);
+      try { await old.unregister(); } catch (e) { }
     }
     if (!on) { return; }
     try {
-      liteRegistration = await browser.contentScripts.register({
-        matches: ['http://*/*', 'https://*/*'],
-        css: [{ file: '/perf/lite.css' }],
-        allFrames: true,
-        runAt: 'document_start',
-      });
-    } catch (e) {
-      liteRegistration = null;
-    }
+      registrations.set(name, await browser.contentScripts.register(Object.assign({ runAt: 'document_start' }, STYLES[name])));
+    } catch (e) { }
   });
 }
+
+function setLook(lite, fixes) {
+  setStyle('lite', lite);
+  setStyle('youtube', fixes);
+  setStyle('theflixer', fixes);
+  browser.storage.local.set({ look: { lite, fixes } }).catch(() => { });
+}
+
+browser.storage.local.get('look').then(r => {
+  const look = (r && r.look) || { lite: false, fixes: true };
+  if (!lookFromApp) { setLook(look.lite === true, look.fixes !== false); }
+}, () => {
+  if (!lookFromApp) { setLook(false, true); }
+});
 
 // ---------------------------------------------------------------- reader view
 

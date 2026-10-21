@@ -1,0 +1,139 @@
+package com.swiftbrowser.ui
+
+import android.animation.ValueAnimator
+import android.app.Activity
+import android.content.Context
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.RectF
+import android.view.View
+import android.view.accessibility.AccessibilityNodeInfo
+import androidx.core.view.ViewCompat
+import android.widget.Switch
+import androidx.core.content.ContextCompat
+import androidx.core.graphics.ColorUtils
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
+import com.swiftbrowser.R
+import com.swiftbrowser.SwiftApp
+
+/**
+ * A small on/off switch in Swift's own colours (the Material one is large and looks like another
+ * app). The row it sits in handles taps; this only draws, and slides when changed.
+ */
+class SlimSwitch(context: Context) : View(context) {
+    private val density = resources.displayMetrics.density
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val rect = RectF()
+    private val trackOff = ContextCompat.getColor(context, R.color.surface_alt)
+    private val outline = ContextCompat.getColor(context, R.color.outline)
+    private val thumbOff = ContextCompat.getColor(context, R.color.text_secondary)
+    private val trackOn = ContextCompat.getColor(context, R.color.accent)
+    private val thumbOn = ContextCompat.getColor(context, R.color.on_accent)
+    private var position = 0f
+    private var animator: ValueAnimator? = null
+
+    var isChecked = false
+        private set
+
+    init {
+        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
+    }
+
+    fun setChecked(on: Boolean, animate: Boolean) {
+        if (on == isChecked && animator == null) {
+            position = if (on) 1f else 0f
+            invalidate()
+            return
+        }
+        isChecked = on
+        animator?.cancel()
+        animator = null
+        val target = if (on) 1f else 0f
+        if (!animate) {
+            position = target
+            invalidate()
+            return
+        }
+        animator = ValueAnimator.ofFloat(position, target).apply {
+            duration = 150
+            addUpdateListener {
+                position = it.animatedValue as Float
+                invalidate()
+            }
+            start()
+        }
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        val w = 34 * density
+        val h = 20 * density
+        val left = (width - w) / 2f
+        val top = (height - h) / 2f
+        rect.set(left, top, left + w, top + h)
+        paint.style = Paint.Style.FILL
+        paint.color = ColorUtils.blendARGB(trackOff, trackOn, position)
+        canvas.drawRoundRect(rect, h / 2, h / 2, paint)
+        if (position < 1f) {
+            paint.style = Paint.Style.STROKE
+            paint.strokeWidth = 1.5f * density
+            paint.color = ColorUtils.setAlphaComponent(outline, ((1f - position) * 255).toInt())
+            rect.inset(0.75f * density, 0.75f * density)
+            canvas.drawRoundRect(rect, h / 2, h / 2, paint)
+        }
+        paint.style = Paint.Style.FILL
+        paint.color = ColorUtils.blendARGB(thumbOff, thumbOn, position)
+        val r = (5 + 2 * position) * density
+        val cx = left + h / 2 + (w - h) * position
+        canvas.drawCircle(cx, top + h / 2, r, paint)
+    }
+}
+
+/** Describes a settings row holding a [SlimSwitch] as a switch to screen readers. */
+class SwitchRowAccessibility(private val switch: SlimSwitch) : View.AccessibilityDelegate() {
+    override fun onInitializeAccessibilityNodeInfo(host: View, info: AccessibilityNodeInfo) {
+        super.onInitializeAccessibilityNodeInfo(host, info)
+        info.className = Switch::class.java.name
+        info.isCheckable = true
+        info.isChecked = switch.isChecked
+    }
+}
+
+/** Full screen (Settings → Look & screen): the phone's bars are hidden on every Swift screen. */
+object SystemBars {
+    /**
+     * The keyboard (and on Android 7 some dialogs) brings the bars back for good; they go again a
+     * moment after it has gone, as long as [wanted] says so.
+     */
+    fun keepHidden(a: Activity, wanted: () -> Boolean = { true }) {
+        val decor = a.window.decorView
+        val check = object : Runnable {
+            override fun run() {
+                if (!SwiftApp.prefs.fullScreen || a.isFinishing || !a.hasWindowFocus() || !wanted()) return
+                if (ViewCompat.getRootWindowInsets(decor)?.isVisible(WindowInsetsCompat.Type.ime()) == true) {
+                    decor.postDelayed(this, 2500)
+                    return
+                }
+                apply(a)
+            }
+        }
+        @Suppress("DEPRECATION")
+        decor.setOnSystemUiVisibilityChangeListener { visibility ->
+            if (SwiftApp.prefs.fullScreen && visibility and View.SYSTEM_UI_FLAG_FULLSCREEN == 0) {
+                decor.removeCallbacks(check)
+                decor.postDelayed(check, 2500)
+            }
+        }
+    }
+
+    fun apply(a: Activity) {
+        val c = WindowCompat.getInsetsController(a.window, a.window.decorView)
+        if (SwiftApp.prefs.fullScreen) {
+            c.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            c.hide(WindowInsetsCompat.Type.systemBars())
+        } else {
+            c.show(WindowInsetsCompat.Type.systemBars())
+        }
+    }
+}

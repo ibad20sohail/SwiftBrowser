@@ -15,6 +15,7 @@ import com.swiftbrowser.SwiftApp
 import com.swiftbrowser.core.Favicons
 import com.swiftbrowser.core.UrlUtils
 import com.swiftbrowser.download.Downloads
+import com.swiftbrowser.engine.Engine
 import com.swiftbrowser.media.Helper
 import com.swiftbrowser.tabs.Tab
 import com.swiftbrowser.tabs.TabManager
@@ -36,17 +37,41 @@ object PageActions {
         }
     }
 
-    // ------------------------------------------------------------------ Lite mode
+    // ------------------------------------------------------------------ how sites look
 
-    /** Lite mode on all sites (no animations, shadows or blur), or off. Reloads the open page. */
-    fun setLite(a: MainActivity, on: Boolean) {
-        SwiftApp.prefs.liteMode = on
-        Helper.sendLiteMode()
-        val tab = TabManager.current
-        // The extension registers the style asynchronously; give it a moment before reloading.
-        if (tab != null && UrlUtils.isHttp(tab.url)) {
-            a.window.decorView.postDelayed({ if (tab.session != null) TabManager.reload(tab) }, 300)
+    /**
+     * Lite mode on all sites (no animations, shadows or blur), or off. Turning it on also turns off
+     * "Show sites as designed". Reloads the open page when [a] is given.
+     */
+    fun setLite(a: MainActivity?, on: Boolean) {
+        val prefs = SwiftApp.prefs
+        prefs.liteMode = on
+        if (on && prefs.sitesAsDesigned) {
+            prefs.sitesAsDesigned = false
+            Engine.applySitesAsDesigned()
         }
+        Helper.sendLook()
+        reloadCurrent(a)
+    }
+
+    /**
+     * Sites exactly as designed (glass blur, animations, no lighter YouTube/TheFlixer), for fast
+     * phones. Turning it on turns Lite mode off.
+     */
+    fun setSitesAsDesigned(a: MainActivity?, on: Boolean) {
+        val prefs = SwiftApp.prefs
+        prefs.sitesAsDesigned = on
+        if (on) prefs.liteMode = false
+        Engine.applySitesAsDesigned()
+        Helper.sendLook()
+        reloadCurrent(a)
+    }
+
+    private fun reloadCurrent(a: MainActivity?) {
+        val tab = TabManager.current ?: return
+        if (a == null || !UrlUtils.isHttp(tab.url)) return
+        // The extension registers its styles asynchronously; give it a moment before reloading.
+        a.window.decorView.postDelayed({ if (tab.session != null) TabManager.reload(tab) }, 300)
     }
 
     // ------------------------------------------------------------------ save for offline

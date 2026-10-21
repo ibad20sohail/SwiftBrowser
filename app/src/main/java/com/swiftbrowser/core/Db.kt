@@ -17,6 +17,19 @@ data class TabRow(
     val parentId: Long?,
     val lastUsed: Long,
     val desktop: Boolean,
+    val groupId: Long?,
+)
+
+data class TabGroupRow(val id: Long, val profileId: Long, val name: String, val color: Int)
+
+/** A tab closed recently, kept so it can be opened again with its history. */
+data class ClosedTabRow(
+    val id: Long,
+    val profileId: Long,
+    val url: String,
+    val title: String,
+    val state: String?,
+    val closedAt: Long,
 )
 
 data class HistoryRow(val id: Long, val url: String, val title: String, val lastVisit: Long, val visits: Int)
@@ -41,8 +54,11 @@ data class DownloadRow(
     val created: Long,
 )
 
-/** Small hand-written SQLite layer: profiles, tabs, history, bookmarks, downloads, per-site ad levels. */
-class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 1) {
+/**
+ * Small hand-written SQLite layer: profiles, tabs (with their order and groups), recently closed
+ * tabs, history, bookmarks, downloads, per-site ad levels and where videos were left off.
+ */
+class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 2) {
 
     override fun onConfigure(db: SQLiteDatabase) {
         db.enableWriteAheadLogging()
@@ -75,6 +91,7 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 1) {
                 "status INTEGER NOT NULL, error TEXT, headers TEXT, page_url TEXT, extra TEXT, created INTEGER NOT NULL)",
         )
         db.execSQL("CREATE TABLE site_levels(site TEXT PRIMARY KEY, level TEXT NOT NULL)")
+        addVersion2(db)
 
         db.insert("profiles", null, ContentValues().apply {
             put("name", "Personal")
@@ -83,7 +100,31 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 1) {
         })
     }
 
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {}
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        if (oldVersion < 2) {
+            addVersion2(db)
+            // Tabs keep the order they had: the order they were opened in.
+            db.execSQL("UPDATE tabs SET position = id")
+        }
+    }
+
+    /** 1.6: tab order and groups, recently closed tabs, where videos were left off. */
+    private fun addVersion2(db: SQLiteDatabase) {
+        db.execSQL("ALTER TABLE tabs ADD COLUMN position INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE tabs ADD COLUMN group_id INTEGER")
+        db.execSQL(
+            "CREATE TABLE tab_groups(id INTEGER PRIMARY KEY AUTOINCREMENT, profile_id INTEGER NOT NULL, " +
+                "name TEXT NOT NULL, color INTEGER NOT NULL, created INTEGER NOT NULL)",
+        )
+        db.execSQL(
+            "CREATE TABLE closed_tabs(id INTEGER PRIMARY KEY AUTOINCREMENT, profile_id INTEGER NOT NULL, " +
+                "url TEXT NOT NULL, title TEXT, state TEXT, closed_at INTEGER NOT NULL)",
+        )
+        db.execSQL(
+            "CREATE TABLE video_positions(page TEXT PRIMARY KEY, position REAL NOT NULL, duration REAL NOT NULL, " +
+                "updated INTEGER NOT NULL)",
+        )
+    }
 
     private inline fun <T> query(sql: String, args: Array<String>?, map: (Cursor) -> T): List<T> {
         readableDatabase.rawQuery(sql, args).use { c ->
@@ -121,6 +162,8 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 1) {
             val a = arrayOf("$id")
             db.delete("profiles", "id=?", a)
             db.delete("tabs", "profile_id=?", a)
+            db.delete("tab_groups", "profile_id=?", a)
+            db.delete("closed_tabs", "profile_id=?", a)
             db.delete("history", "profile_id=?", a)
             db.delete("bookmarks", "profile_id=?", a)
             db.setTransactionSuccessful()
@@ -132,10 +175,14 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 1) {
     // ---------------------------------------------------------------- tabs
 
     fun tabs(): List<TabRow> =
-        query("SELECT id, profile_id, url, title, state, parent_id, last_used, desktop FROM tabs ORDER BY id", null) {
+        query(
+            "SELECT id, profile_id, url, title, state, parent_id, last_used, desktop, group_id FROM tabs ORDER BY position, id",
+            null,
+        ) {
             TabRow(
                 it.getLong(0), it.getLong(1), it.str(2), it.str(3), it.strOrNull(4),
                 if (it.isNull(5)) null else it.getLong(5), it.getLong(6), it.getInt(7) != 0,
+                if (it.isNull(8)) null else it.getLong(8),
             )
         }
 
@@ -161,6 +208,115 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 1) {
 
     fun deleteTab(id: Long) {
         writableDatabase.delete("tabs", "id=?", arrayOf("$id"))
+    }
+
+    /** Saves the order of the tabs and which group each is in: (id, group id) in order. */
+    fun saveTabOrder(order: List<Pair<Long, Long?>>) {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            db.compileStatement("UPDATE tabs SET position = ?, group_id = ? WHERE id = ?").use { st ->
+                order.forEachIndexed { i, (id, group) ->
+                    st.bindLong(1, i.toLong())
+                    if (group != null) st.bindLong(2, group) else st.bindNull(2)
+                    st.bindLong(3, id)
+                    st.executeUpdateDelete()
+                }
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    // ---------------------------------------------------------------- tab groups
+
+    fun tabGroups(): List<TabGroupRow> =
+        query("SELECT id, profile_id, name, color FROM tab_groups ORDER BY id", null) {
+            TabGroupRow(it.getLong(0), it.getLong(1), it.str(2), it.getInt(3))
+        }
+
+    fun insertTabGroup(profileId: Long, name: String, color: Int): Long =
+        writableDatabase.insert("tab_groups", null, ContentValues().apply {
+            put("profile_id", profileId)
+            put("name", name)
+            put("color", color)
+            put("created", System.currentTimeMillis())
+        })
+
+    fun updateTabGroup(id: Long, name: String, color: Int) {
+        writableDatabase.update("tab_groups", ContentValues().apply {
+            put("name", name)
+            put("color", color)
+        }, "id=?", arrayOf("$id"))
+    }
+
+    fun deleteTabGroup(id: Long) {
+        writableDatabase.delete("tab_groups", "id=?", arrayOf("$id"))
+    }
+
+    // ---------------------------------------------------------------- recently closed tabs
+
+    fun closedTabs(profileId: Long, limit: Int): List<ClosedTabRow> =
+        query(
+            "SELECT id, profile_id, url, title, state, closed_at FROM closed_tabs WHERE profile_id = ? " +
+                "ORDER BY closed_at DESC, id DESC LIMIT $limit",
+            arrayOf("$profileId"),
+        ) { ClosedTabRow(it.getLong(0), it.getLong(1), it.str(2), it.str(3), it.strOrNull(4), it.getLong(5)) }
+
+    /** Remembers a closed tab; only the newest [keep] of the profile are kept. Returns its row id. */
+    fun addClosedTab(profileId: Long, url: String, title: String, state: String?, keep: Int): Long {
+        val db = writableDatabase
+        val id = db.insert("closed_tabs", null, ContentValues().apply {
+            put("profile_id", profileId)
+            put("url", url)
+            put("title", title)
+            put("state", state)
+            put("closed_at", System.currentTimeMillis())
+        })
+        db.execSQL(
+            "DELETE FROM closed_tabs WHERE profile_id = ? AND id NOT IN " +
+                "(SELECT id FROM closed_tabs WHERE profile_id = ? ORDER BY closed_at DESC, id DESC LIMIT $keep)",
+            arrayOf<Any>(profileId, profileId),
+        )
+        return id
+    }
+
+    fun deleteClosedTab(id: Long) {
+        writableDatabase.delete("closed_tabs", "id=?", arrayOf("$id"))
+    }
+
+    fun clearClosedTabs(profileId: Long) {
+        writableDatabase.delete("closed_tabs", "profile_id=?", arrayOf("$profileId"))
+    }
+
+    // ---------------------------------------------------------------- where videos were left off
+
+    /** Position and length in seconds of the video last watched on [page], if it wasn't finished. */
+    fun videoPosition(page: String): Pair<Double, Double>? =
+        query("SELECT position, duration FROM video_positions WHERE page = ?", arrayOf(page)) {
+            it.getDouble(0) to it.getDouble(1)
+        }.firstOrNull()
+
+    fun setVideoPosition(page: String, position: Double, duration: Double) {
+        val db = writableDatabase
+        db.insertWithOnConflict("video_positions", null, ContentValues().apply {
+            put("page", page)
+            put("position", position)
+            put("duration", duration)
+            put("updated", System.currentTimeMillis())
+        }, SQLiteDatabase.CONFLICT_REPLACE)
+        db.execSQL(
+            "DELETE FROM video_positions WHERE page NOT IN (SELECT page FROM video_positions ORDER BY updated DESC LIMIT 300)",
+        )
+    }
+
+    fun deleteVideoPosition(page: String) {
+        writableDatabase.delete("video_positions", "page=?", arrayOf(page))
+    }
+
+    fun clearVideoPositions() {
+        writableDatabase.delete("video_positions", null, null)
     }
 
     // ---------------------------------------------------------------- history

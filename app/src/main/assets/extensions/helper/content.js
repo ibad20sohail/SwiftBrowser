@@ -1,8 +1,10 @@
 'use strict';
 
 // Runs in every frame. Reports real link taps (so the app can tell a link the
-// user tapped from a script hijacking the tap), applies the playback speed and,
-// in the top frame, tells the app the page's icon.
+// user tapped from a script hijacking the tap), applies the playback speed, does
+// the full-screen video gestures (skip, hold for double speed), reports where long
+// videos are so the app can offer to continue them, and, in the top frame, tells
+// the app the page's icon.
 (function () {
   if (window.__swiftHelper) { return; }
   window.__swiftHelper = true;
@@ -61,13 +63,93 @@
       // Only the page itself, not its frames; the background script does the work.
       if (isTop) { browser.runtime.sendMessage({ type: 'reader-start' }); }
     } else if (msg.type === 'seek') {
+      const v = fullScreenVideo();
+      if (v && Number.isFinite(v.duration)) {
+        v.currentTime = Math.max(0, Math.min(v.duration - 0.5, v.currentTime + Number(msg.delta || 0)));
+      }
+    } else if (msg.type === 'rate-hold') {
+      // Held down on a full-screen video: double speed until let go.
+      const v = fullScreenVideo();
+      if (!v) { return; }
+      if (msg.on) {
+        if (v.__swiftHeldRate === undefined) { v.__swiftHeldRate = v.playbackRate; }
+        try { v.playbackRate = 2; } catch (e) { }
+      } else if (v.__swiftHeldRate !== undefined) {
+        try { v.playbackRate = v.__swiftHeldRate; } catch (e) { }
+        delete v.__swiftHeldRate;
+      }
+    } else if (msg.type === 'resume') {
+      // Continue watching: the video of that length goes back to where it was left off.
+      const d = Number(msg.d);
       for (const v of videos()) {
-        if (!v.paused && Number.isFinite(v.duration)) {
-          v.currentTime = Math.max(0, Math.min(v.duration, v.currentTime + Number(msg.delta || 0)));
+        if (Number.isFinite(v.duration) && Math.abs(v.duration - d) < 5) {
+          v.currentTime = Number(msg.t) || 0;
+          if (v.paused) { v.play().catch(() => { }); }
+          break;
         }
       }
     }
   }
+
+  // The video shown full screen, if it is in this frame (only one frame has it).
+  function fullScreenVideo() {
+    const fs = document.fullscreenElement || document.mozFullScreenElement;
+    if (!fs) { return null; }
+    if (fs.tagName === 'VIDEO') { return fs; }
+    let best = null;
+    let bestArea = 0;
+    for (const v of fs.querySelectorAll('video')) {
+      const r = v.getBoundingClientRect();
+      const area = r.width * r.height;
+      if (area > bestArea) {
+        bestArea = area;
+        best = v;
+      }
+    }
+    return best;
+  }
+
+  // ---------------------------------------------------------------- continue watching
+
+  // Films and episodes, not clips or ads.
+  const MIN_LENGTH = 120;
+  const started = new WeakSet();
+  let lastReport = 0;
+
+  function longVideo(el) {
+    return el && el.tagName === 'VIDEO' && Number.isFinite(el.duration) && el.duration >= MIN_LENGTH;
+  }
+
+  function reportPosition(v, ended) {
+    send({ type: 'video-pos', t: ended ? v.duration : v.currentTime, d: v.duration, ended: ended === true });
+  }
+
+  // Every few seconds while playing, and when paused or finished.
+  document.addEventListener('timeupdate', ev => {
+    const v = ev.target;
+    if (!longVideo(v) || v.paused) { return; }
+    const now = Date.now();
+    if (now - lastReport < 5000) { return; }
+    lastReport = now;
+    reportPosition(v, false);
+  }, true);
+
+  document.addEventListener('pause', ev => {
+    const v = ev.target;
+    if (longVideo(v) && !v.ended && v.currentTime > 0) { reportPosition(v, false); }
+  }, true);
+
+  document.addEventListener('ended', ev => {
+    if (longVideo(ev.target)) { reportPosition(ev.target, true); }
+  }, true);
+
+  // When a long video first plays, the app may offer to continue from where it was left off.
+  document.addEventListener('playing', ev => {
+    const v = ev.target;
+    if (!longVideo(v) || started.has(v)) { return; }
+    started.add(v);
+    send({ type: 'video-start', t: v.currentTime, d: v.duration });
+  }, true);
 
   // The page's best icon for tab cards and home page shortcuts: a PNG/ICO of
   // roughly 48-192 px if declared, otherwise the app falls back to /favicon.ico.

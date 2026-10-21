@@ -218,6 +218,9 @@ class TabDelegates(private val tab: Tab) :
         tab.loading = true
         tab.progress = 5
         tab.media.clear()
+        // A reloaded page may offer to continue its video again (see WatchPositions).
+        tab.resumeOffered = null
+        tab.resumePosition = 0.0
         if (tab === TabManager.current && session.isOpen) session.setActive(true)
         changed()
     }

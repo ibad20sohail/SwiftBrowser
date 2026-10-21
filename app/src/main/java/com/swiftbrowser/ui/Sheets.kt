@@ -3,7 +3,12 @@ package com.swiftbrowser.ui
 import android.content.Context
 import android.content.res.ColorStateList
 import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.text.InputType
+import android.text.SpannableString
+import android.text.Spanned
+import android.text.format.DateUtils
+import android.text.style.ForegroundColorSpan
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -25,6 +30,8 @@ import com.swiftbrowser.R
 import com.swiftbrowser.SwiftApp
 import com.swiftbrowser.adblock.AdBlock
 import com.swiftbrowser.adblock.AdLevel
+import com.swiftbrowser.core.ClosedTabRow
+import com.swiftbrowser.core.Favicons
 import com.swiftbrowser.core.ProfileRow
 import com.swiftbrowser.core.Profiles
 import com.swiftbrowser.core.UrlUtils
@@ -34,6 +41,7 @@ import com.swiftbrowser.engine.Engine
 import com.swiftbrowser.media.Helper
 import com.swiftbrowser.media.MediaItem
 import com.swiftbrowser.tabs.Tab
+import com.swiftbrowser.tabs.TabGroup
 import com.swiftbrowser.tabs.TabManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -295,7 +303,7 @@ object Sheets {
             .show()
     }
 
-    fun askText(ctx: Context, title: String, hint: String, initial: String, onOk: (String) -> Unit) {
+    fun askText(ctx: Context, title: String, hint: String, initial: String, allowEmpty: Boolean = false, onOk: (String) -> Unit) {
         val input = EditText(ctx).apply {
             setText(initial)
             this.hint = hint
@@ -307,15 +315,20 @@ object Sheets {
             setPadding(ctx.dp(20), ctx.dp(8), ctx.dp(20), 0)
             addView(input, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         }
-        MaterialAlertDialogBuilder(ctx)
+        val dialog = MaterialAlertDialogBuilder(ctx)
             .setTitle(title)
             .setView(box)
             .setPositiveButton(android.R.string.ok) { _, _ ->
                 val text = input.text.toString().trim()
-                if (text.isNotEmpty()) onOk(text)
+                if (text.isNotEmpty() || allowEmpty) onOk(text)
             }
             .setNegativeButton(android.R.string.cancel, null)
             .show()
+        input.imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_DONE
+        input.setOnEditorActionListener { _, _, _ ->
+            dialog.getButton(android.content.DialogInterface.BUTTON_POSITIVE).performClick()
+            true
+        }
     }
 
     // ------------------------------------------------------------------ videos
@@ -478,5 +491,152 @@ object Sheets {
             }
             .setNegativeButton(android.R.string.cancel, null)
             .show()
+    }
+
+    // ------------------------------------------------------------------ tab groups
+
+    /** "Add to group": one of the groups next to the tab, or a new one. */
+    fun chooseGroup(a: MainActivity, tab: Tab) {
+        val groups = TabManager.groupsFor(tab.incognito, tab.profileId).filter { it.id != tab.groupId }
+        val grouped = tab.groupId != null
+        if (groups.isEmpty() && !grouped) {
+            newGroup(a, tab)
+            return
+        }
+        val labels = groups.map { g ->
+            SpannableString("\u25CF  " + TabManager.groupTitle(g)).apply {
+                setSpan(ForegroundColorSpan(a.color(TabGroup.colorRes(g.color))), 0, 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            }
+        } + SpannableString("+  New group") +
+            (if (grouped) listOf(SpannableString("\u2212  Remove from group")) else emptyList())
+        MaterialAlertDialogBuilder(a)
+            .setTitle(if (grouped) "Move to group" else "Add to group")
+            .setItems(labels.toTypedArray<CharSequence>()) { _, which ->
+                when {
+                    which < groups.size -> {
+                        TabManager.addToGroup(tab, groups[which])
+                        a.snack("Added to ${TabManager.groupTitle(groups[which])}")
+                    }
+                    which == groups.size -> newGroup(a, tab)
+                    else -> TabManager.removeFromGroup(tab)
+                }
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun newGroup(a: MainActivity, tab: Tab) {
+        askText(a, "New group", "Name (you can leave it empty)", "", allowEmpty = true) { name ->
+            val g = TabManager.newGroupWith(tab)
+            if (name.isNotBlank()) TabManager.renameGroup(g, name)
+            a.snack("Tab added to ${TabManager.groupTitle(g)}. Drag other tabs onto it in the tab grid.")
+        }
+    }
+
+    fun renameGroup(a: MainActivity, group: TabGroup) {
+        askText(a, "Group name", "For example \"Movies\"", group.name, allowEmpty = true) { name ->
+            TabManager.renameGroup(group, name)
+        }
+    }
+
+    /** The ⋮ of an open group: its name and colour, a new tab in it, ungroup, close. */
+    fun groupOptions(a: MainActivity, group: TabGroup, onNewTab: () -> Unit) {
+        val col = column(a)
+        lateinit var dialog: BottomSheetDialog
+        val n = TabManager.tabsIn(group).size
+        col.addView(header(a, group.name.ifBlank { "Tab group" }, if (n == 1) "1 tab" else "$n tabs"))
+        col.addView(row(a, R.drawable.ic_edit, "Rename group") {
+            dialog.dismiss()
+            renameGroup(a, group)
+        })
+        col.addView(label(a, "Colour", top = 8))
+        col.addView(colorPicker(a, group.color) { TabManager.setGroupColor(group, it) })
+        col.addView(row(a, R.drawable.ic_add, "New tab in this group") {
+            dialog.dismiss()
+            onNewTab()
+        })
+        col.addView(row(a, R.drawable.ic_layers, "Ungroup (the tabs stay open)") {
+            dialog.dismiss()
+            TabManager.ungroup(group)
+        })
+        col.addView(row(a, R.drawable.ic_close, "Close group") {
+            dialog.dismiss()
+            TabManager.closeGroup(group)
+        })
+        dialog = sheet(a, col)
+        dialog.show()
+    }
+
+    private fun colorPicker(a: MainActivity, selected: Int, onPick: (Int) -> Unit): View = LinearLayout(a).apply {
+        orientation = LinearLayout.HORIZONTAL
+        setPadding(a.dp(18), a.dp(4), a.dp(12), a.dp(10))
+        val dots = ArrayList<View>()
+        fun dot(index: Int, chosen: Boolean) = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(a.color(TabGroup.colorRes(index)))
+            if (chosen) setStroke(a.dp(3), a.color(R.color.text_primary))
+        }
+        for (i in TabGroup.COLORS.indices) {
+            val v = View(a).apply {
+                contentDescription = TabGroup.COLOR_NAMES[i]
+                background = dot(i, i == selected)
+                setOnClickListener {
+                    dots.forEachIndexed { j, d -> d.background = dot(j, j == i) }
+                    onPick(i)
+                }
+            }
+            dots += v
+            addView(v, LinearLayout.LayoutParams(a.dp(30), a.dp(30)).apply { marginEnd = a.dp(8) })
+        }
+    }
+
+    // ------------------------------------------------------------------ recently closed tabs
+
+    fun recentlyClosed(a: MainActivity) {
+        val pid = Profiles.currentId
+        a.lifecycleScope.launch {
+            val rows = withContext(Dispatchers.IO) { TabManager.recentlyClosed(pid) }
+            if (rows.isEmpty()) {
+                a.snack("No recently closed tabs")
+                return@launch
+            }
+            val col = column(a)
+            lateinit var dialog: BottomSheetDialog
+            col.addView(header(a, "Recently closed", "Tap one to open it again, with its back history."))
+            val list = RecyclerView(a).apply {
+                layoutManager = LinearLayoutManager(a)
+                isNestedScrollingEnabled = false
+            }
+            val now = System.currentTimeMillis()
+            val adapter = RowAdapter<ClosedTabRow>(
+                bind = { h, r ->
+                    val host = UrlUtils.host(r.url)?.removePrefix("www.").orEmpty()
+                    val ago = if (now - r.closedAt < DateUtils.MINUTE_IN_MILLIS) "Just now"
+                    else DateUtils.getRelativeTimeSpanString(r.closedAt, now, DateUtils.MINUTE_IN_MILLIS)
+                    h.set(R.drawable.ic_globe, r.title.ifBlank { UrlUtils.display(r.url) }, if (host.isEmpty()) ago else "$host · $ago")
+                    h.icon.imageTintList = ColorStateList.valueOf(a.color(R.color.text_secondary))
+                    Favicons.load(r.url) { bmp ->
+                        if (bmp != null && h.bindingAdapterPosition >= 0) {
+                            h.icon.imageTintList = null
+                            h.icon.setImageBitmap(bmp)
+                        }
+                    }
+                },
+                onClick = { r ->
+                    dialog.dismiss()
+                    TabManager.reopen(r)
+                },
+            )
+            adapter.items = rows
+            list.adapter = adapter
+            col.addView(list)
+            col.addView(row(a, R.drawable.ic_delete, "Clear this list") {
+                dialog.dismiss()
+                TabManager.clearRecentlyClosed(pid)
+                a.snack("Recently closed tabs cleared")
+            })
+            dialog = sheet(a, col)
+            dialog.show()
+        }
     }
 }

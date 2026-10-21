@@ -45,14 +45,16 @@ object Engine {
     var activityDelegate: GeckoRuntime.ActivityDelegate? = null
 
     private lateinit var app: Application
+    private lateinit var prefs: Prefs
 
     fun init(app: Application, prefs: Prefs) {
         this.app = app
+        this.prefs = prefs
         // uBlock Origin does the blocking: its malware and tracker lists replace Firefox's
         // Safe Browsing and tracking-protection lists, which cost CPU on every request and
         // over 10 MB of storage.
         removeSafeBrowsingData(app)
-        val startupConfig = writeStartupConfig(prefs.softwareRendering)
+        val startupConfig = writeStartupConfig()
         val contentBlocking = ContentBlocking.Settings.Builder()
             .antiTracking(ContentBlocking.AntiTracking.NONE)
             .enhancedTrackingProtectionLevel(ContentBlocking.EtpLevel.NONE)
@@ -127,7 +129,7 @@ object Engine {
             SetGeckoPreference.setStringPref("gfx.webrender.debug.profiler-ui", DRAW_SPEED_UI, BRANCH),
             SetGeckoPreference.setBoolPref("gfx.webrender.debug.profiler", prefs.showDrawSpeed, BRANCH),
             SetGeckoPreference.setBoolPref("gfx.webrender.debug.gpu-time-queries", prefs.showDrawSpeed, BRANCH),
-        )
+        ) + lookPrefs(prefs.sitesAsDesigned)
         GeckoPreferenceController.setGeckoPrefs(list).accept({ result ->
             val failed = result?.filterValues { !it }?.keys.orEmpty()
             if (failed.isNotEmpty()) L.w("Engine prefs not set: $failed")
@@ -143,17 +145,19 @@ object Engine {
      * Settings the engine must have before it starts, such as the drawing method: it is fixed when
      * the graphics process starts, so setting it later would only apply after a restart.
      */
-    private fun writeStartupConfig(softwareRendering: Boolean): String {
+    private fun writeStartupConfig(): String {
         val file = File(app.filesDir, "gecko-startup.yaml")
         val text = buildString {
             append("prefs:\n")
-            append("  $SOFTWARE_RENDERING_PREF: $softwareRendering\n")
-            // Frosted glass (backdrop-filter, e.g. YouTube's bottom bar and the badges on every
-            // thumbnail) blurs whatever scrolls under it on every frame: far too slow on this
-            // phone, on the GPU and the CPU alike. Sites show their plain see-through colour.
-            append("  layout.css.backdrop-filter.enabled: false\n")
-            // Sites that have a version without decorative animations use it.
-            append("  ui.prefersReducedMotion: 1\n")
+            append("  $SOFTWARE_RENDERING_PREF: ${prefs.softwareRendering}\n")
+            if (!prefs.sitesAsDesigned) {
+                // Frosted glass (backdrop-filter, e.g. YouTube's bottom bar and the badges on every
+                // thumbnail) blurs whatever scrolls under it on every frame: far too slow on this
+                // phone, on the GPU and the CPU alike. Sites show their plain see-through colour.
+                append("  $BACKDROP_FILTER_PREF: false\n")
+                // Sites that have a version without decorative animations use it.
+                append("  $REDUCED_MOTION_PREF: 1\n")
+            }
             // All tabs share one engine process for web pages (Firefox allows 8). Each extra
             // process costs 60-100 MB, which a 2 GB phone doesn't have: Android then closes Swift.
             append("  dom.ipc.processCount: 1\n")
@@ -176,10 +180,31 @@ object Engine {
         runtime.settings.setForceUserScalableEnabled(on)
     }
 
-    /** Draw pages with the CPU instead of the GPU. Takes effect after the app restarts. */
-    fun setSoftwareRendering(enabled: Boolean) {
-        writeStartupConfig(enabled)
+    /** Draw pages with the CPU instead of the GPU (Prefs.softwareRendering). Takes effect after the app restarts. */
+    fun applySoftwareRendering() {
+        writeStartupConfig()
         GeckoPreferenceController.clearGeckoUserPref(SOFTWARE_RENDERING_PREF)
+    }
+
+    private const val BACKDROP_FILTER_PREF = "layout.css.backdrop-filter.enabled"
+    private const val REDUCED_MOTION_PREF = "ui.prefersReducedMotion"
+
+    /**
+     * Glass blur and animations as sites designed them, or Swift's lighter version for slow phones.
+     * Also set in the profile (not only at start-up), so a change shows when pages reload.
+     */
+    private fun lookPrefs(asDesigned: Boolean) = listOf<SetGeckoPreference<*>>(
+        SetGeckoPreference.setBoolPref(BACKDROP_FILTER_PREF, asDesigned, BRANCH),
+        SetGeckoPreference.setIntPref(REDUCED_MOTION_PREF, if (asDesigned) 0 else 1, BRANCH),
+    )
+
+    /** Prefs.sitesAsDesigned changed. */
+    fun applySitesAsDesigned() {
+        writeStartupConfig()
+        GeckoPreferenceController.setGeckoPrefs(lookPrefs(prefs.sitesAsDesigned)).accept({ result ->
+            val failed = result?.filterValues { !it }?.keys.orEmpty()
+            if (failed.isNotEmpty()) L.w("Look prefs not set: $failed")
+        }, { e -> L.w("Look prefs failed", e) })
     }
 
     /** Frames per second, the time each frame takes and what it was spent on. */

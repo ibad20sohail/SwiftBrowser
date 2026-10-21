@@ -78,7 +78,7 @@ class PlaybackService : Service() {
         val title = Playback.title?.takeIf { it.isNotBlank() } ?: tab.displayTitle
         val site = UrlUtils.host(tab.url)?.removePrefix("www.").orEmpty()
         return NotificationCompat.Builder(this, CHANNEL)
-            .setSmallIcon(R.drawable.ic_notify)
+            .setSmallIcon(R.drawable.ic_notify_logo)
             .setContentTitle(title)
             .setContentText(listOfNotNull(Playback.artist?.takeIf { it.isNotBlank() }, site).joinToString(" • "))
             .setContentIntent(open)

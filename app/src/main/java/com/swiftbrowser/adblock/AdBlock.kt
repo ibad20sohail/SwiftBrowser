@@ -76,6 +76,9 @@ object AdBlock {
         "adguard-social", "fanboy-social", "block-lan",
     )
 
+    /** "Hide cookie pop-ups" (Settings): the two lists that hide cookie consent notices. Part of Extreme anyway. */
+    private val COOKIE_LISTS = listOf("ublock-cookies-easylist", "fanboy-cookiemonster")
+
     /** Pages on these sites keep third-party scripts in Extreme mode, or signing in would break. */
     private val EXTREME_EXEMPT = listOf("google.com", "youtube.com", "gmail.com", "accounts.google.com")
 
@@ -203,11 +206,12 @@ object AdBlock {
     private fun push() {
         val p = port ?: return
         val g = global
-        val lists = when (g) {
+        val levelLists = when (g) {
             AdLevel.OFF, AdLevel.BALANCED -> BALANCED_LISTS
             AdLevel.HIGH -> BALANCED_LISTS + HIGH_EXTRA
             AdLevel.EXTREME -> BALANCED_LISTS + HIGH_EXTRA + EXTREME_EXTRA
         }
+        val lists = if (prefs.hideCookieNotices) (levelLists + COOKIE_LISTS).distinct() else levelLists
         val msg = JSONObject()
             .put("type", "apply")
             .put("lists", JSONArray(lists))
@@ -218,6 +222,12 @@ object AdBlock {
         } catch (e: Exception) {
             L.w("uBO push failed", e)
         }
+    }
+
+    /** Settings → Ad blocking → Hide cookie pop-ups changed. */
+    fun applyCookieNotices() {
+        push()
+        notifyListeners()
     }
 
     /** Downloads newer versions of filter lists that are due, then rebuilds the filters. */

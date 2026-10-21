@@ -69,6 +69,7 @@ import com.swiftbrowser.engine.Engine
 import com.swiftbrowser.media.Helper
 import com.swiftbrowser.tabs.BrowserUi
 import com.swiftbrowser.tabs.Tab
+import com.swiftbrowser.tabs.TabGroup
 import com.swiftbrowser.tabs.TabManager
 import com.swiftbrowser.tabs.Thumbnails
 import kotlinx.coroutines.Dispatchers
@@ -282,6 +283,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         showProblemIfAny()
         showStartupUntilReady()
         applySystemBars()
+        SystemBars.keepHidden(this) { fullscreenTab == null }
         // The menu was open when the screen restarted for a dark mode switch: it stays open.
         if (savedInstanceState?.getBoolean(STATE_MENU_OPEN) == true) {
             root.post { if (!isFinishing) quickMenu.open(animate = false) }
@@ -520,7 +522,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         TabManager.newTab(android.net.Uri.fromFile(java.io.File(path)).toString(), incognito = false)
     }
 
-    override fun showMessage(text: String) = snack(text)
+    override fun showMessage(text: String, action: String?, long: Boolean, onAction: (() -> Unit)?) =
+        snack(text, action, long, onAction)
 
     fun openInCurrent(url: String) {
         val tab = current
@@ -671,8 +674,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         val icons = ColorStateList.valueOf(iconColor())
         menuBtn.imageTintList = icons
         urlClear.imageTintList = icons
-        tabsCount.setTextColor(text)
-        tabsCount.background = tabCountBackground(this, if (incognito) text else color(R.color.text_secondary))
+        styledTabCount = null
+        styleTabCount()
         profileChip.visibility = if (incognito) View.GONE else View.VISIBLE
         incognitoIcon.visibility = if (incognito) View.VISIBLE else View.GONE
         shownUrlIcon = 0
@@ -745,6 +748,11 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             override fun onNewTab(incognito: Boolean) {
                 switcher.close()
                 TabManager.newTab(incognito = incognito)
+            }
+
+            override fun onNewTabInGroup(group: TabGroup) {
+                switcher.close()
+                TabManager.newTabInGroup(group)
             }
 
             override fun onSwitcherClosed() {
@@ -835,8 +843,29 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     override fun onTabsChanged() {
         val n = (if (current?.incognito == true) TabManager.incognitoTabs() else TabManager.profileTabs()).size
         tabsCount.text = if (n > 99) ":D" else n.toString()
+        styleTabCount()
         updateProfileChip()
         if (switcher.isOpen) switcher.refresh()
+    }
+
+    private var styledTabCount: Int? = null
+
+    /** The tab button takes the colour of the open tab's group, so you can tell you're in one. */
+    private fun styleTabCount() {
+        val tab = current
+        val group = tab?.let { TabManager.groupOf(it) }
+        val incognito = tab?.incognito == true
+        val key = (group?.color ?: -1) * 2 + if (incognito) 1 else 0
+        if (key == styledTabCount) return
+        styledTabCount = key
+        val text = when {
+            group != null -> color(TabGroup.colorRes(group.color))
+            incognito -> color(R.color.incognito_text)
+            else -> color(R.color.text_primary)
+        }
+        tabsCount.setTextColor(text)
+        tabsCount.background = tabCountBackground(this, if (group != null || incognito) text else color(R.color.text_secondary))
+        findViewById<View>(R.id.tabs_btn).contentDescription = if (group != null) "Tabs (group ${TabManager.groupTitle(group)})" else "Tabs"
     }
 
     override fun onTabUpdated(tab: Tab) {
@@ -898,8 +927,14 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         snack("Opened in a new tab", "Switch") { TabManager.select(tab) }
     }
 
-    override fun onTabClosed(tab: Tab) {
-        snack(if (tab.incognito) "Incognito tab closed" else "Tab closed", "Undo") { TabManager.undoClose() }
+    override fun onTabsClosed(tabs: List<Tab>) {
+        val text = when {
+            tabs.size > 1 -> "${tabs.size} tabs closed"
+            tabs.firstOrNull()?.incognito == true -> "Incognito tab closed"
+            else -> "Tab closed"
+        }
+        // Many tabs at once (a group, the inactive tabs): more time to take it back.
+        snack(text, "Undo", long = tabs.size > 1) { TabManager.undoClose() }
     }
 
     override fun releaseSession(session: GeckoSession) {
@@ -1302,6 +1337,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     // ------------------------------------------------------------------ context menu
 
     override fun onContextMenu(tab: Tab, element: GeckoSession.ContentDelegate.ContextElement) {
+        // On a full-screen video a held finger means double speed, not this menu.
+        if (fullscreenTab != null && prefs.videoTaps) return
         val actions = ArrayList<Pair<String, () -> Unit>>()
         val link = element.linkUri
         val src = element.srcUri
@@ -1375,7 +1412,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         videoBtn.visibility = View.GONE
         hideSystemBars()
         if (prefs.autoLandscape) requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-        gestureLayer.gesturesEnabled = prefs.videoGestures
+        gestureLayer.setVideoMode(true, swipes = prefs.videoGestures, taps = prefs.videoTaps)
         updateKeepScreenOn()
     }
 
@@ -1388,7 +1425,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         showToolbar()
         applySystemBars()
         requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
-        gestureLayer.gesturesEnabled = false
+        gestureLayer.setVideoMode(false, swipes = false, taps = false)
         window.attributes = window.attributes.apply {
             screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
         }
@@ -1442,8 +1479,34 @@ class MainActivity : AppCompatActivity(), BrowserUi {
                 handler.removeCallbacks(hideHud)
                 handler.postDelayed(hideHud, 700)
             }
+
+            override fun onDoubleTap(leftSide: Boolean) {
+                val tab = fullscreenTab ?: return
+                val step = if (leftSide) -10 else 10
+                val now = SystemClock.uptimeMillis()
+                // Taps in a row add up, as in YouTube: +10, +20, +30 s...
+                skipRun = if (now - lastSkipAt < 1200 && (skipRun > 0) == (step > 0)) skipRun + step else step
+                lastSkipAt = now
+                Helper.seek(tab, step.toDouble())
+                showHud(if (leftSide) R.drawable.ic_fast_rewind else R.drawable.ic_fast_forward, "${if (skipRun > 0) "+" else "−"}${abs(skipRun)} s")
+                handler.postDelayed(hideHud, 700)
+            }
+
+            override fun onHold(start: Boolean) {
+                val tab = fullscreenTab
+                if (tab != null) Helper.holdSpeed(tab, start)
+                if (start && tab != null) {
+                    showHud(R.drawable.ic_fast_forward, "2×")
+                } else {
+                    handler.removeCallbacks(hideHud)
+                    hud.visibility = View.GONE
+                }
+            }
         }
     }
+
+    private var skipRun = 0
+    private var lastSkipAt = 0L
 
     fun formatSpeed(rate: Double): String =
         (if (rate % 1.0 == 0.0) rate.toInt().toString() else rate.toString().trimEnd('0')) + "x"
@@ -1538,7 +1601,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         val tab = current
         when {
             quickMenu.isOpen -> quickMenu.close()
-            switcher.isOpen -> switcher.close()
+            switcher.isOpen -> if (!switcher.back()) switcher.close()
             fullscreenTab != null -> tab?.session?.exitFullScreen() ?: exitFullscreen()
             findBar.visibility == View.VISIBLE -> closeFind()
             editing -> stopEditing()
@@ -1588,7 +1651,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
                 val tab = current ?: return false
                 if (editing || fullscreenTab != null || switcher.isOpen || quickMenu.isOpen) return false
                 if (startup.visibility == View.VISIBLE || findBar.visibility == View.VISIBLE) return false
-                if (!toolbarWanted || toolbarShown < toolbarPx || TabManager.groupOf(tab).size < 2) return false
+                if (!toolbarWanted || toolbarShown < toolbarPx || TabManager.swipeOrder(tab).size < 2) return false
                 val at = IntArray(2)
                 appBar.getLocationOnScreen(at)
                 return rawX >= at[0] && rawX < at[0] + appBar.width && rawY >= at[1] && rawY < at[1] + appBar.height
@@ -1596,9 +1659,9 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
             override fun neighbourTab(next: Boolean): Tab? {
                 val tab = current ?: return null
-                val group = TabManager.groupOf(tab)
-                val i = group.indexOf(tab)
-                return if (i < 0) null else group.getOrNull(if (next) i + 1 else i - 1)
+                val order = TabManager.swipeOrder(tab)
+                val i = order.indexOf(tab)
+                return if (i < 0) null else order.getOrNull(if (next) i + 1 else i - 1)
             }
 
             override fun switchToTab(tab: Tab) {
@@ -1717,8 +1780,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
     // ------------------------------------------------------------------ helpers
 
-    fun snack(text: String, action: String? = null, onAction: (() -> Unit)? = null) {
-        val bar = Snackbar.make(root, text, if (action != null) 4000 else Snackbar.LENGTH_SHORT)
+    fun snack(text: String, action: String? = null, long: Boolean = false, onAction: (() -> Unit)? = null) {
+        val bar = Snackbar.make(root, text, if (long) 8000 else if (action != null) 4000 else Snackbar.LENGTH_SHORT)
         if (action != null && onAction != null) bar.setAction(action) { onAction() }
         bar.show()
     }
@@ -1771,7 +1834,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             Diagnostics.Problem.CLOSED_BY_ANDROID -> "Swift was closed while you used it" to
                 "Android closed Swift while it was on screen. On a 2 GB phone that almost always means the phone ran out of memory " +
                 "(very heavy pages such as Google's AI answers can do that).\n\nTo make it less likely: keep fewer tabs in memory " +
-                "(Settings → Performance), close tabs you don't need, and close other apps.\n\nIf it keeps happening, send a report."
+                "(Settings → Speed & memory), close tabs you don't need, and close other apps.\n\nIf it keeps happening, send a report."
             Diagnostics.Problem.ENGINE_CRASH -> "Swift's engine crashed" to
                 "The Firefox engine inside Swift crashed last time" + (detail?.let { ":\n$it" } ?: ".") +
                 "\n\nSending a report helps find out why."

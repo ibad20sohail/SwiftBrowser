@@ -22,6 +22,9 @@ class Tab(
     /** Incognito tabs are never saved and keep no history, cookies or cache after closing. */
     val incognito: Boolean = false,
 ) {
+    /** The tab group it is in, see [TabGroup]. A group's tabs are next to each other in the tab list. */
+    var groupId: Long? = null
+
     /** Live engine session, or null while the tab is suspended (or shows the home page). */
     var session: GeckoSession? = null
 
@@ -57,6 +60,10 @@ class Tab(
     /** Selected while asleep (no engine session): its page is being loaded again. */
     var wokeUp = false
 
+    /** The page whose video Swift offered to continue, and from where (once per page load; see WatchPositions). */
+    var resumeOffered: String? = null
+    var resumePosition = 0.0
+
     /** A pop-up allowed by NavPolicy may load exactly this address once without a second check. */
     var approvedUrl: String? = null
 
@@ -72,6 +79,25 @@ class Tab(
         get() = title.ifBlank { if (isBlank) (if (incognito) "Incognito tab" else "New tab") else UrlUtils.display(url) }
 }
 
+/**
+ * Tabs grouped together in the tab grid, like in Chrome. [color] is an index into
+ * [TabGroup.COLORS]; incognito groups (negative ids) are never saved.
+ */
+class TabGroup(val id: Long, val profileId: Long, var name: String, var color: Int, val incognito: Boolean = false) {
+    companion object {
+        /** Grey, blue, red, yellow, green, pink, purple, cyan; each has a light and a dark-theme shade. */
+        val COLORS = intArrayOf(
+            com.swiftbrowser.R.color.group_grey, com.swiftbrowser.R.color.group_blue,
+            com.swiftbrowser.R.color.group_red, com.swiftbrowser.R.color.group_yellow,
+            com.swiftbrowser.R.color.group_green, com.swiftbrowser.R.color.group_pink,
+            com.swiftbrowser.R.color.group_purple, com.swiftbrowser.R.color.group_cyan,
+        )
+        val COLOR_NAMES = arrayOf("Grey", "Blue", "Red", "Yellow", "Green", "Pink", "Purple", "Cyan")
+
+        fun colorRes(index: Int) = COLORS[index.mod(COLORS.size)]
+    }
+}
+
 /** What the browser screen does for the engine. Implemented by MainActivity. */
 interface BrowserUi {
     val activity: AppCompatActivity
@@ -83,8 +109,8 @@ interface BrowserUi {
     /** A new tab was opened in the background. */
     fun onTabOpenedInBackground(tab: Tab)
 
-    /** A tab was closed from the tab grid; the user may undo it (TabManager.undoClose). */
-    fun onTabClosed(tab: Tab)
+    /** Tabs were closed from the tab grid; the user may undo it (TabManager.undoClose). */
+    fun onTabsClosed(tabs: List<Tab>)
 
     /** Detach [session] from the screen before it gets closed. */
     fun releaseSession(session: GeckoSession)
@@ -112,8 +138,8 @@ interface BrowserUi {
      */
     fun onPageDrawn(tab: Tab, contentful: Boolean)
 
-    /** A short message at the bottom of the screen. */
-    fun showMessage(text: String)
+    /** A short message at the bottom of the screen, optionally with a button. */
+    fun showMessage(text: String, action: String? = null, long: Boolean = false, onAction: (() -> Unit)? = null)
 
     /** Lets the user choose files for a page's upload field; null when cancelled. */
     fun pickFiles(mimeTypes: Array<String>, multiple: Boolean, callback: (List<android.net.Uri>?) -> Unit)

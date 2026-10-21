@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The bird of the app icon on Android 8 and later, inside the 66 dp safe zone. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:pivotX="50"
+        android:pivotY="50"
+        android:rotation="22"
+        android:scaleX="0.7"
+        android:scaleY="0.7"
+        android:translateX="4"
+        android:translateY="4.7">
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M50,26.5 C53.2,26.5 55.2,29.2 55.5,33 L55.6,38 C65,34 80,37.5 89,58 C79.5,49.5 66.5,47 56,50.5 L55,57 L59.5,73.5 L50,66 L40.5,73.5 L45,57 L44,50.5 C33.5,47 20.5,49.5 11,58 C20,37.5 35,34 44.4,38 L44.5,33 C44.8,29.2 46.8,26.5 50,26.5 Z" />
+    </group>
+</vector>

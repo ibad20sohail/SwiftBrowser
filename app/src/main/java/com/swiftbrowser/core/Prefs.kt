@@ -121,6 +121,40 @@ class Prefs(ctx: Context) {
         get() = sp.getBoolean(FULL_SCREEN, false)
         set(v) = sp.edit { putBoolean(FULL_SCREEN, v) }
 
+    /**
+     * Tabs not opened for this many days move to "Inactive tabs" at the end of the tab grid
+     * (0 = never).
+     */
+    var inactiveDays: Int
+        get() = sp.getInt(INACTIVE_DAYS, 14)
+        set(v) = sp.edit { putInt(INACTIVE_DAYS, v) }
+
+    /** Set at start-up: this phone has plenty of memory and a graphics chip that draws fast. */
+    var autoSitesAsDesigned = false
+
+    /**
+     * Sites look exactly as designed: Swift's changes for slow phones (no glass blur, fewer
+     * animations, lighter YouTube and TheFlixer) are off. Automatic until changed.
+     */
+    var sitesAsDesigned: Boolean
+        get() = if (sp.contains(SITES_AS_DESIGNED)) sp.getBoolean(SITES_AS_DESIGNED, false) else autoSitesAsDesigned
+        set(v) = sp.edit { putBoolean(SITES_AS_DESIGNED, v) }
+
+    /** uBlock Origin's cookie-notice lists hide "Accept cookies" pop-ups (always on in Extreme). */
+    var hideCookieNotices: Boolean
+        get() = sp.getBoolean(HIDE_COOKIE_NOTICES, false)
+        set(v) = sp.edit { putBoolean(HIDE_COOKIE_NOTICES, v) }
+
+    /** Remember where long videos were left off and offer to continue from there. */
+    var continueWatching: Boolean
+        get() = sp.getBoolean(CONTINUE_WATCHING, true)
+        set(v) = sp.edit { putBoolean(CONTINUE_WATCHING, v) }
+
+    /** On full-screen videos: double-tap the sides to skip 10 seconds, hold for double speed. */
+    var videoTaps: Boolean
+        get() = sp.getBoolean(VIDEO_TAPS, true)
+        set(v) = sp.edit { putBoolean(VIDEO_TAPS, v) }
+
     /** When Swift last asked GitHub for a newer version. */
     var lastUpdateCheck: Long
         get() = sp.getLong(LAST_UPDATE_CHECK, 0L)
@@ -151,5 +185,10 @@ class Prefs(ctx: Context) {
         const val LITE_MODE = "lite_mode"
         const val FULL_SCREEN = "full_screen"
         const val LAST_UPDATE_CHECK = "last_update_check"
+        const val INACTIVE_DAYS = "inactive_days"
+        const val SITES_AS_DESIGNED = "sites_as_designed"
+        const val HIDE_COOKIE_NOTICES = "hide_cookie_notices"
+        const val CONTINUE_WATCHING = "continue_watching"
+        const val VIDEO_TAPS = "video_taps"
     }
 }

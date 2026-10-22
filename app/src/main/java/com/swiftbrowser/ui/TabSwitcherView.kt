@@ -21,7 +21,6 @@ import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.TextView
-import androidx.appcompat.widget.PopupMenu
 import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.GridLayoutManager
@@ -194,6 +193,12 @@ class TabSwitcherView @JvmOverloads constructor(
             closing = false
         }.start()
         listener?.onSwitcherClosed()
+    }
+
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        super.onSizeChanged(w, h, oldw, oldh)
+        // The screen turned: every card takes the new size.
+        if (w != oldw && oldw > 0) post { adapter.notifyDataSetChanged() }
     }
 
     /** Back from a group, the inactive tabs or a search; false when the grid itself is shown. */
@@ -450,46 +455,36 @@ class TabSwitcherView @JvmOverloads constructor(
         TabManager.closeTabs(inactive, undoable = true)
     }
 
-    /** Menu for a card that was held and let go without moving it. */
-    private fun cardMenu(anchor: View, item: Item) {
+    /** Menu for a card that was held and let go without moving it (a dialog: it keeps full screen). */
+    private fun cardMenu(@Suppress("UNUSED_PARAMETER") anchor: View, item: Item) {
         val activity = context as? MainActivity ?: return
-        val menu = PopupMenu(activity, anchor)
+        val actions = ArrayList<Pair<String, () -> Unit>>()
+        val title: String
         when (item) {
             is Item.TabCard -> {
                 val tab = item.tab
+                title = item.title
                 if (tab.groupId == null) {
-                    menu.menu.add(0, 1, 0, "Add to group")
+                    actions += "Add to group" to { Sheets.chooseGroup(activity, tab) }
                 } else {
-                    menu.menu.add(0, 2, 0, "Remove from group")
-                    menu.menu.add(0, 1, 1, "Move to another group")
+                    actions += "Remove from group" to { TabManager.removeFromGroup(tab) }
+                    actions += "Move to another group" to { Sheets.chooseGroup(activity, tab) }
                 }
-                menu.menu.add(0, 3, 2, "Close tab")
-                menu.setOnMenuItemClickListener {
-                    when (it.itemId) {
-                        1 -> Sheets.chooseGroup(activity, tab)
-                        2 -> TabManager.removeFromGroup(tab)
-                        3 -> TabManager.close(tab, undoable = true)
-                    }
-                    true
-                }
+                actions += "Close tab" to { TabManager.close(tab, undoable = true) }
             }
             is Item.GroupCard -> {
                 val group = item.group
-                menu.menu.add(0, 1, 0, "Rename group")
-                menu.menu.add(0, 2, 1, "Ungroup")
-                menu.menu.add(0, 3, 2, "Close group")
-                menu.setOnMenuItemClickListener {
-                    when (it.itemId) {
-                        1 -> Sheets.renameGroup(activity, group)
-                        2 -> TabManager.ungroup(group)
-                        3 -> TabManager.closeGroup(group)
-                    }
-                    true
-                }
+                title = item.title
+                actions += "Rename group" to { Sheets.renameGroup(activity, group) }
+                actions += "Ungroup" to { TabManager.ungroup(group) }
+                actions += "Close group" to { TabManager.closeGroup(group) }
             }
             is Item.Banner -> return
         }
-        menu.show()
+        com.google.android.material.dialog.MaterialAlertDialogBuilder(activity)
+            .setTitle(title)
+            .setItems(actions.map { it.first }.toTypedArray()) { _, which -> actions[which].second() }
+            .showImmersive()
     }
 
     // ------------------------------------------------------------------ dragging
@@ -741,9 +736,22 @@ class TabSwitcherView @JvmOverloads constructor(
             is Item.Banner -> 2
         }
 
-        private fun thumbHeight(parent: ViewGroup): Int {
-            val width = (parent.width.takeIf { it > 0 } ?: resources.displayMetrics.widthPixels) - parent.paddingLeft - parent.paddingRight
+        /**
+         * The picture height for the grid's width now. Worked out on every bind, not once per card:
+         * cards made while the screen was turned (a full-screen video) would otherwise come back
+         * taller than the others.
+         */
+        private fun thumbHeight(): Int {
+            val width = (grid.width.takeIf { it > 0 } ?: resources.displayMetrics.widthPixels) - grid.paddingLeft - grid.paddingRight
             return ((width / 2 - dp(12)) * Thumbnails.ASPECT).toInt()
+        }
+
+        private fun fitHeight(v: View) {
+            val h = thumbHeight()
+            if (v.layoutParams.height != h) {
+                v.layoutParams.height = h
+                v.requestLayout()
+            }
         }
 
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder {
@@ -752,12 +760,12 @@ class TabSwitcherView @JvmOverloads constructor(
                 0 -> {
                     val v = inflater.inflate(R.layout.item_tab_card, parent, false)
                     v.clipToOutline = true
-                    CardHolder(v).also { it.thumbBox.layoutParams.height = thumbHeight(parent) }
+                    CardHolder(v)
                 }
                 1 -> {
                     val v = inflater.inflate(R.layout.item_group_card, parent, false)
                     v.clipToOutline = true
-                    GroupHolder(v).also { it.mosaic.layoutParams.height = thumbHeight(parent) }
+                    GroupHolder(v)
                 }
                 else -> BannerHolder(inflater.inflate(R.layout.item_tab_banner, parent, false))
             }
@@ -780,6 +788,7 @@ class TabSwitcherView @JvmOverloads constructor(
         private fun bindTab(h: CardHolder, card: Item.TabCard) {
             val tab = card.tab
             h.tab = tab
+            fitHeight(h.thumbBox)
             val dark = showingIncognito
             // Outlined rather than shadowed: just as clear, and nothing extra to draw.
             h.itemView.background = cardBackground(dark)
@@ -826,6 +835,7 @@ class TabSwitcherView @JvmOverloads constructor(
         private fun bindGroup(h: GroupHolder, card: Item.GroupCard) {
             val group = card.group
             h.group = group
+            fitHeight(h.mosaic)
             val dark = showingIncognito
             h.itemView.background = cardBackground(dark)
             h.itemView.scaleX = 1f

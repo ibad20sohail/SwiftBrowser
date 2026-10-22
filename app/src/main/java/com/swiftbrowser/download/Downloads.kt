@@ -156,15 +156,40 @@ object Downloads {
     fun hasStoragePermission(ctx: Context): Boolean =
         ContextCompat.checkSelfPermission(ctx, Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
 
-    /** Downloads/Swift when storage permission was granted, the app's own folder otherwise. */
+    /** Where downloads go unless chosen otherwise: Download/Swift on the phone's storage. */
+    fun defaultDirectory(): File = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "Swift")
+
+    /**
+     * The folder chosen in Settings (Download/Swift unless changed). Without storage permission,
+     * or if the folder can't be written (an SD card taken out), the app's own folder.
+     */
     fun directory(): File {
-        val dir = if (hasStoragePermission(app)) {
-            File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "Swift")
-        } else {
-            app.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: File(app.filesDir, "downloads")
+        val chosen = prefs.downloadFolder.takeIf { it.isNotBlank() }?.let { File(it) }
+        val dir = when {
+            // Swift's own folder on an SD card needs no permission.
+            chosen != null && chosen.path.contains("/Android/data/") && usable(chosen) -> chosen
+            !hasStoragePermission(app) -> app.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: File(app.filesDir, "downloads")
+            chosen != null && usable(chosen) -> chosen
+            else -> defaultDirectory()
         }
         dir.mkdirs()
         return dir
+    }
+
+    private fun usable(dir: File): Boolean = (dir.isDirectory || dir.mkdirs()) && dir.canWrite()
+
+    /** Swift's folder on a removable SD card, if the phone has one (deleted with the app). */
+    fun sdCardDirectory(): File? =
+        app.getExternalFilesDirs(Environment.DIRECTORY_DOWNLOADS).drop(1).firstOrNull { it != null && Environment.getExternalStorageState(it) == Environment.MEDIA_MOUNTED }
+
+    /** A folder path as people know it: "Phone › Download/Swift". */
+    fun describe(dir: File): String {
+        val phone = Environment.getExternalStorageDirectory().path
+        return when {
+            dir.path.startsWith(phone) -> "Phone storage › " + dir.path.removePrefix(phone).trimStart('/')
+            dir.path.contains("/Android/data/") -> "SD card › Swift's folder"
+            else -> dir.path
+        }
     }
 
     private fun uniqueFile(dir: File, name: String): File {

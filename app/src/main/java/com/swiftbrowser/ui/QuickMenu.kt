@@ -55,6 +55,20 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
     private val dots = LinearLayout(a)
 
     private val headerIcon = ImageView(a)
+
+    /** Opens the site's own settings (desktop version, sound, location, ad blocking, its data). */
+    private val siteButton = ImageButton(a).apply {
+        setImageResource(R.drawable.ic_tune)
+        imageTintList = ColorStateList.valueOf(ContextCompat.getColor(a, R.color.text_secondary))
+        contentDescription = "Site settings"
+        setBackgroundResource(borderless())
+        setOnClickListener {
+            val tab = TabManager.current ?: return@setOnClickListener
+            val site = UrlUtils.site(tab.url) ?: return@setOnClickListener
+            close()
+            Sheets.siteSettings(a, site, tab)
+        }
+    }
     private val headerTitle = TextView(a)
     private val headerSite = TextView(a)
 
@@ -221,6 +235,7 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
         val page = !tab.isHome && tab.session != null
         val inReader = Helper.isReaderUrl(tab.url)
 
+        siteButton.visibility = if (UrlUtils.isHttp(tab.url) && UrlUtils.site(tab.url) != null) View.VISIBLE else View.GONE
         headerTitle.text = if (tab.isHome) (if (tab.incognito) "Incognito tab" else "New tab") else tab.displayTitle
         headerSite.text = when {
             inReader -> "Reader view"
@@ -290,7 +305,7 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
             .setMessage(if (incognito) "Close all incognito tabs?" else "Close all tabs in ${Profiles.current().name}?")
             .setPositiveButton("Close all") { _, _ -> TabManager.closeAll(incognito) }
             .setNegativeButton(android.R.string.cancel, null)
-            .show()
+            .showImmersive()
     }
 
     /** The panel's height, measured on the first opening (before it has been laid out). */
@@ -479,6 +494,7 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
                 setTextColor(color(R.color.text_secondary))
             })
         }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        addView(siteButton, LinearLayout.LayoutParams(dp(44), dp(44)))
         addView(ImageButton(a).apply {
             setImageResource(R.drawable.ic_copy)
             imageTintList = ColorStateList.valueOf(color(R.color.text_secondary))

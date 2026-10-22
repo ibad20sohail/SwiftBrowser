@@ -33,6 +33,11 @@ class TabSwipe(
 
         fun switchToTab(tab: Tab)
 
+        /** The toolbar was swiped up or down; true if that did something (the touch is then used up). */
+        fun onVerticalSwipe(towardPage: Boolean): Boolean
+
+        fun isBarAtBottom(): Boolean
+
         /** The colour behind a tab's picture. */
         fun backgroundOf(tab: Tab): Int
     }
@@ -55,6 +60,9 @@ class TabSwipe(
     private var startY = 0f
     private var velocity: VelocityTracker? = null
 
+    /** A vertical swipe opened the tab grid: the rest of this touch is used up. */
+    private var swallowing = false
+
     /** The tab whose picture is shown, and on which side it comes in from. */
     private var target: Tab? = null
     private var fromRight = false
@@ -70,6 +78,10 @@ class TabSwipe(
     private val width: Float get() = (peek.parent as View).width.toFloat()
 
     fun onTouchEvent(ev: MotionEvent): Result {
+        if (swallowing) {
+            if (ev.actionMasked == MotionEvent.ACTION_UP || ev.actionMasked == MotionEvent.ACTION_CANCEL) swallowing = false
+            return Result.CONSUMED
+        }
         when (ev.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 dragging = false
@@ -94,6 +106,17 @@ class TabSwipe(
                 }
                 if (abs(dy) > slop && abs(dy) > abs(dx)) {
                     stopTracking()
+                    // Down from a top bar or up from a bottom bar: towards the page.
+                    val towardPage = if (host.isBarAtBottom()) dy < 0 else dy > 0
+                    if (abs(dy) > slop * 2 && host.onVerticalSwipe(towardPage)) {
+                        swallowing = true
+                        return Result.STARTED
+                    }
+                    if (abs(dy) <= slop * 2) {
+                        // Not decided yet: keep watching this touch.
+                        tracking = true
+                        return Result.PASS
+                    }
                     return Result.PASS
                 }
                 if (abs(dx) <= slop || abs(dx) < abs(dy) * 1.5f) return Result.PASS

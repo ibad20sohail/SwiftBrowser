@@ -229,6 +229,42 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 2) {
         }
     }
 
+    // ---------------------------------------------------------------- restoring a backup
+
+    /** A tab from a backup, after the tabs already open. Its page loads when it is opened. */
+    fun importTab(profileId: Long, url: String, title: String, groupId: Long?, lastUsed: Long) {
+        val db = writableDatabase
+        val position = db.compileStatement("SELECT IFNULL(MAX(position), 0) + 1 FROM tabs").use { it.simpleQueryForLong() }
+        db.insert("tabs", null, ContentValues().apply {
+            put("profile_id", profileId)
+            put("url", url)
+            put("title", title)
+            put("last_used", lastUsed)
+            put("desktop", 0)
+            put("position", position)
+            if (groupId != null) put("group_id", groupId) else putNull("group_id")
+        })
+    }
+
+    fun importHistory(profileId: Long, url: String, title: String, lastVisit: Long, visits: Int) {
+        writableDatabase.insertWithOnConflict("history", null, ContentValues().apply {
+            put("profile_id", profileId)
+            put("url", url)
+            put("title", title)
+            put("last_visit", lastVisit)
+            put("visits", visits)
+        }, SQLiteDatabase.CONFLICT_IGNORE)
+    }
+
+    fun importBookmark(profileId: Long, url: String, title: String, created: Long) {
+        writableDatabase.insertWithOnConflict("bookmarks", null, ContentValues().apply {
+            put("profile_id", profileId)
+            put("url", url)
+            put("title", title)
+            put("created", created)
+        }, SQLiteDatabase.CONFLICT_IGNORE)
+    }
+
     // ---------------------------------------------------------------- tab groups
 
     fun tabGroups(): List<TabGroupRow> =

@@ -52,6 +52,7 @@ class SwiftApp : Application() {
         // Phones with plenty of memory and a graphics chip that draws fast show sites as designed.
         prefs.autoSitesAsDesigned = !prefs.autoSoftwareRendering && totalMemory() >= 3_500_000_000L
         Engine.init(this, prefs)
+        com.swiftbrowser.engine.DataSaver.init(this)
         L.d("Swift ${BuildConfig.VERSION_NAME} started")
     }
 

@@ -5,6 +5,7 @@
   --link: #1b66e4;
   --rule: #e4e7ec;
   --button: #eef1f6;
+  --reading: #fff1c2;
   --size: 19px;
   color-scheme: light dark;
 }
@@ -17,6 +18,7 @@
     --link: #8ab4ff;
     --rule: #2a2e36;
     --button: #262a31;
+    --reading: #3a3420;
   }
 }
 
@@ -85,3 +87,8 @@ article td, article th { border: 1px solid var(--rule); padding: 4px 8px; }
 article hr { border: 0; border-top: 1px solid var(--rule); }
 
 .missing { color: var(--muted); font: 16px Roboto, sans-serif; }
+
+.listen { padding: 0 14px; }
+
+/* The paragraph being read aloud. */
+.reading { background: var(--reading); border-radius: 6px; box-shadow: 0 0 0 4px var(--reading); }

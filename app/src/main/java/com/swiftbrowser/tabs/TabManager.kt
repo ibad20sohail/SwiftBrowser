@@ -10,6 +10,7 @@ import com.swiftbrowser.core.Diagnostics
 import com.swiftbrowser.core.L
 import com.swiftbrowser.core.Prefs
 import com.swiftbrowser.core.Profiles
+import com.swiftbrowser.core.UrlUtils
 import com.swiftbrowser.engine.Engine
 import com.swiftbrowser.media.Helper
 import com.swiftbrowser.media.Playback
@@ -650,6 +651,8 @@ object TabManager {
     }
 
     fun setDesktop(tab: Tab, desktop: Boolean) {
+        // Remembered for the site, so its other pages and tabs get the same version.
+        UrlUtils.site(tab.url)?.let { if (UrlUtils.isHttp(tab.url)) com.swiftbrowser.core.SiteSettings.setDesktop(it, desktop) }
         tab.desktop = desktop
         tab.session?.settings?.let { s ->
             s.setUserAgentMode(

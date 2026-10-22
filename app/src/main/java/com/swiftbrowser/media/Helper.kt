@@ -115,6 +115,20 @@ object Helper {
             "icon" -> if (!tab.incognito) Favicons.onPageIcon(msg.optString("page"), msg.optString("href").ifBlank { null })
             "playing" -> Unit
             "video-pos" -> WatchPositions.onPosition(tab, msg)
+            // Read aloud, from the reader view page in this tab: it hears back how far it got.
+            "tts-start", "tts-pause", "tts-resume", "tts-stop" -> {
+                val ctx = SwiftApp.instance ?: return
+                if (port != null) {
+                    ReadAloud.listener = { state ->
+                        try {
+                            port.postMessage(state)
+                        } catch (_: Exception) {
+                            ReadAloud.listener = null
+                        }
+                    }
+                }
+                ReadAloud.onMessage(ctx, msg)
+            }
             "video-start" -> WatchPositions.onStart(tab, msg)
         }
     }

@@ -95,6 +95,7 @@
                 android:paddingEnd="6dp">
 
                 <ImageView
+                    android:id="@+id/home_search_icon"
                     android:layout_width="24dp"
                     android:layout_height="24dp"
                     android:importantForAccessibility="no"

@@ -33,6 +33,7 @@ import com.swiftbrowser.adblock.AdLevel
 import com.swiftbrowser.core.ClosedTabRow
 import com.swiftbrowser.core.Favicons
 import com.swiftbrowser.core.ProfileRow
+import com.swiftbrowser.core.SiteSettings
 import com.swiftbrowser.core.Profiles
 import com.swiftbrowser.core.UrlUtils
 import com.swiftbrowser.download.Downloads
@@ -214,7 +215,7 @@ object Sheets {
         }
         col.addView(buttons)
         dialog = sheet(a, col)
-        dialog.show()
+        dialog.showImmersive()
     }
 
     // ------------------------------------------------------------------ profiles
@@ -267,7 +268,7 @@ object Sheets {
             TabManager.newTab("https://accounts.google.com/", incognito = false)
         })
         dialog = sheet(a, col)
-        dialog.show()
+        dialog.showImmersive()
     }
 
     private fun manageProfile(a: MainActivity, p: ProfileRow) {
@@ -288,7 +289,7 @@ object Sheets {
                             a.snack("Cleared")
                         }
                         .setNegativeButton(android.R.string.cancel, null)
-                        .show()
+                        .showImmersive()
                     "Delete profile" -> MaterialAlertDialogBuilder(a)
                         .setTitle("Delete ${p.name}?")
                         .setMessage("Its tabs, history, bookmarks, cookies and logins will be removed.")
@@ -297,10 +298,10 @@ object Sheets {
                             a.snack("Profile deleted")
                         }
                         .setNegativeButton(android.R.string.cancel, null)
-                        .show()
+                        .showImmersive()
                 }
             }
-            .show()
+            .showImmersive()
     }
 
     fun askText(ctx: Context, title: String, hint: String, initial: String, allowEmpty: Boolean = false, onOk: (String) -> Unit) {
@@ -323,7 +324,7 @@ object Sheets {
                 if (text.isNotEmpty() || allowEmpty) onOk(text)
             }
             .setNegativeButton(android.R.string.cancel, null)
-            .show()
+            .showImmersive()
         input.imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_DONE
         input.setOnEditorActionListener { _, _, _ ->
             dialog.getButton(android.content.DialogInterface.BUTTON_POSITIVE).performClick()
@@ -384,7 +385,7 @@ object Sheets {
             speed(a, tab)
         })
         dialog = sheet(a, col)
-        dialog.show()
+        dialog.showImmersive()
     }
 
     /** What a detected HLS playlist contains; cached per URL while the app runs. */
@@ -467,7 +468,7 @@ object Sheets {
                             a.startHlsDownload(tab, v.url, headers, shortQuality(v))
                         }
                         .setNegativeButton(android.R.string.cancel, null)
-                        .show()
+                        .showImmersive()
                 }
             }
         }
@@ -490,7 +491,7 @@ object Sheets {
                 if (tab.helperPorts.isEmpty()) a.snack("Speed ${labels[which]} will apply when the video plays")
             }
             .setNegativeButton(android.R.string.cancel, null)
-            .show()
+            .showImmersive()
     }
 
     // ------------------------------------------------------------------ tab groups
@@ -522,7 +523,7 @@ object Sheets {
                 }
             }
             .setNegativeButton(android.R.string.cancel, null)
-            .show()
+            .showImmersive()
     }
 
     private fun newGroup(a: MainActivity, tab: Tab) {
@@ -564,7 +565,7 @@ object Sheets {
             TabManager.closeGroup(group)
         })
         dialog = sheet(a, col)
-        dialog.show()
+        dialog.showImmersive()
     }
 
     private fun colorPicker(a: MainActivity, selected: Int, onPick: (Int) -> Unit): View = LinearLayout(a).apply {
@@ -636,7 +637,123 @@ object Sheets {
                 a.snack("Recently closed tabs cleared")
             })
             dialog = sheet(a, col)
-            dialog.show()
+            dialog.showImmersive()
         }
+    }
+
+    // ------------------------------------------------------------------ site settings
+
+    /** A row with an icon, a title, a line of explanation and a switch; the whole row toggles it. */
+    private fun switchRow(ctx: Context, icon: Int, title: String, sub: String, checked: Boolean, onChange: (Boolean) -> Unit): View {
+        val sw = SlimSwitch(ctx).apply { setChecked(checked, animate = false) }
+        return LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            minimumHeight = ctx.dp(60)
+            setPadding(ctx.dp(20), ctx.dp(8), ctx.dp(14), ctx.dp(8))
+            setBackgroundResource(RowHolder.selectableBackground(ctx))
+            addView(android.widget.ImageView(ctx).apply {
+                setImageResource(icon)
+                imageTintList = ColorStateList.valueOf(ctx.color(R.color.text_secondary))
+            }, LinearLayout.LayoutParams(ctx.dp(24), ctx.dp(24)))
+            addView(LinearLayout(ctx).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(ctx.dp(20), 0, ctx.dp(8), 0)
+                addView(TextView(ctx).apply {
+                    text = title
+                    textSize = 15f
+                    setTextColor(ctx.color(R.color.text_primary))
+                })
+                addView(TextView(ctx).apply {
+                    text = sub
+                    textSize = 13f
+                    setTextColor(ctx.color(R.color.text_secondary))
+                })
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            addView(sw, LinearLayout.LayoutParams(ctx.dp(46), ctx.dp(32)))
+            accessibilityDelegate = SwitchRowAccessibility(sw)
+            contentDescription = title
+            setOnClickListener {
+                val on = !sw.isChecked
+                sw.setChecked(on, animate = true)
+                onChange(on)
+            }
+        }
+    }
+
+    /**
+     * One site's settings: its desktop version, sound that starts by itself, location, ad blocking,
+     * and its cookies and data. Opened from ⋮ (the settings button next to the page's name) and
+     * from Settings → Privacy & storage → Site settings.
+     */
+    fun siteSettings(ctx: Context, site: String, tab: Tab? = null, onChanged: (() -> Unit)? = null) {
+        val col = column(ctx)
+        lateinit var dialog: BottomSheetDialog
+        val onThisSite = tab != null && UrlUtils.site(tab.url) == site
+        col.addView(header(ctx, site, "Settings for this site, kept for all its pages and tabs."))
+        col.addView(switchRow(ctx, R.drawable.ic_desktop, "Desktop site", "Always open the computer version", SiteSettings.desktop(site)) { on ->
+            SiteSettings.setDesktop(site, on)
+            if (onThisSite && tab != null) TabManager.setDesktop(tab, on)
+            onChanged?.invoke()
+        })
+        col.addView(switchRow(ctx, R.drawable.ic_volume, "Sound can start by itself", "Videos may play with sound before you tap play", SiteSettings.autoplay(site)) { on ->
+            SiteSettings.setAutoplay(site, on)
+            onChanged?.invoke()
+        })
+        col.addView(label(ctx, "Location", top = 12))
+        val places = SiteSettings.Location.entries
+        col.addView(chips(ctx, places.map { it.label }, places.indexOf(SiteSettings.location(site))) { i ->
+            SiteSettings.setLocation(site, places[i])
+            onChanged?.invoke()
+        })
+        col.addView(label(ctx, "Ad blocking", top = 16))
+        val levels = AdLevel.entries
+        val override = AdBlock.overrideFor(site)
+        val levelNote = note(ctx, override?.summary ?: "Uses the level chosen for all sites (${AdBlock.global.label}).")
+        col.addView(chips(ctx, listOf("Same as all sites") + levels.map { it.label }, if (override == null) 0 else levels.indexOf(override) + 1) { i ->
+            val level = if (i == 0) null else levels[i - 1]
+            AdBlock.setOverride(site, level)
+            levelNote.text = level?.summary ?: "Uses the level chosen for all sites (${AdBlock.global.label})."
+            onChanged?.invoke()
+        })
+        col.addView(levelNote)
+        if (onThisSite) col.addView(note(ctx, "Changes apply when the page reloads."))
+
+        val buttons = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(ctx.dp(16), ctx.dp(10), ctx.dp(16), 0)
+        }
+        fun button(text: String, onClick: () -> Unit) {
+            buttons.addView(MaterialButton(ctx, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
+                this.text = text
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                setOnClickListener {
+                    dialog.dismiss()
+                    onClick()
+                }
+            })
+        }
+        button("Clear cookies and data of this site") {
+            MaterialAlertDialogBuilder(ctx)
+                .setTitle("Clear $site's data?")
+                .setMessage("Its cookies, saved logins and stored data are deleted, so you're signed out of it.")
+                .setPositiveButton("Clear") { _, _ ->
+                    Engine.runtime.storageController.clearDataFromBaseDomain(site, org.mozilla.geckoview.StorageController.ClearFlags.ALL)
+                    if (onThisSite && tab != null) TabManager.reload(tab)
+                }
+                .setNegativeButton(android.R.string.cancel, null)
+                .showImmersive()
+        }
+        if (SiteSettings.hasSettings(site)) {
+            button("Reset this site's settings") {
+                val wasDesktop = SiteSettings.desktop(site)
+                SiteSettings.reset(site)
+                if (onThisSite && tab != null && wasDesktop) TabManager.setDesktop(tab, false)
+                onChanged?.invoke()
+            }
+        }
+        col.addView(buttons)
+        dialog = sheet(ctx, col)
+        dialog.showImmersive()
     }
 }

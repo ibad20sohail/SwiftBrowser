@@ -137,3 +137,64 @@ object SystemBars {
         }
     }
 }
+
+/**
+ * Pop-ups that keep full screen. On Android 7 every new window (a dialog, a menu, a bottom sheet)
+ * brings the status and navigation bars back while it is open, unless it is shown without focus,
+ * given the screen's full-screen flags, and only then focused.
+ */
+object Immersive {
+    @Suppress("DEPRECATION")
+    fun show(d: android.app.Dialog) {
+        val window = d.window
+        val activity = activityOf(d.context)
+        val flags = activity?.window?.decorView?.systemUiVisibility ?: 0
+        // A dialog with a text field takes its keyboard with it (otherwise it stays up over the page).
+        window?.decorView?.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+            override fun onViewAttachedToWindow(v: View) {}
+
+            override fun onViewDetachedFromWindow(v: View) {
+                if (!hasTextField(v)) return
+                // The screen behind takes the keyboard over once it has the focus back; close it then.
+                val decor = activity?.window?.decorView ?: return
+                val imm = v.context.getSystemService(Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager
+                decor.viewTreeObserver.addOnWindowFocusChangeListener(object : android.view.ViewTreeObserver.OnWindowFocusChangeListener {
+                    override fun onWindowFocusChanged(hasFocus: Boolean) {
+                        if (!hasFocus) return
+                        decor.viewTreeObserver.removeOnWindowFocusChangeListener(this)
+                        decor.post { imm.hideSoftInputFromWindow(decor.windowToken, 0) }
+                    }
+                })
+            }
+        })
+        if (window == null || flags and View.SYSTEM_UI_FLAG_FULLSCREEN == 0) {
+            d.show()
+            return
+        }
+        window.setFlags(
+            android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+        )
+        d.show()
+        window.decorView.systemUiVisibility = flags or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
+            View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+        window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE)
+    }
+
+    private fun hasTextField(v: View): Boolean = v is android.widget.EditText ||
+        (v is android.view.ViewGroup && (0 until v.childCount).any { hasTextField(v.getChildAt(it)) })
+
+    private fun activityOf(ctx: Context): Activity? {
+        var c: Context? = ctx
+        while (c is android.content.ContextWrapper) {
+            if (c is Activity) return c
+            c = c.baseContext
+        }
+        return null
+    }
+}
+
+fun android.app.Dialog.showImmersive() = Immersive.show(this)
+
+fun com.google.android.material.dialog.MaterialAlertDialogBuilder.showImmersive(): androidx.appcompat.app.AlertDialog =
+    create().also { Immersive.show(it) }

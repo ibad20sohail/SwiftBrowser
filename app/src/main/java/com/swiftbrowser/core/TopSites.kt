@@ -1,11 +1,68 @@
 package com.swiftbrowser.core
 
 import android.net.Uri
+import androidx.core.content.edit
+import com.swiftbrowser.SwiftApp
+import org.json.JSONArray
+import org.json.JSONObject
 import java.util.Locale
 
-/** The shortcuts on the home page: the profile's most visited sites. */
+/**
+ * The shortcuts on the home page: the ones the user added (pinned, in their order), then the
+ * profile's most visited sites.
+ */
 object TopSites {
-    data class Tile(val key: String, val url: String, val label: String)
+    data class Tile(val key: String, val url: String, val label: String, val pinned: Boolean = false)
+
+    /** Up to this many shortcuts on the home page. */
+    const val MAX = 12
+
+    private fun pinnedKey(profileId: Long) = "pinned_tiles_$profileId"
+
+    /** The shortcuts the user added, in their order. */
+    fun pinned(profileId: Long): List<Tile> {
+        val json = SwiftApp.prefs.sp.getString(pinnedKey(profileId), null) ?: return emptyList()
+        return try {
+            val arr = JSONArray(json)
+            (0 until arr.length()).mapNotNull { i ->
+                val o = arr.getJSONObject(i)
+                val url = o.optString("url")
+                val host = Uri.parse(url).host ?: return@mapNotNull null
+                Tile(key(host), url, o.optString("label").ifBlank { label(key(host)) }, pinned = true)
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    fun setPinned(profileId: Long, tiles: List<Tile>) {
+        val arr = JSONArray()
+        tiles.forEach { arr.put(JSONObject().put("url", it.url).put("label", it.label)) }
+        SwiftApp.prefs.sp.edit { putString(pinnedKey(profileId), arr.toString()) }
+    }
+
+    fun addPinned(profileId: Long, url: String, label: String) {
+        val host = Uri.parse(url).host ?: return
+        setPinned(profileId, pinned(profileId).filter { it.url != url } + Tile(key(host), url, label.ifBlank { label(key(host)) }, true))
+    }
+
+    /** Replaces [old] (pinned or not) with a pinned shortcut to [url] named [label], in the same place. */
+    fun editPinned(profileId: Long, old: Tile, url: String, label: String) {
+        val host = Uri.parse(url).host ?: return
+        val tile = Tile(key(host), url, label.ifBlank { label(key(host)) }, true)
+        val list = pinned(profileId).toMutableList()
+        val i = list.indexOfFirst { it.url == old.url }
+        if (i >= 0) list[i] = tile else list += tile
+        setPinned(profileId, list)
+    }
+
+    fun unpin(profileId: Long, tile: Tile) = setPinned(profileId, pinned(profileId).filter { it.url != tile.url })
+
+    /** Puts [tile] first among the pinned shortcuts (pinning it if it wasn't). */
+    fun moveToStart(profileId: Long, tile: Tile) {
+        val rest = pinned(profileId).filter { it.url != tile.url }
+        setPinned(profileId, listOf(tile.copy(pinned = true)) + rest)
+    }
 
     private val DEFAULTS = listOf(
         Tile("google.com", "https://www.google.com/", "Google"),
@@ -35,8 +92,16 @@ object TopSites {
     fun label(key: String): String =
         NAMES[key] ?: UrlUtils.siteOfHost(key).substringBefore('.').replaceFirstChar { it.titlecase(Locale.ROOT) }
 
-    /** Blocking; reads history. */
-    fun load(db: Db, profileId: Long, hidden: Set<String>, max: Int = 8): List<Tile> {
+    /** Blocking; reads history. The user's own shortcuts first, then the most visited sites. */
+    fun load(db: Db, profileId: Long, hidden: Set<String>): List<Tile> {
+        val pinned = pinned(profileId).take(MAX)
+        val taken = pinned.map { it.key }.toSet()
+        val visited = loadVisited(db, profileId, hidden + taken, (8 - pinned.size).coerceAtLeast(0))
+        return pinned + visited
+    }
+
+    private fun loadVisited(db: Db, profileId: Long, hidden: Set<String>, max: Int): List<Tile> {
+        if (max <= 0) return emptyList()
         class Site(val scheme: String, val host: String) {
             var visits = 0
             var last = 0L
@@ -60,7 +125,7 @@ object TopSites {
             .take(max)
             .map { (key, s) -> Tile(key, "${s.scheme}://${s.host}/", label(key)) }
             .toMutableList()
-        if (tiles.size < 4) {
+        if (tiles.size < 4 && tiles.size < max) {
             for (d in DEFAULTS) {
                 if (tiles.size >= max) break
                 if (d.key !in hidden && tiles.none { it.key == d.key }) tiles += d

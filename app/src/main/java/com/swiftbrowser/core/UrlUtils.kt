@@ -22,7 +22,7 @@ object UrlUtils {
 
     fun isBlank(url: String?): Boolean = url.isNullOrBlank() || url == "about:blank"
 
-    /** Turns what the user typed into a URL to load: a web address, or a Google search. */
+    /** Turns what the user typed into a URL to load: a web address, or a search. */
     fun toUrlOrSearch(input: String): String {
         val t = input.trim()
         if (t.isEmpty()) return ""
@@ -41,7 +41,8 @@ object UrlUtils {
         return searchUrl(t)
     }
 
-    fun searchUrl(query: String): String = "https://www.google.com/search?q=" + URLEncoder.encode(query, "UTF-8")
+    /** A search with the engine chosen in Settings. */
+    fun searchUrl(query: String): String = SearchEngine.current.searchUrl(query)
 
     private fun looksLikeHost(t: String): Boolean {
         val hostPort = t.substringBefore('/').substringBefore('?').substringBefore('#')
@@ -113,14 +114,8 @@ object UrlUtils {
         s
     }
 
-    /** The search terms if [url] is a Google results page, so the bar shows the query instead of the URL. */
-    fun googleQuery(url: String?): String? {
-        if (url == null || !isHttp(url)) return null
-        val u = Uri.parse(url)
-        val host = u.host ?: return null
-        if (!host.contains("google.") || u.path != "/search") return null
-        return u.getQueryParameter("q")
-    }
+    /** The search terms if [url] is a search results page, so the bar shows the query instead of the URL. */
+    fun searchQuery(url: String?): String? = SearchEngine.queryOf(url)
 
     private val BAD_CHARS = Regex("[\\\\/:*?\"<>|\\u0000-\\u001f]")
 

@@ -30,7 +30,11 @@ import com.swiftbrowser.R
 import com.swiftbrowser.SwiftApp
 import com.swiftbrowser.adblock.AdBlock
 import com.swiftbrowser.adblock.AdLevel
+import com.swiftbrowser.core.Backup
 import com.swiftbrowser.core.Diagnostics
+import com.swiftbrowser.core.SearchEngine
+import com.swiftbrowser.core.SiteSettings
+import com.swiftbrowser.engine.DataSaver
 import com.swiftbrowser.core.Prefs
 import com.swiftbrowser.core.Profiles
 import com.swiftbrowser.core.Updates
@@ -308,10 +312,11 @@ class SettingsActivity : AppCompatActivity() {
         Topic.LOOK -> listOfNotNull(
             if (prefs.darkMode) "Dark" else "Light",
             if (prefs.fullScreen) "Full screen" else null,
+            if (prefs.toolbarAtBottom) "Bar at the bottom" else null,
             "Text ${(prefs.textScale * 100).roundToInt()}%",
         ).joinToString(" · ")
         Topic.BROWSING -> listOfNotNull(
-            "Google",
+            SearchEngine.current.label,
             if (prefs.inactiveDays > 0) "Inactive tabs after ${prefs.inactiveDays} days" else null,
         ).joinToString(" · ")
         Topic.ADBLOCK -> {
@@ -368,18 +373,34 @@ class SettingsActivity : AppCompatActivity() {
                 Engine.setForceZoom(it)
             }
         }
-        def(Topic.LOOK, null, "Hide toolbar while scrolling", "address bar url bar top") {
-            switch(R.drawable.ic_toolbar, "Hide toolbar while scrolling", { "Scroll up a little to bring it back" }, checked = { prefs.hideToolbarOnScroll }) {
+        def(Topic.LOOK, "Toolbar", "Address bar at the bottom", "toolbar bottom one hand reach position") {
+            switch(R.drawable.ic_toolbar, "Address bar at the bottom", { "Easier to reach with one hand" }, checked = { prefs.toolbarAtBottom }) {
+                prefs.toolbarAtBottom = it
+            }
+        }
+        def(Topic.LOOK, "Toolbar", "Hide toolbar while scrolling", "address bar url bar top") {
+            switch(R.drawable.ic_toolbar, "Hide toolbar while scrolling", { "Scroll back to bring it back" }, checked = { prefs.hideToolbarOnScroll }) {
                 prefs.hideToolbarOnScroll = it
             }
         }
+        def(Topic.LOOK, "Toolbar", "Toolbar slides with the page", "animation smooth chrome follow finger") {
+            switch(
+                R.drawable.ic_touch, "Toolbar slides with the page",
+                { if (prefs.toolbarFollowsScroll) "It follows your finger, as in Chrome" else "Off: it appears and goes at once" },
+                details = "On, the toolbar slides away and back exactly as far as you scroll, and finishes with a short slide " +
+                    "when you let go. Off, it disappears or comes back in one go after a deliberate scroll (as in Swift 1.6). " +
+                    "Turn it off if scrolling feels less smooth with it.",
+                enabled = { prefs.hideToolbarOnScroll },
+                checked = { prefs.toolbarFollowsScroll },
+            ) { prefs.toolbarFollowsScroll = it }
+        }
 
         // Browsing & tabs
-        def(Topic.BROWSING, "Search", "Search engine", "google") {
-            info(R.drawable.ic_search, "Search engine", { "Google" })
+        def(Topic.BROWSING, "Search", "Search engine", "google duckduckgo bing startpage") {
+            action(R.drawable.ic_search, "Search engine", { SearchEngine.current.label }) { chooseSearchEngine() }
         }
         def(Topic.BROWSING, "Search", "Search suggestions", "google suggest typing") {
-            switch(R.drawable.ic_lightbulb, "Search suggestions", { "Google suggests searches as you type" }, checked = { prefs.searchSuggestions }) {
+            switch(R.drawable.ic_lightbulb, "Search suggestions", { "${SearchEngine.current.label} suggests searches as you type" }, checked = { prefs.searchSuggestions }) {
                 prefs.searchSuggestions = it
             }
         }
@@ -451,6 +472,16 @@ class SettingsActivity : AppCompatActivity() {
                 checked = { prefs.liteMode },
             ) { PageActions.setLite(null, it) }
         }
+        def(Topic.SPEED, "Data", "Data saver", "mobile data images cellular save") {
+            switch(
+                R.drawable.ic_image, "Data saver",
+                { if (DataSaver.active) "On mobile data now: pages load without images" else "On mobile data, pages load without images" },
+                checked = { prefs.dataSaver },
+            ) {
+                prefs.dataSaver = it
+                DataSaver.apply()
+            }
+        }
         def(Topic.SPEED, "Memory and drawing", "Tabs kept loaded", "memory ram live tabs") {
             action(R.drawable.ic_memory, "Tabs kept loaded", { liveTabsText(prefs.maxLiveTabs) }) { chooseLiveTabs() }
         }
@@ -514,8 +545,8 @@ class SettingsActivity : AppCompatActivity() {
                 prefs.confirmDownloads = it
             }
         }
-        def(Topic.VIDEO, "Downloads", "Download folder", "storage location") {
-            info(R.drawable.ic_folder, "Download folder", { Downloads.directory().path.replace("/storage/emulated/0", "Phone storage") })
+        def(Topic.VIDEO, "Downloads", "Download folder", "storage location where save sd card") {
+            action(R.drawable.ic_folder, "Download folder", { Downloads.describe(Downloads.directory()) }) { chooseDownloadFolder() }
         }
 
         // Privacy & storage
@@ -524,6 +555,17 @@ class SettingsActivity : AppCompatActivity() {
         }
         def(Topic.PRIVACY, null, "Storage used", "space cache size") {
             action(R.drawable.ic_storage, "Storage used", { storageText() }) { clearCache() }
+        }
+        def(Topic.PRIVACY, "Sites", "Site settings", "desktop location sound permissions per site") {
+            action(R.drawable.ic_tune, "Site settings", { siteSettingsText() }) { chooseSite() }
+        }
+        def(Topic.PRIVACY, "Backup", "Back up", "export save copy backup") {
+            action(R.drawable.ic_download, "Back up", { "Settings, bookmarks, history, open tabs and site settings, to one file" }) { backUp() }
+        }
+        def(Topic.PRIVACY, "Backup", "Restore from a backup", "import restore backup new phone") {
+            action(R.drawable.ic_update, "Restore from a backup", { "Adds a backup's contents to this phone, then restarts Swift" }) {
+                chooseBackup()
+            }
         }
 
         // About
@@ -680,7 +722,7 @@ class SettingsActivity : AppCompatActivity() {
                             .setTitle(title)
                             .setMessage(details)
                             .setPositiveButton(android.R.string.ok, null)
-                            .show()
+                            .showImmersive()
                     }
                 }, LinearLayout.LayoutParams(dp(36), dp(36)))
             }
@@ -827,7 +869,135 @@ class SettingsActivity : AppCompatActivity() {
                 snack("Pages use the new size when they reload")
             }
             .setNegativeButton(android.R.string.cancel, null)
-            .show()
+            .showImmersive()
+    }
+
+    private fun chooseSearchEngine() {
+        val engines = SearchEngine.entries
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Search engine")
+            .setSingleChoiceItems(engines.map { it.label }.toTypedArray(), engines.indexOf(SearchEngine.current)) { d, which ->
+                prefs.searchEngine = engines[which].key
+                d.dismiss()
+                refreshAll()
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .showImmersive()
+    }
+
+    private fun chooseDownloadFolder() {
+        val phone = android.os.Environment.getExternalStorageDirectory()
+        val options = ArrayList<Pair<String, String>>()
+        options += "Phone storage › Download/Swift" to ""
+        options += "Phone storage › Download" to android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS).path
+        options += "Phone storage › Movies" to android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_MOVIES).path
+        Downloads.sdCardDirectory()?.let { options += "SD card › Swift's folder (deleted with Swift)" to it.path }
+        val current = prefs.downloadFolder
+        val labels = options.map { it.first } + "Another folder…"
+        val checked = options.indexOfFirst { it.second == current }.let { if (it < 0) options.size else it }
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Download folder")
+            .setSingleChoiceItems(labels.toTypedArray(), checked) { d, which ->
+                d.dismiss()
+                if (which < options.size) {
+                    setDownloadFolder(options[which].second)
+                } else {
+                    Sheets.askText(this, "Folder on the phone's storage", "For example Videos/Films", current.removePrefix(phone.path).trimStart('/')) { path ->
+                        setDownloadFolder(File(phone, path.trim().trim('/')).path)
+                    }
+                }
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .showImmersive()
+    }
+
+    private fun setDownloadFolder(path: String) {
+        prefs.downloadFolder = path
+        val dir = Downloads.directory()
+        refreshAll()
+        if (path.isNotBlank() && dir.path != path) snack("Swift can't write there; downloads go to ${Downloads.describe(dir)}")
+        else snack("New downloads go to ${Downloads.describe(dir)}")
+    }
+
+    private fun siteSettingsText(): String {
+        val n = SiteSettings.sites().size
+        return if (n == 0) "None yet. On a site, open ⋮ and tap the settings button next to its name." else "$n ${if (n == 1) "site" else "sites"}"
+    }
+
+    private fun chooseSite() {
+        val sites = SiteSettings.sites()
+        if (sites.isEmpty()) {
+            snack("No site has its own settings yet")
+            return
+        }
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Site settings")
+            .setItems(sites.toTypedArray()) { _, which -> Sheets.siteSettings(this, sites[which], onChanged = { refreshAll() }) }
+            .setNegativeButton("Close", null)
+            .showImmersive()
+    }
+
+    private fun backUp() {
+        lifecycleScope.launch {
+            val file = withContext(Dispatchers.IO) {
+                try {
+                    Backup.write(this@SettingsActivity)
+                } catch (e: Exception) {
+                    null
+                }
+            }
+            snack(if (file == null) "Couldn't write the backup" else "Saved to ${Downloads.describe(file.parentFile ?: file)} › ${file.name}")
+        }
+    }
+
+    /** Backups found in the download folders, newest first; the file picker finds the others. */
+    private fun chooseBackup() {
+        lifecycleScope.launch {
+            val found = withContext(Dispatchers.IO) { Backup.found() }
+            if (found.isEmpty()) {
+                pickBackupFile()
+                return@launch
+            }
+            val labels = found.map { "${it.name}\n${Downloads.describe(it.parentFile ?: it)}" } + "Choose another file…"
+            MaterialAlertDialogBuilder(this@SettingsActivity)
+                .setTitle("Restore from a backup")
+                .setItems(labels.toTypedArray()) { _, which ->
+                    if (which < found.size) confirmRestore(android.net.Uri.fromFile(found[which])) else pickBackupFile()
+                }
+                .setNegativeButton(android.R.string.cancel, null)
+                .showImmersive()
+        }
+    }
+
+    private fun pickBackupFile() {
+        restorePicker.launch(arrayOf("application/json", "text/plain", "application/octet-stream"))
+    }
+
+    private val restorePicker = registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) confirmRestore(uri)
+    }
+
+    private fun confirmRestore(uri: android.net.Uri) {
+        lifecycleScope.launch {
+            val root = withContext(Dispatchers.IO) { Backup.read(this@SettingsActivity, uri) }
+            if (root == null) {
+                snack("That file isn't a Swift backup")
+                return@launch
+            }
+            val s = Backup.summary(root)
+            MaterialAlertDialogBuilder(this@SettingsActivity)
+                .setTitle("Restore this backup?")
+                .setMessage(
+                    "Made on ${s.created}: ${s.profiles} ${if (s.profiles == 1) "profile" else "profiles"}, ${s.bookmarks} bookmarks, " +
+                        "${s.tabs} tabs and ${s.history} history entries.\n\nThey are added to what is on this phone, its settings " +
+                        "replace these, and Swift restarts.",
+                )
+                .setPositiveButton("Restore") { _, _ ->
+                    Backup.restoreThen(root) { SwiftApp.restart(this@SettingsActivity) }
+                }
+                .setNegativeButton(android.R.string.cancel, null)
+                .showImmersive()
+        }
     }
 
     private fun inactiveText(days: Int) = if (days <= 0) "Never" else "After $days days without opening them"
@@ -843,7 +1013,7 @@ class SettingsActivity : AppCompatActivity() {
                 refreshAll()
             }
             .setNegativeButton(android.R.string.cancel, null)
-            .show()
+            .showImmersive()
     }
 
     private fun checkForUpdates() {
@@ -864,7 +1034,7 @@ class SettingsActivity : AppCompatActivity() {
                             snack("Downloading Swift ${r.version}… Android asks to install it when it's done.")
                         }
                         .setNegativeButton("Later", null)
-                        .show()
+                        .showImmersive()
                 }
             }
         }
@@ -888,7 +1058,7 @@ class SettingsActivity : AppCompatActivity() {
                 refreshAll()
             }
             .setNegativeButton(android.R.string.cancel, null)
-            .show()
+            .showImmersive()
     }
 
     private fun confirmRenderingChange(on: Boolean) {
@@ -903,7 +1073,7 @@ class SettingsActivity : AppCompatActivity() {
             .setMessage("$text Your tabs stay open.")
             .setPositiveButton("Restart now") { _, _ -> SwiftApp.restart(this) }
             .setNegativeButton("Later", null)
-            .show()
+            .showImmersive()
     }
 
     private fun siteLevelsText(): String {
@@ -924,7 +1094,7 @@ class SettingsActivity : AppCompatActivity() {
                 refreshAll()
             }
             .setNegativeButton("Close", null)
-            .show()
+            .showImmersive()
     }
 
     private fun clearData() {
@@ -954,7 +1124,7 @@ class SettingsActivity : AppCompatActivity() {
                 }
             }
             .setNegativeButton(android.R.string.cancel, null)
-            .show()
+            .showImmersive()
     }
 
     private fun clearCache() {
@@ -972,7 +1142,7 @@ class SettingsActivity : AppCompatActivity() {
                 }
             }
             .setNegativeButton(android.R.string.cancel, null)
-            .show()
+            .showImmersive()
     }
 
     private fun storageText(): String =

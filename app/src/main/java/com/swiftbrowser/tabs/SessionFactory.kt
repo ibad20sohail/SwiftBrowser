@@ -9,6 +9,7 @@ import com.swiftbrowser.adblock.AdLevel
 import com.swiftbrowser.adblock.NavPolicy
 import com.swiftbrowser.core.L
 import com.swiftbrowser.core.Profiles
+import com.swiftbrowser.core.SiteSettings
 import com.swiftbrowser.core.UrlUtils
 import com.swiftbrowser.engine.Engine
 import com.swiftbrowser.media.Helper
@@ -155,6 +156,8 @@ class TabDelegates(private val tab: Tab) :
             if (request.hasUserGesture || level < AdLevel.HIGH) ui?.onExternalApp(tab, url)
             return GeckoResult.deny()
         }
+        // Sites set to their desktop version get it from the first request on (and others don't).
+        if (request.target != GeckoSession.NavigationDelegate.TARGET_WINDOW_NEW) applySiteDesktop(session, url)
         // The first load of a pop-up that the policy already allowed in its opener.
         tab.approvedUrl?.let { approved ->
             if (request.target != GeckoSession.NavigationDelegate.TARGET_WINDOW_NEW &&
@@ -174,6 +177,21 @@ class TabDelegates(private val tab: Tab) :
                 NavPolicy.navigation(level, request, tab.lastClick, System.currentTimeMillis(), tab.userNavAt, waited)
             }
         }
+    }
+
+    /** Switches the tab between the mobile and desktop versions as the site's setting says. */
+    private fun applySiteDesktop(session: GeckoSession, url: String) {
+        val site = UrlUtils.site(url) ?: return
+        val want = SiteSettings.desktop(site)
+        if (want == tab.desktop) return
+        tab.desktop = want
+        session.settings.setUserAgentMode(
+            if (want) GeckoSessionSettings.USER_AGENT_MODE_DESKTOP else GeckoSessionSettings.USER_AGENT_MODE_MOBILE,
+        )
+        session.settings.setViewportMode(
+            if (want) GeckoSessionSettings.VIEWPORT_MODE_DESKTOP else GeckoSessionSettings.VIEWPORT_MODE_MOBILE,
+        )
+        TabManager.scheduleSave(tab)
     }
 
     private fun decide(url: String, popup: Boolean, eval: (Boolean) -> NavPolicy.Decision): GeckoResult<AllowOrDeny>? {
@@ -364,13 +382,19 @@ class TabDelegates(private val tab: Tab) :
             GeckoSession.PermissionDelegate.PERMISSION_MEDIA_KEY_SYSTEM_ACCESS,
             GeckoSession.PermissionDelegate.PERMISSION_STORAGE_ACCESS,
             -> GeckoResult.fromValue(ContentPermission.VALUE_ALLOW)
-            // Sound only after the user presses play; stops noisy auto-playing ads.
-            GeckoSession.PermissionDelegate.PERMISSION_AUTOPLAY_AUDIBLE -> GeckoResult.fromValue(ContentPermission.VALUE_DENY)
+            // Sound only after the user presses play (stops noisy auto-playing ads), unless the site is allowed.
+            GeckoSession.PermissionDelegate.PERMISSION_AUTOPLAY_AUDIBLE -> GeckoResult.fromValue(
+                if (SiteSettings.autoplay(UrlUtils.site(perm.uri))) ContentPermission.VALUE_ALLOW else ContentPermission.VALUE_DENY,
+            )
             // Notification prompts on these sites are spam.
             GeckoSession.PermissionDelegate.PERMISSION_DESKTOP_NOTIFICATION -> GeckoResult.fromValue(ContentPermission.VALUE_DENY)
-            GeckoSession.PermissionDelegate.PERMISSION_GEOLOCATION -> SessionFactory.prompts.askPermission(
-                "Allow ${UrlUtils.host(perm.uri) ?: "this site"} to use your location?",
-            )
+            GeckoSession.PermissionDelegate.PERMISSION_GEOLOCATION -> when (SiteSettings.location(UrlUtils.site(perm.uri))) {
+                SiteSettings.Location.ALLOW -> GeckoResult.fromValue(ContentPermission.VALUE_ALLOW)
+                SiteSettings.Location.BLOCK -> GeckoResult.fromValue(ContentPermission.VALUE_DENY)
+                SiteSettings.Location.ASK -> SessionFactory.prompts.askPermission(
+                    "Allow ${UrlUtils.host(perm.uri) ?: "this site"} to use your location?",
+                )
+            }
             else -> GeckoResult.fromValue(ContentPermission.VALUE_DENY)
         }
     }

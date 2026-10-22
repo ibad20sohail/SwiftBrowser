@@ -106,7 +106,7 @@ class HistoryActivity : ListActivity() {
                     }
                 }
                 .setNegativeButton(android.R.string.cancel, null)
-                .show()
+                .showImmersive()
             true
         }
         search.visibility = View.VISIBLE
@@ -141,7 +141,7 @@ class HistoryActivity : ListActivity() {
                 0 -> openUrl(url, newTab = true)
                 1 -> copyText(this, url)
             }
-        }.show()
+        }.showImmersive()
     }
 }
 
@@ -187,7 +187,7 @@ class BookmarksActivity : ListActivity() {
                     load()
                 }
             }
-        }.show()
+        }.showImmersive()
     }
 }
 
@@ -198,7 +198,7 @@ class DownloadsActivity : ListActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         toolbar.title = "Downloads"
-        toolbar.subtitle = Downloads.directory().path.replace("/storage/emulated/0", "Phone")
+        toolbar.subtitle = Downloads.describe(Downloads.directory())
         list.adapter = adapter
         list.itemAnimator = null
         refresh()
@@ -334,9 +334,9 @@ class DownloadsActivity : ListActivity() {
                     .setMessage("Delete ${d.fileName}?")
                     .setPositiveButton("Delete") { _, _ -> Downloads.remove(d.id, deleteFile = true) }
                     .setNegativeButton(android.R.string.cancel, null)
-                    .show()
+                    .showImmersive()
             }
-        }.show()
+        }.showImmersive()
     }
 
     companion object {

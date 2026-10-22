@@ -5,7 +5,7 @@ ad-heavy sites on an old phone (Moto E4, Android 7.1.2).
 
 ## Download
 
-**[Download Swift 1.6 (APK)](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v1.6/Swift-1.6.apk)**
+**[Download Swift 1.7 (APK)](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v1.7/Swift-1.7.apk)**
 for Android 7 and newer (32-bit ARM, about 150 MB). It installs over an earlier Swift and keeps
 tabs and settings. From 1.4 on, Swift can also update itself: Settings → Check for updates.
 
@@ -29,29 +29,43 @@ are attached to the releases because GitHub doesn't accept files over 100 MB in 
   - Tabs not opened for 14 days (a setting) wait under **Inactive tabs**, with Close all.
   - A closed tab (or group) can be brought back with Undo, and **Recent tabs** in the menu keeps
     the last 50 closed tabs with their back history.
-  - Swipe sideways on the toolbar to go to the next or previous tab.
+  - Swipe sideways on the toolbar to go to the next or previous tab, or swipe it toward the page
+    to open the tab grid. Hold the tab button for New tab, New incognito tab, Close this tab and
+    Recent tabs.
   - How many tabs stay loaded is a setting (1 to 10, 2 by default); the others show their last
     picture straight away and reload their page when opened.
 - **Menu** (⋮) that slides up from the bottom: the page's main actions as a row of icons, four
   switches (Lite mode, dark mode, desktop site, full screen) that keep the menu open, and two pages
   of buttons swiped sideways. Swipe it down, tap outside it or press back to close it.
 - **Reader view**: a clean, light version of article pages (Mozilla's Readability), with text size
-  buttons, in light or dark.
+  buttons, in light or dark. **Listen** reads the article aloud with the phone's text-to-speech,
+  from the paragraph on screen, marking the paragraph being read.
 - **Lite mode**, one switch for all sites (menu or Settings): no animations, shadows or blur, so
   heavy sites scroll smoothly on the phone. It stays on until it is turned off.
 - **Show sites as designed** (Settings → Speed & memory): for newer phones, turns off Swift's
   changes for slow phones (no glass blur, fewer animations, lighter YouTube and TheFlixer). It is
   on by itself on phones with 4 GB of memory or more and a fast graphics chip.
 - **Full screen** (menu or Settings): browsing without the phone's status and navigation bars; a
-  swipe in from the top or bottom edge shows them for a moment.
+  swipe in from the top or bottom edge shows them for a moment. Menus and dialogs keep them hidden.
 - **Save offline**: saves a page as a PDF in Downloads, to read without internet in Swift's own
   PDF viewer.
 - **Add to Home screen**: a shortcut to the page on the phone's home screen.
 - **Swipe from the edges**: from the left edge of a page to go back, from the right to go forward.
-- **Home page** for new tabs: a Google search box (with voice search) and shortcuts to the most
-  visited sites.
-- **Toolbar that hides while scrolling down** (after a deliberate scroll, not a nudge) and comes
-  back when scrolling up, and pull down at the top of a page to reload.
+- **Home page** for new tabs: a search box (with voice search) and up to 12 shortcuts. Add your
+  own with the + tile; hold a shortcut to open it in a new or incognito tab, rename it, change its
+  address, move it to the start or remove it. Free places are filled with the most visited sites.
+- **Address bar at the top or the bottom** (Settings → Look & screen).
+- **Toolbar that hides while scrolling**: it slides away and back with your finger, as in Chrome,
+  and finishes with a short slide when you let go (or, with that setting off, it goes and comes
+  back in one go after a deliberate scroll). Pull down at the top of a page to reload.
+- **Site settings**: the settings button next to the site's name in the menu sets, for that site,
+  desktop mode (remembered), sound that starts by itself, location (ask, allow or block), the
+  ad-blocking level, and clears its cookies and data. Settings → Privacy & storage lists the sites.
+- **Search engine**: Google, DuckDuckGo, Bing or Startpage, with suggestions from the same engine.
+- **Data saver**: on mobile data, pages load without images (Settings → Speed & memory).
+- **Back up and restore**: settings, profiles, bookmarks, history, open tabs and groups, and site
+  settings in one file in the download folder, to restore on this or another phone. Passwords and
+  cookies aren't in it.
 - **Video**:
   - Full-screen videos use the whole screen and follow the phone's auto-rotate. Turning them to
     landscape automatically, and swipe gestures for brightness (left side) and volume (right
@@ -66,14 +80,14 @@ are attached to the releases because GitHub doesn't accept files over 100 MB in 
     from there, even after a reload or reopening the tab.
   - Videos a page plays can be downloaded, including HLS (`.m3u8`) streams. These are saved as
     MP4 when possible.
-- **Downloads** with pause/resume and notifications.
+- **Downloads** with pause/resume and notifications, saved to a folder of your choice: Download/Swift,
+  Download, Movies, Swift's folder on the SD card, or any folder on the phone.
 - **Settings** in the app's own look: the most used switches as tiles, seven topics that show
   what is set, and a search box.
 - **Hide cookie pop-ups**: one switch (Settings → Ad blocking) for uBlock Origin's cookie-notice
   lists.
 - **Dark / light mode**, with a calm palette in both. Sites that support dark mode follow it.
 - **Text size** for all sites, and **zoom** even on sites that turn it off.
-- **Google search** with suggestions in the address bar.
 - **Tuned for a 2 GB phone**: uBlock Origin runs in its own process, filter lists update only
   while the app is in the background, the web cache is capped, and Firefox's own Safe Browsing
   lists are off (uBlock Origin covers them). Silent videos don't start by themselves (YouTube

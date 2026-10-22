@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Swift Helper",
-  "version": "1.7.0",
+  "version": "1.8.1",
   "description": "Video detection, playback speed, video gestures, continue watching, tap tracking, reader view and lighter styles for slow sites, for the Swift browser.",
   "browser_specific_settings": {
     "gecko": { "id": "helper@swiftbrowser.app" }

@@ -47,6 +47,13 @@ class SwiftGeckoView @JvmOverloads constructor(
         }
     }
 
+    /** True when the current touch scrolls the page itself up or down (not an inner scroller, a map or a slider). */
+    fun touchScrollsPage(): Boolean {
+        val d = downDetail ?: return false
+        return d.handledResult() == PanZoomController.INPUT_RESULT_HANDLED &&
+            d.scrollableDirections() and (PanZoomController.SCROLLABLE_FLAG_TOP or PanZoomController.SCROLLABLE_FLAG_BOTTOM) != 0
+    }
+
     /** True once the engine has answered for the current touch. */
     val touchAnswered: Boolean get() = downDetail != null
 }

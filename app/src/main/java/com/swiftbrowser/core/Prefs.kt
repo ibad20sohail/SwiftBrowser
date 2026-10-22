@@ -49,6 +49,11 @@ class Prefs(ctx: Context) {
         get() = sp.getBoolean(SHOW_DRAW_SPEED, false)
         set(v) = sp.edit { putBoolean(SHOW_DRAW_SPEED, v) }
 
+    /** SearchEngine key: google, duckduckgo, bing or startpage. */
+    var searchEngine: String
+        get() = sp.getString(SEARCH_ENGINE, "google") ?: "google"
+        set(v) = sp.edit { putString(SEARCH_ENGINE, v) }
+
     var searchSuggestions: Boolean
         get() = sp.getBoolean(SEARCH_SUGGESTIONS, true)
         set(v) = sp.edit { putBoolean(SEARCH_SUGGESTIONS, v) }
@@ -57,6 +62,19 @@ class Prefs(ctx: Context) {
     var hideToolbarOnScroll: Boolean
         get() = sp.getBoolean(HIDE_TOOLBAR, true)
         set(v) = sp.edit { putBoolean(HIDE_TOOLBAR, v) }
+
+    /**
+     * The toolbar slides away and back with the finger (as in Chrome) instead of jumping in one
+     * frame after a deliberate scroll.
+     */
+    var toolbarFollowsScroll: Boolean
+        get() = sp.getBoolean(TOOLBAR_FOLLOWS, true)
+        set(v) = sp.edit { putBoolean(TOOLBAR_FOLLOWS, v) }
+
+    /** The address bar at the bottom of the screen, easier to reach with one hand. */
+    var toolbarAtBottom: Boolean
+        get() = sp.getBoolean(TOOLBAR_BOTTOM, false)
+        set(v) = sp.edit { putBoolean(TOOLBAR_BOTTOM, v) }
 
     var pullToRefresh: Boolean
         get() = sp.getBoolean(PULL_TO_REFRESH, true)
@@ -145,6 +163,16 @@ class Prefs(ctx: Context) {
         get() = sp.getBoolean(HIDE_COOKIE_NOTICES, false)
         set(v) = sp.edit { putBoolean(HIDE_COOKIE_NOTICES, v) }
 
+    /** Folder for downloads (a full path); empty: Download/Swift. See Downloads.directory. */
+    var downloadFolder: String
+        get() = sp.getString(DOWNLOAD_FOLDER, "") ?: ""
+        set(v) = sp.edit { putString(DOWNLOAD_FOLDER, v) }
+
+    /** On mobile data, pages load without images (see DataSaver). */
+    var dataSaver: Boolean
+        get() = sp.getBoolean(DATA_SAVER, false)
+        set(v) = sp.edit { putBoolean(DATA_SAVER, v) }
+
     /** Remember where long videos were left off and offer to continue from there. */
     var continueWatching: Boolean
         get() = sp.getBoolean(CONTINUE_WATCHING, true)
@@ -170,7 +198,10 @@ class Prefs(ctx: Context) {
         const val AUTOPLAY_MUTED = "autoplay_muted"
         const val SHOW_DRAW_SPEED = "show_draw_speed"
         const val SEARCH_SUGGESTIONS = "search_suggestions"
+        const val SEARCH_ENGINE = "search_engine"
         const val HIDE_TOOLBAR = "hide_toolbar_on_scroll"
+        const val TOOLBAR_FOLLOWS = "toolbar_follows_scroll"
+        const val TOOLBAR_BOTTOM = "toolbar_at_bottom"
         const val PULL_TO_REFRESH = "pull_to_refresh"
         const val SOFTWARE_RENDERING = "software_rendering"
         const val MAX_LIVE_TABS = "max_live_tabs"
@@ -190,5 +221,7 @@ class Prefs(ctx: Context) {
         const val HIDE_COOKIE_NOTICES = "hide_cookie_notices"
         const val CONTINUE_WATCHING = "continue_watching"
         const val VIDEO_TAPS = "video_taps"
+        const val DATA_SAVER = "data_saver"
+        const val DOWNLOAD_FOLDER = "download_folder"
     }
 }

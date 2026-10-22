@@ -15,6 +15,7 @@ import com.swiftbrowser.R
 import com.swiftbrowser.SwiftApp
 import com.swiftbrowser.core.Favicons
 import com.swiftbrowser.core.Profiles
+import com.swiftbrowser.core.SearchEngine
 import com.swiftbrowser.core.TopSites
 import com.swiftbrowser.tabs.TabManager
 
@@ -28,6 +29,7 @@ class HomeView @JvmOverloads constructor(
         fun onVoiceSearch()
         fun onTileClicked(url: String)
         fun onTileLongClicked(tile: TopSites.Tile, anchor: View)
+        fun onAddTile()
     }
 
     var listener: Listener? = null
@@ -37,13 +39,16 @@ class HomeView @JvmOverloads constructor(
     private val incognitoBox: View
     private val search: LinearLayout
     private val hint: TextView
+    private val searchIcon: ImageView
     private val tilesBox: LinearLayout
     private val tilesTitle: View
     private var incognito = false
     private var generation = 0
-    private val tileViews = HashMap<String, View>()
+    private val tileViews = ArrayList<View>()
 
-    private val iconListener: (String) -> Unit = { key -> tileViews[key]?.let { bindIcon(it, key) } }
+    private val iconListener: (String) -> Unit = { key ->
+        tileViews.filter { (it.tag as? TopSites.Tile)?.let { t -> com.swiftbrowser.core.Favicons.key(t.url) } == key }.forEach { bindIcon(it) }
+    }
 
     init {
         LayoutInflater.from(context).inflate(R.layout.view_home, this, true)
@@ -52,6 +57,7 @@ class HomeView @JvmOverloads constructor(
         incognitoBox = findViewById(R.id.home_incognito)
         search = findViewById(R.id.home_search)
         hint = findViewById(R.id.home_search_hint)
+        searchIcon = findViewById(R.id.home_search_icon)
         tilesBox = findViewById(R.id.home_tiles)
         tilesTitle = findViewById(R.id.home_tiles_title)
         search.setOnClickListener { listener?.onSearchBoxClicked() }
@@ -103,6 +109,10 @@ class HomeView @JvmOverloads constructor(
             hint.setTextColor(color(R.color.text_secondary))
             loadTiles()
         }
+        val engine = SearchEngine.current
+        hint.text = engine.hint
+        searchIcon.setImageResource(engine.icon)
+        searchIcon.imageTintList = if (engine.icon == R.drawable.ic_google_g) null else hint.textColors
         if (changed) post { updateTopSpace() }
     }
 
@@ -120,14 +130,25 @@ class HomeView @JvmOverloads constructor(
         }
     }
 
+    /** Reloads the shortcuts after one was added, changed or removed. */
+    fun refreshTiles() {
+        if (!incognito) loadTiles()
+    }
+
     private fun bindTiles(tiles: List<TopSites.Tile>) {
         tilesBox.removeAllViews()
         tileViews.clear()
-        tilesTitle.visibility = if (tiles.isEmpty() || incognito) View.GONE else View.VISIBLE
+        tilesTitle.visibility = if (incognito) View.GONE else View.VISIBLE
         val inflater = LayoutInflater.from(context)
-        for (rowTiles in tiles.chunked(4)) {
+        // The last place is an "Add" button while there is room.
+        val cells: List<TopSites.Tile?> = if (tiles.size < TopSites.MAX) tiles + null else tiles
+        for (rowTiles in cells.chunked(4)) {
             val row = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
             for (t in rowTiles) {
+                if (t == null) {
+                    row.addView(addTile(inflater, row))
+                    continue
+                }
                 val v = inflater.inflate(R.layout.item_tile, row, false)
                 v.findViewById<TextView>(R.id.tile_label).text = t.label
                 val letter = v.findViewById<TextView>(R.id.tile_letter)
@@ -142,8 +163,8 @@ class HomeView @JvmOverloads constructor(
                     true
                 }
                 v.tag = t
-                tileViews[t.key] = v
-                bindIcon(v, t.key)
+                tileViews += v
+                bindIcon(v)
                 row.addView(v)
             }
             repeat(4 - rowTiles.size) { row.addView(Space(context), LinearLayout.LayoutParams(0, 1, 1f)) }
@@ -151,10 +172,27 @@ class HomeView @JvmOverloads constructor(
         }
     }
 
-    private fun bindIcon(v: View, key: String) {
+    private fun addTile(inflater: LayoutInflater, row: LinearLayout): View {
+        val v = inflater.inflate(R.layout.item_tile, row, false)
+        v.findViewById<TextView>(R.id.tile_label).text = "Add"
+        v.findViewById<TextView>(R.id.tile_letter).apply {
+            text = "+"
+            setTextColor(color(R.color.text_secondary))
+            textSize = 26f
+            background = GradientDrawable().apply {
+                cornerRadius = dp(18).toFloat()
+                setStroke(dp(2), color(R.color.outline))
+            }
+        }
+        v.contentDescription = "Add a shortcut"
+        v.setOnClickListener { listener?.onAddTile() }
+        return v
+    }
+
+    private fun bindIcon(v: View) {
         val tile = v.tag as? TopSites.Tile ?: return
         Favicons.load(tile.url) { bmp ->
-            if (bmp == null || tileViews[key] !== v) return@load
+            if (bmp == null || v !in tileViews || v.tag !== tile) return@load
             val icon = v.findViewById<ImageView>(R.id.tile_icon)
             icon.setImageBitmap(bmp)
             icon.visibility = View.VISIBLE

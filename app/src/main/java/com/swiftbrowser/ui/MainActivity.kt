@@ -145,8 +145,13 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     private var themeReloadTab: Tab? = null
     private var themeReloadStarted = false
 
-    // Toolbar that slides away while scrolling down a page.
+    // Toolbar that slides away while scrolling down a page (top or bottom of the screen).
     private var toolbarPx = 0
+    private var bottomBar = false
+    private var settleAnim: ValueAnimator? = null
+
+    /** Which way the finger last moved the toolbar: -1 away, +1 back. */
+    private var fingerDirection = 0
     private var toolbarShown = 0f
     private var toolbarWanted = true
     private var lastScrollY = -1f
@@ -233,6 +238,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         prefs = SwiftApp.prefs
         toolbarPx = resources.getDimensionPixelSize(R.dimen.toolbar_height)
         bindViews()
+        applyToolbarPosition()
         setupToolbar()
         setupFindBar()
         setupGestures()
@@ -292,6 +298,9 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             quickMenu
             false
         }
+        com.swiftbrowser.engine.DataSaver.listener = { active ->
+            if (active) snack("On mobile data: pages load without images (Data saver)")
+        }
         setupEdgeSwipe()
         // A newer Swift on GitHub? Asked at most once a day, a while after starting.
         handler.postDelayed({
@@ -312,6 +321,11 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
     override fun onStart() {
         super.onStart()
+        // Settings → Look & screen may have moved the address bar.
+        if (bottomBar != prefs.toolbarAtBottom) applyToolbarPosition()
+        // Settings → Browsing may have changed the search engine.
+        urlEdit.hint = com.swiftbrowser.core.SearchEngine.current.hint
+        if (home.visibility == View.VISIBLE) current?.let { home.show(it.incognito) }
         Diagnostics.setOnScreen(true)
         if (!switcher.isOpen) current?.session?.let { if (it.isOpen) it.setActive(true) }
     }
@@ -344,6 +358,9 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         home.listener = null
         switcher.listener = null
         gestureLayer.pullListener = null
+        gestureLayer.fingerListener = null
+        settleAnim?.cancel()
+        com.swiftbrowser.engine.DataSaver.listener = null
         gestureLayer.edgeListener = null
         gestureLayer.listener = null
         gestureLayer.page = null
@@ -425,6 +442,10 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     private fun setupToolbar() {
         profileChip.setOnClickListener { Sheets.profiles(this) }
         findViewById<View>(R.id.tabs_btn).setOnClickListener { openTabSwitcher() }
+        findViewById<View>(R.id.tabs_btn).setOnLongClickListener {
+            tabButtonMenu()
+            true
+        }
         menuBtn.setOnClickListener {
             stopEditing()
             quickMenu.open()
@@ -435,7 +456,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             current?.let { TabManager.revive(it) }
         }
 
-        suggestionsList.layoutManager = LinearLayoutManager(this)
+        suggestionsList.layoutManager = LinearLayoutManager(this).apply { reverseLayout = bottomBar }
         suggestionsList.adapter = suggestionAdapter
         suggestionsList.addOnScrollListener(object : RecyclerView.OnScrollListener() {
             override fun onScrollStateChanged(rv: RecyclerView, newState: Int) {
@@ -475,12 +496,12 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         val tab = current
         val text = when {
             tab == null || tab.isBlank -> ""
-            else -> UrlUtils.googleQuery(tab.url) ?: tab.url
+            else -> UrlUtils.searchQuery(tab.url) ?: tab.url
         }
         urlBox.visibility = View.VISIBLE
         urlEdit.setText(text)
         urlEdit.selectAll()
-        setUrlIcon(R.drawable.ic_google_g)
+        setUrlIcon(com.swiftbrowser.core.SearchEngine.current.icon)
         suggestionsList.visibility = View.VISIBLE
         updateUrlButtons()
         if (!urlEdit.hasFocus()) urlEdit.requestFocus()
@@ -544,7 +565,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
                 .setTitle("Voice search isn't available")
                 .setMessage("Voice search uses Google's speech recognition, which comes with the Google app. Install or enable the Google app on this phone to use it.")
                 .setPositiveButton(android.R.string.ok, null)
-                .show()
+                .showImmersive()
             return
         }
         try {
@@ -562,7 +583,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             val head = ArrayList<Suggestion>()
             if (text.isNotBlank()) {
                 val target = UrlUtils.toUrlOrSearch(text)
-                head += if (target.startsWith("https://www.google.com/search?")) {
+                head += if (UrlUtils.searchQuery(target) != null) {
                     Suggestion(Suggestion.Kind.SEARCH, text, target)
                 } else {
                     Suggestion(Suggestion.Kind.GO, text, target)
@@ -572,7 +593,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             suggestionAdapter.items = head + local
             if (google && text.isNotBlank()) {
                 delay(150)
-                val fromGoogle = withContext(Dispatchers.IO) { Suggestions.google(text) }
+                val fromGoogle = withContext(Dispatchers.IO) { Suggestions.fromEngine(text) }
                     .filter { !it.equals(text, ignoreCase = true) }
                     .take(5)
                     .map { Suggestion(Suggestion.Kind.SEARCH, it, UrlUtils.searchUrl(it)) }
@@ -610,7 +631,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         if (editing) return
         val tab = current
         val url = tab?.url
-        val query = UrlUtils.googleQuery(url)
+        val query = UrlUtils.searchQuery(url)
         val reader = Helper.isReaderUrl(url)
         val saved = url?.startsWith("file://") == true
         val text = when {
@@ -625,7 +646,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         val icon = when {
             reader -> R.drawable.ic_reader
             saved -> R.drawable.ic_offline
-            tab == null || tab.isBlank || query != null -> R.drawable.ic_google_g
+            tab == null || tab.isBlank || query != null -> com.swiftbrowser.core.SearchEngine.current.icon
             tab.secure -> R.drawable.ic_lock
             else -> R.drawable.ic_globe
         }
@@ -694,29 +715,80 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
             override fun onTileClicked(url: String) = openInCurrent(url)
 
-            override fun onTileLongClicked(tile: TopSites.Tile, anchor: View) {
-                val menu = PopupMenu(this@MainActivity, anchor)
-                menu.menu.add(0, 1, 0, "Open in new tab")
-                menu.menu.add(0, 2, 1, "Open in incognito tab")
-                menu.menu.add(0, 3, 2, "Remove")
-                menu.setOnMenuItemClickListener { item ->
-                    when (item.itemId) {
-                        1 -> TabManager.newTab(tile.url, incognito = false)
-                        2 -> TabManager.newTab(tile.url, incognito = true)
-                        3 -> {
-                            prefs.hiddenTiles = prefs.hiddenTiles + tile.key
-                            current?.let { home.show(it.incognito) }
-                            snack("Removed ${tile.label}", "Undo") {
-                                prefs.hiddenTiles = prefs.hiddenTiles - tile.key
-                                current?.let { home.show(it.incognito) }
-                            }
-                        }
-                    }
-                    true
-                }
-                menu.show()
+            override fun onTileLongClicked(tile: TopSites.Tile, anchor: View) = tileMenu(tile)
+
+            override fun onAddTile() = editTile(null)
+        }
+    }
+
+    /** Holding a home page shortcut. */
+    private fun tileMenu(tile: TopSites.Tile) {
+        val pid = Profiles.currentId
+        val actions = ArrayList<Pair<String, () -> Unit>>()
+        actions += "Open in new tab" to { TabManager.newTab(tile.url, incognito = false) }
+        actions += "Open in incognito tab" to { TabManager.newTab(tile.url, incognito = true) }
+        actions += "Edit name or address" to { editTile(tile) }
+        if (TopSites.pinned(pid).firstOrNull()?.url != tile.url) {
+            actions += "Move to the start" to {
+                TopSites.moveToStart(pid, tile)
+                home.refreshTiles()
             }
         }
+        actions += "Remove" to {
+            // Also kept out of the most visited sites, or it would come straight back.
+            val before = TopSites.pinned(pid)
+            val wasHidden = tile.key in prefs.hiddenTiles
+            if (tile.pinned) TopSites.unpin(pid, tile)
+            prefs.hiddenTiles = prefs.hiddenTiles + tile.key
+            home.refreshTiles()
+            snack("Removed ${tile.label}", "Undo") {
+                if (tile.pinned) TopSites.setPinned(pid, before)
+                if (!wasHidden) prefs.hiddenTiles = prefs.hiddenTiles - tile.key
+                home.refreshTiles()
+            }
+        }
+        MaterialAlertDialogBuilder(this)
+            .setTitle(tile.label)
+            .setItems(actions.map { it.first }.toTypedArray()) { _, which -> actions[which].second() }
+            .showImmersive()
+    }
+
+    /** Adds a shortcut ([old] null) or changes one; changed shortcuts stay where they are. */
+    private fun editTile(old: TopSites.Tile?) {
+        val pad = dp(20f).toInt()
+        val name = EditText(this).apply {
+            hint = "Name"
+            setSingleLine()
+            setText(old?.label.orEmpty())
+        }
+        val address = EditText(this).apply {
+            hint = "Address, e.g. youtube.com"
+            setSingleLine()
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_URI
+            setText(old?.url ?: current?.url?.takeIf { UrlUtils.isHttp(it) }.orEmpty())
+        }
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(pad, dp(8f).toInt(), pad, 0)
+            addView(name)
+            addView(address)
+        }
+        MaterialAlertDialogBuilder(this)
+            .setTitle(if (old == null) "Add a shortcut" else "Edit shortcut")
+            .setView(box)
+            .setPositiveButton(if (old == null) "Add" else "Save") { _, _ ->
+                val url = UrlUtils.toUrlOrSearch(address.text.toString())
+                if (!UrlUtils.isHttp(url) || UrlUtils.searchQuery(url) != null && !address.text.contains('.')) {
+                    snack("That isn't a web address")
+                    return@setPositiveButton
+                }
+                val pid = Profiles.currentId
+                if (old == null) TopSites.addPinned(pid, url, name.text.toString().trim())
+                else TopSites.editPinned(pid, old, url, name.text.toString().trim())
+                home.refreshTiles()
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .showImmersive()
     }
 
     private fun updateHome(tab: Tab) {
@@ -759,6 +831,19 @@ class MainActivity : AppCompatActivity(), BrowserUi {
                 current?.session?.let { if (it.isOpen) it.setActive(true) }
             }
         }
+    }
+
+    /** Holding the tab button: the quick things to do with tabs. */
+    private fun tabButtonMenu() {
+        val tab = current ?: return
+        val actions = ArrayList<Pair<String, () -> Unit>>()
+        actions += "New tab" to { TabManager.newTab(incognito = false) }
+        actions += "New incognito tab" to { TabManager.newTab(incognito = true) }
+        actions += (if (tab.incognito) "Close this incognito tab" else "Close this tab") to { TabManager.close(tab, undoable = true) }
+        actions += "Recent tabs" to { Sheets.recentlyClosed(this) }
+        MaterialAlertDialogBuilder(this)
+            .setItems(actions.map { it.first }.toTypedArray()) { _, which -> actions[which].second() }
+            .showImmersive()
     }
 
     fun openTabSwitcher() {
@@ -1002,15 +1087,47 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         session.contentDelegate = object : GeckoSession.ContentDelegate {
             override fun onCloseRequest(s: GeckoSession) = sheet.dismiss()
         }
-        sheet.show()
+        sheet.showImmersive()
     }
 
     // ------------------------------------------------------------------ toolbar that hides while scrolling
 
+    /**
+     * The address bar at the top (the page moves down under it) or at the bottom (it covers the
+     * bottom of the page, which the engine leaves free; the page itself never moves).
+     */
+    private fun applyToolbarPosition() {
+        bottomBar = prefs.toolbarAtBottom
+        val gravity = if (bottomBar) android.view.Gravity.BOTTOM else android.view.Gravity.TOP
+        (appBar.layoutParams as FrameLayout.LayoutParams).gravity = gravity
+        appBar.layoutParams = appBar.layoutParams
+        val edge = if (bottomBar) android.view.Gravity.TOP else android.view.Gravity.BOTTOM
+        for (id in intArrayOf(R.id.toolbar_divider, R.id.progress)) {
+            val v = findViewById<View>(id)
+            (v.layoutParams as FrameLayout.LayoutParams).gravity = edge
+            v.layoutParams = v.layoutParams
+        }
+        // Views that fill the page area leave the toolbar's room at its end of the screen.
+        for (v in listOf<View>(home, crashView, pageCover, findViewById(R.id.swipe_peek), suggestionsList)) {
+            val lp = v.layoutParams as FrameLayout.LayoutParams
+            lp.topMargin = if (bottomBar) 0 else toolbarPx
+            lp.bottomMargin = if (bottomBar) toolbarPx else 0
+            v.layoutParams = lp
+        }
+        // With the bar below, the best suggestion is the one next to it.
+        (suggestionsList.layoutManager as? LinearLayoutManager)?.reverseLayout = bottomBar
+        applyToolbarShown(toolbarShown)
+    }
+
     private fun applyToolbarShown(shown: Float) {
         toolbarShown = shown
-        appBar.translationY = shown - toolbarPx
-        gestureLayer.translationY = shown
+        if (bottomBar) {
+            appBar.translationY = toolbarPx - shown
+            gestureLayer.translationY = 0f
+        } else {
+            appBar.translationY = shown - toolbarPx
+            gestureLayer.translationY = shown
+        }
         // The engine lays pages out for a fully shown toolbar (see setDynamicToolbarMaxHeight); a
         // negative clipping moves elements fixed to the bottom of the screen down by the hidden part.
         gecko.setVerticalClipping((shown - toolbarPx).roundToInt())
@@ -1029,10 +1146,12 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         if (fullscreenTab != null) return
         val target = if (show) toolbarPx.toFloat() else 0f
         if (toolbarWanted == show && toolbarShown == target) return
+        settleAnim?.cancel()
         toolbarWanted = show
         applyToolbarShown(target)
         val now = SystemClock.uptimeMillis()
-        expectedShift = if (show) toolbarPx.toFloat() else -toolbarPx.toFloat()
+        // Only a toolbar at the top moves the page, which the engine then makes up for.
+        expectedShift = if (bottomBar) 0f else if (show) toolbarPx.toFloat() else -toolbarPx.toFloat()
         shiftExpectedUntil = now + 1000
         toolbarToggledAt = now
         scrollRun = 0f
@@ -1050,6 +1169,15 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         if (byUser) lastUserScrollAt = SystemClock.uptimeMillis()
         val last = lastScrollY
         lastScrollY = scrollY
+        if (followsFinger()) {
+            // Back at the top after a fling upwards (not the engine making up for the toolbar's own move).
+            if (!toolbarWanted && scrollY <= toolbarPx / 2f && last >= 0f && scrollY < last && !gestureLayer.fingerDown &&
+                settleAnim == null && SystemClock.uptimeMillis() - lastToolbarMoveAt > 400
+            ) {
+                settleToolbar(true)
+            }
+            return
+        }
         if (!toolbarWanted && (scrollY <= toolbarPx / 2f || !canAutoHideToolbar())) {
             // Back at the top of the page (or hiding isn't wanted now): show the toolbar.
             scrollRun = 0f
@@ -1082,6 +1210,62 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         }
     }
 
+    private fun followsFinger() = prefs.toolbarFollowsScroll
+
+    /**
+     * Chrome-like: the toolbar slides by exactly as much as the finger moves the page, and only
+     * while the page itself scrolls. It is never left half-way: see [onFingerUp].
+     */
+    private fun onFingerMove(dy: Float) {
+        if (!followsFinger() || !canAutoHideToolbar() || !gecko.touchScrollsPage()) return
+        // Only once the page is really scrolling, not while the finger is still deciding.
+        if (SystemClock.uptimeMillis() - lastUserScrollAt > 300) return
+        val target = (toolbarShown + dy).coerceIn(0f, toolbarPx.toFloat())
+        if (target == toolbarShown) return
+        settleAnim?.cancel()
+        settleAnim = null
+        fingerDirection = if (dy < 0) -1 else 1
+        moveToolbar(target)
+    }
+
+    /** The finger let go half-way: the toolbar finishes the way it was going. */
+    private fun onFingerUp() {
+        if (!followsFinger() || toolbarShown <= 0f || toolbarShown >= toolbarPx) return
+        settleToolbar(fingerDirection > 0)
+    }
+
+    private var lastToolbarMoveAt = 0L
+
+    private fun moveToolbar(shown: Float) {
+        lastToolbarMoveAt = SystemClock.uptimeMillis()
+        val wasShown = toolbarWanted
+        toolbarWanted = shown > 0f
+        applyToolbarShown(shown)
+        if (toolbarWanted && !wasShown && toolbarStale) refreshToolbarNow()
+    }
+
+    /** A short, straight slide to fully shown or fully hidden. */
+    private fun settleToolbar(show: Boolean) {
+        val target = if (show) toolbarPx.toFloat() else 0f
+        settleAnim?.cancel()
+        if (toolbarShown == target) {
+            settleAnim = null
+            return
+        }
+        val distance = abs(target - toolbarShown) / toolbarPx
+        settleAnim = ValueAnimator.ofFloat(toolbarShown, target).apply {
+            duration = (140 * distance).toLong().coerceAtLeast(50)
+            interpolator = LinearInterpolator()
+            addUpdateListener { moveToolbar(it.animatedValue as Float) }
+            addListener(object : android.animation.AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: android.animation.Animator) {
+                    if (settleAnim === animation) settleAnim = null
+                }
+            })
+            start()
+        }
+    }
+
     override fun onToolbarRequest(tab: Tab, show: Boolean) {
         if (tab !== current) return
         if (show) showToolbar() else if (canAutoHideToolbar()) hideToolbar()
@@ -1093,6 +1277,10 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
     private fun setupPullToRefresh() {
         gestureLayer.page = gecko
+        gestureLayer.fingerListener = object : GestureFrameLayout.FingerListener {
+            override fun onFingerMove(dy: Float) = this@MainActivity.onFingerMove(dy)
+            override fun onFingerUp() = this@MainActivity.onFingerUp()
+        }
         gestureLayer.pullListener = object : GestureFrameLayout.PullListener {
             override fun canPull(): Boolean {
                 val tab = current ?: return false
@@ -1127,7 +1315,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     private fun pullOffset(distance: Float) = (distance * 0.5f).coerceAtMost(dp(110f))
 
     /** Circle tucked under the bottom edge of the toolbar. */
-    private fun ptrHiddenY() = toolbarPx - dp(16f) - dp(40f)
+    private fun ptrHiddenY() = (if (bottomBar) 0 else toolbarPx) - dp(16f) - dp(40f)
 
     private fun startPullRefresh() {
         val tab = current ?: return hidePullIndicator()
@@ -1252,7 +1440,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
                 }
             }
             .setNegativeButton("Stay here", null)
-            .show()
+            .showImmersive()
     }
 
     // ------------------------------------------------------------------ downloads
@@ -1289,7 +1477,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
                     }
                 }
             }
-            .show()
+            .showImmersive()
     }
 
     /** Asks for storage access once; downloads go to the app's own folder if refused. */
@@ -1370,7 +1558,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         MaterialAlertDialogBuilder(this)
             .setTitle(title)
             .setItems(actions.map { it.first }.toTypedArray()) { _, which -> actions[which].second() }
-            .show()
+            .showImmersive()
     }
 
     fun copy(text: String) {
@@ -1668,6 +1856,15 @@ class MainActivity : AppCompatActivity(), BrowserUi {
                 if (tab !== current && tab in TabManager.tabs) TabManager.select(tab)
             }
 
+            override fun onVerticalSwipe(towardPage: Boolean): Boolean {
+                // Pulling the address bar towards the page opens the tab grid, as in Chrome.
+                if (!towardPage || switcher.isOpen) return false
+                openTabSwitcher()
+                return true
+            }
+
+            override fun isBarAtBottom() = bottomBar
+
             override fun backgroundOf(tab: Tab): Int =
                 color(if (tab.incognito) R.color.incognito_bg else if (tab.isHome) R.color.home_bg else R.color.page_bg)
         }
@@ -1712,7 +1909,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
                 }
             }
             .setNegativeButton("Later", null)
-            .show()
+            .showImmersive()
     }
 
     private val updateDownloadListener: () -> Unit = {
@@ -1783,6 +1980,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     fun snack(text: String, action: String? = null, long: Boolean = false, onAction: (() -> Unit)? = null) {
         val bar = Snackbar.make(root, text, if (long) 8000 else if (action != null) 4000 else Snackbar.LENGTH_SHORT)
         if (action != null && onAction != null) bar.setAction(action) { onAction() }
+        if (bottomBar && appBar.visibility == View.VISIBLE && toolbarShown > 0f) bar.anchorView = appBar
         bar.show()
     }
 
@@ -1821,7 +2019,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
                 Crash.clear(this)
             }
             .setNegativeButton("Dismiss") { _, _ -> Crash.clear(this) }
-            .show()
+            .showImmersive()
         L.d("Showed crash report")
     }
 
@@ -1844,7 +2042,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             .setMessage(text)
             .setPositiveButton("OK", null)
             .setNeutralButton("Send report") { _, _ -> shareProblemReport() }
-            .show()
+            .showImmersive()
     }
 
     /** The problem report with this run's settings; see Diagnostics. */

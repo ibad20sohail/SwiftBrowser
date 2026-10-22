@@ -12,13 +12,12 @@ data class Suggestion(val kind: Kind, val title: String, val url: String) {
     enum class Kind { GO, SEARCH, BOOKMARK, HISTORY }
 }
 
-/** Address bar suggestions: Google's suggest service plus the profile's bookmarks and history. */
+/** Address bar suggestions: the search engine's suggest service plus the profile's bookmarks and history. */
 object Suggestions {
     /** Blocking; call from a background thread. */
-    fun google(query: String): List<String> {
+    fun fromEngine(query: String): List<String> {
         if (query.isBlank()) return emptyList()
-        val url = "https://suggestqueries.google.com/complete/search?client=firefox&ie=utf-8&oe=utf-8&q=" +
-            URLEncoder.encode(query, "UTF-8")
+        val url = com.swiftbrowser.core.SearchEngine.current.suggestUrl(query)
         return try {
             val request = WebRequest.Builder(url).method("GET").build()
             val response = Engine.executor.fetch(request, GeckoWebExecutor.FETCH_FLAGS_ANONYMOUS).poll(5000)

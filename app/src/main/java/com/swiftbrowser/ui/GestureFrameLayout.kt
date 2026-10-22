@@ -37,6 +37,12 @@ class GestureFrameLayout @JvmOverloads constructor(
         fun onEdgeSwipeEnd(fromLeft: Boolean, distance: Float)
     }
 
+    /** Every finger movement over the page (screen pixels, down is positive), for the toolbar. */
+    interface FingerListener {
+        fun onFingerMove(dy: Float)
+        fun onFingerUp()
+    }
+
     interface PullListener {
         /** Whether a pull may start now (page at the top, toolbar shown, ...). */
         fun canPull(): Boolean
@@ -51,6 +57,12 @@ class GestureFrameLayout @JvmOverloads constructor(
     private var tapGestures = false
     var listener: Listener? = null
     var pullListener: PullListener? = null
+    var fingerListener: FingerListener? = null
+    private var fingerActive = false
+    private var fingerLastY = 0f
+
+    /** A finger is on the page now. */
+    val fingerDown: Boolean get() = fingerActive
     var edgeListener: EdgeListener? = null
     var page: SwiftGeckoView? = null
 
@@ -84,6 +96,7 @@ class GestureFrameLayout @JvmOverloads constructor(
 
     override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
         if (videoMode) return interceptVideoGesture(ev)
+        trackFinger(ev)
         if (interceptEdge(ev)) return true
         return interceptPull(ev)
     }
@@ -108,6 +121,30 @@ class GestureFrameLayout @JvmOverloads constructor(
         return true
     }
 
+    /** Follows one finger in screen coordinates (this layout itself moves with the toolbar). */
+    private fun trackFinger(ev: MotionEvent) {
+        when (ev.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                fingerActive = true
+                fingerLastY = ev.rawY
+            }
+            MotionEvent.ACTION_MOVE -> {
+                if (!fingerActive || ev.pointerCount > 1) return
+                val dy = ev.rawY - fingerLastY
+                fingerLastY = ev.rawY
+                if (dy != 0f) fingerListener?.onFingerMove(dy)
+            }
+            MotionEvent.ACTION_POINTER_DOWN -> endFinger()
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> endFinger()
+        }
+    }
+
+    private fun endFinger() {
+        if (!fingerActive) return
+        fingerActive = false
+        fingerListener?.onFingerUp()
+    }
+
     // ------------------------------------------------------------------ swipe from the edges
 
     private fun interceptEdge(ev: MotionEvent): Boolean {
@@ -130,6 +167,7 @@ class GestureFrameLayout @JvmOverloads constructor(
                 } else if (inward > slop && inward > dy * 1.5f) {
                     edgeCandidate = false
                     edgeDragging = true
+                    endFinger()
                     parent?.requestDisallowInterceptTouchEvent(true)
                     return true
                 }
@@ -180,6 +218,7 @@ class GestureFrameLayout @JvmOverloads constructor(
                         !p.touchAnswered -> Unit
                         !p.touchAllowsPullToRefresh() -> pullCandidate = false
                         else -> {
+                            endFinger()
                             pulling = true
                             pullStartY = ev.y
                             parent?.requestDisallowInterceptTouchEvent(true)

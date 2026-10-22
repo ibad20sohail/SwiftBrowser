@@ -60,7 +60,7 @@ class Prompts : PromptDelegate {
         dialog.setOnDismissListener {
             if (!prompt.isComplete) result.complete(prompt.dismiss())
         }
-        dialog.show()
+        dialog.showImmersive()
         return result
     }
 
@@ -257,7 +257,7 @@ class Prompts : PromptDelegate {
                         )
                     }, cal.get(Calendar.HOUR_OF_DAY), cal.get(Calendar.MINUTE), true)
                     tp.setOnCancelListener { if (!prompt.isComplete) result.complete(prompt.dismiss()) }
-                    tp.show()
+                    tp.showImmersive()
                 }
                 else -> result.complete(prompt.confirm(String.format(Locale.US, "%04d-%02d-%02d", y, m + 1, d)))
             }
@@ -267,12 +267,12 @@ class Prompts : PromptDelegate {
                 result.complete(prompt.confirm(String.format(Locale.US, "%02d:%02d", h, min)))
             }, cal.get(Calendar.HOUR_OF_DAY), cal.get(Calendar.MINUTE), true)
             tp.setOnCancelListener { result.complete(prompt.dismiss()) }
-            tp.show()
+            tp.showImmersive()
         } else {
             val dp = DatePickerDialog(ctx, { _, y, m, d -> finishDate(y, m, d) },
                 cal.get(Calendar.YEAR), cal.get(Calendar.MONTH), cal.get(Calendar.DAY_OF_MONTH))
             dp.setOnCancelListener { result.complete(prompt.dismiss()) }
-            dp.show()
+            dp.showImmersive()
         }
         return result
     }
@@ -383,7 +383,7 @@ class Prompts : PromptDelegate {
             .setNegativeButton("Block") { _, _ -> answer(ContentPermission.VALUE_DENY) }
             .create()
         dialog.setOnDismissListener { answer(ContentPermission.VALUE_DENY) }
-        dialog.show()
+        dialog.showImmersive()
         return result
     }
 

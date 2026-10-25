@@ -174,6 +174,70 @@
     send({ type: 'icon', href: best, page: location.href });
   }
 
+  // ---------------------------------------------------------------- keep playing in the background
+
+  // With "Keep playing in the background" on, a page that is playing a video or music is not told
+  // that it went out of view (another tab, another app, the screen off): many players, YouTube's
+  // among them, pause themselves when that happens. Other pages are told as usual.
+  let keepPlaying = false;
+  let pretending = false;
+
+  function mediaPlaying() {
+    for (const m of document.querySelectorAll('video, audio')) {
+      if (!m.paused && !m.ended && m.readyState > 2) { return true; }
+    }
+    return false;
+  }
+
+  function lookChanged(look) {
+    keepPlaying = !!(look && look.keepPlaying === true);
+    if (!keepPlaying) { pretending = false; }
+  }
+
+  try {
+    browser.storage.local.get('look').then(r => lookChanged(r && r.look), () => { });
+    browser.storage.onChanged.addListener((changes, area) => {
+      if (area === 'local' && changes.look) { lookChanged(changes.look.newValue); }
+    });
+  } catch (e) { }
+
+  try {
+    const page = document.wrappedJSObject;
+    Object.defineProperty(page, 'hidden', {
+      configurable: true,
+      enumerable: true,
+      get: exportFunction(function () { return pretending ? false : document.hidden; }, window),
+    });
+    Object.defineProperty(page, 'visibilityState', {
+      configurable: true,
+      enumerable: true,
+      get: exportFunction(function () { return pretending ? 'visible' : document.visibilityState; }, window),
+    });
+  } catch (e) { }
+
+  // Capture phase on the window: before any of the page's own listeners.
+  window.addEventListener('visibilitychange', ev => {
+    if (ev.target !== document) { return; }
+    if (document.hidden) {
+      if (!keepPlaying || !mediaPlaying()) { return; }
+      pretending = true;
+    } else if (pretending) {
+      // Back on screen: the page never knew it was gone.
+      pretending = false;
+    } else {
+      return;
+    }
+    ev.stopImmediatePropagation();
+  }, true);
+
+  // The sleep timer can stop playback "at the end of this video"; any media that finishes says so.
+  document.addEventListener('ended', ev => {
+    const m = ev.target;
+    if (m && (m.tagName === 'VIDEO' || m.tagName === 'AUDIO') && Number.isFinite(m.duration) && m.duration > 20) {
+      send({ type: 'media-ended' });
+    }
+  }, true);
+
   // Capture phase on window: runs before the page's own click handlers.
   window.addEventListener('click', ev => {
     if (!ev.isTrusted) { return; }

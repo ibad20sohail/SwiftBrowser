@@ -230,6 +230,22 @@ object AdBlock {
         notifyListeners()
     }
 
+    /**
+     * Starts uBlock Origin's element picker on [tab]'s page: tap something (a leftover ad, a
+     * banner) and create a filter that hides it on that site from now on.
+     */
+    fun pickElement(tab: com.swiftbrowser.tabs.Tab): Boolean {
+        val p = port ?: return false
+        val extTabId = com.swiftbrowser.media.Helper.extensionTabId(tab) ?: return false
+        return try {
+            p.postMessage(JSONObject().put("type", "pick").put("tabId", extTabId))
+            true
+        } catch (e: Exception) {
+            L.w("uBO picker failed", e)
+            false
+        }
+    }
+
     /** Downloads newer versions of filter lists that are due, then rebuilds the filters. */
     fun updateFilterLists(): Boolean {
         val p = port ?: return false

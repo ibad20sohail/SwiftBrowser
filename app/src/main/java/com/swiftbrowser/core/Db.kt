@@ -410,6 +410,10 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 2) {
     }
 
     /** The most recently visited pages, for the home page shortcuts. */
+    /** When each address was last visited, in any profile (for clearing data of sites not visited for a while). */
+    fun lastVisits(): List<Pair<String, Long>> =
+        query("SELECT url, MAX(last_visit) FROM history GROUP BY url", null) { it.getString(0) to it.getLong(1) }
+
     fun recentVisits(profileId: Long, limit: Int): List<HistoryRow> =
         query(
             "SELECT id, url, title, last_visit, visits FROM history WHERE profile_id = ? ORDER BY last_visit DESC LIMIT $limit",

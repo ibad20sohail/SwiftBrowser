@@ -25,6 +25,9 @@ object DataSaver {
     private var applied: Boolean? = null
     var listener: ((Boolean) -> Unit)? = null
 
+    /** Told when the phone moves between Wi-Fi and mobile data (Settings, downloads waiting for Wi-Fi). */
+    val networkListeners = ArrayList<() -> Unit>()
+
     fun init(ctx: Context) {
         val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
         onMobileData = isMobile(cm.getNetworkCapabilities(cm.activeNetwork))
@@ -52,6 +55,7 @@ object DataSaver {
         if (mobile == onMobileData) return
         onMobileData = mobile
         apply()
+        networkListeners.toList().forEach { it() }
     }
 
     /** True while images are held back. */

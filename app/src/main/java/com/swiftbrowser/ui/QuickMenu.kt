@@ -39,7 +39,7 @@ import kotlin.math.abs
  * The ⋮ menu, sliding up from the bottom:
  *  - the page it is about, with the most used page actions as a row of icons,
  *  - four switches (Lite mode, dark mode, desktop site, full screen) that stay open when tapped,
- *  - the rest as pages of 4×2 buttons that are swiped sideways.
+ *  - the rest as two pages of 4×2 buttons that are swiped sideways.
  * Swiping the menu down (or tapping outside it) closes it. It is built once and lives in the
  * browser screen itself (a dialog would make a new window every time, which takes a moment on this
  * phone); opening it only updates what depends on the page.
@@ -90,6 +90,8 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
     private val speed: Item
     private val closeAll: Item
     private val addToGroup: Item
+    private val blockElement: Item
+    private val sleep: Item
 
     init {
         panel.orientation = LinearLayout.VERTICAL
@@ -166,6 +168,14 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
         closeAll = item(page2, R.drawable.ic_close, "Close all tabs") { confirmCloseAll(it) }
         addToGroup = item(page2, R.drawable.ic_layers, "Add to group") { Sheets.chooseGroup(a, it) }
         item(page2, R.drawable.ic_reopen, "Recent tabs") { Sheets.recentlyClosed(a) }
+        blockElement = item(page2, R.drawable.ic_block, "Block element") { tab ->
+            if (AdBlock.pickElement(tab)) {
+                a.snack("Tap what you want gone, then Create. It stays hidden on this site.", long = true)
+            } else {
+                a.snack("The ad blocker isn't ready on this page yet. Try again in a moment.")
+            }
+        }
+        sleep = item(page2, R.drawable.ic_timer, "Sleep timer") { Sheets.sleepTimer(a) }
         pager.addPage(page1)
         pager.addPage(page2)
         // A last row with fewer buttons keeps them in their columns.
@@ -284,6 +294,9 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
         speed.set(R.drawable.ic_speed, "Speed ${a.formatSpeed(tab.speed)}")
         closeAll.set(R.drawable.ic_close, if (tab.incognito) "Close incognito" else "Close all tabs")
         addToGroup.set(R.drawable.ic_layers, if (tab.groupId != null) "Move to group" else "Add to group")
+        blockElement.set(R.drawable.ic_block, "Block element", enabled = http && page && AdBlock.global != AdLevel.OFF)
+        val timer = com.swiftbrowser.media.SleepTimer.label()
+        sleep.set(R.drawable.ic_timer, timer ?: "Sleep timer", active = timer != null)
     }
 
     private fun toggleBookmark(tab: Tab) {

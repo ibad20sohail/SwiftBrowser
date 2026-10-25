@@ -43,6 +43,7 @@ import com.swiftbrowser.download.Downloads
 import com.swiftbrowser.engine.Engine
 import com.swiftbrowser.engine.GpuInfo
 import com.swiftbrowser.media.PlaybackService
+import com.swiftbrowser.media.SleepTimer
 import com.swiftbrowser.tabs.TabManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -65,7 +66,8 @@ class SettingsActivity : AppCompatActivity() {
         ADBLOCK("Ad blocking", R.drawable.ic_shield),
         SPEED("Speed & memory", R.drawable.ic_speed),
         VIDEO("Video & downloads", R.drawable.ic_movie),
-        PRIVACY("Privacy & storage", R.drawable.ic_storage),
+        PRIVACY("Privacy & backup", R.drawable.ic_lock),
+        STORAGE("Storage", R.drawable.ic_storage),
         ABOUT("About Swift", R.drawable.ic_info),
     }
 
@@ -81,8 +83,9 @@ class SettingsActivity : AppCompatActivity() {
     private val refreshers = ArrayList<() -> Unit>()
     private val resultRefreshers = ArrayList<() -> Unit>()
 
-    private var cacheBytes = 0L
-    private var dataBytes = -1L
+    /** What Swift keeps on the phone; null until measured. */
+    private var usage: com.swiftbrowser.core.Storage.Usage? = null
+    private val networkChanged: () -> Unit = { refreshAll() }
 
     private val defs: List<Def> by lazy { buildDefs() }
 
@@ -118,6 +121,13 @@ class SettingsActivity : AppCompatActivity() {
         super.onResume()
         computeStorage()
         refreshAll()
+        // Data saver says whether the phone is on mobile data right now.
+        DataSaver.networkListeners += networkChanged
+    }
+
+    override fun onPause() {
+        DataSaver.networkListeners -= networkChanged
+        super.onPause()
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -336,11 +346,16 @@ class SettingsActivity : AppCompatActivity() {
             if (prefs.maxLiveTabs == 1) "1 tab kept loaded" else "${prefs.maxLiveTabs} tabs kept loaded",
         ).joinToString(" · ")
         Topic.VIDEO -> listOfNotNull(
-            if (prefs.backgroundPlay) "Background play" else null,
+            if (prefs.keepPlaying) "Keeps playing in the background" else null,
             if (prefs.continueWatching) "Continue watching" else null,
             if (prefs.videoTaps) "Double-tap to skip" else null,
         ).joinToString(" · ").ifEmpty { "Players and downloads" }
-        Topic.PRIVACY -> if (dataBytes < 0) "Clear history and data" else "Cache ${UrlUtils.formatBytes(cacheBytes)} · Clear history and data"
+        Topic.PRIVACY -> listOfNotNull(
+            if (prefs.httpsOnly) "Secure connections first" else null,
+            "Clear history and data",
+            "Back up",
+        ).joinToString(" · ")
+        Topic.STORAGE -> usage?.let { "Swift uses ${UrlUtils.formatBytes(it.total)} · cache ${UrlUtils.formatBytes(it.cache)}" } ?: "Calculating…"
         Topic.ABOUT -> "Swift ${BuildConfig.VERSION_NAME} · Updates · Problem report"
     }
 
@@ -374,8 +389,13 @@ class SettingsActivity : AppCompatActivity() {
             }
         }
         def(Topic.LOOK, "Toolbar", "Address bar at the bottom", "toolbar bottom one hand reach position") {
-            switch(R.drawable.ic_toolbar, "Address bar at the bottom", { "Easier to reach with one hand" }, checked = { prefs.toolbarAtBottom }) {
+            switch(R.drawable.ic_toolbar_bottom, "Address bar at the bottom", { "Easier to reach with one hand" }, checked = { prefs.toolbarAtBottom }) {
                 prefs.toolbarAtBottom = it
+            }
+        }
+        def(Topic.LOOK, "Toolbar", "Show home button", "house home page start") {
+            switch(R.drawable.ic_home, "Show home button", { "A house next to the address, for the home page" }, checked = { prefs.showHomeButton }) {
+                prefs.showHomeButton = it
             }
         }
         def(Topic.LOOK, "Toolbar", "Hide toolbar while scrolling", "address bar url bar top") {
@@ -393,6 +413,11 @@ class SettingsActivity : AppCompatActivity() {
                 enabled = { prefs.hideToolbarOnScroll },
                 checked = { prefs.toolbarFollowsScroll },
             ) { prefs.toolbarFollowsScroll = it }
+        }
+        def(Topic.LOOK, "Feel", "Light vibration", "haptic vibrate feedback touch") {
+            switch(R.drawable.ic_vibration, "Light vibration", { "A short buzz when you hold something or drag a tab" }, checked = { prefs.haptics }) {
+                prefs.haptics = it
+            }
         }
 
         // Browsing & tabs
@@ -416,6 +441,9 @@ class SettingsActivity : AppCompatActivity() {
         }
         def(Topic.BROWSING, "Tabs", "Inactive tabs", "old tabs archive unused") {
             action(R.drawable.ic_history, "Inactive tabs", { inactiveText(prefs.inactiveDays) }) { chooseInactiveDays() }
+        }
+        def(Topic.BROWSING, "Reader view", "Reader view text", "font serif spacing lines reading") {
+            action(R.drawable.ic_font, "Reader view text", { readerText() }) { Sheets.readerStyle(this@SettingsActivity) { refreshAll() } }
         }
 
         // Ad blocking
@@ -503,11 +531,23 @@ class SettingsActivity : AppCompatActivity() {
         }
 
         // Video & downloads
-        def(Topic.VIDEO, "Playing", "Background play", "music audio screen off notification") {
-            switch(R.drawable.ic_headphones, "Background play", { "Keeps playing with Swift closed or the screen off" }, checked = { prefs.backgroundPlay }) {
-                prefs.backgroundPlay = it
-                TabManager.applyBackgroundPlay(it)
+        def(Topic.VIDEO, "Playing", "Keep playing in the background", "background play music audio screen off notification switch tabs") {
+            switch(
+                R.drawable.ic_headphones, "Keep playing in the background",
+                { if (prefs.keepPlaying) "Music and videos go on in other tabs, other apps and with the screen off" else "Off: they pause when you leave their tab" },
+                details = "On: a song or video keeps playing when you switch tabs, open another app or turn the screen off, " +
+                    "with play and pause in the notifications. Sites that pause themselves when you leave them (like YouTube) " +
+                    "keep playing too. One tab plays at a time.\n\nOff: it pauses as soon as its tab is out of view.",
+                checked = { prefs.keepPlaying },
+            ) {
+                prefs.keepPlaying = it
+                TabManager.applyKeepPlaying(it)
                 PlaybackService.sync(this@SettingsActivity)
+            }
+        }
+        def(Topic.VIDEO, "Playing", "Sleep timer", "stop music video sleep night minutes") {
+            action(R.drawable.ic_timer, "Sleep timer", { SleepTimer.label() ?: "Off. Also in the ⋮ menu and the playback notification." }) {
+                Sheets.sleepTimer(this@SettingsActivity) { refreshAll() }
             }
         }
         def(Topic.VIDEO, "Playing", "Continue watching", "resume position film movie episode") {
@@ -545,6 +585,16 @@ class SettingsActivity : AppCompatActivity() {
                 prefs.confirmDownloads = it
             }
         }
+        def(Topic.VIDEO, "Downloads", "Big downloads wait for Wi-Fi", "mobile data cellular wifi only") {
+            switch(
+                R.drawable.ic_wifi, "Big downloads wait for Wi-Fi",
+                { if (prefs.wifiOnlyDownloads) "Files over 50 MB start when you're on Wi-Fi" else "Downloads start on mobile data too" },
+                checked = { prefs.wifiOnlyDownloads },
+            ) {
+                prefs.wifiOnlyDownloads = it
+                Downloads.onNetworkChanged()
+            }
+        }
         def(Topic.VIDEO, "Downloads", "Download folder", "storage location where save sd card") {
             action(R.drawable.ic_folder, "Download folder", { Downloads.describe(Downloads.directory()) }) { chooseDownloadFolder() }
         }
@@ -553,8 +603,30 @@ class SettingsActivity : AppCompatActivity() {
         def(Topic.PRIVACY, null, "Clear browsing data", "history cookies cache delete") {
             action(R.drawable.ic_delete, "Clear browsing data", { "History, cookies and cached files of ${Profiles.current().name}" }) { clearData() }
         }
-        def(Topic.PRIVACY, null, "Storage used", "space cache size") {
-            action(R.drawable.ic_storage, "Storage used", { storageText() }) { clearCache() }
+        def(Topic.PRIVACY, null, "Secure connections first", "secure https only encrypted insecure http") {
+            switch(
+                R.drawable.ic_lock, "Secure connections first",
+                { if (prefs.httpsOnly) "Every site's secure version, when it has one" else "Off: sites open the way the link says" },
+                details = "Pages load over a secure (https) connection whenever the site has one, even from an old " +
+                    "\"http\" link, so nobody on the network can read or change them. A site without a secure version " +
+                    "still opens, and Swift tells you it isn't secure.",
+                checked = { prefs.httpsOnly },
+            ) {
+                prefs.httpsOnly = it
+                Engine.applyPrivacyPrefs()
+            }
+        }
+        def(Topic.PRIVACY, null, "Reject cookie banners", "cookies consent gdpr reject banner") {
+            switch(
+                R.drawable.ic_cookie, "Reject cookie banners",
+                { "Firefox answers \"Reject\" for you on sites it knows" },
+                details = "Firefox knows the cookie banners of many big sites and answers them with \"Reject\", so they " +
+                    "neither show nor get your consent. On other sites, \"Hide cookie pop-ups\" (Ad blocking) hides them.",
+                checked = { prefs.rejectCookieBanners },
+            ) {
+                prefs.rejectCookieBanners = it
+                Engine.applyPrivacyPrefs()
+            }
         }
         def(Topic.PRIVACY, "Sites", "Site settings", "desktop location sound permissions per site") {
             action(R.drawable.ic_tune, "Site settings", { siteSettingsText() }) { chooseSite() }
@@ -566,6 +638,20 @@ class SettingsActivity : AppCompatActivity() {
             action(R.drawable.ic_update, "Restore from a backup", { "Adds a backup's contents to this phone, then restarts Swift" }) {
                 chooseBackup()
             }
+        }
+
+        // Storage
+        def(Topic.STORAGE, null, "Storage used", "space size phone memory") {
+            custom(storageBreakdown(refresh))
+        }
+        def(Topic.STORAGE, "Free up space", "Clear the cache", "cache files space") {
+            action(R.drawable.ic_delete, "Clear the cache", { usage?.let { "${UrlUtils.formatBytes(it.cache)} of files sites reuse" } }) { clearCache() }
+        }
+        def(Topic.STORAGE, "Free up space", "Data sites stored", "site storage sites space clear") {
+            action(R.drawable.ic_globe, "Data sites stored", { usage?.let { "${UrlUtils.formatBytes(it.sites)} · see and clear each site" } }) { showSiteStorage() }
+        }
+        def(Topic.STORAGE, "Free up space", "Clear sites you don't visit", "old unused sites 30 days") {
+            action(R.drawable.ic_history, "Clear sites you don't visit", { "Everything of sites not visited for 30 days" }) { clearUnusedSites() }
         }
 
         // About
@@ -1131,40 +1217,160 @@ class SettingsActivity : AppCompatActivity() {
         MaterialAlertDialogBuilder(this)
             .setTitle("Free up space?")
             .setMessage(
-                "Cached images and files (${UrlUtils.formatBytes(cacheBytes)}) are deleted. " +
+                "Cached images and files (${UrlUtils.formatBytes(usage?.cache ?: 0)}) are deleted. " +
                     "Pages load from the network again; logins and settings stay.",
             )
             .setPositiveButton("Clear cache") { _, _ ->
                 Engine.runtime.storageController.clearData(StorageController.ClearFlags.ALL_CACHES)
+                remeasureSoon()
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .showImmersive()
+    }
+
+    private fun computeStorage() {
+        lifecycleScope.launch {
+            usage = withContext(Dispatchers.IO) { com.swiftbrowser.core.Storage.measure(this@SettingsActivity) }
+            refreshAll()
+        }
+    }
+
+    /** Measures again a moment after the engine was asked to delete something. */
+    private fun remeasureSoon() {
+        lifecycleScope.launch {
+            delay(1500)
+            computeStorage()
+        }
+    }
+
+    /** A bar of what Swift keeps on the phone, with each part and its size below it. */
+    private fun storageBreakdown(refresh: MutableList<() -> Unit>): View {
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(16), dp(16), dp(12))
+        }
+        val total = TextView(this).apply {
+            textSize = 22f
+            setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL))
+            setTextColor(color(R.color.text_primary))
+        }
+        box.addView(total)
+        val bar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            background = GradientDrawable().apply {
+                cornerRadius = dp(5).toFloat()
+                setColor(color(R.color.surface_alt))
+            }
+            clipToOutline = true
+        }
+        box.addView(bar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(10)).apply {
+            topMargin = dp(10)
+            bottomMargin = dp(6)
+        })
+        val rows = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        box.addView(rows)
+        box.addView(TextView(this).apply {
+            text = "The app is mostly the Firefox engine and can't get smaller. The ad-block lists stay so blocking is fast."
+            textSize = 12.5f
+            setTextColor(color(R.color.text_secondary))
+            setPadding(0, dp(10), 0, 0)
+        })
+        val colors = intArrayOf(R.color.group_blue, R.color.group_red, R.color.group_green, R.color.group_yellow, R.color.group_purple, R.color.group_grey)
+        val update = {
+            val u = usage
+            total.text = if (u == null) "Calculating…" else "Swift uses ${UrlUtils.formatBytes(u.total)}"
+            bar.removeAllViews()
+            rows.removeAllViews()
+            if (u != null) {
+                val parts = listOf(
+                    "The app" to u.app, "Ad-block lists" to u.adBlock, "Data sites stored" to u.sites,
+                    "Cache" to u.cache, "Engine data" to u.engine, "Tabs, history and pictures" to u.swift,
+                )
+                parts.forEachIndexed { i, (label, bytes) ->
+                    val c = color(colors[i])
+                    if (bytes > 0 && u.total > 0) {
+                        bar.addView(View(this).apply { setBackgroundColor(c) }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, bytes.toFloat() / u.total))
+                    }
+                    rows.addView(LinearLayout(this).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        gravity = Gravity.CENTER_VERTICAL
+                        setPadding(0, dp(5), 0, dp(5))
+                        addView(View(this@SettingsActivity).apply {
+                            background = GradientDrawable().apply {
+                                shape = GradientDrawable.OVAL
+                                setColor(c)
+                            }
+                        }, LinearLayout.LayoutParams(dp(10), dp(10)).apply { marginEnd = dp(12) })
+                        addView(TextView(this@SettingsActivity).apply {
+                            text = label
+                            textSize = 14.5f
+                            setTextColor(color(R.color.text_primary))
+                        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                        addView(TextView(this@SettingsActivity).apply {
+                            text = UrlUtils.formatBytes(bytes)
+                            textSize = 14.5f
+                            setTextColor(color(R.color.text_secondary))
+                        })
+                    })
+                }
+            }
+        }
+        update()
+        refresh += update
+        return box
+    }
+
+    /** Sites that stored data, biggest first; tapping one clears it. */
+    private fun showSiteStorage() {
+        lifecycleScope.launch {
+            val sites = withContext(Dispatchers.IO) { com.swiftbrowser.core.Storage.sites(this@SettingsActivity) }
+            if (sites.isEmpty()) {
+                snack("No site has stored anything")
+                return@launch
+            }
+            val labels = sites.map { "${it.site} · ${UrlUtils.formatBytes(it.bytes)}" }.toTypedArray()
+            MaterialAlertDialogBuilder(this@SettingsActivity)
+                .setTitle("Data sites stored")
+                .setItems(labels) { _, which ->
+                    val site = sites[which]
+                    MaterialAlertDialogBuilder(this@SettingsActivity)
+                        .setTitle("Clear ${site.site}?")
+                        .setMessage("Its stored data and cached files (${UrlUtils.formatBytes(site.bytes)}) are deleted. You stay signed in.")
+                        .setPositiveButton("Clear") { _, _ ->
+                            com.swiftbrowser.core.Storage.clearSite(site.site)
+                            snack("Cleared ${site.site}")
+                            remeasureSoon()
+                        }
+                        .setNegativeButton(android.R.string.cancel, null)
+                        .showImmersive()
+                }
+                .setNegativeButton("Close", null)
+                .showImmersive()
+        }
+    }
+
+    private fun clearUnusedSites() {
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Clear sites you don't visit?")
+            .setMessage("Sites you haven't opened for 30 days lose everything they stored, cookies too: you're signed out of them. Sites open in a tab stay.")
+            .setPositiveButton("Clear") { _, _ ->
                 lifecycleScope.launch {
-                    delay(1500)
-                    computeStorage()
+                    val n = withContext(Dispatchers.IO) { com.swiftbrowser.core.Storage.clearUnused(this@SettingsActivity, 30) }
+                    snack(if (n == 0) "No unused sites found" else "Cleared $n ${if (n == 1) "site" else "sites"}")
+                    remeasureSoon()
                 }
             }
             .setNegativeButton(android.R.string.cancel, null)
             .showImmersive()
     }
 
-    private fun storageText(): String =
-        if (dataBytes < 0) "Calculating…"
-        else "Cache ${UrlUtils.formatBytes(cacheBytes)} · Sites and ad-block lists ${UrlUtils.formatBytes(dataBytes)}. Tap to clear the cache."
-
-    private fun computeStorage() {
-        lifecycleScope.launch {
-            val (cache, data) = withContext(Dispatchers.IO) {
-                sizeOf(cacheDir) to sizeOf(File(filesDir, "mozilla"))
+    private fun readerText() =
+        (if (prefs.readerFont == "sans") "Sans-serif" else "Serif") + " · " +
+            when (prefs.readerSpacing) {
+                0 -> "tight lines"
+                2 -> "loose lines"
+                else -> "normal lines"
             }
-            cacheBytes = cache
-            dataBytes = data
-            refreshAll()
-        }
-    }
-
-    private fun sizeOf(f: File): Long {
-        if (!f.exists()) return 0
-        if (f.isFile) return f.length()
-        return f.listFiles()?.sumOf { sizeOf(it) } ?: 0
-    }
 
     // ------------------------------------------------------------------ helpers
 

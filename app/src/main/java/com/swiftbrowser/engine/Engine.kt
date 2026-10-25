@@ -5,6 +5,7 @@ import android.content.Context
 import android.os.Process
 import androidx.core.content.edit
 import com.swiftbrowser.BuildConfig
+import com.swiftbrowser.SwiftApp
 import com.swiftbrowser.adblock.AdBlock
 import com.swiftbrowser.core.Diagnostics
 import com.swiftbrowser.core.L
@@ -32,7 +33,7 @@ object Engine {
      * Bump when tools/ublock-patch/swift-bridge.js changes: uBO keeps its upstream version number,
      * so GeckoView would otherwise keep the previously installed copy.
      */
-    private const val UBO_BRIDGE_REV = 5
+    private const val UBO_BRIDGE_REV = 6
 
     private const val BRANCH = GeckoPreferenceController.PREF_BRANCH_USER
 
@@ -54,6 +55,7 @@ object Engine {
         // Safe Browsing and tracking-protection lists, which cost CPU on every request and
         // over 10 MB of storage.
         removeSafeBrowsingData(app)
+        removeTempFiles(app)
         val startupConfig = writeStartupConfig()
         val contentBlocking = ContentBlocking.Settings.Builder()
             .antiTracking(ContentBlocking.AntiTracking.NONE)
@@ -100,9 +102,10 @@ object Engine {
      */
     private fun applyPerformancePrefs(prefs: Prefs) {
         val list = listOf<SetGeckoPreference<*>>(
-            // The web cache could otherwise grow to several hundred MB.
+            // The web cache could otherwise grow to several hundred MB. 20 MB keeps the pieces
+            // sites reuse on every page (scripts, styles, logos) without filling the phone.
             SetGeckoPreference.setBoolPref("browser.cache.disk.smart_size.enabled", false, BRANCH),
-            SetGeckoPreference.setIntPref("browser.cache.disk.capacity", 40 * 1024, BRANCH),
+            SetGeckoPreference.setIntPref("browser.cache.disk.capacity", 20 * 1024, BRANCH),
             // Keep one previous page ready for an instant Back; each kept page holds its memory.
             SetGeckoPreference.setIntPref("browser.sessionhistory.max_total_viewers", 1, BRANCH),
             // Decoded images held in memory per process: 48 MB is plenty for a 720p screen.
@@ -129,7 +132,7 @@ object Engine {
             SetGeckoPreference.setStringPref("gfx.webrender.debug.profiler-ui", DRAW_SPEED_UI, BRANCH),
             SetGeckoPreference.setBoolPref("gfx.webrender.debug.profiler", prefs.showDrawSpeed, BRANCH),
             SetGeckoPreference.setBoolPref("gfx.webrender.debug.gpu-time-queries", prefs.showDrawSpeed, BRANCH),
-        ) + lookPrefs(prefs.sitesAsDesigned)
+        ) + lookPrefs(prefs.sitesAsDesigned) + privacyPrefs(prefs)
         GeckoPreferenceController.setGeckoPrefs(list).accept({ result ->
             val failed = result?.filterValues { !it }?.keys.orEmpty()
             if (failed.isNotEmpty()) L.w("Engine prefs not set: $failed")
@@ -212,6 +215,28 @@ object Engine {
         "FPS,Frame CPU total,Renderer,GPU,Texture cache update,Shader build time,Rendered picture tiles,Draw calls,Color passes,Alpha passes"
 
     /** Shows or hides the drawing-speed meter on pages, immediately. GPU timing is measured only meanwhile. */
+    /**
+     * Secure connections first and Firefox's own answer to cookie banners (Settings → Privacy).
+     * HTTPS-First rather than HTTPS-only: sites without a secure version still open (Swift says so,
+     * see TabDelegates), as GeckoView has no way to let one such site through HTTPS-only mode.
+     */
+    private fun privacyPrefs(prefs: Prefs): List<SetGeckoPreference<*>> {
+        val banners = if (prefs.rejectCookieBanners) 1 else 0
+        return listOf(
+            SetGeckoPreference.setBoolPref("dom.security.https_only_mode", false, BRANCH),
+            SetGeckoPreference.setBoolPref("dom.security.https_only_mode_pbm", false, BRANCH),
+            SetGeckoPreference.setBoolPref("dom.security.https_first", prefs.httpsOnly, BRANCH),
+            SetGeckoPreference.setBoolPref("dom.security.https_first_pbm", prefs.httpsOnly, BRANCH),
+            // 1: click "Reject" (or hide the banner) where Firefox knows the site's banner.
+            SetGeckoPreference.setIntPref("cookiebanners.service.mode", banners, BRANCH),
+            SetGeckoPreference.setIntPref("cookiebanners.service.mode.privateBrowsing", banners, BRANCH),
+        )
+    }
+
+    fun applyPrivacyPrefs() {
+        GeckoPreferenceController.setGeckoPrefs(privacyPrefs(SwiftApp.prefs))
+    }
+
     fun setDrawSpeedMeter(enabled: Boolean) {
         GeckoPreferenceController.setGeckoPrefs(
             listOf(
@@ -222,6 +247,15 @@ object Engine {
     }
 
     /** Lists downloaded before updates were turned off (e.g. by version 1.0). Runs before the engine starts. */
+    /** Files the engine left in its temporary folder (it can hold several MB); nothing uses them before it starts. */
+    private fun removeTempFiles(app: Application) {
+        try {
+            File(app.cacheDir, "gecko_temp").listFiles()?.forEach { it.deleteRecursively() }
+        } catch (e: Exception) {
+            L.w("Could not remove temporary files", e)
+        }
+    }
+
     private fun removeSafeBrowsingData(app: Application) {
         try {
             File(app.filesDir, "mozilla").listFiles()?.forEach { profile ->

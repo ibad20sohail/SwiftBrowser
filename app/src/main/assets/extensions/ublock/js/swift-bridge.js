@@ -171,6 +171,14 @@ const onMessage = msg => {
             µb.scheduleAssetUpdater({ now: true, fetchDelay: 100, auto: true });
         });
         break;
+    case 'pick':
+        // "Block an element" in Swift's menu: uBO's element picker on the tab's page. What the
+        // user picks becomes one of "My filters", kept for that site.
+        if ( typeof msg.tabId === 'number' ) {
+            µb.epickerArgs.mouse = false;
+            µb.elementPickerExec(msg.tabId, 0, '', false);
+        }
+        break;
     default:
         break;
     }

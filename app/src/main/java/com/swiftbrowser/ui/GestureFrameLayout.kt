@@ -3,7 +3,7 @@ package com.swiftbrowser.ui
 import android.content.Context
 import android.os.SystemClock
 import android.util.AttributeSet
-import android.view.HapticFeedbackConstants
+
 import android.view.MotionEvent
 import android.view.ViewConfiguration
 import android.widget.FrameLayout
@@ -268,7 +268,7 @@ class GestureFrameLayout @JvmOverloads constructor(
         val cancel = MotionEvent.obtain(now, now, MotionEvent.ACTION_CANCEL, downX, downY, 0)
         for (i in 0 until childCount) getChildAt(i).dispatchTouchEvent(cancel)
         cancel.recycle()
-        performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+        Haptics.hold(this)
         listener?.onHold(true)
     }
 

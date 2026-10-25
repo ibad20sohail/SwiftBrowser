@@ -176,7 +176,11 @@ object Immersive {
             android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
         )
         d.show()
-        window.decorView.systemUiVisibility = flags or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
+        // A sheet reaches down to the screen's edge, where the hidden navigation bar would be.
+        val sheet = d is com.google.android.material.bottomsheet.BottomSheetDialog
+        if (sheet) window.addFlags(android.view.WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS)
+        val layout = if (sheet) View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN else 0
+        window.decorView.systemUiVisibility = flags or layout or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
             View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
         window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE)
     }
@@ -198,3 +202,49 @@ fun android.app.Dialog.showImmersive() = Immersive.show(this)
 
 fun com.google.android.material.dialog.MaterialAlertDialogBuilder.showImmersive(): androidx.appcompat.app.AlertDialog =
     create().also { Immersive.show(it) }
+
+/** Fills its box with the picture's top part (a page's top), cut to width, instead of its middle. */
+class TopCropImageView @JvmOverloads constructor(
+    context: Context, attrs: android.util.AttributeSet? = null,
+) : android.widget.ImageView(context, attrs) {
+    init {
+        scaleType = ScaleType.MATRIX
+    }
+
+    override fun setFrame(l: Int, t: Int, r: Int, b: Int): Boolean {
+        val changed = super.setFrame(l, t, r, b)
+        fit()
+        return changed
+    }
+
+    override fun setImageDrawable(drawable: android.graphics.drawable.Drawable?) {
+        super.setImageDrawable(drawable)
+        fit()
+    }
+
+    private fun fit() {
+        val d = drawable ?: return
+        val w = width - paddingLeft - paddingRight
+        val dw = d.intrinsicWidth
+        if (w <= 0 || dw <= 0) return
+        val h = height - paddingTop - paddingBottom
+        val scale = maxOf(w.toFloat() / dw, if (d.intrinsicHeight > 0) h.toFloat() / d.intrinsicHeight else 0f)
+        imageMatrix = android.graphics.Matrix().apply {
+            setScale(scale, scale)
+            postTranslate((w - dw * scale) / 2f, 0f)
+        }
+    }
+}
+
+/** The light vibration (Settings → Look & screen → Light vibration), whatever the phone's touch-vibration setting. */
+object Haptics {
+    fun hold(v: View) = buzz(v, android.view.HapticFeedbackConstants.LONG_PRESS)
+
+    fun tick(v: View) = buzz(v, android.view.HapticFeedbackConstants.VIRTUAL_KEY)
+
+    private fun buzz(v: View, kind: Int) {
+        if (!SwiftApp.prefs.haptics) return
+        @Suppress("DEPRECATION")
+        v.performHapticFeedback(kind, android.view.HapticFeedbackConstants.FLAG_IGNORE_GLOBAL_SETTING)
+    }
+}

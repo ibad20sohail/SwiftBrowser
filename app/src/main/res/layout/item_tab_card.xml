@@ -56,12 +56,11 @@
             android:layout_height="200dp"
             android:background="@color/tab_thumb_bg">
 
-            <ImageView
+            <com.swiftbrowser.ui.TopCropImageView
                 android:id="@+id/card_thumb"
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
-                android:importantForAccessibility="no"
-                android:scaleType="centerCrop" />
+                android:importantForAccessibility="no" />
 
             <ImageView
                 android:id="@+id/card_placeholder"

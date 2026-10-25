@@ -10,6 +10,21 @@ function applySize() {
   document.documentElement.style.setProperty('--size', size + 'px');
 }
 
+// Font and line spacing, chosen in the app (Settings → Browsing → Reader view text).
+const FONTS = { serif: 'Georgia, "Noto Serif", serif', sans: 'Roboto, "Noto Sans", sans-serif' };
+const LINES = ['1.45', '1.65', '1.9'];
+
+function applyStyle(look) {
+  const root = document.documentElement.style;
+  root.setProperty('--font', FONTS[look && look.readerFont] || FONTS.serif);
+  root.setProperty('--line', LINES[look && Number.isInteger(look.readerSpacing) ? look.readerSpacing : 1] || LINES[1]);
+}
+
+browser.storage.local.get('look').then(r => applyStyle(r && r.look), () => { });
+browser.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && changes.look) { applyStyle(changes.look.newValue); }
+});
+
 // The article comes from a web page: keep its text, pictures and links, nothing that runs.
 function clean(html) {
   const doc = new DOMParser().parseFromString(html, 'text/html');

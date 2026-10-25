@@ -28,7 +28,9 @@ body {
   margin: 0;
   color: var(--text);
   background: var(--bg);
-  font: var(--size)/1.65 Georgia, "Noto Serif", serif;
+  font-size: var(--size);
+  line-height: var(--line, 1.65);
+  font-family: var(--font, Georgia, "Noto Serif", serif);
   -webkit-text-size-adjust: none;
   text-size-adjust: none;
 }
@@ -92,3 +94,7 @@ article hr { border: 0; border-top: 1px solid var(--rule); }
 
 /* The paragraph being read aloud. */
 .reading { background: var(--reading); border-radius: 6px; box-shadow: 0 0 0 4px var(--reading); }
+
+/* The article comes in with a short fade. */
+#content, #title { animation: swift-in 220ms ease-out; }
+@keyframes swift-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }

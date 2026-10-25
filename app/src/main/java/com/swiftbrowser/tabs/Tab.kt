@@ -45,6 +45,12 @@ class Tab(
     /** The tab left the home page; Back on its first page returns there. */
     var leftHome = false
 
+    /** The home button shows the home page over the tab's page; Back (or opening something) leaves it. */
+    var homeShown = false
+
+    /** The screen shows the home page for this tab. */
+    val showsHome: Boolean get() = isHome || homeShown
+
     /** uBlock Origin's per-tab blocked-request count, as shown on its badge. */
     var badge: String? = null
     var uboAction: WebExtension.Action? = null
@@ -69,6 +75,9 @@ class Tab(
 
     var mediaSession: MediaSession? = null
     var playing = false
+
+    /** A video (not just sound) has played on the page since it loaded: the screen stays on while it plays. */
+    var videoPlaying = false
 
     val isBlank: Boolean get() = UrlUtils.isBlank(url)
 

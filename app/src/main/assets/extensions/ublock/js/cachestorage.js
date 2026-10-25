@@ -156,9 +156,23 @@ const cacheStorage = (( ) => {
                     promises.push(compress(serializedbin, key, rawbin[key]));
                 }
                 await Promise.all(promises);
+                // Swift: what the fast cache keeps (compiled lists, selfie) isn't
+                // stored a second time in extension storage, which saves about
+                // 25 MB on a phone. Without the fast cache, uBO rebuilds it.
+                const mirrored = fastCache === 'indexedDB'
+                    ? keys.filter(k => /^cache\/(compiled|selfie)\//.test(k))
+                    : [];
+                const rest = {};
+                for ( const key of keys ) {
+                    if ( mirrored.includes(key) ) { continue; }
+                    rest[key] = serializedbin[key];
+                }
                 await Promise.all([
                     cacheAPIs[fastCache].set(rawbin, serializedbin),
-                    extensionStorage.set(serializedbin),
+                    extensionStorage.set(rest),
+                    mirrored.length !== 0
+                        ? extensionStorage.remove(mirrored)
+                        : Promise.resolve(),
                 ]);
             } catch(reason) {
                 ubolog(reason);

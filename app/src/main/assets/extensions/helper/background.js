@@ -45,17 +45,26 @@ function onNative(msg) {
     post({ type: 'headers', id: msg.id, headers: referer ? { referer } : null });
   } else if (msg.type === 'look') {
     lookFromApp = true;
-    setLook(msg.lite === true, msg.fixes !== false);
+    setLook({
+      lite: msg.lite === true,
+      fixes: msg.fixes !== false,
+      liteExcept: Array.isArray(msg.liteExcept) ? msg.liteExcept : [],
+      keepPlaying: msg.keepPlaying === true,
+      readerFont: msg.readerFont === 'sans' ? 'sans' : 'serif',
+      readerSpacing: Number.isInteger(msg.readerSpacing) ? msg.readerSpacing : 1,
+    });
   }
 }
 
 // ---------------------------------------------------------------- how sites look
 
 // Styles pages get from their first byte on:
-//  - lite: Lite mode, every page without animations, shadows or blur;
+//  - lite: Lite mode, every page without animations, shadows or blur (but the sites the user
+//    left out of it);
 //  - youtube, theflixer: lighter versions of these two sites (no big blurs), unless the app
 //    shows sites as designed.
 // The last choice is kept, so pages loading before the app has said it again look the same.
+// It also holds keepPlaying, which content scripts read (see content.js).
 const STYLES = {
   lite: { matches: ['http://*/*', 'https://*/*'], css: [{ file: '/perf/lite.css' }], allFrames: true },
   youtube: { matches: ['*://*.youtube.com/*'], css: [{ file: '/perf/youtube.css' }] },
@@ -69,33 +78,52 @@ const registrations = new Map();
 let lookQueue = Promise.resolve();
 let lookFromApp = false;
 
-function setStyle(name, on) {
+const registered = new Map(); // name -> what it was registered with
+
+function setStyle(name, on, exclude) {
+  const key = on ? JSON.stringify(exclude || []) : null;
   lookQueue = lookQueue.then(async () => {
+    if ((registered.get(name) || null) === key) { return; }
     const old = registrations.get(name);
-    if (on === (old !== undefined)) { return; }
     if (old) {
       registrations.delete(name);
+      registered.delete(name);
       try { await old.unregister(); } catch (e) { }
     }
     if (!on) { return; }
+    const options = Object.assign({ runAt: 'document_start' }, STYLES[name]);
+    if (exclude && exclude.length > 0) {
+      options.excludeMatches = [];
+      for (const site of exclude) { options.excludeMatches.push('*://' + site + '/*', '*://*.' + site + '/*'); }
+    }
     try {
-      registrations.set(name, await browser.contentScripts.register(Object.assign({ runAt: 'document_start' }, STYLES[name])));
+      registrations.set(name, await browser.contentScripts.register(options));
+      registered.set(name, key);
     } catch (e) { }
   });
 }
 
-function setLook(lite, fixes) {
-  setStyle('lite', lite);
-  setStyle('youtube', fixes);
-  setStyle('theflixer', fixes);
-  browser.storage.local.set({ look: { lite, fixes } }).catch(() => { });
+function setLook(look) {
+  setStyle('lite', look.lite, look.liteExcept);
+  setStyle('youtube', look.fixes);
+  setStyle('theflixer', look.fixes);
+  browser.storage.local.set({ look }).catch(() => { });
 }
 
 browser.storage.local.get('look').then(r => {
-  const look = (r && r.look) || { lite: false, fixes: true };
-  if (!lookFromApp) { setLook(look.lite === true, look.fixes !== false); }
+  const look = (r && r.look) || {};
+  if (!lookFromApp) {
+    setLook({
+      lite: look.lite === true,
+      fixes: look.fixes !== false,
+      liteExcept: Array.isArray(look.liteExcept) ? look.liteExcept : [],
+      keepPlaying: look.keepPlaying === true,
+      readerFont: look.readerFont === 'sans' ? 'sans' : 'serif',
+      readerSpacing: Number.isInteger(look.readerSpacing) ? look.readerSpacing : 1,
+    });
+  }
 }, () => {
-  if (!lookFromApp) { setLook(false, true); }
+  if (!lookFromApp) { setLook({ lite: false, fixes: true, liteExcept: [], keepPlaying: false }); }
 });
 
 // ---------------------------------------------------------------- reader view

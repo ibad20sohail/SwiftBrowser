@@ -6,7 +6,9 @@ Usage:
 The patch:
   * copies tools/ublock-patch/swift-bridge.js into js/,
   * loads it from background.html (after uBO's own start.js),
-  * adds the "nativeMessaging" and "geckoViewAddons" permissions it needs.
+  * adds the "nativeMessaging" and "geckoViewAddons" permissions it needs,
+  * makes js/cachestorage.js keep compiled lists and the filter snapshot only in
+    uBO's fast IndexedDB cache, not a second time in extension storage (~25 MB).
 
 uBO's version string is left untouched (a 4-part version would switch uBO into
 dev-build mode). When the bridge changes, bump UBO_BRIDGE_REV in Engine.kt so the
@@ -26,6 +28,29 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEST = os.path.join(ROOT, "app", "src", "main", "assets", "extensions", "ublock")
 BRIDGE = os.path.join(ROOT, "tools", "ublock-patch", "swift-bridge.js")
 BRIDGE_TAG = '<script src="js/swift-bridge.js" type="module"></script>'
+
+CACHE_OLD = r"""                await Promise.all([
+                    cacheAPIs[fastCache].set(rawbin, serializedbin),
+                    extensionStorage.set(serializedbin),
+                ]);"""
+CACHE_NEW = r"""                // Swift: what the fast cache keeps (compiled lists, selfie) isn't
+                // stored a second time in extension storage, which saves about
+                // 25 MB on a phone. Without the fast cache, uBO rebuilds it.
+                const mirrored = fastCache === 'indexedDB'
+                    ? keys.filter(k => /^cache\/(compiled|selfie)\//.test(k))
+                    : [];
+                const rest = {};
+                for ( const key of keys ) {
+                    if ( mirrored.includes(key) ) { continue; }
+                    rest[key] = serializedbin[key];
+                }
+                await Promise.all([
+                    cacheAPIs[fastCache].set(rawbin, serializedbin),
+                    extensionStorage.set(rest),
+                    mirrored.length !== 0
+                        ? extensionStorage.remove(mirrored)
+                        : Promise.resolve(),
+                ]);"""
 
 
 def fetch(version):
@@ -98,6 +123,16 @@ def main():
         html = html.replace(anchor, anchor + "\n" + BRIDGE_TAG)
     with open(bg_path, "w", encoding="utf-8", newline="\n") as f:
         f.write(html)
+
+    cache_path = os.path.join(DEST, "js", "cachestorage.js")
+    with open(cache_path, encoding="utf-8") as f:
+        js = f.read()
+    if CACHE_NEW not in js:
+        if CACHE_OLD not in js:
+            raise SystemExit("js/cachestorage.js changed upstream; update the storage patch")
+        js = js.replace(CACHE_OLD, CACHE_NEW)
+    with open(cache_path, "w", encoding="utf-8", newline="\n") as f:
+        f.write(js)
 
     print("uBlock Origin", manifest.get("version"), "installed to", DEST)
 

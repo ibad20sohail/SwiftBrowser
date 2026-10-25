@@ -112,10 +112,48 @@ class Prefs(ctx: Context) {
         get() = sp.getBoolean(FORCE_ZOOM, false)
         set(v) = sp.edit { putBoolean(FORCE_ZOOM, v) }
 
-    /** Videos and music keep playing when Swift is in the background or the screen is off. */
-    var backgroundPlay: Boolean
-        get() = sp.getBoolean(BACKGROUND_PLAY, true)
-        set(v) = sp.edit { putBoolean(BACKGROUND_PLAY, v) }
+    /**
+     * A video or music keeps playing when you switch tabs, go to another app or turn the screen off.
+     * Off: it pauses as soon as its page is out of view.
+     */
+    var keepPlaying: Boolean
+        get() = sp.getBoolean(KEEP_PLAYING, true)
+        set(v) = sp.edit { putBoolean(KEEP_PLAYING, v) }
+
+    /** The house button in the toolbar, which shows the home page. */
+    var showHomeButton: Boolean
+        get() = sp.getBoolean(SHOW_HOME_BUTTON, true)
+        set(v) = sp.edit { putBoolean(SHOW_HOME_BUTTON, v) }
+
+    /** A light vibration on long presses, dragging tabs and grouping them. */
+    var haptics: Boolean
+        get() = sp.getBoolean(HAPTICS, true)
+        set(v) = sp.edit { putBoolean(HAPTICS, v) }
+
+    /** Pages always load over a secure connection; an insecure site asks first. */
+    var httpsOnly: Boolean
+        get() = sp.getBoolean(HTTPS_ONLY, false)
+        set(v) = sp.edit { putBoolean(HTTPS_ONLY, v) }
+
+    /** Firefox answers cookie banners with "Reject" where it knows how. */
+    var rejectCookieBanners: Boolean
+        get() = sp.getBoolean(REJECT_COOKIE_BANNERS, true)
+        set(v) = sp.edit { putBoolean(REJECT_COOKIE_BANNERS, v) }
+
+    /** Large downloads wait for Wi-Fi when the phone is on mobile data. */
+    var wifiOnlyDownloads: Boolean
+        get() = sp.getBoolean(WIFI_ONLY_DOWNLOADS, false)
+        set(v) = sp.edit { putBoolean(WIFI_ONLY_DOWNLOADS, v) }
+
+    /** Reader view: "serif" (as before) or "sans". */
+    var readerFont: String
+        get() = sp.getString(READER_FONT, "serif") ?: "serif"
+        set(v) = sp.edit { putString(READER_FONT, v) }
+
+    /** Reader view line spacing: 0 tight, 1 normal, 2 loose. */
+    var readerSpacing: Int
+        get() = sp.getInt(READER_SPACING, 1)
+        set(v) = sp.edit { putInt(READER_SPACING, v) }
 
     /** Swiping in from the left or right edge of a page goes back or forward. */
     var edgeSwipe: Boolean
@@ -210,7 +248,14 @@ class Prefs(ctx: Context) {
         const val HIDDEN_TILES = "hidden_tiles"
         const val TEXT_SCALE = "text_scale"
         const val FORCE_ZOOM = "force_zoom"
-        const val BACKGROUND_PLAY = "background_play"
+        const val KEEP_PLAYING = "keep_playing"
+        const val SHOW_HOME_BUTTON = "show_home_button"
+        const val HAPTICS = "haptics"
+        const val HTTPS_ONLY = "https_only"
+        const val REJECT_COOKIE_BANNERS = "reject_cookie_banners"
+        const val WIFI_ONLY_DOWNLOADS = "wifi_only_downloads"
+        const val READER_FONT = "reader_font"
+        const val READER_SPACING = "reader_spacing"
         const val EDGE_SWIPE = "edge_swipe"
         const val LITE_SITES = "lite_sites"
         const val LITE_MODE = "lite_mode"

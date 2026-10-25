@@ -64,9 +64,30 @@ abstract class ListActivity : AppCompatActivity() {
         if (hasFocus) SystemBars.apply(this)
     }
 
-    protected fun showEmpty(isEmpty: Boolean, text: String) {
+    /** An empty list: an icon, what is missing, and how to fill it. */
+    protected fun showEmpty(isEmpty: Boolean, title: String, hint: String? = null, icon: Int = 0) {
+        if (!isEmpty) {
+            empty.visibility = View.GONE
+            return
+        }
+        val text = android.text.SpannableStringBuilder(title)
+        text.setSpan(android.text.style.StyleSpan(android.graphics.Typeface.BOLD), 0, title.length, 0)
+        text.setSpan(android.text.style.RelativeSizeSpan(1.15f), 0, title.length, 0)
+        text.setSpan(android.text.style.ForegroundColorSpan(androidx.core.content.ContextCompat.getColor(this, R.color.text_primary)), 0, title.length, 0)
+        if (!hint.isNullOrBlank()) text.append("\n\n").append(hint)
         empty.text = text
-        empty.visibility = if (isEmpty) View.VISIBLE else View.GONE
+        val d = if (icon == 0) null else androidx.core.content.ContextCompat.getDrawable(this, icon)?.mutate()?.also {
+            it.setTint(androidx.core.content.ContextCompat.getColor(this, R.color.text_secondary))
+            val size = (56 * resources.displayMetrics.density).toInt()
+            it.setBounds(0, 0, size, size)
+        }
+        empty.setCompoundDrawablesRelative(null, d, null, null)
+        empty.compoundDrawablePadding = (16 * resources.displayMetrics.density).toInt()
+        if (empty.visibility != View.VISIBLE) {
+            empty.visibility = View.VISIBLE
+            empty.alpha = 0f
+            empty.animate().alpha(1f).setDuration(180).start()
+        }
     }
 
     protected fun openUrl(url: String, newTab: Boolean = false) {
@@ -130,7 +151,11 @@ class HistoryActivity : ListActivity() {
         lifecycleScope.launch {
             val rows = withContext(Dispatchers.IO) { SwiftApp.db.history(Profiles.currentId, q) }
             adapter.items = rows
-            showEmpty(rows.isEmpty(), if (q.isBlank()) "No history yet" else "Nothing found")
+            if (q.isBlank()) {
+                showEmpty(rows.isEmpty(), "No history yet", "Pages you open show up here, newest first.", R.drawable.ic_history)
+            } else {
+                showEmpty(rows.isEmpty(), "Nothing found", "No page in your history has \"${q.trim()}\" in its title or address.", R.drawable.ic_search)
+            }
         }
     }
 
@@ -166,7 +191,7 @@ class BookmarksActivity : ListActivity() {
         lifecycleScope.launch {
             val rows = withContext(Dispatchers.IO) { SwiftApp.db.bookmarks(Profiles.currentId) }
             adapter.items = rows
-            showEmpty(rows.isEmpty(), "No bookmarks yet.\nUse the star in the menu to bookmark a page.")
+            showEmpty(rows.isEmpty(), "No bookmarks yet", "Tap the star in the ⋮ menu to keep a page here.", R.drawable.ic_star_border)
         }
     }
 
@@ -217,7 +242,11 @@ class DownloadsActivity : ListActivity() {
 
     private fun refresh() {
         adapter.items = Downloads.all()
-        showEmpty(adapter.items.isEmpty(), "No downloads yet")
+        showEmpty(
+            adapter.items.isEmpty(), "No downloads yet",
+            "Hold a link, picture or video and choose Download. On pages with videos, the download button appears next to the address.",
+            R.drawable.ic_download,
+        )
     }
 
     private inner class DownloadHolder(v: View) : RecyclerView.ViewHolder(v) {
@@ -249,7 +278,8 @@ class DownloadsActivity : ListActivity() {
             val pct = d.percent
             h.progress.visibility = if (d.status == Downloads.DONE) View.GONE else View.VISIBLE
             h.progress.isIndeterminate = (d.status == Downloads.RUNNING && pct < 0) || d.status == Downloads.CONVERTING
-            if (pct >= 0) h.progress.progress = pct
+            // Moves smoothly to the new value instead of jumping.
+            if (pct >= 0) h.progress.setProgress(pct, h.progress.progress < pct)
             h.status.text = statusText(d)
             when (d.status) {
                 Downloads.RUNNING, Downloads.QUEUED -> {
@@ -273,7 +303,7 @@ class DownloadsActivity : ListActivity() {
 
     private fun statusText(d: Downloads.Item): String = when (d.status) {
         Downloads.DONE -> "${UrlUtils.formatBytes(d.done)} • Done"
-        Downloads.QUEUED -> "Waiting…"
+        Downloads.QUEUED -> if (d.error == Downloads.WAITING_FOR_WIFI) "Waiting for Wi-Fi (big download)" else "Waiting…"
         Downloads.PAUSED -> "Paused • ${UrlUtils.formatBytes(d.done)}${if (d.percent >= 0) " (${d.percent}%)" else ""}"
         Downloads.FAILED -> "Failed: ${d.error ?: "unknown error"}"
         Downloads.CONVERTING -> "Converting to MP4…"
@@ -309,7 +339,7 @@ class DownloadsActivity : ListActivity() {
 
     private fun menu(d: Downloads.Item) {
         val options = ArrayList<String>()
-        if (d.status == Downloads.DONE) options += listOf("Open", "Share")
+        if (d.status == Downloads.DONE) options += listOf("Open", "Share", "Show where it's saved")
         options += "Copy download link"
         options += if (d.status == Downloads.DONE) "Remove from list" else "Cancel download"
         options += "Delete file"
@@ -327,6 +357,7 @@ class DownloadsActivity : ListActivity() {
                     } catch (_: Exception) {
                     }
                 }
+                "Show where it's saved" -> showInFolder(d)
                 "Copy download link" -> copyText(this, d.url)
                 "Remove from list" -> Downloads.remove(d.id, deleteFile = false)
                 "Cancel download" -> Downloads.remove(d.id, deleteFile = true)
@@ -337,6 +368,28 @@ class DownloadsActivity : ListActivity() {
                     .showImmersive()
             }
         }.showImmersive()
+    }
+
+    /** Opens the phone's file manager at the download's folder, or says where it is. */
+    private fun showInFolder(d: Downloads.Item) {
+        val dir = File(d.filePath).parentFile ?: return
+        val storage = android.os.Environment.getExternalStorageDirectory().path
+        if (dir.path.startsWith(storage)) {
+            val docId = "primary:" + dir.path.removePrefix(storage).trimStart('/')
+            val uri = android.provider.DocumentsContract.buildDocumentUri("com.android.externalstorage.documents", docId)
+            val intent = Intent(Intent.ACTION_VIEW).setDataAndType(uri, android.provider.DocumentsContract.Document.MIME_TYPE_DIR)
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            try {
+                startActivity(intent)
+                return
+            } catch (_: Exception) {
+            }
+        }
+        MaterialAlertDialogBuilder(this)
+            .setTitle(d.fileName)
+            .setMessage("Saved in ${Downloads.describe(dir)}\n\n${dir.path}")
+            .setPositiveButton(android.R.string.ok, null)
+            .showImmersive()
     }
 
     companion object {

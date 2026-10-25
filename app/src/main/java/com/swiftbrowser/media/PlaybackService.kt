@@ -20,11 +20,15 @@ import com.swiftbrowser.tabs.TabManager
 import com.swiftbrowser.ui.MainActivity
 
 /**
- * Background play: while a page plays a video or music, a notification with play/pause keeps
- * Swift running when it is in the background or the screen is off (the engine itself keeps the
- * phone awake while sound plays). Without it Android would soon close the app and stop the sound.
+ * Keep playing in the background: while a page plays a video or music, a notification with
+ * play/pause and the sleep timer keeps Swift running when it is in the background or the screen
+ * is off. Without it Android would soon close the app and stop the sound. While something plays it
+ * also keeps the processor and Wi-Fi awake, so streams don't stall with the screen off.
  */
 class PlaybackService : Service() {
+
+    private var wakeLock: android.os.PowerManager.WakeLock? = null
+    private var wifiLock: android.net.wifi.WifiManager.WifiLock? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -33,6 +37,7 @@ class PlaybackService : Service() {
         when (intent?.action) {
             ACTION_PLAY -> tab?.mediaSession?.play()
             ACTION_PAUSE -> tab?.mediaSession?.pause()
+            ACTION_TIMER -> SleepTimer.cycle(this)
             ACTION_CLOSE -> {
                 tab?.mediaSession?.pause()
                 Playback.dismiss()
@@ -47,21 +52,54 @@ class PlaybackService : Service() {
         val n = notification(tab)
         if (tab.playing) {
             startForeground(NOTIFICATION_ID, n)
+            holdLocks(true)
         } else {
             // Paused: the notification stays (to resume), but Android may close the app again.
+            holdLocks(false)
             ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_DETACH)
             NotificationManagerCompat.from(this).notify(NOTIFICATION_ID, n)
         }
         return START_NOT_STICKY
     }
 
+    @Suppress("DEPRECATION")
+    private fun holdLocks(on: Boolean) {
+        try {
+            if (on) {
+                if (wakeLock == null) {
+                    val pm = getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+                    wakeLock = pm.newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "swift:playback").apply {
+                        setReferenceCounted(false)
+                        acquire()
+                    }
+                }
+                if (wifiLock == null) {
+                    val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
+                    wifiLock = wm.createWifiLock(android.net.wifi.WifiManager.WIFI_MODE_FULL_HIGH_PERF, "swift:playback").apply {
+                        setReferenceCounted(false)
+                        acquire()
+                    }
+                }
+            } else {
+                wakeLock?.let { if (it.isHeld) it.release() }
+                wakeLock = null
+                wifiLock?.let { if (it.isHeld) it.release() }
+                wifiLock = null
+            }
+        } catch (e: Exception) {
+            L.w("Playback locks", e)
+        }
+    }
+
     private fun stop() {
+        holdLocks(false)
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         NotificationManagerCompat.from(this).cancel(NOTIFICATION_ID)
         stopSelf()
     }
 
     override fun onDestroy() {
+        holdLocks(false)
         // A paused tab's notification isn't tied to the service; it goes with it all the same.
         NotificationManagerCompat.from(this).cancel(NOTIFICATION_ID)
         super.onDestroy()
@@ -92,6 +130,7 @@ class PlaybackService : Service() {
                 if (tab.playing) "Pause" else "Play",
                 action(if (tab.playing) ACTION_PAUSE else ACTION_PLAY, 1),
             )
+            .addAction(R.drawable.ic_timer, SleepTimer.label()?.let { "Sleep: $it" } ?: "Sleep timer", action(ACTION_TIMER, 3))
             .addAction(R.drawable.ic_close, "Close", action(ACTION_CLOSE, 2))
             .build()
     }
@@ -109,6 +148,7 @@ class PlaybackService : Service() {
         private const val ACTION_PLAY = "play"
         private const val ACTION_PAUSE = "pause"
         private const val ACTION_CLOSE = "close"
+        private const val ACTION_TIMER = "timer"
 
         private fun ensureChannel(ctx: Context) {
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
@@ -142,7 +182,7 @@ object Playback {
 
     fun wanted(): Boolean {
         val t = tab ?: return false
-        return SwiftApp.prefs.backgroundPlay && !dismissed && t.mediaSession != null && t in TabManager.tabs
+        return SwiftApp.prefs.keepPlaying && !dismissed && t.mediaSession != null && t in TabManager.tabs
     }
 
     fun onPlayingChanged(ctx: Context, t: Tab) {

@@ -40,6 +40,7 @@ import com.swiftbrowser.download.Downloads
 import com.swiftbrowser.download.Hls
 import com.swiftbrowser.engine.Engine
 import com.swiftbrowser.media.Helper
+import com.swiftbrowser.media.SleepTimer
 import com.swiftbrowser.media.MediaItem
 import com.swiftbrowser.tabs.Tab
 import com.swiftbrowser.tabs.TabGroup
@@ -140,6 +141,65 @@ object Sheets {
                 })
             }
         }
+
+    // ------------------------------------------------------------------ action lists
+
+    class Action(val icon: Int, val label: String, val run: () -> Unit)
+
+    /**
+     * Things to do with a link, a picture, a shortcut or the tab button, as a sheet that slides up:
+     * what it is about at the top (a title and, smaller, its address), then a row per action.
+     */
+    fun actions(a: MainActivity, title: String?, subtitle: String?, actions: List<Action>, icon: android.graphics.Bitmap? = null) {
+        val col = column(a)
+        lateinit var dialog: BottomSheetDialog
+        if (!title.isNullOrBlank() || !subtitle.isNullOrBlank()) {
+            val head = LinearLayout(a).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(a.dp(20), a.dp(8), a.dp(20), a.dp(10))
+            }
+            if (icon != null) {
+                head.addView(android.widget.ImageView(a).apply { setImageBitmap(icon) }, LinearLayout.LayoutParams(a.dp(28), a.dp(28)).apply {
+                    marginEnd = a.dp(14)
+                })
+            }
+            head.addView(LinearLayout(a).apply {
+                orientation = LinearLayout.VERTICAL
+                if (!title.isNullOrBlank()) {
+                    addView(TextView(a).apply {
+                        text = title
+                        textSize = 16f
+                        maxLines = 2
+                        ellipsize = android.text.TextUtils.TruncateAt.END
+                        setTypeface(typeface, Typeface.BOLD)
+                        setTextColor(a.color(R.color.text_primary))
+                    })
+                }
+                if (!subtitle.isNullOrBlank()) {
+                    addView(TextView(a).apply {
+                        text = subtitle
+                        textSize = 13f
+                        maxLines = 2
+                        ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
+                        setTextColor(a.color(R.color.text_secondary))
+                        setPadding(0, a.dp(2), 0, 0)
+                    })
+                }
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            col.addView(head)
+            col.addView(View(a).apply { setBackgroundColor(a.color(R.color.divider)) },
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 1).apply { bottomMargin = a.dp(4) })
+        }
+        for (action in actions) {
+            col.addView(row(a, action.icon, action.label) {
+                dialog.dismiss()
+                action.run()
+            })
+        }
+        dialog = sheet(a, col)
+        dialog.showImmersive()
+    }
 
     // ------------------------------------------------------------------ dark mode
 
@@ -461,20 +521,91 @@ object Sheets {
                     media != null -> a.startHlsDownload(tab, url, headers, null)
                     variants.isEmpty() -> a.snack("No video found in this stream")
                     variants.size == 1 -> a.startHlsDownload(tab, variants[0].url, headers, shortQuality(variants[0]))
-                    else -> MaterialAlertDialogBuilder(a)
-                        .setTitle("Choose quality")
-                        .setItems(variants.map { it.label }.toTypedArray()) { _, which ->
-                            val v = variants[which]
-                            a.startHlsDownload(tab, v.url, headers, shortQuality(v))
-                        }
-                        .setNegativeButton(android.R.string.cancel, null)
-                        .showImmersive()
+                    else -> chooseQuality(a, tab, variants, headers)
                 }
             }
         }
     }
 
     private fun shortQuality(v: Hls.Variant): String? = if (v.height > 0) "${v.height}p" else null
+
+    /**
+     * The stream's qualities, each with about how big the file will be: the video's length comes
+     * from the smallest quality's playlist (one small request), the size from each one's bit rate.
+     */
+    private fun chooseQuality(a: MainActivity, tab: Tab, variants: List<Hls.Variant>, headers: Map<String, String>) {
+        a.lifecycleScope.launch {
+            val seconds = withContext(Dispatchers.IO) {
+                runCatching {
+                    val smallest = variants.minByOrNull { if (it.bandwidth > 0) it.bandwidth else Long.MAX_VALUE } ?: variants.last()
+                    Hls.parseMedia(Downloads.fetchText(smallest.url, headers), smallest.url).duration
+                }.getOrDefault(0.0)
+            }
+            val labels = variants.map { v ->
+                val quality = shortQuality(v) ?: v.label
+                val size = if (seconds > 0 && v.bandwidth > 0) " · about ${UrlUtils.formatBytes((v.bandwidth * seconds / 8).toLong())}" else ""
+                quality + size
+            }
+            val minutes = if (seconds > 0) " (${(seconds / 60).toInt().coerceAtLeast(1)} min)" else ""
+            MaterialAlertDialogBuilder(a)
+                .setTitle("Choose quality$minutes")
+                .setItems(labels.toTypedArray()) { _, which ->
+                    val v = variants[which]
+                    a.startHlsDownload(tab, v.url, headers, shortQuality(v))
+                }
+                .setNegativeButton(android.R.string.cancel, null)
+                .showImmersive()
+        }
+    }
+
+    // ------------------------------------------------------------------ sleep timer
+
+    /** Stop playing after some minutes, or at the end of what is playing. */
+    fun sleepTimer(ctx: Context, onChanged: (() -> Unit)? = null) {
+        val choices = SleepTimer.CHOICES.toList() + SleepTimer.END
+        val labels = choices.map { if (it == SleepTimer.END) "At the end of this video or song" else "In $it minutes" }.toMutableList()
+        val running = SleepTimer.label()
+        if (running != null) labels += "Turn off ($running)"
+        MaterialAlertDialogBuilder(ctx)
+            .setTitle("Sleep timer")
+            .setItems(labels.toTypedArray()) { _, which ->
+                if (which >= choices.size) {
+                    SleepTimer.cancel(ctx)
+                    (ctx as? MainActivity)?.snack("Sleep timer off")
+                } else {
+                    SleepTimer.set(ctx, choices[which])
+                    (ctx as? MainActivity)?.snack(
+                        if (choices[which] == SleepTimer.END) "Playback stops at the end of this video" else "Playback stops in ${choices[which]} minutes",
+                    )
+                }
+                onChanged?.invoke()
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .showImmersive()
+    }
+
+    // ------------------------------------------------------------------ reader view
+
+    /** Reader view's font and line spacing; open reader pages follow at once. */
+    fun readerStyle(ctx: Context, onChanged: (() -> Unit)? = null) {
+        val prefs = SwiftApp.prefs
+        val col = column(ctx)
+        col.addView(header(ctx, "Reader view text", "How articles look in reader view"))
+        col.addView(label(ctx, "Font"))
+        col.addView(chips(ctx, listOf("Serif", "Sans-serif"), if (prefs.readerFont == "sans") 1 else 0) { i ->
+            prefs.readerFont = if (i == 1) "sans" else "serif"
+            Helper.sendReaderStyle()
+            onChanged?.invoke()
+        })
+        col.addView(label(ctx, "Line spacing", top = 16))
+        col.addView(chips(ctx, listOf("Tight", "Normal", "Loose"), prefs.readerSpacing.coerceIn(0, 2)) { i ->
+            prefs.readerSpacing = i
+            Helper.sendReaderStyle()
+            onChanged?.invoke()
+        })
+        col.addView(note(ctx, "Text size is set with the A− and A+ buttons in reader view."))
+        sheet(ctx, col).showImmersive()
+    }
 
     // ------------------------------------------------------------------ speed
 
@@ -598,7 +729,7 @@ object Sheets {
         a.lifecycleScope.launch {
             val rows = withContext(Dispatchers.IO) { TabManager.recentlyClosed(pid) }
             if (rows.isEmpty()) {
-                a.snack("No recently closed tabs")
+                a.snack("No recently closed tabs yet. Tabs you close wait here, so you can open them again.", long = true)
                 return@launch
             }
             val col = column(a)
@@ -698,6 +829,11 @@ object Sheets {
         })
         col.addView(switchRow(ctx, R.drawable.ic_volume, "Sound can start by itself", "Videos may play with sound before you tap play", SiteSettings.autoplay(site)) { on ->
             SiteSettings.setAutoplay(site, on)
+            onChanged?.invoke()
+        })
+        col.addView(switchRow(ctx, R.drawable.ic_lite, "Lite mode on this site", "Turn off if the site looks broken with Lite mode", !SiteSettings.noLite(site)) { on ->
+            SiteSettings.setNoLite(site, !on)
+            if (onThisSite && tab != null && SwiftApp.prefs.liteMode) TabManager.reload(tab)
             onChanged?.invoke()
         })
         col.addView(label(ctx, "Location", top = 12))

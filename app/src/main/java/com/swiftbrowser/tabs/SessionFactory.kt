@@ -27,6 +27,9 @@ import org.mozilla.geckoview.WebExtension
 import org.mozilla.geckoview.WebRequestError
 import org.mozilla.geckoview.WebResponse
 
+/** Sites already said to be insecure (secure connections first), for this run of Swift. */
+private val warnedInsecure = HashSet<String>()
+
 object SessionFactory {
     val prompts = Prompts()
 
@@ -43,8 +46,8 @@ object SessionFactory {
                 if (tab.desktop) GeckoSessionSettings.VIEWPORT_MODE_DESKTOP else GeckoSessionSettings.VIEWPORT_MODE_MOBILE,
             )
             // A page that isn't on screen (another tab, Swift in the background) stops its media,
-            // unless background play is on: then video and music go on.
-            .suspendMediaWhenInactive(!SwiftApp.prefs.backgroundPlay)
+            // unless "Keep playing in the background" is on: then video and music go on.
+            .suspendMediaWhenInactive(!SwiftApp.prefs.keepPlaying)
             .build()
         val session = GeckoSession(settings)
         val d = TabDelegates(tab)
@@ -236,6 +239,7 @@ class TabDelegates(private val tab: Tab) :
         tab.loading = true
         tab.progress = 5
         tab.media.clear()
+        tab.videoPlaying = false
         // A reloaded page may offer to continue its video again (see WatchPositions).
         tab.resumeOffered = null
         tab.resumePosition = 0.0
@@ -257,6 +261,18 @@ class TabDelegates(private val tab: Tab) :
     override fun onSecurityChange(session: GeckoSession, securityInfo: GeckoSession.ProgressDelegate.SecurityInformation) {
         tab.secure = securityInfo.isSecure
         changed()
+        warnIfInsecure()
+    }
+
+    /** With secure connections first on: a site without a secure version says so, once per site. */
+    private fun warnIfInsecure() {
+        if (!SwiftApp.prefs.httpsOnly || tab.secure || tab !== TabManager.current) return
+        val url = tab.url
+        if (!url.startsWith("http://")) return
+        val host = UrlUtils.host(url) ?: return
+        if (host == "localhost" || host.startsWith("127.") || host.startsWith("192.168.") || host.startsWith("10.")) return
+        if (!warnedInsecure.add(host)) return
+        ui?.showMessage("$host has no secure version: what you send here can be seen on the network", long = true)
     }
 
     override fun onSessionStateChange(session: GeckoSession, sessionState: GeckoSession.SessionState) {
@@ -450,6 +466,11 @@ class TabDelegates(private val tab: Tab) :
         if (tab.playing == playing) return
         L.d("Tab ${tab.id} ${if (playing) "playing" else "stopped playing"}")
         tab.playing = playing
+        if (playing) {
+            // One tab plays at a time: starting something pauses what another tab was playing.
+            for (t in TabManager.tabs) if (t !== tab && t.playing) t.mediaSession?.pause()
+            com.swiftbrowser.media.SleepTimer.onPlaying(tab)
+        }
         ui?.onPlayingChanged(tab)
         SwiftApp.instance?.let { Playback.onPlayingChanged(it, tab) }
     }

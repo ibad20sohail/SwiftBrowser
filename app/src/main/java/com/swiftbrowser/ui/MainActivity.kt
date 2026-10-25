@@ -105,6 +105,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     private lateinit var videoBtn: View
     private lateinit var tabsCount: TextView
     private lateinit var menuBtn: ImageButton
+    private lateinit var homeBtn: ImageButton
     private lateinit var progress: ProgressBar
     private lateinit var gestureLayer: GestureFrameLayout
     private lateinit var home: HomeView
@@ -285,11 +286,12 @@ class MainActivity : AppCompatActivity(), BrowserUi {
                 }
             }
         }
+        // Full screen first: the dialogs below keep it (see Immersive).
+        applySystemBars()
+        SystemBars.keepHidden(this) { fullscreenTab == null }
         showCrashReportIfAny()
         showProblemIfAny()
         showStartupUntilReady()
-        applySystemBars()
-        SystemBars.keepHidden(this) { fullscreenTab == null }
         // The menu was open when the screen restarted for a dark mode switch: it stays open.
         if (savedInstanceState?.getBoolean(STATE_MENU_OPEN) == true) {
             root.post { if (!isFinishing) quickMenu.open(animate = false) }
@@ -323,8 +325,9 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         super.onStart()
         // Settings → Look & screen may have moved the address bar.
         if (bottomBar != prefs.toolbarAtBottom) applyToolbarPosition()
-        // Settings → Browsing may have changed the search engine.
+        // Settings → Browsing may have changed the search engine, Look & screen the home button.
         urlEdit.hint = com.swiftbrowser.core.SearchEngine.current.hint
+        updateHomeButton()
         if (home.visibility == View.VISIBLE) current?.let { home.show(it.incognito) }
         Diagnostics.setOnScreen(true)
         if (!switcher.isOpen) current?.session?.let { if (it.isOpen) it.setActive(true) }
@@ -341,11 +344,13 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         Diagnostics.setOnScreen(false)
         TabManager.flushSaves()
         if (!isChangingConfigurations) {
-            // A playing page stays active so its video or music goes on (background play).
-            val keepPlaying = prefs.backgroundPlay && current?.playing == true
+            // A playing page stays active so its video or music goes on (keep playing in the
+            // background): an active page also keeps the engine's page process from being closed.
+            val keepPlaying = prefs.keepPlaying && current?.playing == true
             current?.session?.let { if (it.isOpen && !keepPlaying) it.setActive(false) }
             AdBlock.updateInBackground()
         }
+        updateKeepScreenOn()
     }
 
     override fun onDestroy() {
@@ -387,6 +392,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         videoBtn = findViewById(R.id.video_btn)
         tabsCount = findViewById(R.id.tabs_count)
         menuBtn = findViewById(R.id.menu_btn)
+        homeBtn = findViewById(R.id.home_btn)
         progress = findViewById(R.id.progress)
         gestureLayer = findViewById(R.id.gesture_layer)
         gecko = findViewById(R.id.gecko)
@@ -450,6 +456,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             stopEditing()
             quickMenu.open()
         }
+        homeBtn.setOnClickListener { goHome() }
         videoBtn.setOnClickListener { current?.let { Sheets.videos(this, it) } }
         findViewById<View>(R.id.crash_reload).setOnClickListener {
             crashView.visibility = View.GONE
@@ -489,31 +496,100 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         urlMic.setOnClickListener { voiceSearch() }
     }
 
-    fun startEditing() {
+    fun startEditing(fromHomeSearch: Boolean = false) {
         if (fullscreenTab != null) return
+        val wasEditing = editing
         editing = true
         showToolbar()
+        if (!wasEditing) setToolbarEditing(true)
         val tab = current
         val text = when {
-            tab == null || tab.isBlank -> ""
+            tab == null || tab.isBlank || tab.homeShown -> ""
             else -> UrlUtils.searchQuery(tab.url) ?: tab.url
         }
         urlBox.visibility = View.VISIBLE
         urlEdit.setText(text)
         urlEdit.selectAll()
         setUrlIcon(com.swiftbrowser.core.SearchEngine.current.icon)
+        if (!wasEditing) {
+            suggestionsList.alpha = 0f
+            suggestionsList.animate().alpha(1f).setDuration(180).start()
+        }
         suggestionsList.visibility = View.VISIBLE
         updateUrlButtons()
         if (!urlEdit.hasFocus()) urlEdit.requestFocus()
         showKeyboard(urlEdit)
         refreshSuggestions("")
+        if (fromHomeSearch && !wasEditing && home.visibility == View.VISIBLE) slideSearchIntoBar()
+    }
+
+    /**
+     * The home page's search box moves into the address bar: the bar starts where the box is and
+     * slides to its place, while the box fades away. Only views of the app move (no page drawing).
+     */
+    private fun slideSearchIntoBar() {
+        val box = home.searchBox
+        val from = IntArray(2)
+        val to = IntArray(2)
+        box.getLocationOnScreen(from)
+        urlBox.getLocationOnScreen(to)
+        val dy = (from[1] + box.height / 2f) - (to[1] + urlBox.height / 2f)
+        if (abs(dy) < dp(8f)) return
+        // The bar is drawn outside the toolbar while it travels.
+        toolbar.clipChildren = false
+        (appBar as android.view.ViewGroup).clipChildren = false
+        urlBox.animate().cancel()
+        urlBox.translationY = dy
+        urlBox.animate().translationY(0f).setDuration(240).setInterpolator(DecelerateInterpolator(1.8f)).withEndAction {
+            toolbar.clipChildren = true
+            (appBar as android.view.ViewGroup).clipChildren = true
+        }.start()
+        box.animate().cancel()
+        box.animate().alpha(0f).translationY(-dy / 3f).setDuration(160).start()
+    }
+
+    /** The home page's search box comes back (Back from typing on the home page). */
+    private fun restoreHomeSearch() {
+        val box = home.searchBox
+        if (box.alpha == 1f && box.translationY == 0f) return
+        box.animate().cancel()
+        box.animate().alpha(1f).translationY(0f).setDuration(200).setInterpolator(DecelerateInterpolator(1.6f)).start()
+    }
+
+    /**
+     * While typing, the address takes the whole toolbar: the buttons around it fade away and the
+     * field widens, and they come back after. A short animation of the toolbar's own views.
+     */
+    private fun setToolbarEditing(on: Boolean) {
+        // Buttons fade, the field's width follows; the field itself never fades (it may be sliding in).
+        val transition = android.transition.TransitionSet().apply {
+            addTransition(android.transition.Fade(android.transition.Fade.OUT))
+            addTransition(android.transition.ChangeBounds())
+            addTransition(android.transition.Fade(android.transition.Fade.IN).excludeTarget(urlBox, true))
+            duration = 170
+            ordering = android.transition.TransitionSet.ORDERING_TOGETHER
+        }
+        android.transition.TransitionManager.beginDelayedTransition(toolbar, transition)
+        val around = listOf<View>(profileChip.parent as View, findViewById(R.id.tabs_btn), menuBtn)
+        for (v in around) v.visibility = if (on) View.GONE else View.VISIBLE
+        updateHomeButton()
+        if (on) videoBtn.visibility = View.GONE else refreshToolbarNow()
+    }
+
+    private fun updateHomeButton() {
+        val v = if (prefs.showHomeButton && !editing) View.VISIBLE else View.GONE
+        if (homeBtn.visibility != v) homeBtn.visibility = v
     }
 
     fun stopEditing() {
         if (!editing) return
         editing = false
+        setToolbarEditing(false)
+        urlBox.animate().cancel()
+        urlBox.translationY = 0f
         suggestJob?.cancel()
         suggestionsList.visibility = View.GONE
+        restoreHomeSearch()
         updateUrlButtons()
         hideKeyboard()
         if (!gecko.requestFocus()) root.requestFocus()
@@ -589,6 +665,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
                     Suggestion(Suggestion.Kind.GO, text, target)
                 }
             }
+            if (text.isBlank()) copiedLink()?.let { head += Suggestion(Suggestion.Kind.CLIPBOARD, "Link you copied", it) }
             val local = withContext(Dispatchers.IO) { Suggestions.local(pid, text) }
             suggestionAdapter.items = head + local
             if (google && text.isNotBlank()) {
@@ -602,8 +679,26 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         }
     }
 
+    /** A web address on the clipboard (not the page that is open), offered when the address bar opens. */
+    private fun copiedLink(): String? {
+        val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        val text = try {
+            cm.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(this)?.toString()?.trim()
+        } catch (_: Exception) {
+            null
+        } ?: return null
+        if (text.isEmpty() || text.length > 2000 || text.contains(' ') || text.contains('\n')) return null
+        val url = when {
+            UrlUtils.isHttp(text) -> text
+            Regex("^[a-z0-9-]+(\\.[a-z0-9-]+)*\\.[a-z]{2,}(/\\S*)?$", RegexOption.IGNORE_CASE).matches(text) -> "https://$text"
+            else -> return null
+        }
+        return url.takeIf { it != current?.url }
+    }
+
     private fun bindSuggestion(h: RowHolder, s: Suggestion) {
         val icon = when (s.kind) {
+            Suggestion.Kind.CLIPBOARD -> R.drawable.ic_copy
             Suggestion.Kind.GO -> R.drawable.ic_globe
             Suggestion.Kind.SEARCH -> R.drawable.ic_search
             Suggestion.Kind.BOOKMARK -> R.drawable.ic_star
@@ -611,6 +706,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         }
         val subtitle = when (s.kind) {
             Suggestion.Kind.SEARCH -> null
+            Suggestion.Kind.CLIPBOARD -> UrlUtils.display(s.url)
             Suggestion.Kind.GO -> s.url
             else -> UrlUtils.display(s.url)
         }
@@ -661,7 +757,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
     private fun updateProgress() {
         val tab = current
-        if (tab == null || !tab.loading || fullscreenTab != null || tab.isHome) {
+        if (tab == null || !tab.loading || fullscreenTab != null || tab.showsHome) {
             if (progress.visibility != View.INVISIBLE) progress.visibility = View.INVISIBLE
         } else {
             if (progress.visibility != View.VISIBLE) progress.visibility = View.VISIBLE
@@ -694,6 +790,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         urlEdit.setHintTextColor(iconColor())
         val icons = ColorStateList.valueOf(iconColor())
         menuBtn.imageTintList = icons
+        homeBtn.imageTintList = icons
         urlClear.imageTintList = icons
         styledTabCount = null
         styleTabCount()
@@ -709,7 +806,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
     private fun setupHome() {
         home.listener = object : HomeView.Listener {
-            override fun onSearchBoxClicked() = startEditing()
+            override fun onSearchBoxClicked() = startEditing(fromHomeSearch = true)
 
             override fun onVoiceSearch() = voiceSearch()
 
@@ -724,17 +821,17 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     /** Holding a home page shortcut. */
     private fun tileMenu(tile: TopSites.Tile) {
         val pid = Profiles.currentId
-        val actions = ArrayList<Pair<String, () -> Unit>>()
-        actions += "Open in new tab" to { TabManager.newTab(tile.url, incognito = false) }
-        actions += "Open in incognito tab" to { TabManager.newTab(tile.url, incognito = true) }
-        actions += "Edit name or address" to { editTile(tile) }
+        val actions = ArrayList<Sheets.Action>()
+        actions += Sheets.Action(R.drawable.ic_open_new, "Open in new tab") { TabManager.newTab(tile.url, incognito = false) }
+        actions += Sheets.Action(R.drawable.ic_incognito, "Open in incognito tab") { TabManager.newTab(tile.url, incognito = true) }
+        actions += Sheets.Action(R.drawable.ic_edit, "Edit name or address") { editTile(tile) }
         if (TopSites.pinned(pid).firstOrNull()?.url != tile.url) {
-            actions += "Move to the start" to {
+            actions += Sheets.Action(R.drawable.ic_up, "Move to the start") {
                 TopSites.moveToStart(pid, tile)
                 home.refreshTiles()
             }
         }
-        actions += "Remove" to {
+        actions += Sheets.Action(R.drawable.ic_delete, "Remove") {
             // Also kept out of the most visited sites, or it would come straight back.
             val before = TopSites.pinned(pid)
             val wasHidden = tile.key in prefs.hiddenTiles
@@ -747,10 +844,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
                 home.refreshTiles()
             }
         }
-        MaterialAlertDialogBuilder(this)
-            .setTitle(tile.label)
-            .setItems(actions.map { it.first }.toTypedArray()) { _, which -> actions[which].second() }
-            .showImmersive()
+        Sheets.actions(this, tile.label, UrlUtils.display(tile.url), actions, com.swiftbrowser.core.Favicons.cached(tile.url))
     }
 
     /** Adds a shortcut ([old] null) or changes one; changed shortcuts stay where they are. */
@@ -786,18 +880,26 @@ class MainActivity : AppCompatActivity(), BrowserUi {
                 if (old == null) TopSites.addPinned(pid, url, name.text.toString().trim())
                 else TopSites.editPinned(pid, old, url, name.text.toString().trim())
                 home.refreshTiles()
+                // Its real icon (the site's big app icon, else its favicon), not just a letter.
+                UrlUtils.host(url)?.let { host ->
+                    com.swiftbrowser.core.Favicons.onPageIcon(url, url.substringBefore("://") + "://" + host + "/apple-touch-icon.png")
+                }
             }
             .setNegativeButton(android.R.string.cancel, null)
             .showImmersive()
     }
 
     private fun updateHome(tab: Tab) {
-        val show = tab.isHome && fullscreenTab == null
+        val show = tab.showsHome && fullscreenTab == null
         if (show) {
             if (home.visibility != View.VISIBLE || homeShownFor !== tab) {
                 home.show(tab.incognito)
                 home.scrollToTop()
                 homeShownFor = tab
+                if (!editing) {
+                    home.searchBox.alpha = 1f
+                    home.searchBox.translationY = 0f
+                }
             }
             home.visibility = View.VISIBLE
         } else {
@@ -808,13 +910,41 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         if (urlBox.visibility != urlVisibility) urlBox.visibility = urlVisibility
     }
 
+    /** The home button: the home page over the tab's page; Back returns to the page. */
+    private fun goHome() {
+        val tab = current ?: return
+        stopEditing()
+        closeFind()
+        if (tab.showsHome) {
+            home.scrollToTop()
+            return
+        }
+        tab.homeShown = true
+        // The page underneath needs no drawing (unless it is playing and should go on).
+        if (!(prefs.keepPlaying && tab.playing)) tab.session?.let { if (it.isOpen) it.setActive(false) }
+        showToolbar()
+        updateHome(tab)
+        home.animate().cancel()
+        home.alpha = 0f
+        home.translationY = dp(24f)
+        home.animate().alpha(1f).translationY(0f).setDuration(220).setInterpolator(DecelerateInterpolator(1.6f)).start()
+        refreshToolbarNow()
+    }
+
+    private fun leaveHome(tab: Tab) {
+        tab.homeShown = false
+        tab.session?.let { if (it.isOpen) it.setActive(true) }
+        updateHome(tab)
+        refreshToolbarNow()
+    }
+
     // ------------------------------------------------------------------ tab switcher
 
     private fun setupSwitcher() {
         switcher.listener = object : TabSwitcherView.Listener {
             override fun onTabChosen(tab: Tab) {
                 if (tab !== current) TabManager.select(tab)
-                switcher.close()
+                switcher.close(pageRect())
             }
 
             override fun onNewTab(incognito: Boolean) {
@@ -836,14 +966,14 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     /** Holding the tab button: the quick things to do with tabs. */
     private fun tabButtonMenu() {
         val tab = current ?: return
-        val actions = ArrayList<Pair<String, () -> Unit>>()
-        actions += "New tab" to { TabManager.newTab(incognito = false) }
-        actions += "New incognito tab" to { TabManager.newTab(incognito = true) }
-        actions += (if (tab.incognito) "Close this incognito tab" else "Close this tab") to { TabManager.close(tab, undoable = true) }
-        actions += "Recent tabs" to { Sheets.recentlyClosed(this) }
-        MaterialAlertDialogBuilder(this)
-            .setItems(actions.map { it.first }.toTypedArray()) { _, which -> actions[which].second() }
-            .showImmersive()
+        Haptics.hold(findViewById(R.id.tabs_btn))
+        val actions = listOf(
+            Sheets.Action(R.drawable.ic_add, "New tab") { TabManager.newTab(incognito = false) },
+            Sheets.Action(R.drawable.ic_incognito, "New incognito tab") { TabManager.newTab(incognito = true) },
+            Sheets.Action(R.drawable.ic_close, if (tab.incognito) "Close this incognito tab" else "Close this tab") { TabManager.close(tab, undoable = true) },
+            Sheets.Action(R.drawable.ic_reopen, "Recent tabs") { Sheets.recentlyClosed(this) },
+        )
+        Sheets.actions(this, null, null, actions)
     }
 
     fun openTabSwitcher() {
@@ -852,7 +982,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         stopEditing()
         closeFind()
         val tab = current
-        switcher.open(tab?.incognito == true)
+        switcher.open(tab?.incognito == true, pageRect())
         if (tab == null) return
         captureThumbnail(tab) {
             if (switcher.isOpen) {
@@ -861,6 +991,17 @@ class MainActivity : AppCompatActivity(), BrowserUi {
                 if (current === tab) tab.session?.let { if (it.isOpen) it.setActive(false) }
             }
         }
+    }
+
+    /** Where the page (or home page) is on the screen, in the tab grid's coordinates. */
+    private fun pageRect(): android.graphics.Rect {
+        val bar = toolbarShown.roundToInt()
+        val at = IntArray(2)
+        val grid = IntArray(2)
+        root.getLocationInWindow(at)
+        switcher.getLocationInWindow(grid)
+        val dy = at[1] - grid[1]
+        return android.graphics.Rect(0, dy + if (bottomBar) 0 else bar, root.width, dy + root.height - if (bottomBar) bar else 0)
     }
 
     private var thumbnailTries = 0
@@ -993,7 +1134,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         toolbarStale = false
         updateUrlBar()
         updateProgress()
-        val video = if (tab.media.isNotEmpty() && fullscreenTab == null && !tab.isHome) View.VISIBLE else View.GONE
+        val video = if (tab.media.isNotEmpty() && fullscreenTab == null && !tab.showsHome && !editing) View.VISIBLE else View.GONE
         if (videoBtn.visibility != video) videoBtn.visibility = video
     }
 
@@ -1038,8 +1179,13 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         updateKeepScreenOn()
     }
 
+    /**
+     * The screen stays on only while the open tab is really playing a video: not while it is
+     * paused or has ended (even in full screen), and not for sound alone.
+     */
     private fun updateKeepScreenOn() {
-        val on = fullscreenTab != null || current?.playing == true
+        val tab = current
+        val on = tab != null && tab.playing && (fullscreenTab === tab || tab.media.isNotEmpty() || tab.videoPlaying)
         if (on) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
@@ -1161,7 +1307,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     private fun canAutoHideToolbar(): Boolean {
         val tab = current ?: return false
         return prefs.hideToolbarOnScroll && !editing && fullscreenTab == null && !ptrRefreshing &&
-            findBar.visibility != View.VISIBLE && !switcher.isOpen && !tab.isHome && !tab.crashed
+            findBar.visibility != View.VISIBLE && !switcher.isOpen && !tab.showsHome && !tab.crashed
     }
 
     override fun onPageScroll(tab: Tab, scrollY: Float, byUser: Boolean) {
@@ -1285,7 +1431,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             override fun canPull(): Boolean {
                 val tab = current ?: return false
                 return prefs.pullToRefresh && !ptrRefreshing && fullscreenTab == null && !editing && !switcher.isOpen &&
-                    findBar.visibility != View.VISIBLE && tab.session != null && !tab.isHome &&
+                    findBar.visibility != View.VISIBLE && tab.session != null && !tab.showsHome &&
                     toolbarWanted && toolbarShown >= toolbarPx
             }
 
@@ -1527,38 +1673,48 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     override fun onContextMenu(tab: Tab, element: GeckoSession.ContentDelegate.ContextElement) {
         // On a full-screen video a held finger means double speed, not this menu.
         if (fullscreenTab != null && prefs.videoTaps) return
-        val actions = ArrayList<Pair<String, () -> Unit>>()
+        val actions = ArrayList<Sheets.Action>()
         val link = element.linkUri
         val src = element.srcUri
         if (link != null) {
-            actions += "Open in new tab" to { TabManager.newTab(link, parent = tab) }
-            actions += "Open in background tab" to { TabManager.newTab(link, parent = tab, select = false) }
-            if (!tab.incognito) actions += "Open in incognito tab" to { TabManager.newTab(link, parent = tab, incognito = true) }
-            actions += "Copy link" to { copy(link) }
-            actions += "Share link" to { share(link) }
-            actions += "Download link" to { downloadUrl(tab, link) }
+            actions += Sheets.Action(R.drawable.ic_open_new, "Open in new tab") { TabManager.newTab(link, parent = tab) }
+            actions += Sheets.Action(R.drawable.ic_tab, "Open in background tab") { TabManager.newTab(link, parent = tab, select = false) }
+            if (!tab.incognito) actions += Sheets.Action(R.drawable.ic_incognito, "Open in incognito tab") { TabManager.newTab(link, parent = tab, incognito = true) }
+            actions += Sheets.Action(R.drawable.ic_copy, "Copy link") { copy(link) }
+            element.textContent?.trim()?.takeIf { it.isNotEmpty() && it != link }?.let { text ->
+                actions += Sheets.Action(R.drawable.ic_text_size, "Copy link text") { copy(text) }
+            }
+            actions += Sheets.Action(R.drawable.ic_share, "Share link") { share(link) }
+            actions += Sheets.Action(R.drawable.ic_download, "Download link") { downloadUrl(tab, link) }
         }
         if (src != null) {
             when (element.type) {
                 GeckoSession.ContentDelegate.ContextElement.TYPE_IMAGE -> {
-                    actions += "Open image in new tab" to { TabManager.newTab(src, parent = tab) }
-                    actions += "Download image" to { downloadUrl(tab, src) }
-                    actions += "Copy image link" to { copy(src) }
+                    actions += Sheets.Action(R.drawable.ic_image, "Open image in new tab") { TabManager.newTab(src, parent = tab) }
+                    actions += Sheets.Action(R.drawable.ic_download, "Download image") { downloadUrl(tab, src) }
+                    actions += Sheets.Action(R.drawable.ic_link, "Copy image link") { copy(src) }
                 }
                 GeckoSession.ContentDelegate.ContextElement.TYPE_VIDEO,
                 GeckoSession.ContentDelegate.ContextElement.TYPE_AUDIO -> {
-                    actions += "Download video" to { downloadUrl(tab, src) }
-                    actions += "Copy video link" to { copy(src) }
-                    if (UrlUtils.isHttp(src)) actions += "Open video in new tab" to { TabManager.newTab(src, parent = tab) }
+                    actions += Sheets.Action(R.drawable.ic_download, "Download video") { downloadUrl(tab, src) }
+                    actions += Sheets.Action(R.drawable.ic_link, "Copy video link") { copy(src) }
+                    if (UrlUtils.isHttp(src)) actions += Sheets.Action(R.drawable.ic_movie, "Open video in new tab") { TabManager.newTab(src, parent = tab) }
                 }
             }
         }
         if (actions.isEmpty()) return
-        val title = (link ?: src ?: "").let { if (it.length > 120) it.take(117) + "…" else it }
-        MaterialAlertDialogBuilder(this)
-            .setTitle(title)
-            .setItems(actions.map { it.first }.toTypedArray()) { _, which -> actions[which].second() }
-            .showImmersive()
+        Haptics.hold(gecko)
+        // What it is (the link's words, a picture's description), then its address.
+        val title = (element.textContent ?: element.title ?: element.altText)?.trim()?.replace(Regex("\\s+"), " ")?.take(140)
+            ?.takeIf { it.isNotEmpty() && it != link }
+            ?: when (element.type) {
+                GeckoSession.ContentDelegate.ContextElement.TYPE_IMAGE -> "Picture"
+                GeckoSession.ContentDelegate.ContextElement.TYPE_VIDEO -> "Video"
+                GeckoSession.ContentDelegate.ContextElement.TYPE_AUDIO -> "Sound"
+                else -> null
+            }
+        val address = (link ?: src)?.let { if (it.startsWith("data:")) "data:…" else UrlUtils.display(it) }
+        Sheets.actions(this, title, address, actions, (link ?: src)?.let { com.swiftbrowser.core.Favicons.cached(it) })
     }
 
     fun copy(text: String) {
@@ -1655,7 +1811,10 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         }
     }
 
-    private val hideHud = Runnable { hud.visibility = View.GONE }
+    private val hideHud = Runnable {
+        hud.animate().cancel()
+        hud.animate().alpha(0f).setDuration(150).withEndAction { hud.visibility = View.GONE }.start()
+    }
 
     private fun setupGestures() {
         gestureLayer.listener = object : GestureFrameLayout.Listener {
@@ -1728,7 +1887,12 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     private fun showHud(icon: Int, text: String) {
         hud.text = text
         hud.setCompoundDrawablesRelativeWithIntrinsicBounds(tinted(icon), null, null, null)
-        hud.visibility = View.VISIBLE
+        if (hud.visibility != View.VISIBLE || hud.alpha < 1f) {
+            hud.animate().cancel()
+            if (hud.visibility != View.VISIBLE) hud.alpha = 0f
+            hud.visibility = View.VISIBLE
+            hud.animate().alpha(1f).setDuration(120).start()
+        }
         handler.removeCallbacks(hideHud)
     }
 
@@ -1789,11 +1953,12 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         val tab = current
         when {
             quickMenu.isOpen -> quickMenu.close()
-            switcher.isOpen -> if (!switcher.back()) switcher.close()
+            switcher.isOpen -> if (!switcher.back()) switcher.close(pageRect())
             fullscreenTab != null -> tab?.session?.exitFullScreen() ?: exitFullscreen()
             findBar.visibility == View.VISIBLE -> closeFind()
             editing -> stopEditing()
             tab == null -> finish()
+            tab.homeShown -> leaveHome(tab)
             tab.canGoBack && tab.session != null -> TabManager.goBack(tab)
             tab.leftHome && !tab.isHome -> TabManager.returnHome(tab)
             tab.parentId != null && TabManager.tabs.any { it.id == tab.parentId } -> TabManager.close(tab)
@@ -1855,15 +2020,6 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             override fun switchToTab(tab: Tab) {
                 if (tab !== current && tab in TabManager.tabs) TabManager.select(tab)
             }
-
-            override fun onVerticalSwipe(towardPage: Boolean): Boolean {
-                // Pulling the address bar towards the page opens the tab grid, as in Chrome.
-                if (!towardPage || switcher.isOpen) return false
-                openTabSwitcher()
-                return true
-            }
-
-            override fun isBarAtBottom() = bottomBar
 
             override fun backgroundOf(tab: Tab): Int =
                 color(if (tab.incognito) R.color.incognito_bg else if (tab.isHome) R.color.home_bg else R.color.page_bg)
@@ -1946,7 +2102,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         gestureLayer.edgeListener = object : GestureFrameLayout.EdgeListener {
             override fun canEdgeSwipe(fromLeft: Boolean): Boolean {
                 val tab = current ?: return false
-                return prefs.edgeSwipe && fullscreenTab == null && !editing && !tab.isHome && tab.session != null &&
+                return prefs.edgeSwipe && fullscreenTab == null && !editing && !tab.showsHome && tab.session != null &&
                     (if (fromLeft) tab.canGoBack else tab.canGoForward)
             }
 

@@ -38,6 +38,12 @@ class HomeView @JvmOverloads constructor(
     private val logo: View
     private val incognitoBox: View
     private val search: LinearLayout
+
+    /** The search box, which slides into the address bar when tapped (see MainActivity). */
+    val searchBox: View get() = search
+
+    /** The next shortcuts shown come in with a short fade (after one was added, moved or removed). */
+    private var animateTiles = false
     private val hint: TextView
     private val searchIcon: ImageView
     private val tilesBox: LinearLayout
@@ -132,7 +138,9 @@ class HomeView @JvmOverloads constructor(
 
     /** Reloads the shortcuts after one was added, changed or removed. */
     fun refreshTiles() {
-        if (!incognito) loadTiles()
+        if (incognito) return
+        animateTiles = true
+        loadTiles()
     }
 
     private fun bindTiles(tiles: List<TopSites.Tile>) {
@@ -159,6 +167,7 @@ class HomeView @JvmOverloads constructor(
                 }
                 v.setOnClickListener { listener?.onTileClicked(t.url) }
                 v.setOnLongClickListener {
+                    Haptics.hold(v)
                     listener?.onTileLongClicked(t, v)
                     true
                 }
@@ -169,6 +178,21 @@ class HomeView @JvmOverloads constructor(
             }
             repeat(4 - rowTiles.size) { row.addView(Space(context), LinearLayout.LayoutParams(0, 1, 1f)) }
             tilesBox.addView(row)
+        }
+        if (animateTiles) {
+            animateTiles = false
+            var i = 0
+            for (r in 0 until tilesBox.childCount) {
+                val row = tilesBox.getChildAt(r) as? LinearLayout ?: continue
+                for (c in 0 until row.childCount) {
+                    val v = row.getChildAt(c)
+                    if (v is Space) continue
+                    v.alpha = 0f
+                    v.scaleX = 0.9f
+                    v.scaleY = 0.9f
+                    v.animate().alpha(1f).scaleX(1f).scaleY(1f).setStartDelay(i++ * 12L).setDuration(170).start()
+                }
+            }
         }
     }
 

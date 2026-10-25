@@ -4,13 +4,14 @@ import android.content.Context
 import android.content.res.ColorStateList
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Rect
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.StateListDrawable
 import android.os.SystemClock
 import android.text.Editable
 import android.text.TextWatcher
 import android.util.AttributeSet
-import android.view.HapticFeedbackConstants
+
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewConfiguration
@@ -124,9 +125,9 @@ class TabSwitcherView @JvmOverloads constructor(
         normalCount = findViewById(R.id.toggle_normal_count)
         incognitoIcon = findViewById(R.id.toggle_incognito_icon)
 
-        val layout = GridLayoutManager(context, 2)
+        val layout = GridLayoutManager(context, columns())
         layout.spanSizeLookup = object : GridLayoutManager.SpanSizeLookup() {
-            override fun getSpanSize(position: Int) = if (adapter.items.getOrNull(position) is Item.Banner) 2 else 1
+            override fun getSpanSize(position: Int) = if (adapter.items.getOrNull(position) is Item.Banner) layout.spanCount else 1
         }
         grid.layoutManager = layout
         grid.adapter = adapter
@@ -164,42 +165,174 @@ class TabSwitcherView @JvmOverloads constructor(
         }
     }
 
-    fun open(incognito: Boolean) {
+    /**
+     * Opens the grid. [page] is where the open tab's page is on the screen (in this view's
+     * coordinates): its picture shrinks from there into its card.
+     */
+    fun open(incognito: Boolean, page: Rect? = null) {
         showingIncognito = incognito
         closing = false
         mode = Mode.GRID
         openGroup = null
         query = ""
         applyPage()
+        // The screen may have turned while the grid was hidden.
+        (grid.layoutManager as GridLayoutManager).let { if (it.spanCount != columns()) it.spanCount = columns() }
         refresh(scrollToCurrent = true)
         animate().cancel()
+        stopZoom()
+        for (i in 0 until childCount) getChildAt(i).apply {
+            animate().cancel()
+            alpha = 1f
+        }
         visibility = View.VISIBLE
-        alpha = 0f
-        scaleX = 1.04f
-        scaleY = 1.04f
-        animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(170).withEndAction(null).start()
+        alpha = 1f
+        // The grid fades in around the open tab's picture, which stays solid as it shrinks.
+        fadeBackground(0, 255)
+        for (i in 0 until childCount) getChildAt(i).let { v ->
+            if (v === zoomView) return@let
+            v.alpha = 0f
+            v.animate().alpha(1f).setDuration(ZOOM_MS).start()
+        }
+        val tab = TabManager.current
+        if (page != null && tab != null) post { zoom(tab, page, intoCard = true) }
     }
 
-    fun close() {
+    /** Closes the grid; with [page], the chosen tab's picture grows from its card to there. */
+    fun close(page: Rect? = null) {
         if (visibility != View.VISIBLE || closing) return
         closing = true
         hideKeyboard()
         animate().cancel()
-        animate().alpha(0f).scaleX(1.04f).scaleY(1.04f).setDuration(140).withEndAction {
-            visibility = View.GONE
-            alpha = 1f
-            scaleX = 1f
-            scaleY = 1f
-            closing = false
-        }.start()
+        val tab = TabManager.current
+        val zoomed = page != null && tab != null && zoom(tab, page, intoCard = false)
+        // With the picture growing to the page, the grid fades behind it; otherwise all of it fades.
+        val fading = if (zoomed) (0 until childCount).map { getChildAt(it) }.filter { it !== zoomView } else listOf(this)
+        fading.forEach { it.animate().cancel() }
+        if (zoomed) fadeBackground(255, 0)
+        fading.forEachIndexed { i, v ->
+            v.animate().alpha(0f).setDuration(if (zoomed) ZOOM_MS else 140).withEndAction(if (i > 0) null else Runnable {
+                visibility = View.GONE
+                fading.forEach { it.alpha = 1f }
+                alpha = 1f
+                background?.alpha = 255
+                closing = false
+                stopZoom()
+            }).start()
+        }
         listener?.onSwitcherClosed()
+    }
+
+    // ------------------------------------------------------------------ the open tab's picture moving between page and card
+
+    private var zoomView: TopCropImageView? = null
+    private var zoomAnim: android.animation.ValueAnimator? = null
+    private var zoomHidden: View? = null
+
+    /** Moves [tab]'s picture between [page] and its card; false when its card isn't on screen. */
+    private fun zoom(tab: Tab, page: Rect, intoCard: Boolean): Boolean {
+        val idx = adapter.items.indexOfFirst {
+            (it is Item.TabCard && it.tab === tab) || (it is Item.GroupCard && it.group.id == tab.groupId)
+        }
+        val holder = if (idx >= 0) grid.findViewHolderForAdapterPosition(idx) else null
+        val box = when (holder) {
+            is CardHolder -> holder.thumbBox
+            is GroupHolder -> holder.mosaic
+            else -> null
+        } ?: return false
+        val card = Rect()
+        box.getDrawingRect(card)
+        offsetDescendantRectToMyCoords(box, card)
+        if (card.isEmpty || !Rect(0, 0, width, height).intersect(card)) return false
+
+        stopZoom()
+        val v = zoomView ?: TopCropImageView(context).also {
+            it.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            addView(it, LayoutParams(0, 0))
+            zoomView = it
+        }
+        v.setBackgroundColor(color(if (tab.incognito) R.color.incognito_bg else if (tab.isHome) R.color.home_bg else R.color.page_bg))
+        v.setImageDrawable(null)
+        if (!tab.isHome) Thumbnails.load(tab) { bmp -> if (zoomView === v && bmp != null) v.setImageBitmap(bmp) }
+        v.visibility = View.VISIBLE
+        v.bringToFront()
+        // The card stays empty while its picture is on the way in or out.
+        val cardView = holder!!.itemView
+        cardView.alpha = 0f
+        zoomHidden = cardView
+        val from = if (intoCard) Rect(page) else card
+        val to = if (intoCard) card else Rect(page)
+        v.layout(from.left, from.top, from.right, from.bottom)
+        zoomAnim = android.animation.ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = ZOOM_MS
+            interpolator = android.view.animation.DecelerateInterpolator(1.5f)
+            addUpdateListener {
+                val f = it.animatedValue as Float
+                v.layout(
+                    lerp(from.left, to.left, f), lerp(from.top, to.top, f),
+                    lerp(from.right, to.right, f), lerp(from.bottom, to.bottom, f),
+                )
+            }
+            addListener(object : android.animation.AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: android.animation.Animator) {
+                    if (zoomAnim !== animation) return
+                    if (intoCard) stopZoom()
+                }
+            })
+            start()
+        }
+        return true
+    }
+
+    private fun lerp(a: Int, b: Int, f: Float) = (a + (b - a) * f).toInt()
+
+    private var backgroundAnim: android.animation.ValueAnimator? = null
+
+    private fun fadeBackground(from: Int, to: Int) {
+        backgroundAnim?.cancel()
+        val bg = background ?: return
+        bg.alpha = from
+        backgroundAnim = android.animation.ValueAnimator.ofInt(from, to).apply {
+            duration = ZOOM_MS
+            addUpdateListener { bg.alpha = it.animatedValue as Int }
+            start()
+        }
+    }
+
+    private fun stopZoom() {
+        zoomAnim?.let {
+            zoomAnim = null
+            it.cancel()
+        }
+        zoomHidden?.alpha = 1f
+        zoomHidden = null
+        zoomView?.let {
+            it.visibility = View.GONE
+            it.setImageDrawable(null)
+        }
+    }
+
+    override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
+        // The moving picture is placed by its animation, not by the layout.
+        val v = zoomView
+        val keep = if (v != null && zoomAnim != null) Rect(v.left, v.top, v.right, v.bottom) else null
+        super.onLayout(changed, left, top, right, bottom)
+        if (keep != null) v?.layout(keep.left, keep.top, keep.right, keep.bottom)
     }
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
-        // The screen turned: every card takes the new size.
-        if (w != oldw && oldw > 0) post { adapter.notifyDataSetChanged() }
+        // The screen turned: three tabs a row when it is wide, and every card takes the new size.
+        if (w != oldw && oldw > 0) post {
+            (grid.layoutManager as GridLayoutManager).spanCount = columns()
+            adapter.notifyDataSetChanged()
+        }
     }
+
+    private fun landscape(): Boolean =
+        resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+
+    private fun columns() = if (landscape()) 3 else 2
 
     /** Back from a group, the inactive tabs or a search; false when the grid itself is shown. */
     fun back(): Boolean {
@@ -562,7 +695,7 @@ class TabSwitcherView @JvmOverloads constructor(
             v.animate().scaleX(0.92f).scaleY(0.92f).setDuration(120).start()
             v.findViewById<View>(R.id.card_selected)?.visibility = View.VISIBLE
             v.findViewById<View>(R.id.group_selected)?.visibility = View.VISIBLE
-            v.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+            Haptics.tick(v)
         }
     }
 
@@ -611,7 +744,7 @@ class TabSwitcherView @JvmOverloads constructor(
                 moved = false
                 maxDrag = 0f
                 mergeCandidate = null
-                vh.itemView.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                Haptics.hold(vh.itemView)
                 vh.itemView.animate().scaleX(1.05f).scaleY(1.05f).setDuration(120).start()
             }
         }
@@ -742,8 +875,12 @@ class TabSwitcherView @JvmOverloads constructor(
          * taller than the others.
          */
         private fun thumbHeight(): Int {
-            val width = (grid.width.takeIf { it > 0 } ?: resources.displayMetrics.widthPixels) - grid.paddingLeft - grid.paddingRight
-            return ((width / 2 - dp(12)) * Thumbnails.ASPECT).toInt()
+            // The screen's width now: the grid's own may still be the one before the screen turned.
+            val width = resources.displayMetrics.widthPixels - grid.paddingLeft - grid.paddingRight
+            val wide = landscape()
+            // Wide screens: shorter pictures, so a whole row of cards fits on the screen.
+            val aspect = if (wide) CARD_ASPECT_WIDE else CARD_ASPECT
+            return ((width / (if (wide) 3 else 2) - dp(12)) * aspect).toInt()
         }
 
         private fun fitHeight(v: View) {
@@ -901,6 +1038,13 @@ class TabSwitcherView @JvmOverloads constructor(
     private companion object {
         const val BANNER_INACTIVE = 1
         const val NOTE_INACTIVE = 2
+
+        /** How long the open tab takes to shrink into its card, or to grow back out of it. */
+        const val ZOOM_MS = 220L
+
+        /** A card picture's height for its width (the top of the page is shown). */
+        const val CARD_ASPECT = 1.02f
+        const val CARD_ASPECT_WIDE = 0.72f
 
         /** How long a dragged tab rests over another card before letting go groups them. */
         const val MERGE_HOLD_MS = 350L

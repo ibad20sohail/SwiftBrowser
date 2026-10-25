@@ -58,6 +58,10 @@ object Downloads {
     const val KIND_HLS = "hls"
 
     private const val MAX_PARALLEL = 2
+
+    /** Shown on a download that waits for Wi-Fi (see Prefs.wifiOnlyDownloads). */
+    const val WAITING_FOR_WIFI = "Waiting for Wi-Fi"
+    private const val BIG = 50L * 1024 * 1024
     private const val HLS_PARALLEL = 4
 
     class Item(
@@ -117,6 +121,7 @@ object Downloads {
             if (item.status == RUNNING || item.status == QUEUED || item.status == CONVERTING) item.status = PAUSED
             items[item.id] = item
         }
+        com.swiftbrowser.engine.DataSaver.networkListeners += { onNetworkChanged() }
     }
 
     fun all(): List<Item> = synchronized(items) { items.values.reversed() }
@@ -322,10 +327,38 @@ object Downloads {
         streams.remove(id)?.let { runCatching { it.close() } }
     }
 
+    /** On mobile data with "Big downloads wait for Wi-Fi": videos and files over 50 MB wait. */
+    private fun mustWait(item: Item): Boolean =
+        prefs.wifiOnlyDownloads && com.swiftbrowser.engine.DataSaver.onMobileData &&
+            (item.kind == KIND_HLS || item.total > BIG || (item.total <= 0 && item.mime?.startsWith("video/") == true))
+
+    /** The phone moved between Wi-Fi and mobile data, or the setting changed. */
+    fun onNetworkChanged() {
+        synchronized(items) { items.values.toList() }.forEach { item ->
+            if (item.status == RUNNING && mustWait(item)) {
+                stopJob(item.id)
+                item.status = QUEUED
+                item.error = WAITING_FOR_WIFI
+                persist(item)
+            } else if (item.status == QUEUED && item.error == WAITING_FOR_WIFI && !mustWait(item)) {
+                item.error = null
+            }
+        }
+        changed(immediate = true)
+        schedule()
+    }
+
     private fun schedule() {
         val toStart = synchronized(items) {
             val running = items.values.count { it.status == RUNNING || it.status == CONVERTING }
             items.values.filter { it.status == QUEUED && !jobs.containsKey(it.id) }
+                .filter { item ->
+                    val wait = mustWait(item)
+                    item.error = if (wait) WAITING_FOR_WIFI else item.error?.takeIf { it != WAITING_FOR_WIFI }
+                    // Waiting: the page's open answer is let go; the file is asked for again on Wi-Fi.
+                    if (wait) firstResponses.remove(item.id)?.body?.let { runCatching { it.close() } }
+                    !wait
+                }
                 .sortedBy { it.created }
                 .take((MAX_PARALLEL - running).coerceAtLeast(0))
         }

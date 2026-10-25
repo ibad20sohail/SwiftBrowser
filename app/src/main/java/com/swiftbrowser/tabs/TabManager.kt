@@ -232,9 +232,10 @@ object TabManager {
         detachSession(tab)
     }
 
-    /** Background play was switched on or off: pages that are already open follow it. */
-    fun applyBackgroundPlay(on: Boolean) {
+    /** "Keep playing in the background" was switched on or off: pages that are already open follow it. */
+    fun applyKeepPlaying(on: Boolean) {
         for (t in tabs) t.session?.settings?.suspendMediaWhenInactive = !on
+        Helper.sendLook()
     }
 
     fun suspendBackgroundTabs() {
@@ -590,6 +591,7 @@ object TabManager {
     /** Navigates [tab] to [url] on the user's behalf. */
     fun load(tab: Tab, url: String) {
         tab.userNavAt = System.currentTimeMillis()
+        tab.homeShown = false
         if (tab.isHome) tab.leftHome = true
         // A blank tab gets an empty session here; the address is set after, so it loads only once.
         val session = ensureLive(tab)

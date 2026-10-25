@@ -60,6 +60,8 @@ object ErrorPage {
             "This page crashed" to "Try loading it again."
         WebRequestError.ERROR_UNKNOWN_PROTOCOL ->
             "Can't open this address" to "The browser doesn't know how to open this type of link."
+        WebRequestError.ERROR_HTTPS_ONLY ->
+            "No secure version of this site" to "It only works over an insecure connection. Turn off \"Secure connections first\" in Settings → Privacy to open it."
         WebRequestError.ERROR_MALFORMED_URI ->
             "Invalid address" to "Check the address for typing mistakes."
         else -> "Problem loading page" to "Something went wrong (error ${e.code})."

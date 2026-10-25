@@ -93,6 +93,9 @@ object Helper {
     }
 
     /** The tab's session went away (closed or suspended). */
+    /** The tab's id as extensions know it (the same for all of them), once its page has said hello. */
+    fun extensionTabId(tab: Tab): Int? = tabsByExtId.entries.firstOrNull { it.value === tab }?.key
+
     fun detachTab(tab: Tab) {
         tab.helperPorts.clear()
         tabsByExtId.entries.removeAll { it.value === tab }
@@ -113,7 +116,10 @@ object Helper {
             }
             "click" -> tab.lastClick = NavPolicy.Click(msg.optString("href"), System.currentTimeMillis())
             "icon" -> if (!tab.incognito) Favicons.onPageIcon(msg.optString("page"), msg.optString("href").ifBlank { null })
-            "playing" -> Unit
+            "playing" -> if (!tab.videoPlaying) {
+                tab.videoPlaying = true
+                TabManager.ui?.onPlayingChanged(tab)
+            }
             "video-pos" -> WatchPositions.onPosition(tab, msg)
             // Read aloud, from the reader view page in this tab: it hears back how far it got.
             "tts-start", "tts-pause", "tts-resume", "tts-stop" -> {
@@ -130,6 +136,7 @@ object Helper {
                 ReadAloud.onMessage(ctx, msg)
             }
             "video-start" -> WatchPositions.onStart(tab, msg)
+            "media-ended" -> SleepTimer.onMediaEnded(tab)
         }
     }
 
@@ -186,18 +193,27 @@ object Helper {
         url != null && url.startsWith("moz-extension://") && url.contains("/reader/view.html")
 
     /**
-     * Tells the extension which styles pages get from their first byte on: Lite mode, and the
-     * lighter YouTube and TheFlixer (unless sites are shown as designed).
+     * Tells the extension which styles pages get from their first byte on: Lite mode (but not on
+     * the sites left out of it), and the lighter YouTube and TheFlixer (unless sites are shown as
+     * designed); and whether playing pages are kept playing out of view.
      */
     fun sendLook() {
         val port = backgroundPort ?: return
         val prefs = SwiftApp.prefs
         try {
-            port.postMessage(JSONObject().put("type", "look").put("lite", prefs.liteMode).put("fixes", !prefs.sitesAsDesigned))
+            port.postMessage(
+                JSONObject().put("type", "look").put("lite", prefs.liteMode).put("fixes", !prefs.sitesAsDesigned)
+                    .put("liteExcept", org.json.JSONArray(com.swiftbrowser.core.SiteSettings.liteExceptions()))
+                    .put("keepPlaying", prefs.keepPlaying)
+                    .put("readerFont", prefs.readerFont).put("readerSpacing", prefs.readerSpacing),
+            )
         } catch (e: Exception) {
             L.w("Couldn't send the look", e)
         }
     }
+
+    /** Reader view's font and spacing travel with the look (open reader pages follow at once). */
+    fun sendReaderStyle() = sendLook()
 
     private fun addMedia(tab: Tab, msg: JSONObject) {
         val url = msg.optString("url")

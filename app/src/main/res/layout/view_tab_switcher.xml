@@ -28,7 +28,7 @@
                 android:paddingStart="12dp"
                 android:paddingEnd="16dp"
                 android:text="New tab"
-                android:textColor="@color/on_accent_container"
+                android:textColor="?attr/colorOnPrimaryContainer"
                 android:textSize="15sp" />
 
             <View
@@ -184,7 +184,7 @@
                 android:gravity="center"
                 android:paddingStart="12dp"
                 android:paddingEnd="12dp"
-                android:textColor="@color/accent"
+                android:textColor="?attr/colorPrimary"
                 android:textSize="15sp"
                 android:visibility="gone" />
         </LinearLayout>

@@ -60,7 +60,17 @@ object TabManager {
 
     var ui: BrowserUi? = null
 
+    /** The connection is back: the open tab's failed page loads again (other tabs when opened). */
+    private fun onOnline() {
+        val tab = current ?: return
+        if (tab.waitingForConnection && tab.session != null) {
+            L.d("Connection back: loading the page again")
+            reload(tab)
+        }
+    }
+
     fun init(db: Db, prefs: Prefs) {
+        com.swiftbrowser.engine.DataSaver.onlineListeners += { onOnline() }
         this.db = db
         this.prefs = prefs
         tabs.clear()
@@ -152,6 +162,10 @@ object TabManager {
         }
         current = tab
         tab.lastUsed = System.currentTimeMillis()
+        // It failed while offline and the connection is back now.
+        if (tab.waitingForConnection && com.swiftbrowser.engine.DataSaver.online && tab.session != null) {
+            ui?.activity?.window?.decorView?.post { if (current === tab) reload(tab) }
+        }
         scheduleSave(tab)
         if (!tab.isHome) {
             tab.wokeUp = tab.session == null && (tab.sessionState != null || tab.state != null)
@@ -591,10 +605,14 @@ object TabManager {
     /** Navigates [tab] to [url] on the user's behalf. */
     fun load(tab: Tab, url: String) {
         tab.userNavAt = System.currentTimeMillis()
+        tab.waitingForConnection = false
         tab.homeShown = false
         if (tab.isHome) tab.leftHome = true
         // A blank tab gets an empty session here; the address is set after, so it loads only once.
         val session = ensureLive(tab)
+        // The home page may have put the page underneath to rest (MainActivity.goHome): the new
+        // page must load in an active session, or it isn't drawn, saved or added to history.
+        if (tab === current && session.isOpen) session.setActive(true)
         if (tab.isBlank) tab.url = url
         tab.loading = true
         tab.progress = 5
@@ -624,6 +642,7 @@ object TabManager {
 
     fun reload(tab: Tab) {
         tab.userNavAt = System.currentTimeMillis()
+        tab.waitingForConnection = false
         val session = tab.session
         if (session == null || !session.isOpen) {
             if (!tab.isHome) select(tab)
@@ -634,11 +653,13 @@ object TabManager {
 
     fun goBack(tab: Tab) {
         tab.userNavAt = System.currentTimeMillis()
+        tab.waitingForConnection = false
         tab.session?.goBack()
     }
 
     fun goForward(tab: Tab) {
         tab.userNavAt = System.currentTimeMillis()
+        tab.waitingForConnection = false
         tab.session?.goForward()
     }
 

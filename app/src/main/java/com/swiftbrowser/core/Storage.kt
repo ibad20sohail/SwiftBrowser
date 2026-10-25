@@ -50,6 +50,27 @@ object Storage {
         return Usage(app, adBlock, sites, sizeOf(ctx.cacheDir), (profiles - adBlock - sites).coerceAtLeast(0), swift)
     }
 
+    /**
+     * Blocking: when the phone is almost full (under 300 MB free), the cache is emptied, at most once a
+     * day. Returns how much it held, or 0 when nothing was done.
+     */
+    fun freeSpaceIfLow(ctx: Context): Long {
+        val prefs = SwiftApp.prefs
+        if (System.currentTimeMillis() - prefs.lastLowSpaceCleanup < 24L * 3600 * 1000) return 0
+        val free = try {
+            android.os.StatFs(ctx.filesDir.path).availableBytes
+        } catch (_: Exception) {
+            return 0
+        }
+        if (free >= 300L * 1024 * 1024) return 0
+        val cache = sizeOf(ctx.cacheDir)
+        if (cache < 2L * 1024 * 1024) return 0
+        prefs.lastLowSpaceCleanup = System.currentTimeMillis()
+        Engine.runtime.storageController.clearData(StorageController.ClearFlags.ALL_CACHES)
+        L.d("Phone almost full (${free / (1024 * 1024)} MB free): cache cleared")
+        return cache
+    }
+
     /** Blocking: sites that stored something, the biggest first. */
     fun sites(ctx: Context): List<SiteUsage> {
         val bytes = HashMap<String, Long>()

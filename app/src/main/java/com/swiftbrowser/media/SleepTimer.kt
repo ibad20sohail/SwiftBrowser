@@ -41,6 +41,19 @@ object SleepTimer {
         stopAll("time is up")
     }
 
+    /** Once a minute while the timer runs: the time left in the menu and notification. */
+    private val tick: Runnable = object : Runnable {
+        override fun run() {
+            if (endsAt <= 0) return
+            listener?.invoke()
+            com.swiftbrowser.SwiftApp.instance?.let { PlaybackService.sync(it) }
+            handler.postDelayed(this, 60_000)
+        }
+    }
+
+    /** How long the sound fades out before it stops. */
+    private const val FADE_MS = 8000L
+
     fun set(ctx: Context, minutes: Int) {
         cancel(notify = false)
         if (minutes == END) {
@@ -48,12 +61,14 @@ object SleepTimer {
         } else {
             endsAt = SystemClock.uptimeMillis() + minutes * 60_000L
             handler.postDelayed(fire, minutes * 60_000L)
+            handler.postDelayed(tick, 60_000)
         }
         changed(ctx)
     }
 
     fun cancel(ctx: Context? = null, notify: Boolean = true) {
         handler.removeCallbacks(fire)
+        handler.removeCallbacks(tick)
         endsAt = 0
         atEnd = false
         if (notify && ctx != null) changed(ctx)
@@ -94,11 +109,16 @@ object SleepTimer {
     }
 
     private fun stopAll(why: String) {
-        L.d("Sleep timer: $why, pausing")
-        for (t in TabManager.tabs) if (t.playing) t.mediaSession?.pause()
-        stopNextUntil = maxOf(stopNextUntil, SystemClock.uptimeMillis() + 60_000)
+        L.d("Sleep timer: $why, fading out")
+        val playing = TabManager.tabs.filter { it.playing }
+        // The sound fades out over a few seconds instead of stopping at once; the page pauses
+        // itself at the end (and is paused here in case it couldn't).
+        for (t in playing) Helper.fadeOut(t, FADE_MS)
+        handler.postDelayed({ for (t in playing) if (t.playing) t.mediaSession?.pause() }, FADE_MS + 1500)
+        stopNextUntil = maxOf(stopNextUntil, SystemClock.uptimeMillis() + FADE_MS + 60_000)
         listener?.invoke()
-        TabManager.ui?.showMessage("Sleep timer: playback paused")
+        TabManager.ui?.showMessage("Sleep timer: stopping playback")
+        com.swiftbrowser.SwiftApp.instance?.let { PlaybackService.sync(it) }
     }
 
     private fun changed(ctx: Context) {

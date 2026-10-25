@@ -130,8 +130,8 @@
                 android:fontFamily="sans-serif-medium"
                 android:paddingStart="8dp"
                 android:text="Shortcuts"
-                android:textColor="@color/text_secondary"
-                android:textSize="13sp"
+                android:textColor="@color/text_primary"
+                android:textSize="15.5sp"
                 android:visibility="gone" />
 
             <LinearLayout

@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Swift</string>
-    <string name="url_hint">Search Google or type URL</string>
+    <string name="url_hint">Search or type web address</string>
     <string name="find_hint">Find in page</string>
     <string name="incognito_title">You\'ve gone Incognito</string>
     <string name="incognito_body">Pages you view in incognito tabs won\'t stay in your history, and their cookies and site data are deleted when you close all incognito tabs. Downloads and bookmarks are kept.</string>

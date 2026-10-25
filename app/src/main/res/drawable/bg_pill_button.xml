@@ -3,7 +3,7 @@
 <ripple xmlns:android="http://schemas.android.com/apk/res/android" android:color="#22000000">
     <item>
         <shape android:shape="rectangle">
-            <solid android:color="@color/accent_container" />
+            <solid android:color="?attr/colorPrimaryContainer" />
             <corners android:radius="20dp" />
         </shape>
     </item>

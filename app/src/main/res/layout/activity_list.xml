@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- History, bookmarks and downloads (2.0): the title bar, an optional search box, and the list,
+     which stays at a readable width on a turned phone; an empty list shows what goes there. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
@@ -8,32 +10,38 @@
     <com.google.android.material.appbar.MaterialToolbar
         android:id="@+id/list_toolbar"
         android:layout_width="match_parent"
-        android:layout_height="56dp"
+        android:layout_height="60dp"
         android:background="@color/page_bg" />
 
-    <EditText
-        android:id="@+id/list_search"
+    <com.swiftbrowser.ui.MaxWidthLayout
         android:layout_width="match_parent"
-        android:layout_height="46dp"
-        android:layout_marginStart="14dp"
-        android:layout_marginEnd="14dp"
-        android:layout_marginBottom="8dp"
-        android:background="@drawable/bg_url"
-        android:drawableStart="@drawable/ic_search"
-        android:drawablePadding="8dp"
-        android:hint="Search"
-        android:imeOptions="actionSearch|flagNoExtractUi"
-        android:importantForAutofill="no"
-        android:inputType="text"
-        android:paddingStart="12dp"
-        android:paddingEnd="12dp"
-        android:singleLine="true"
-        android:textColor="@color/text_primary"
-        android:textColorHint="@color/text_secondary"
-        android:textSize="15sp"
-        android:visibility="gone" />
+        android:layout_height="wrap_content">
 
-    <FrameLayout
+        <EditText
+            android:id="@+id/list_search"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:layout_marginStart="16dp"
+            android:layout_marginEnd="16dp"
+            android:layout_marginBottom="8dp"
+            android:background="@drawable/bg_url"
+            android:drawableStart="@drawable/ic_search"
+            android:drawablePadding="10dp"
+            android:drawableTint="@color/text_secondary"
+            android:hint="Search"
+            android:imeOptions="actionSearch|flagNoExtractUi"
+            android:importantForAutofill="no"
+            android:inputType="text"
+            android:paddingStart="14dp"
+            android:paddingEnd="14dp"
+            android:singleLine="true"
+            android:textColor="@color/text_primary"
+            android:textColorHint="@color/text_secondary"
+            android:textSize="15sp"
+            android:visibility="gone" />
+    </com.swiftbrowser.ui.MaxWidthLayout>
+
+    <com.swiftbrowser.ui.MaxWidthLayout
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1">
@@ -43,17 +51,12 @@
             android:layout_width="match_parent"
             android:layout_height="match_parent"
             android:clipToPadding="false"
-            android:paddingBottom="16dp" />
+            android:paddingBottom="24dp" />
 
-        <TextView
+        <FrameLayout
             android:id="@+id/list_empty"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_gravity="center"
-            android:gravity="center"
-            android:padding="32dp"
-            android:textColor="@color/text_secondary"
-            android:textSize="15sp"
+            android:layout_height="match_parent"
             android:visibility="gone" />
-    </FrameLayout>
+    </com.swiftbrowser.ui.MaxWidthLayout>
 </LinearLayout>

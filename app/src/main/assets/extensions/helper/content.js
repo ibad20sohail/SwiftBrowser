@@ -78,6 +78,32 @@
         try { v.playbackRate = v.__swiftHeldRate; } catch (e) { }
         delete v.__swiftHeldRate;
       }
+    } else if (msg.type === 'seek-playing') {
+      // A headset or notification button: what plays in this frame skips.
+      for (const m of document.querySelectorAll('video, audio')) {
+        if (!m.paused && Number.isFinite(m.duration)) {
+          m.currentTime = Math.max(0, Math.min(m.duration - 0.5, m.currentTime + Number(msg.delta || 0)));
+        }
+      }
+    } else if (msg.type === 'fade') {
+      // The sleep timer: quieter and quieter, then paused, with the volume as it was.
+      const ms = Math.max(500, Number(msg.ms) || 6000);
+      for (const m of document.querySelectorAll('video, audio')) {
+        if (m.paused) { continue; }
+        const start = m.volume;
+        const t0 = performance.now();
+        const step = () => {
+          const f = Math.min(1, (performance.now() - t0) / ms);
+          try { m.volume = start * (1 - f); } catch (e) { }
+          if (f < 1 && !m.paused) {
+            setTimeout(step, 100);
+          } else {
+            m.pause();
+            try { m.volume = start; } catch (e) { }
+          }
+        };
+        step();
+      }
     } else if (msg.type === 'resume') {
       // Continue watching: the video of that length goes back to where it was left off.
       const d = Number(msg.d);

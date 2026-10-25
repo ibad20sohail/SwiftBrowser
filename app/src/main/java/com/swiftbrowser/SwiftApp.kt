@@ -40,7 +40,7 @@ class SwiftApp : Application() {
         prefs = Prefs(this)
         migratePrefs()
         db = Db(this)
-        applyNightMode(prefs.darkMode)
+        com.swiftbrowser.ui.Looks.start()
         Profiles.init(db, prefs)
         AdBlock.init(prefs, db)
         Downloads.init(this, db, prefs)

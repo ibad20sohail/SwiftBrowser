@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A tab's page picture inside its card: inset, with its own rounded corners (2.0). -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <solid android:color="@color/tab_thumb_bg" />
+    <corners android:radius="14dp" />
+</shape>

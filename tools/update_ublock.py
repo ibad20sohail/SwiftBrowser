@@ -8,7 +8,8 @@ The patch:
   * loads it from background.html (after uBO's own start.js),
   * adds the "nativeMessaging" and "geckoViewAddons" permissions it needs,
   * makes js/cachestorage.js keep compiled lists and the filter snapshot only in
-    uBO's fast IndexedDB cache, not a second time in extension storage (~25 MB).
+    uBO's fast IndexedDB cache, not a second time in extension storage (~25 MB),
+  * sizes the element picker for a phone (css/epicker-ui.css).
 
 uBO's version string is left untouched (a 4-part version would switch uBO into
 dev-build mode). When the bridge changes, bump UBO_BRIDGE_REV in Engine.kt so the
@@ -28,6 +29,44 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEST = os.path.join(ROOT, "app", "src", "main", "assets", "extensions", "ublock")
 BRIDGE = os.path.join(ROOT, "tools", "ublock-patch", "swift-bridge.js")
 BRIDGE_TAG = '<script src="js/swift-bridge.js" type="module"></script>'
+
+PICKER_CSS = r"""/* Swift: the picker on a phone. */
+/* The panel spans the bottom of the screen, with text and buttons sized to the screen's width:
+   pages laid out wider than the phone (no mobile version) get them scaled up to match. */
+html#ublock0-epicker {
+    --font-size: clamp(15px, 4.2vw, 46px);
+    --font-size-smaller: calc(var(--font-size) * 0.9);
+    --font-size-xsmall: calc(var(--font-size) * 0.8);
+    --font-size-larger: calc(var(--font-size) * 1.1);
+    --monospace-size: calc(var(--font-size) * 0.85);
+    --button-font-size: var(--font-size);
+    font-size: var(--font-size);
+}
+#ublock0-epicker aside,
+#ublock0-epicker:not(.paused) aside,
+#ublock0-epicker.minimized aside {
+    bottom: 1vw !important;
+    left: 1vw !important;
+    max-width: 98vw !important;
+    min-width: 0 !important;
+    right: auto !important;
+    top: auto !important;
+    width: 98vw !important;
+}
+#ublock0-epicker #toolbar button {
+    flex: 1;
+    font-size: 1em;
+    margin: 0.2em;
+    min-height: 2.6em;
+}
+#ublock0-epicker #windowbar {
+    min-height: 2.2em;
+}
+#ublock0-epicker #candidateFilters .changeFilter li {
+    font-size: var(--monospace-size);
+    padding: 0.3em 0;
+}
+"""
 
 CACHE_OLD = r"""                await Promise.all([
                     cacheAPIs[fastCache].set(rawbin, serializedbin),
@@ -133,6 +172,13 @@ def main():
         js = js.replace(CACHE_OLD, CACHE_NEW)
     with open(cache_path, "w", encoding="utf-8", newline="\n") as f:
         f.write(js)
+
+    picker_path = os.path.join(DEST, "css", "epicker-ui.css")
+    with open(picker_path, encoding="utf-8") as f:
+        css = f.read()
+    if "/* Swift: the picker on a phone. */" not in css:
+        with open(picker_path, "w", encoding="utf-8", newline="\n") as f:
+            f.write(css.rstrip("\n") + "\n\n" + PICKER_CSS)
 
     print("uBlock Origin", manifest.get("version"), "installed to", DEST)
 

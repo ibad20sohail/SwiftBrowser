@@ -45,6 +45,9 @@ class Tab(
     /** The tab left the home page; Back on its first page returns there. */
     var leftHome = false
 
+    /** The page couldn't load for lack of a connection: it loads again when there is one. */
+    var waitingForConnection = false
+
     /** The home button shows the home page over the tab's page; Back (or opening something) leaves it. */
     var homeShown = false
 
@@ -146,6 +149,12 @@ interface BrowserUi {
      * page's content is drawn, after it has (re)loaded, not just its background.
      */
     fun onPageDrawn(tab: Tab, contentful: Boolean)
+
+    /** Continue watching: a button to go back to [position] in the tab's video, until used or closed. */
+    fun showResumeChip(tab: Tab, position: String, onResume: () -> Unit)
+
+    /** The continue-watching button goes ([tab] null: whichever tab it is for). */
+    fun hideResumeChip(tab: Tab?)
 
     /** A short message at the bottom of the screen, optionally with a button. */
     fun showMessage(text: String, action: String? = null, long: Boolean = false, onAction: (() -> Unit)? = null)

@@ -10,9 +10,55 @@ class Prefs(ctx: Context) {
     // Same file androidx.preference used in 1.0, so settings carry over.
     val sp: SharedPreferences = ctx.getSharedPreferences(ctx.packageName + "_preferences", Context.MODE_PRIVATE)
 
+    /** Whether the app and pages are dark right now (follows [themeMode]; see Looks). */
     var darkMode: Boolean
         get() = sp.getBoolean(DARK_MODE, false)
         set(v) = sp.edit { putBoolean(DARK_MODE, v) }
+
+    /** Light, dark, or dark at night (Looks.LIGHT / DARK / NIGHT). Before 1.9 only on or off. */
+    var themeMode: Int
+        get() = sp.getInt(THEME_MODE, if (darkMode) 1 else 0)
+        set(v) = sp.edit { putInt(THEME_MODE, v) }
+
+    /** The welcome cards were shown (first start of a new install, 2.0). */
+    var welcomeDone: Boolean
+        get() = sp.getBoolean(WELCOME_DONE, false)
+        set(v) = sp.edit { putBoolean(WELCOME_DONE, v) }
+
+    /** News on the home page (2.0). */
+    var newsEnabled: Boolean
+        get() = sp.getBoolean(NEWS_ENABLED, true)
+        set(v) = sp.edit { putBoolean(NEWS_ENABLED, v) }
+
+    /** The news country's code, or empty for the phone's region (News.country). */
+    var newsCountry: String
+        get() = sp.getString(NEWS_COUNTRY, "") ?: ""
+        set(v) = sp.edit { putString(NEWS_COUNTRY, v) }
+
+    /** The news topics shown as chips (News.Topic keys); Top stories always is. */
+    var newsTopics: Set<String>
+        get() = sp.getStringSet(NEWS_TOPICS, null)?.toSet() ?: setOf("top", "world", "nation", "business", "tech", "sports", "entertainment")
+        set(v) = sp.edit { putStringSet(NEWS_TOPICS, v) }
+
+    /** Feeds of news sites the user added, in the order added. */
+    var newsFeeds: List<String>
+        get() = (sp.getString(NEWS_FEEDS, "") ?: "").split('\n').filter { it.isNotBlank() }
+        set(v) = sp.edit { putString(NEWS_FEEDS, v.joinToString("\n")) }
+
+    /** Sites whose stories are hidden (holding a story → Hide). */
+    var newsHidden: Set<String>
+        get() = sp.getStringSet(NEWS_HIDDEN, null)?.toSet() ?: emptySet()
+        set(v) = sp.edit { putStringSet(NEWS_HIDDEN, v) }
+
+    /** The ⋮ menu's main buttons (MenuButtons keys, in the menu's order), chosen in Settings. */
+    var menuButtons: List<String>
+        get() = (sp.getString(MENU_BUTTONS, null) ?: DEFAULT_MENU_BUTTONS).split(',').filter { it.isNotBlank() }
+        set(v) = sp.edit { putString(MENU_BUTTONS, v.joinToString(",")) }
+
+    /** The accent colour's key (Accent.key): blue, green, purple, orange, red or teal. */
+    var accent: String
+        get() = sp.getString(ACCENT, "blue") ?: "blue"
+        set(v) = sp.edit { putString(ACCENT, v) }
 
     var adLevel: AdLevel
         get() = AdLevel.fromKey(sp.getString(AD_LEVEL, AdLevel.HIGH.key))
@@ -221,6 +267,25 @@ class Prefs(ctx: Context) {
         get() = sp.getBoolean(VIDEO_TAPS, true)
         set(v) = sp.edit { putBoolean(VIDEO_TAPS, v) }
 
+    /** A backup file is written once a week by itself (the last two are kept). */
+    var autoBackup: Boolean
+        get() = sp.getBoolean(AUTO_BACKUP, true)
+        set(v) = sp.edit { putBoolean(AUTO_BACKUP, v) }
+
+    var lastAutoBackup: Long
+        get() = sp.getLong(LAST_AUTO_BACKUP, 0L)
+        set(v) = sp.edit { putLong(LAST_AUTO_BACKUP, v) }
+
+    /** When Swift last emptied its cache because the phone was almost full. */
+    var lastLowSpaceCleanup: Long
+        get() = sp.getLong(LAST_LOW_SPACE_CLEANUP, 0L)
+        set(v) = sp.edit { putLong(LAST_LOW_SPACE_CLEANUP, v) }
+
+    /** The version whose "What's new" was shown (0 on a new install). */
+    var seenVersion: Int
+        get() = sp.getInt(SEEN_VERSION, 0)
+        set(v) = sp.edit { putInt(SEEN_VERSION, v) }
+
     /** When Swift last asked GitHub for a newer version. */
     var lastUpdateCheck: Long
         get() = sp.getLong(LAST_UPDATE_CHECK, 0L)
@@ -228,6 +293,16 @@ class Prefs(ctx: Context) {
 
     companion object {
         const val DARK_MODE = "dark_mode"
+        const val THEME_MODE = "theme_mode"
+        const val ACCENT = "accent"
+        const val MENU_BUTTONS = "menu_buttons"
+        const val NEWS_ENABLED = "news_enabled"
+        const val WELCOME_DONE = "welcome_done"
+        const val NEWS_COUNTRY = "news_country"
+        const val NEWS_TOPICS = "news_topics"
+        const val NEWS_FEEDS = "news_feeds"
+        const val NEWS_HIDDEN = "news_hidden"
+        const val DEFAULT_MENU_BUTTONS = "new_tab,incognito,bookmarks,history,downloads,reader,save"
         const val AD_LEVEL = "ad_level"
         const val AUTO_LANDSCAPE = "auto_landscape"
         const val VIDEO_GESTURES = "video_gestures"
@@ -249,6 +324,10 @@ class Prefs(ctx: Context) {
         const val TEXT_SCALE = "text_scale"
         const val FORCE_ZOOM = "force_zoom"
         const val KEEP_PLAYING = "keep_playing"
+        const val AUTO_BACKUP = "auto_backup"
+        const val LAST_AUTO_BACKUP = "last_auto_backup"
+        const val LAST_LOW_SPACE_CLEANUP = "last_low_space_cleanup"
+        const val SEEN_VERSION = "seen_version"
         const val SHOW_HOME_BUTTON = "show_home_button"
         const val HAPTICS = "haptics"
         const val HTTPS_ONLY = "https_only"

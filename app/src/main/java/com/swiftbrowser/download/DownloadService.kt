@@ -115,7 +115,7 @@ class DownloadService : Service() {
             val n = NotificationCompat.Builder(ctx, CHANNEL_DONE)
                 .setSmallIcon(R.drawable.ic_notify)
                 .setContentTitle(item.fileName)
-                .setContentText("Download complete • ${UrlUtils.formatBytes(item.done)}")
+                .setContentText("Downloaded · ${UrlUtils.formatBytes(item.done)}")
                 .setAutoCancel(true)
                 .setContentIntent(pi)
                 .build()

@@ -351,7 +351,7 @@ class Prompts : PromptDelegate {
     override fun onRepostConfirmPrompt(session: GeckoSession, prompt: RepostConfirmPrompt): GeckoResult<PromptResponse> =
         show(prompt) { ctx, result ->
             builder(ctx, "Resend data?")
-                .setMessage("This page needs to send the form data again.")
+                .setMessage("Showing this page again sends what you entered in its form again (for example an order or a payment).")
                 .setPositiveButton("Resend") { _, _ -> result.complete(prompt.confirm(AllowOrDeny.ALLOW)) }
                 .setNegativeButton(android.R.string.cancel) { _, _ -> result.complete(prompt.confirm(AllowOrDeny.DENY)) }
                 .create()

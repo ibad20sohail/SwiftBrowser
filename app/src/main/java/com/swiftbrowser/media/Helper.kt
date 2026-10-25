@@ -122,7 +122,7 @@ object Helper {
             }
             "video-pos" -> WatchPositions.onPosition(tab, msg)
             // Read aloud, from the reader view page in this tab: it hears back how far it got.
-            "tts-start", "tts-pause", "tts-resume", "tts-stop" -> {
+            "tts-start", "tts-pause", "tts-resume", "tts-stop", "tts-skip", "tts-rate" -> {
                 val ctx = SwiftApp.instance ?: return
                 if (port != null) {
                     ReadAloud.listener = { state ->
@@ -205,11 +205,22 @@ object Helper {
                 JSONObject().put("type", "look").put("lite", prefs.liteMode).put("fixes", !prefs.sitesAsDesigned)
                     .put("liteExcept", org.json.JSONArray(com.swiftbrowser.core.SiteSettings.liteExceptions()))
                     .put("keepPlaying", prefs.keepPlaying)
-                    .put("readerFont", prefs.readerFont).put("readerSpacing", prefs.readerSpacing),
+                    .put("readerFont", prefs.readerFont).put("readerSpacing", prefs.readerSpacing)
+                    .put("accentLight", accentHex(night = false)).put("accentDark", accentHex(night = true)),
             )
         } catch (e: Exception) {
             L.w("Couldn't send the look", e)
         }
+    }
+
+    /** The accent colour as "#rrggbb", as it looks in light or dark mode (for reader view). */
+    private fun accentHex(night: Boolean): String {
+        val app = SwiftApp.instance ?: return if (night) "#8ab4ff" else "#1b66e4"
+        val config = android.content.res.Configuration(app.resources.configuration)
+        config.uiMode = (config.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK.inv()) or
+            if (night) android.content.res.Configuration.UI_MODE_NIGHT_YES else android.content.res.Configuration.UI_MODE_NIGHT_NO
+        val c = app.createConfigurationContext(config).getColor(com.swiftbrowser.ui.Looks.accent.primary)
+        return String.format("#%06x", c and 0xFFFFFF)
     }
 
     /** Reader view's font and spacing travel with the look (open reader pages follow at once). */
@@ -262,6 +273,16 @@ object Helper {
     /** Double speed while a finger is held on the full-screen video, back to normal when let go. */
     fun holdSpeed(tab: Tab, on: Boolean) {
         postToFrames(tab, JSONObject().put("type", "rate-hold").put("on", on))
+    }
+
+    /** Whatever is playing in the tab skips [deltaSeconds] (headset and notification buttons). */
+    fun seekPlaying(tab: Tab, deltaSeconds: Double) {
+        postToFrames(tab, JSONObject().put("type", "seek-playing").put("delta", deltaSeconds))
+    }
+
+    /** The sleep timer: what plays in the tab gets quieter over [ms] and then pauses. */
+    fun fadeOut(tab: Tab, ms: Long) {
+        postToFrames(tab, JSONObject().put("type", "fade").put("ms", ms))
     }
 
     /** Continue watching: the video [length] seconds long goes to [position]. */

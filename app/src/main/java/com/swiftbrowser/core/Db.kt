@@ -426,6 +426,11 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 2) {
         writableDatabase.delete("history", "id=?", arrayOf("$id"))
     }
 
+    /** One day's history (visits from [from] until [to]). */
+    fun deleteHistoryBetween(profileId: Long, from: Long, to: Long) {
+        writableDatabase.delete("history", "profile_id=? AND last_visit>=? AND last_visit<?", arrayOf("$profileId", "$from", "$to"))
+    }
+
     fun clearHistory(profileId: Long) {
         writableDatabase.delete("history", "profile_id=?", arrayOf("$profileId"))
     }

@@ -8,8 +8,8 @@ import org.mozilla.geckoview.GeckoWebExecutor
 import org.mozilla.geckoview.WebRequest
 import java.net.URLEncoder
 
-data class Suggestion(val kind: Kind, val title: String, val url: String) {
-    enum class Kind { GO, SEARCH, BOOKMARK, HISTORY, CLIPBOARD }
+data class Suggestion(val kind: Kind, val title: String, val url: String, val tabId: Long = 0) {
+    enum class Kind { GO, SEARCH, BOOKMARK, HISTORY, CLIPBOARD, TAB }
 }
 
 /** Address bar suggestions: the search engine's suggest service plus the profile's bookmarks and history. */

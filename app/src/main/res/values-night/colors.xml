@@ -50,4 +50,36 @@
     <color name="group_pink">#FFFF8BCB</color>
     <color name="group_purple">#FFC58AF9</color>
     <color name="group_cyan">#FF78D9EC</color>
+
+    <color name="accent_blue">#FF8AB4FF</color>
+    <color name="on_accent_blue">#FF0A1F44</color>
+    <color name="accent_blue_container">#FF233A63</color>
+    <color name="on_accent_blue_container">#FFD8E4FF</color>
+    <color name="accent_green">#FF7DD3A0</color>
+    <color name="on_accent_green">#FF003920</color>
+    <color name="accent_green_container">#FF1C4A30</color>
+    <color name="on_accent_green_container">#FFC8F1D6</color>
+    <color name="accent_purple">#FFCDB4FF</color>
+    <color name="on_accent_purple">#FF2E1066</color>
+    <color name="accent_purple_container">#FF46307A</color>
+    <color name="on_accent_purple_container">#FFEADDFF</color>
+    <color name="accent_orange">#FFFFB68A</color>
+    <color name="on_accent_orange">#FF4A1E00</color>
+    <color name="accent_orange_container">#FF6B3410</color>
+    <color name="on_accent_orange_container">#FFFFDCC7</color>
+    <color name="accent_red">#FFFFB2BB</color>
+    <color name="on_accent_red">#FF5A0716</color>
+    <color name="accent_red_container">#FF7A2333</color>
+    <color name="on_accent_red_container">#FFFFD9DD</color>
+    <color name="accent_teal">#FF6FD6C8</color>
+    <color name="on_accent_teal">#FF00332D</color>
+    <color name="accent_teal_container">#FF12504A</color>
+    <color name="on_accent_teal_container">#FFC5EEE8</color>
+
+    <color name="danger">#FFF28B82</color>
+    <color name="danger_container">#FF5C2B29</color>
+    <color name="on_danger_container">#FFFFDAD6</color>
+    <color name="message_bg">#FFE6E8EC</color>
+    <color name="message_text">#FF1A1C21</color>
+    <color name="skeleton">#FF262931</color>
 </resources>

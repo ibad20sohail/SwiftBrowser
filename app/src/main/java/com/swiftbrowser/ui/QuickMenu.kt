@@ -35,11 +35,44 @@ import com.swiftbrowser.tabs.Tab
 import com.swiftbrowser.tabs.TabManager
 import kotlin.math.abs
 
+/** The ⋮ menu's buttons that can be chosen for its first page (Settings → Look & screen). */
+object MenuButtons {
+    class Button(val key: String, val icon: Int, val label: String)
+
+    /** In the order they appear. */
+    val all = listOf(
+        Button("new_tab", R.drawable.ic_add, "New tab"),
+        Button("incognito", R.drawable.ic_incognito, "Incognito"),
+        Button("bookmarks", R.drawable.ic_bookmarks, "Bookmarks"),
+        Button("history", R.drawable.ic_history, "History"),
+        Button("downloads", R.drawable.ic_download, "Downloads"),
+        Button("reader", R.drawable.ic_reader, "Reader view"),
+        Button("save", R.drawable.ic_offline, "Save offline"),
+        Button("recent", R.drawable.ic_reopen, "Recent tabs"),
+        Button("home_screen", R.drawable.ic_home_add, "Add to Home"),
+        Button("ad_blocker", R.drawable.ic_shield, "Ad blocker"),
+        Button("speed", R.drawable.ic_speed, "Speed"),
+        Button("sleep", R.drawable.ic_timer, "Sleep timer"),
+        Button("group", R.drawable.ic_layers, "Add to group"),
+        Button("hide", R.drawable.ic_block, "Tap to hide"),
+        Button("close_all", R.drawable.ic_close, "Close all tabs"),
+    )
+
+    /** How many fit the first page next to More. */
+    const val MAIN = 7
+
+    fun chosen(): List<String> {
+        val keys = SwiftApp.prefs.menuButtons.filter { k -> all.any { it.key == k } }.distinct()
+        return all.map { it.key }.filter { it in keys }.take(MAIN)
+    }
+}
+
 /**
  * The ⋮ menu, sliding up from the bottom:
- *  - the page it is about, with the most used page actions as a row of icons,
+ *  - the page it is about (with its site settings, copy and Settings buttons), and the most used
+ *    page actions as a row of icons,
  *  - four switches (Lite mode, dark mode, desktop site, full screen) that stay open when tapped,
- *  - the rest as two pages of 4×2 buttons that are swiped sideways.
+ *  - the chosen main buttons with More, which slides to the second page with the others.
  * Swiping the menu down (or tapping outside it) closes it. It is built once and lives in the
  * browser screen itself (a dialog would make a new window every time, which takes a moment on this
  * phone); opening it only updates what depends on the page.
@@ -51,6 +84,14 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
 
     private val scrim = View(a)
     private val panel = Panel()
+
+    /** Everything under the handle; it scrolls when taller than the screen (a turned phone). */
+    private val content = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
+    private val scroller = android.widget.ScrollView(a).apply {
+        isVerticalScrollBarEnabled = false
+        overScrollMode = View.OVER_SCROLL_NEVER
+        addView(content)
+    }
     private val pager = Pager()
     private val dots = LinearLayout(a)
 
@@ -69,6 +110,19 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
             Sheets.siteSettings(a, site, tab)
         }
     }
+    private val copyButton = ImageButton(a).apply {
+        setImageResource(R.drawable.ic_copy)
+        imageTintList = ColorStateList.valueOf(ContextCompat.getColor(a, R.color.text_secondary))
+        setBackgroundResource(borderless())
+        contentDescription = "Copy address"
+        setOnClickListener {
+            val tab = TabManager.current ?: return@setOnClickListener
+            if (UrlUtils.isHttp(tab.url)) {
+                close()
+                a.copy(tab.url)
+            }
+        }
+    }
     private val headerTitle = TextView(a)
     private val headerSite = TextView(a)
 
@@ -83,15 +137,9 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
     private val desktop: Toggle
     private val fullScreen: Toggle
 
-    private val reader: Item
-    private val save: Item
-    private val homeScreen: Item
-    private val adBlock: Item
-    private val speed: Item
-    private val closeAll: Item
-    private val addToGroup: Item
-    private val blockElement: Item
-    private val sleep: Item
+    /** The buttons on the pages, by MenuButtons key. */
+    private val items = HashMap<String, Item>()
+    private var builtFor: List<String> = emptyList()
 
     init {
         panel.orientation = LinearLayout.VERTICAL
@@ -117,7 +165,7 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
             bottomMargin = dp(8)
         })
 
-        panel.addView(header())
+        content.addView(header())
 
         val actions = LinearLayout(a).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -128,7 +176,7 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
         bookmark = iconAction(actions, R.drawable.ic_star_border, "Bookmark") { toggleBookmark(it) }
         share = iconAction(actions, R.drawable.ic_share, "Share") { a.share(it.url) }
         find = iconAction(actions, R.drawable.ic_find, "Find in page") { a.openFind() }
-        panel.addView(actions)
+        content.addView(actions)
 
         // The switches, as a row of tiles.
         val switches = LinearLayout(a).apply {
@@ -145,45 +193,15 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
             SwiftApp.prefs.fullScreen = on
             a.applySystemBars()
         }
-        panel.addView(switches)
-        panel.addView(View(a).apply { setBackgroundColor(color(R.color.divider)) },
+        content.addView(switches)
+        content.addView(View(a).apply { setBackgroundColor(color(R.color.divider)) },
             LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)).apply {
                 setMargins(dp(18), 0, dp(18), dp(4))
             })
 
-        // Pages of buttons, swiped sideways.
-        val page1 = page()
-        item(page1, R.drawable.ic_add, "New tab") { TabManager.newTab(incognito = false) }
-        item(page1, R.drawable.ic_incognito, "Incognito") { TabManager.newTab(incognito = true) }
-        item(page1, R.drawable.ic_bookmarks, "Bookmarks") { a.openList(BookmarksActivity::class.java) }
-        item(page1, R.drawable.ic_history, "History") { a.openList(HistoryActivity::class.java) }
-        item(page1, R.drawable.ic_download, "Downloads") { a.openDownloads() }
-        reader = item(page1, R.drawable.ic_reader, "Reader view") { PageActions.reader(a, it) }
-        save = item(page1, R.drawable.ic_offline, "Save offline") { PageActions.savePage(a, it) }
-        item(page1, R.drawable.ic_settings, "Settings") { a.openList(SettingsActivity::class.java) }
-        val page2 = page()
-        homeScreen = item(page2, R.drawable.ic_home_add, "Add to Home") { PageActions.addToHomeScreen(a, it) }
-        adBlock = item(page2, R.drawable.ic_shield, "Ad blocker") { Sheets.shield(a) }
-        speed = item(page2, R.drawable.ic_speed, "Speed") { Sheets.speed(a, it) }
-        closeAll = item(page2, R.drawable.ic_close, "Close all tabs") { confirmCloseAll(it) }
-        addToGroup = item(page2, R.drawable.ic_layers, "Add to group") { Sheets.chooseGroup(a, it) }
-        item(page2, R.drawable.ic_reopen, "Recent tabs") { Sheets.recentlyClosed(a) }
-        blockElement = item(page2, R.drawable.ic_block, "Block element") { tab ->
-            if (AdBlock.pickElement(tab)) {
-                a.snack("Tap what you want gone, then Create. It stays hidden on this site.", long = true)
-            } else {
-                a.snack("The ad blocker isn't ready on this page yet. Try again in a moment.")
-            }
-        }
-        sleep = item(page2, R.drawable.ic_timer, "Sleep timer") { Sheets.sleepTimer(a) }
-        pager.addPage(page1)
-        pager.addPage(page2)
-        // A last row with fewer buttons keeps them in their columns.
-        for (p in listOf(page1, page2)) {
-            val last = p.getChildAt(p.childCount - 1) as? LinearLayout ?: continue
-            while (last.childCount < 4) last.addView(View(a), LinearLayout.LayoutParams(0, dp(84), 1f))
-        }
-        panel.addView(pager, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+        // Pages of buttons, swiped sideways: the chosen ones and More, then the others.
+        buildPages()
+        content.addView(pager, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
             topMargin = dp(2)
         })
 
@@ -192,7 +210,7 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
         repeat(2) {
             dots.addView(View(a), LinearLayout.LayoutParams(dp(6), dp(6)).apply { setMargins(dp(3), 0, dp(3), 0) })
         }
-        panel.addView(dots, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(10)).apply { topMargin = dp(2) })
+        content.addView(dots, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(10)).apply { topMargin = dp(2) })
         pager.reset()
 
         scrim.setBackgroundColor(color(R.color.scrim))
@@ -202,7 +220,61 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
         scrim.setOnClickListener { close() }
 
         root.addView(scrim, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-        root.addView(panel, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM))
+        panel.addView(scroller, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        root.addView(panel, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {
+            topMargin = dp(24)
+        })
+    }
+
+    /** What each button does. */
+    private fun run(key: String, tab: Tab) {
+        when (key) {
+            "new_tab" -> TabManager.newTab(incognito = false)
+            "incognito" -> TabManager.newTab(incognito = true)
+            "bookmarks" -> a.openList(BookmarksActivity::class.java)
+            "history" -> a.openList(HistoryActivity::class.java)
+            "downloads" -> a.openDownloads()
+            "reader" -> PageActions.reader(a, tab)
+            "save" -> PageActions.savePage(a, tab)
+            "recent" -> Sheets.recentlyClosed(a)
+            "home_screen" -> PageActions.addToHomeScreen(a, tab)
+            "ad_blocker" -> Sheets.shield(a)
+            "speed" -> Sheets.speed(a, tab)
+            "sleep" -> Sheets.sleepTimer(a)
+            "group" -> Sheets.chooseGroup(a, tab)
+            "hide" -> if (AdBlock.pickElement(tab)) {
+                a.snack("Tap the ad or banner you want gone, then Create. It stays hidden on this site.", long = true)
+            } else {
+                a.snack("The ad blocker is still starting on this page. Try again in a moment.")
+            }
+            "close_all" -> confirmCloseAll(tab)
+        }
+    }
+
+    /** (Re)builds the pages for the chosen buttons: when made, and after they were changed in Settings. */
+    private fun buildPages() {
+        val chosen = MenuButtons.chosen()
+        if (chosen == builtFor && items.isNotEmpty()) return
+        builtFor = chosen
+        items.clear()
+        pager.clear()
+        val first = page()
+        val second = page()
+        for (key in chosen) addItem(first, key)
+        item(first, R.drawable.ic_more, "More", closes = false) { pager.next() }
+        for (b in MenuButtons.all) if (b.key !in chosen) addItem(second, b.key)
+        for (p in listOf(first, second)) {
+            // A last row with fewer buttons keeps them in their columns.
+            val last = p.getChildAt(p.childCount - 1) as? LinearLayout ?: continue
+            while (last.childCount < 4) last.addView(View(a), LinearLayout.LayoutParams(0, dp(88), 1f))
+            pager.addPage(p)
+        }
+        pager.reset()
+    }
+
+    private fun addItem(page: LinearLayout, key: String) {
+        val b = MenuButtons.all.first { it.key == key }
+        items[key] = item(page, b.icon, b.label) { tab -> run(key, tab) }
     }
 
     /** [animate] false: shown at once, as when the screen restarts in the other theme. */
@@ -210,6 +282,9 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
         val tab = TabManager.current ?: return
         if (isOpen) return
         isOpen = true
+        buildPages()
+        fitWidth()
+        scroller.scrollTo(0, 0)
         update(tab)
         pager.reset()
         scrim.animate().cancel()
@@ -246,6 +321,7 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
         val inReader = Helper.isReaderUrl(tab.url)
 
         siteButton.visibility = if (UrlUtils.isHttp(tab.url) && UrlUtils.site(tab.url) != null) View.VISIBLE else View.GONE
+        copyButton.visibility = if (http) View.VISIBLE else View.GONE
         headerTitle.text = if (tab.isHome) (if (tab.incognito) "Incognito tab" else "New tab") else tab.displayTitle
         headerSite.text = when {
             inReader -> "Reader view"
@@ -282,21 +358,21 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
         desktop.set(tab.desktop, enabled = !tab.isHome)
         fullScreen.set(prefs.fullScreen)
 
-        reader.set(R.drawable.ic_reader, if (inReader) "Exit reader" else "Reader view", active = inReader, enabled = (http && page) || inReader)
-        save.set(R.drawable.ic_offline, "Save offline", enabled = http && page)
-        homeScreen.set(R.drawable.ic_home_add, "Add to Home", enabled = http)
+        items["reader"]?.set(R.drawable.ic_reader, if (inReader) "Exit reader" else "Reader view", active = inReader, enabled = (http && page) || inReader)
+        items["save"]?.set(R.drawable.ic_offline, "Save offline", enabled = http && page)
+        items["home_screen"]?.set(R.drawable.ic_home_add, "Add to Home", enabled = http)
         val level = AdBlock.levelFor(tab.url)
         val blocked = tab.badge?.takeIf { level != AdLevel.OFF && it.isNotBlank() && it != "0" }
-        adBlock.set(
+        items["ad_blocker"]?.set(
             if (level == AdLevel.OFF) R.drawable.ic_shield_off else R.drawable.ic_shield,
-            if (blocked != null) "$blocked blocked" else "Ad blocker",
+            if (blocked != null) "$blocked blocked" else if (level == AdLevel.OFF) "Ads allowed" else "Ad blocker",
         )
-        speed.set(R.drawable.ic_speed, "Speed ${a.formatSpeed(tab.speed)}")
-        closeAll.set(R.drawable.ic_close, if (tab.incognito) "Close incognito" else "Close all tabs")
-        addToGroup.set(R.drawable.ic_layers, if (tab.groupId != null) "Move to group" else "Add to group")
-        blockElement.set(R.drawable.ic_block, "Block element", enabled = http && page && AdBlock.global != AdLevel.OFF)
+        items["speed"]?.set(R.drawable.ic_speed, "Speed ${a.formatSpeed(tab.speed)}", active = tab.speed.toDouble() != 1.0)
+        items["close_all"]?.set(R.drawable.ic_close, if (tab.incognito) "Close incognito" else "Close all tabs")
+        items["group"]?.set(R.drawable.ic_layers, if (tab.groupId != null) "Move to group" else "Add to group")
+        items["hide"]?.set(R.drawable.ic_block, "Tap to hide", enabled = http && page && AdBlock.global != AdLevel.OFF)
         val timer = com.swiftbrowser.media.SleepTimer.label()
-        sleep.set(R.drawable.ic_timer, timer ?: "Sleep timer", active = timer != null)
+        items["sleep"]?.set(R.drawable.ic_timer, timer ?: "Sleep timer", active = timer != null)
     }
 
     private fun toggleBookmark(tab: Tab) {
@@ -314,18 +390,31 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
 
     private fun confirmCloseAll(tab: Tab) {
         val incognito = tab.incognito
-        MaterialAlertDialogBuilder(a)
-            .setMessage(if (incognito) "Close all incognito tabs?" else "Close all tabs in ${Profiles.current().name}?")
-            .setPositiveButton("Close all") { _, _ -> TabManager.closeAll(incognito) }
-            .setNegativeButton(android.R.string.cancel, null)
-            .showImmersive()
+        Dialogs.confirm(
+            a,
+            if (incognito) "Close all incognito tabs?" else "Close all tabs?",
+            if (incognito) "Their history and cookies are deleted." else "All tabs in ${Profiles.current().name} close. Recent tabs in the menu keeps them for a while.",
+            "Close all", danger = true,
+        ) { TabManager.closeAll(incognito) }
+    }
+
+    /** On a turned phone the menu keeps a phone's width, centred. */
+    private fun fitWidth() {
+        val lp = panel.layoutParams as FrameLayout.LayoutParams
+        val max = dp(Ui.MAX_CONTENT_WIDTH)
+        val w = if (root.width > max) max else ViewGroup.LayoutParams.MATCH_PARENT
+        if (lp.width != w) {
+            lp.width = w
+            panel.layoutParams = lp
+        }
     }
 
     /** The panel's height, measured on the first opening (before it has been laid out). */
     private fun panelHeight(): Float {
         if (panel.height > 0) return panel.height.toFloat()
+        val w = (panel.layoutParams as FrameLayout.LayoutParams).width.let { if (it > 0) it else root.width }
         panel.measure(
-            View.MeasureSpec.makeMeasureSpec(root.width, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(w, View.MeasureSpec.EXACTLY),
             View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
         )
         return panel.measuredHeight.toFloat()
@@ -335,7 +424,7 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
         for (i in 0 until dots.childCount) {
             dots.getChildAt(i).background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
-                setColor(color(if (i == index) R.color.accent else R.color.outline))
+                setColor(color(if (i == index) Looks.accent.primary else R.color.outline))
             }
         }
     }
@@ -359,7 +448,8 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
                 }
                 MotionEvent.ACTION_MOVE -> {
                     val dy = ev.rawY - downY
-                    if (dy > slop && dy > abs(ev.rawX - downX) * 1.2f) {
+                    // Down drags close the menu, unless its content is scrolled and should scroll back.
+                    if (dy > slop && dy > abs(ev.rawX - downX) * 1.2f && scroller.scrollY == 0) {
                         startDrag(ev)
                         return true
                     }
@@ -435,6 +525,14 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
             strip.addView(page, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT))
         }
 
+        fun clear() {
+            strip.removeAllViews()
+            page = 0
+        }
+
+        /** More: to the next page (and back from the last). */
+        fun next() = goTo(if (page + 1 < strip.childCount) page + 1 else 0)
+
         fun reset() {
             page = 0
             scrollTo(0, 0)
@@ -508,17 +606,15 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
             })
         }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         addView(siteButton, LinearLayout.LayoutParams(dp(44), dp(44)))
+        addView(copyButton, LinearLayout.LayoutParams(dp(44), dp(44)))
         addView(ImageButton(a).apply {
-            setImageResource(R.drawable.ic_copy)
+            setImageResource(R.drawable.ic_settings)
             imageTintList = ColorStateList.valueOf(color(R.color.text_secondary))
             setBackgroundResource(borderless())
-            contentDescription = "Copy link"
+            contentDescription = "Settings"
             setOnClickListener {
-                val tab = TabManager.current ?: return@setOnClickListener
-                if (UrlUtils.isHttp(tab.url)) {
-                    close()
-                    a.copy(tab.url)
-                }
+                close()
+                a.openList(SettingsActivity::class.java)
             }
         }, LinearLayout.LayoutParams(dp(44), dp(44)))
     }
@@ -533,7 +629,7 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
                 this.icon = icon
                 this.active = active
                 view.setImageResource(icon)
-                view.imageTintList = ColorStateList.valueOf(color(if (active) R.color.accent else R.color.text_primary))
+                view.imageTintList = ColorStateList.valueOf(color(if (active) Looks.accent.primary else R.color.text_primary))
             }
             if (view.isEnabled != enabled) {
                 view.isEnabled = enabled
@@ -572,8 +668,8 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
 
         fun set(on: Boolean, enabled: Boolean = true) {
             this.on = on
-            fill.setColor(color(if (on) R.color.accent_container else R.color.surface_alt))
-            val tint = color(if (on) R.color.on_accent_container else R.color.text_primary)
+            fill.setColor(color(if (on) Looks.accent.container else R.color.surface_alt))
+            val tint = color(if (on) Looks.accent.onContainer else R.color.text_primary)
             view.setTextColor(tint)
             glyph?.setTint(tint)
             view.isEnabled = enabled
@@ -599,6 +695,7 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
         row.addView(view, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
             if (row.childCount > 0) marginStart = dp(8)
         })
+        Ui.pressable(view, 0.95f)
         val t = Toggle(view, onChange)
         t.set(false)
         view.setOnClickListener {
@@ -614,7 +711,7 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
     private fun page() = LinearLayout(a).apply {
         orientation = LinearLayout.VERTICAL
         setPadding(dp(6), 0, dp(6), 0)
-        minimumHeight = dp(2 * 84)
+        minimumHeight = dp(2 * 88)
     }
 
     /** A button: a round icon with its name below, all in one view so the menu stays light. */
@@ -636,7 +733,7 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
         }
     }
 
-    private fun item(page: LinearLayout, icon: Int, label: String, action: (Tab) -> Unit): Item {
+    private fun item(page: LinearLayout, icon: Int, label: String, closes: Boolean = true, action: (Tab) -> Unit): Item {
         var row = page.getChildAt(page.childCount - 1) as? LinearLayout
         if (row == null || row.childCount == 4) {
             row = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
@@ -644,20 +741,23 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
         }
         val view = TextView(a).apply {
             gravity = Gravity.CENTER_HORIZONTAL
-            setPadding(dp(2), dp(6), dp(2), dp(6))
-            compoundDrawablePadding = dp(6)
-            textSize = 12f
+            setPadding(dp(2), dp(8), dp(2), dp(6))
+            compoundDrawablePadding = dp(8)
+            textSize = 12.5f
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.END
             setTextColor(color(R.color.text_primary))
             setBackgroundResource(borderless())
         }
-        row.addView(view, LinearLayout.LayoutParams(0, dp(84), 1f))
+        // At least this tall, taller with large phone text (the name never gets cut).
+        view.minHeight = dp(88)
+        row.addView(view, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        Ui.pressable(view, 0.92f)
         val item = Item(view, action)
         item.set(icon, label)
         view.setOnClickListener {
             val tab = TabManager.current ?: return@setOnClickListener
-            close()
+            if (closes) close()
             item.action(tab)
         }
         return item
@@ -666,12 +766,12 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
     private fun roundIcon(icon: Int, active: Boolean): Drawable {
         val circle = GradientDrawable().apply {
             shape = GradientDrawable.OVAL
-            setColor(color(if (active) R.color.accent_container else R.color.surface_alt))
+            setColor(color(if (active) Looks.accent.container else R.color.surface_alt))
         }
         val glyph = ContextCompat.getDrawable(a, icon)!!.mutate()
-        glyph.setTint(color(if (active) R.color.on_accent_container else R.color.text_primary))
+        glyph.setTint(color(if (active) Looks.accent.onContainer else R.color.text_primary))
         return LayerDrawable(arrayOf(circle, glyph)).apply {
-            setLayerSize(0, dp(46), dp(46))
+            setLayerSize(0, dp(48), dp(48))
             setLayerSize(1, dp(22), dp(22))
             setLayerGravity(1, Gravity.CENTER)
         }

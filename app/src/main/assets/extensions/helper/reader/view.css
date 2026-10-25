@@ -2,7 +2,7 @@
   --bg: #ffffff;
   --text: #1b1c20;
   --muted: #646a76;
-  --link: #1b66e4;
+  --link: var(--accent-light, #1b66e4);
   --rule: #e4e7ec;
   --button: #eef1f6;
   --reading: #fff1c2;
@@ -15,7 +15,7 @@
     --bg: #15171c;
     --text: #e6e8ec;
     --muted: #a3a9b4;
-    --link: #8ab4ff;
+    --link: var(--accent-dark, #8ab4ff);
     --rule: #2a2e36;
     --button: #262a31;
     --reading: #3a3420;
@@ -91,6 +91,34 @@ article hr { border: 0; border-top: 1px solid var(--rule); }
 .missing { color: var(--muted); font: 16px Roboto, sans-serif; }
 
 .listen { padding: 0 14px; }
+
+/* The read-aloud controls, at the bottom while reading. */
+.player {
+  position: fixed;
+  left: 12px;
+  right: 12px;
+  bottom: 12px;
+  display: flex;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 28px;
+  background: var(--bg);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.22);
+  animation: swift-in 180ms ease-out;
+}
+.player[hidden] { display: none; }
+.player button {
+  flex: 1;
+  min-width: 0;
+  height: 44px;
+  border: 0;
+  border-radius: 22px;
+  background: var(--button);
+  color: var(--text);
+  font: 600 16px Roboto, sans-serif;
+}
+.player button.wide { flex: 1.6; }
+body.playing main { padding-bottom: 88px; }
 
 /* The paragraph being read aloud. */
 .reading { background: var(--reading); border-radius: 6px; box-shadow: 0 0 0 4px var(--reading); }

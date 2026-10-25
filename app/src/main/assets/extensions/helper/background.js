@@ -52,6 +52,8 @@ function onNative(msg) {
       keepPlaying: msg.keepPlaying === true,
       readerFont: msg.readerFont === 'sans' ? 'sans' : 'serif',
       readerSpacing: Number.isInteger(msg.readerSpacing) ? msg.readerSpacing : 1,
+      accentLight: /^#[0-9a-f]{6}$/i.test(msg.accentLight || '') ? msg.accentLight : '#1b66e4',
+      accentDark: /^#[0-9a-f]{6}$/i.test(msg.accentDark || '') ? msg.accentDark : '#8ab4ff',
     });
   }
 }
@@ -120,6 +122,8 @@ browser.storage.local.get('look').then(r => {
       keepPlaying: look.keepPlaying === true,
       readerFont: look.readerFont === 'sans' ? 'sans' : 'serif',
       readerSpacing: Number.isInteger(look.readerSpacing) ? look.readerSpacing : 1,
+      accentLight: /^#[0-9a-f]{6}$/i.test(look.accentLight || '') ? look.accentLight : '#1b66e4',
+      accentDark: /^#[0-9a-f]{6}$/i.test(look.accentDark || '') ? look.accentDark : '#8ab4ff',
     });
   }
 }, () => {
@@ -129,8 +133,20 @@ browser.storage.local.get('look').then(r => {
 // ---------------------------------------------------------------- reader view
 
 // Articles parsed for reader view, by id, until the reader page has fetched them (a few kept).
+// They are also kept in storage (the last few), so a reader page still works after Swift restarts.
 const articles = new Map();
-let nextArticle = 1;
+const KEPT_ARTICLES = 8;
+
+function keepArticle(id, article) {
+  browser.storage.local.get('articleIds').then(r => {
+    const ids = ((r && r.articleIds) || []).filter(x => x !== id);
+    ids.push(id);
+    const gone = ids.splice(0, Math.max(0, ids.length - KEPT_ARTICLES));
+    const add = { articleIds: ids };
+    add['article:' + id] = article;
+    return browser.storage.local.set(add).then(() => gone.length ? browser.storage.local.remove(gone.map(x => 'article:' + x)) : null);
+  }).catch(() => { });
+}
 
 async function startReader(tabId) {
   try {
@@ -141,9 +157,10 @@ async function startReader(tabId) {
       post({ type: 'reader-failed', tabId });
       return;
     }
-    const id = String(nextArticle++);
+    const id = Date.now().toString(36);
     articles.set(id, article);
     while (articles.size > 6) { articles.delete(articles.keys().next().value); }
+    keepArticle(id, article);
     post({ type: 'reader-ready', tabId, url: browser.runtime.getURL('reader/view.html') + '#' + id });
   } catch (e) {
     post({ type: 'reader-failed', tabId });
@@ -235,7 +252,9 @@ browser.runtime.onMessage.addListener((msg, sender) => {
     return undefined;
   }
   if (msg && msg.type === 'reader-get') {
-    return Promise.resolve(articles.get(String(msg.id)) || null);
+    const id = String(msg.id);
+    if (articles.has(id)) { return Promise.resolve(articles.get(id)); }
+    return browser.storage.local.get('article:' + id).then(r => (r && r['article:' + id]) || null, () => null);
   }
   return undefined;
 });

@@ -447,7 +447,10 @@ class TabSwitcherView @JvmOverloads constructor(
         val searching = mode == Mode.SEARCH
         findViewById<ImageView>(R.id.switcher_empty_icon).apply {
             setImageResource(if (searching) R.drawable.ic_search else if (incognito) R.drawable.ic_incognito else R.drawable.ic_layers)
-            imageTintList = ColorStateList.valueOf(color(if (incognito) R.color.incognito_hint else R.color.text_secondary))
+            imageTintList = ColorStateList.valueOf(color(if (incognito) R.color.incognito_text else Looks.accent.onContainer))
+            background = Ui.circle(color(if (incognito) R.color.incognito_url else Looks.accent.container))
+            val p = (16 * resources.displayMetrics.density).toInt()
+            setPadding(p, p, p, p)
         }
         findViewById<TextView>(R.id.switcher_empty_title).apply {
             text = when {
@@ -485,13 +488,13 @@ class TabSwitcherView @JvmOverloads constructor(
         setBackgroundColor(color(if (dark) R.color.incognito_bg else R.color.switcher_bg))
         val text = color(if (dark) R.color.incognito_text else R.color.text_primary)
         // "New tab" is a tonal pill button.
-        val pillText = color(if (dark) R.color.incognito_text else R.color.on_accent_container)
+        val pillText = color(if (dark) R.color.incognito_text else Looks.accent.onContainer)
         newTab.setTextColor(pillText)
         newTab.background = android.graphics.drawable.RippleDrawable(
             ColorStateList.valueOf(0x22000000),
             GradientDrawable().apply {
                 cornerRadius = dp(20).toFloat()
-                setColor(color(if (dark) R.color.incognito_url else R.color.accent_container))
+                setColor(color(if (dark) R.color.incognito_url else Looks.accent.container))
             },
             null,
         )
@@ -501,7 +504,7 @@ class TabSwitcherView @JvmOverloads constructor(
             cornerRadius = dp(20).toFloat()
             setColor(color(if (dark) R.color.incognito_url else R.color.surface_alt))
         }
-        val selectedColor = if (dark) color(R.color.incognito_hint) else color(R.color.toggle_selected)
+        val selectedColor = if (dark) color(R.color.incognito_hint) else color(Looks.accent.container)
         toggleNormal.background = toggleBackground(selectedColor)
         toggleIncognito.background = toggleBackground(selectedColor)
         toggleNormal.isSelected = !dark
@@ -521,7 +524,7 @@ class TabSwitcherView @JvmOverloads constructor(
         subSearch.background = ContextCompat.getDrawable(context, R.drawable.bg_url)?.mutate()?.also {
             it.setTint(color(if (dark) R.color.incognito_url else R.color.surface_alt))
         }
-        subAction.setTextColor(color(if (dark) R.color.incognito_text else R.color.accent))
+        subAction.setTextColor(color(if (dark) R.color.incognito_text else Looks.accent.primary))
         adapter.notifyDataSetChanged()
     }
 
@@ -591,33 +594,30 @@ class TabSwitcherView @JvmOverloads constructor(
     /** Menu for a card that was held and let go without moving it (a dialog: it keeps full screen). */
     private fun cardMenu(@Suppress("UNUSED_PARAMETER") anchor: View, item: Item) {
         val activity = context as? MainActivity ?: return
-        val actions = ArrayList<Pair<String, () -> Unit>>()
+        val actions = ArrayList<Sheets.Action>()
         val title: String
         when (item) {
             is Item.TabCard -> {
                 val tab = item.tab
                 title = item.title
                 if (tab.groupId == null) {
-                    actions += "Add to group" to { Sheets.chooseGroup(activity, tab) }
+                    actions += Sheets.Action(R.drawable.ic_layers, "Add to group") { Sheets.chooseGroup(activity, tab) }
                 } else {
-                    actions += "Remove from group" to { TabManager.removeFromGroup(tab) }
-                    actions += "Move to another group" to { Sheets.chooseGroup(activity, tab) }
+                    actions += Sheets.Action(R.drawable.ic_layers, "Move to another group") { Sheets.chooseGroup(activity, tab) }
+                    actions += Sheets.Action(R.drawable.ic_close, "Take out of the group") { TabManager.removeFromGroup(tab) }
                 }
-                actions += "Close tab" to { TabManager.close(tab, undoable = true) }
+                actions += Sheets.Action(R.drawable.ic_close, "Close tab", danger = true) { TabManager.close(tab, undoable = true) }
             }
             is Item.GroupCard -> {
                 val group = item.group
                 title = item.title
-                actions += "Rename group" to { Sheets.renameGroup(activity, group) }
-                actions += "Ungroup" to { TabManager.ungroup(group) }
-                actions += "Close group" to { TabManager.closeGroup(group) }
+                actions += Sheets.Action(R.drawable.ic_edit, "Rename group") { Sheets.renameGroup(activity, group) }
+                actions += Sheets.Action(R.drawable.ic_layers, "Ungroup (keep the tabs)") { TabManager.ungroup(group) }
+                actions += Sheets.Action(R.drawable.ic_close, "Close group", danger = true) { TabManager.closeGroup(group) }
             }
             is Item.Banner -> return
         }
-        com.google.android.material.dialog.MaterialAlertDialogBuilder(activity)
-            .setTitle(title)
-            .setItems(actions.map { it.first }.toTypedArray()) { _, which -> actions[which].second() }
-            .showImmersive()
+        Sheets.actions(activity, title, null, actions)
     }
 
     // ------------------------------------------------------------------ dragging
@@ -810,6 +810,14 @@ class TabSwitcherView @JvmOverloads constructor(
         val placeholder: ImageView = view.findViewById(R.id.card_placeholder)
         val selected: View = view.findViewById(R.id.card_selected)
         var tab: Tab? = null
+
+        init {
+            // The page's picture has its own rounded corners inside the card.
+            thumbBox.clipToOutline = true
+            // The touch ripple stays inside the card's rounded corners.
+            view.clipToOutline = true
+            Ui.pressable(close, 0.85f)
+        }
     }
 
     private class GroupHolder(view: View) : RecyclerView.ViewHolder(view) {
@@ -824,6 +832,11 @@ class TabSwitcherView @JvmOverloads constructor(
         )
         val selected: View = view.findViewById(R.id.group_selected)
         var group: TabGroup? = null
+
+        init {
+            view.clipToOutline = true
+            Ui.pressable(close, 0.85f)
+        }
     }
 
     private class BannerHolder(view: View) : RecyclerView.ViewHolder(view) {

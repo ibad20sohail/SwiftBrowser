@@ -35,7 +35,8 @@ object WatchPositions {
         val finished = msg.optBoolean("ended") || t > d - END_MARGIN
         if (!finished && t < MIN_POSITION) return
         // Offered to continue but watching from the start again: the place reached last time is
-        // kept until this viewing gets past it.
+        // kept until this viewing gets past it (then the offer goes).
+        if (tab.resumeOffered == page && (finished || t >= tab.resumePosition - 5)) main.post { TabManager.ui?.hideResumeChip(tab) }
         if (!finished && tab.resumeOffered == page && t < tab.resumePosition) return
         TabManager.io.execute {
             if (finished) SwiftApp.db.deleteVideoPosition(page) else SwiftApp.db.setVideoPosition(page, t, d)
@@ -58,7 +59,7 @@ object WatchPositions {
                 if (TabManager.current !== tab || pageKey(tab.url) != page) return@post
                 tab.resumeOffered = page
                 tab.resumePosition = position
-                TabManager.ui?.showMessage("Continue from ${format(position)}?", "Resume", long = true) { Helper.resume(tab, position, d) }
+                TabManager.ui?.showResumeChip(tab, format(position)) { Helper.resume(tab, position, d) }
             }
         }
     }

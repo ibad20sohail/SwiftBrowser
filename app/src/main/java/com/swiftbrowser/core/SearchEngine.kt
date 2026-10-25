@@ -24,8 +24,8 @@ enum class SearchEngine(
         "https://www.startpage.com/suggestions?format=opensearch&q=", R.drawable.ic_search,
     );
 
-    /** The empty search box's hint (longer names don't fit on a small screen). */
-    val hint: String get() = if (label.length <= 6) "Search $label or type URL" else "Search or type URL"
+    /** The empty search box's hint. */
+    val hint: String get() = "Search or type web address"
 
     fun searchUrl(query: String): String = search + URLEncoder.encode(query, "UTF-8")
 

@@ -18,7 +18,9 @@ class RowHolder(view: View) : RecyclerView.ViewHolder(view) {
     val action: ImageButton = view.findViewById(R.id.row_action)
 
     fun set(iconRes: Int, title: CharSequence, subtitle: CharSequence?) {
+        icon.tag = null
         icon.setImageResource(iconRes)
+        icon.imageTintList = android.content.res.ColorStateList.valueOf(androidx.core.content.ContextCompat.getColor(icon.context, R.color.text_secondary))
         this.title.text = title
         this.subtitle.text = subtitle ?: ""
         this.subtitle.visibility = if (subtitle.isNullOrEmpty()) View.GONE else View.VISIBLE
@@ -26,6 +28,17 @@ class RowHolder(view: View) : RecyclerView.ViewHolder(view) {
         action.setOnClickListener(null)
         itemView.background = null
         itemView.setBackgroundResource(selectableBackground(itemView.context))
+    }
+
+    /** The site's own icon in place of the row's icon, when Swift has it (it may come a moment later). */
+    fun setFavicon(url: String) {
+        icon.tag = url
+        com.swiftbrowser.core.Favicons.load(url) { bmp ->
+            if (bmp != null && icon.tag == url) {
+                icon.imageTintList = null
+                icon.setImageBitmap(bmp)
+            }
+        }
     }
 
     fun setAction(iconRes: Int, description: String, onClick: () -> Unit) {

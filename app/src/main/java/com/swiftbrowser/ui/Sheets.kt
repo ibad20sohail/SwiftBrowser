@@ -13,6 +13,7 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.EditText
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -55,87 +56,96 @@ object Sheets {
     private fun Context.dp(v: Int) = (v * resources.displayMetrics.density).toInt()
     private fun Context.color(res: Int) = ContextCompat.getColor(this, res)
 
-    private fun sheet(ctx: Context, content: View, expand: Boolean = true): BottomSheetDialog {
+    /**
+     * Every sheet: a handle to drag it by, then [content] (scrolling when long). It opens fully and
+     * its rows come in one after another.
+     */
+    fun sheet(ctx: Context, content: View, expand: Boolean = true): BottomSheetDialog {
         val dialog = BottomSheetDialog(ctx)
-        val scroll = if (content is RecyclerView || content is ScrollView) content else ScrollView(ctx).apply { addView(content) }
-        dialog.setContentView(scroll)
+        val scroll = if (content is RecyclerView || content is ScrollView) content else ScrollView(ctx).apply {
+            isVerticalScrollBarEnabled = false
+            overScrollMode = View.OVER_SCROLL_NEVER
+            addView(content)
+        }
+        val box = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(View(ctx).apply {
+                background = Ui.shape(ctx, ctx.color(R.color.outline), 2)
+                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            }, LinearLayout.LayoutParams(ctx.dp(36), ctx.dp(4)).apply {
+                gravity = Gravity.CENTER_HORIZONTAL
+                topMargin = ctx.dp(10)
+                bottomMargin = ctx.dp(4)
+            })
+            addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        }
+        dialog.setContentView(box)
         if (expand) {
             dialog.behavior.state = BottomSheetBehavior.STATE_EXPANDED
             dialog.behavior.skipCollapsed = true
         }
+        (content as? ViewGroup)?.takeIf { it !is RecyclerView && it.childCount in 2..14 }?.let { group ->
+            dialog.setOnShowListener { Motion.stagger(group) }
+        }
         return dialog
     }
 
-    private fun column(ctx: Context) = LinearLayout(ctx).apply {
+    fun column(ctx: Context) = LinearLayout(ctx).apply {
         orientation = LinearLayout.VERTICAL
-        setPadding(0, ctx.dp(8), 0, ctx.dp(12))
+        setPadding(0, ctx.dp(4), 0, ctx.dp(16))
     }
 
-    private fun header(ctx: Context, text: String, sub: String? = null): View = LinearLayout(ctx).apply {
+    fun header(ctx: Context, text: String, sub: String? = null): View = LinearLayout(ctx).apply {
         orientation = LinearLayout.VERTICAL
-        setPadding(ctx.dp(20), ctx.dp(12), ctx.dp(20), ctx.dp(8))
-        addView(TextView(ctx).apply {
-            this.text = text
-            textSize = 18f
-            setTypeface(typeface, Typeface.BOLD)
-            setTextColor(ctx.color(R.color.text_primary))
-        })
+        setPadding(ctx.dp(24), ctx.dp(10), ctx.dp(24), ctx.dp(12))
+        addView(Ui.text(ctx, Ui.Type.TITLE, text))
         if (!sub.isNullOrBlank()) {
-            addView(TextView(ctx).apply {
-                this.text = sub
-                textSize = 13f
-                setTextColor(ctx.color(R.color.text_secondary))
-                setPadding(0, ctx.dp(2), 0, 0)
-            })
+            addView(Ui.text(ctx, Ui.Type.BODY_SECONDARY, sub).apply { setPadding(0, ctx.dp(4), 0, 0) })
         }
     }
 
-    private fun label(ctx: Context, text: String, top: Int = 12): TextView = TextView(ctx).apply {
-        this.text = text
-        textSize = 13f
-        setTypeface(typeface, Typeface.BOLD)
-        setTextColor(ctx.color(R.color.accent))
-        setPadding(ctx.dp(20), ctx.dp(top), ctx.dp(20), ctx.dp(4))
+    fun label(ctx: Context, text: String, top: Int = 12): TextView = Ui.text(ctx, Ui.Type.SECTION, text).apply {
+        setPadding(ctx.dp(24), ctx.dp(top + 4), ctx.dp(24), ctx.dp(6))
     }
 
-    private fun note(ctx: Context, text: String): TextView = TextView(ctx).apply {
-        this.text = text
-        textSize = 13f
-        setTextColor(ctx.color(R.color.text_secondary))
-        setPadding(ctx.dp(20), ctx.dp(4), ctx.dp(20), ctx.dp(4))
+    fun note(ctx: Context, text: String): TextView = Ui.text(ctx, Ui.Type.BODY_SECONDARY, text).apply {
+        setPadding(ctx.dp(24), ctx.dp(4), ctx.dp(24), ctx.dp(8))
     }
 
-    private fun row(ctx: Context, icon: Int, text: String, onClick: () -> Unit): TextView = TextView(ctx).apply {
+    /** A plain row: an icon and what it does. */
+    fun row(ctx: Context, icon: Int, text: String, danger: Boolean = false, onClick: () -> Unit): TextView = TextView(ctx).apply {
         this.text = text
-        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ctx.dp(48))
+        Ui.style(this, Ui.Type.BODY, if (danger) Ui.danger(ctx) else null)
+        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        minHeight = ctx.dp(52)
         gravity = Gravity.CENTER_VERTICAL
-        setPadding(ctx.dp(20), 0, ctx.dp(20), 0)
-        textSize = 15f
-        setTextColor(ctx.color(R.color.text_primary))
+        setPadding(ctx.dp(24), ctx.dp(10), ctx.dp(24), ctx.dp(10))
         compoundDrawablePadding = ctx.dp(20)
-        val d = ContextCompat.getDrawable(ctx, icon)?.mutate()?.also { it.setTint(ctx.color(R.color.text_secondary)) }
-        setCompoundDrawablesRelativeWithIntrinsicBounds(d, null, null, null)
-        setBackgroundResource(RowHolder.selectableBackground(ctx))
+        setCompoundDrawablesRelativeWithIntrinsicBounds(Ui.icon(ctx, icon, if (danger) Ui.danger(ctx) else ctx.color(R.color.text_secondary)), null, null, null)
+        background = Ui.ripple(ctx, null, 0)
         setOnClickListener { onClick() }
     }
 
-    private fun chips(ctx: Context, labels: List<String>, selected: Int, onSelect: (Int) -> Unit): ChipGroup =
+    fun chips(ctx: Context, labels: List<String>, selected: Int, onSelect: (Int) -> Unit): ChipGroup =
         ChipGroup(ctx).apply {
             isSingleSelection = true
             isSelectionRequired = true
-            setPadding(ctx.dp(16), 0, ctx.dp(16), 0)
+            chipSpacingHorizontal = ctx.dp(8)
+            setPadding(ctx.dp(20), 0, ctx.dp(20), 0)
             val states = arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf())
-            val bg = ColorStateList(states, intArrayOf(ctx.color(R.color.accent), ctx.color(R.color.surface_alt)))
-            val fg = ColorStateList(states, intArrayOf(ctx.color(R.color.on_accent), ctx.color(R.color.text_primary)))
+            val bg = ColorStateList(states, intArrayOf(Ui.accentContainer(ctx), ctx.color(R.color.surface_alt)))
+            val fg = ColorStateList(states, intArrayOf(Ui.onAccentContainer(ctx), ctx.color(R.color.text_primary)))
             labels.forEachIndexed { i, text ->
                 addView(Chip(ctx).apply {
                     id = View.generateViewId()
                     this.text = text
                     isCheckable = true
-                    isCheckedIconVisible = false
+                    isCheckedIconVisible = true
+                    checkedIconTint = fg
                     chipBackgroundColor = bg
                     setTextColor(fg)
                     chipStrokeWidth = 0f
+                    chipMinHeight = ctx.dp(40).toFloat()
                     isChecked = i == selected
                     setOnClickListener { if (isChecked) onSelect(i) }
                 })
@@ -144,73 +154,141 @@ object Sheets {
 
     // ------------------------------------------------------------------ action lists
 
-    class Action(val icon: Int, val label: String, val run: () -> Unit)
+    /** One thing a sheet offers. Main actions ([primary]) are the big round buttons at the top. */
+    class Action(val icon: Int, val label: String, val primary: Boolean = false, val danger: Boolean = false, val run: () -> Unit)
+
+    /** A row of big round buttons with a short name under each (up to four fit a phone's width). */
+    private fun buttonRow(ctx: Context, actions: List<Action>, onPick: (Action) -> Unit): LinearLayout = LinearLayout(ctx).apply {
+        orientation = LinearLayout.HORIZONTAL
+        setPadding(ctx.dp(12), ctx.dp(8), ctx.dp(12), ctx.dp(8))
+        for (action in actions) {
+            val tint = if (action.danger) Ui.danger(ctx) else Ui.onAccentContainer(ctx)
+            val fill = if (action.danger) ctx.color(R.color.danger_container) else Ui.accentContainer(ctx)
+            addView(LinearLayout(ctx).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER_HORIZONTAL
+                setPadding(0, ctx.dp(6), 0, ctx.dp(6))
+                background = Ui.ripple(ctx, null, 16)
+                contentDescription = action.label
+                isClickable = true
+                isFocusable = true
+                Ui.pressable(this, 0.93f)
+                addView(ImageView(ctx).apply {
+                    setImageDrawable(Ui.icon(ctx, action.icon, tint))
+                    background = Ui.shape(ctx, fill, 18)
+                    scaleType = ImageView.ScaleType.CENTER
+                    importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+                }, LinearLayout.LayoutParams(ctx.dp(56), ctx.dp(52)))
+                addView(Ui.text(ctx, Ui.Type.CAPTION, action.label, ctx.color(R.color.text_primary), lines = 2).apply {
+                    gravity = Gravity.CENTER
+                    importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+                    setPadding(ctx.dp(2), ctx.dp(8), ctx.dp(2), 0)
+                })
+                setOnClickListener { onPick(action) }
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        }
+        // Fewer than four keep their size, centred.
+        if (actions.size < 4) {
+            val side = (4 - actions.size) * 0.5f
+            addView(View(ctx), 0, LinearLayout.LayoutParams(0, 1, side))
+            addView(View(ctx), LinearLayout.LayoutParams(0, 1, side))
+        }
+    }
 
     /**
-     * Things to do with a link, a picture, a shortcut or the tab button, as a sheet that slides up:
-     * what it is about at the top (a title and, smaller, its address), then a row per action.
+     * Things to do with a link, a picture, a shortcut or the address, as a sheet that slides up:
+     * what it is about at the top (a small picture or the site's icon, a title and the site's name;
+     * tapping it shows the whole address), then the main actions as big buttons and the others as
+     * rows. [preview] is a picture's address, shown small when it can be loaded quickly.
      */
-    fun actions(a: MainActivity, title: String?, subtitle: String?, actions: List<Action>, icon: android.graphics.Bitmap? = null) {
+    fun actions(
+        a: android.app.Activity,
+        title: String?,
+        subtitle: String?,
+        actions: List<Action>,
+        icon: android.graphics.Bitmap? = null,
+        fullAddress: String? = null,
+        preview: String? = null,
+        iconRes: Int? = null,
+    ) {
         val col = column(a)
         lateinit var dialog: BottomSheetDialog
         if (!title.isNullOrBlank() || !subtitle.isNullOrBlank()) {
             val head = LinearLayout(a).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                setPadding(a.dp(20), a.dp(8), a.dp(20), a.dp(10))
+                setPadding(a.dp(24), a.dp(8), a.dp(24), a.dp(14))
             }
-            if (icon != null) {
-                head.addView(android.widget.ImageView(a).apply { setImageBitmap(icon) }, LinearLayout.LayoutParams(a.dp(28), a.dp(28)).apply {
-                    marginEnd = a.dp(14)
-                })
+            val picture = ImageView(a).apply {
+                scaleType = ImageView.ScaleType.CENTER_CROP
+                background = Ui.shape(a, a.color(R.color.surface_alt), 12)
+                clipToOutline = true
+                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+                if (icon != null) {
+                    setImageBitmap(icon)
+                    scaleType = ImageView.ScaleType.FIT_CENTER
+                    val p = a.dp(10)
+                    setPadding(p, p, p, p)
+                } else {
+                    setImageDrawable(Ui.icon(a, iconRes ?: if (preview != null) R.drawable.ic_image else R.drawable.ic_globe, a.color(R.color.text_secondary)))
+                    scaleType = ImageView.ScaleType.CENTER
+                }
             }
-            head.addView(LinearLayout(a).apply {
-                orientation = LinearLayout.VERTICAL
-                if (!title.isNullOrBlank()) {
-                    addView(TextView(a).apply {
-                        text = title
-                        textSize = 16f
-                        maxLines = 2
-                        ellipsize = android.text.TextUtils.TruncateAt.END
-                        setTypeface(typeface, Typeface.BOLD)
-                        setTextColor(a.color(R.color.text_primary))
-                    })
+            val size = a.dp(if (preview != null) 56 else 44)
+            head.addView(picture, LinearLayout.LayoutParams(size, size).apply { marginEnd = a.dp(14) })
+            if (preview != null) PreviewLoader.load(a, preview, a.dp(112)) { bmp ->
+                picture.setPadding(0, 0, 0, 0)
+                picture.scaleType = ImageView.ScaleType.CENTER_CROP
+                picture.setImageBitmap(bmp)
+                picture.alpha = 0f
+                picture.animate().alpha(1f).setDuration(Motion.NORMAL).start()
+            }
+            val texts = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
+            if (!title.isNullOrBlank()) texts.addView(Ui.text(a, Ui.Type.SUBTITLE, title, lines = 2))
+            if (!subtitle.isNullOrBlank()) {
+                val sub = Ui.text(a, Ui.Type.CAPTION, subtitle, lines = 1).apply { setPadding(0, a.dp(3), 0, 0) }
+                texts.addView(sub)
+                // Tapping the header shows the whole address (and tapping again, just the site).
+                if (fullAddress != null && fullAddress != subtitle) {
+                    var full = false
+                    head.background = Ui.ripple(a, null, 0)
+                    head.setOnClickListener {
+                        full = !full
+                        sub.text = if (full) fullAddress else subtitle
+                        sub.maxLines = if (full) 6 else 1
+                    }
+                    head.contentDescription = "${title ?: ""}, $subtitle. Tap to show the whole address"
                 }
-                if (!subtitle.isNullOrBlank()) {
-                    addView(TextView(a).apply {
-                        text = subtitle
-                        textSize = 13f
-                        maxLines = 2
-                        ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
-                        setTextColor(a.color(R.color.text_secondary))
-                        setPadding(0, a.dp(2), 0, 0)
-                    })
-                }
-            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            }
+            head.addView(texts, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             col.addView(head)
-            col.addView(View(a).apply { setBackgroundColor(a.color(R.color.divider)) },
-                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 1).apply { bottomMargin = a.dp(4) })
+            col.addView(Ui.divider(a))
         }
-        for (action in actions) {
-            col.addView(row(a, action.icon, action.label) {
-                dialog.dismiss()
-                action.run()
-            })
+        val pick: (Action) -> Unit = { action ->
+            dialog.dismiss()
+            action.run()
         }
+        val main = actions.filter { it.primary }
+        val rest = actions.filter { !it.primary }
+        main.chunked(4).forEach { col.addView(buttonRow(a, it, pick)) }
+        if (main.isNotEmpty() && rest.isNotEmpty()) col.addView(Ui.divider(a, 24).apply {
+            (layoutParams as LinearLayout.LayoutParams).apply {
+                marginEnd = a.dp(24)
+                topMargin = a.dp(4)
+                bottomMargin = a.dp(4)
+            }
+        })
+        for (action in rest) col.addView(row(a, action.icon, action.label, action.danger) { pick(action) })
         dialog = sheet(a, col)
         dialog.showImmersive()
     }
 
     // ------------------------------------------------------------------ dark mode
 
+    /** The dark mode switch (menu, Settings tile): light or dark from now on, whatever the mode was. */
     fun setDarkMode(on: Boolean) {
-        if (SwiftApp.prefs.darkMode == on) return
-        SwiftApp.prefs.darkMode = on
-        // Pages that support dark mode switch right away; sites that choose their colours when
-        // the page loads (Google, YouTube) follow after the reload done when the screen restarts.
-        Engine.setDark(on)
-        SwiftApp.reloadAfterThemeChange = true
-        SwiftApp.applyNightMode(on)
+        if (SwiftApp.prefs.darkMode == on && SwiftApp.prefs.themeMode != Looks.NIGHT) return
+        Looks.setMode(if (on) Looks.DARK else Looks.LIGHT)
     }
 
     // ------------------------------------------------------------------ ad blocking
@@ -271,7 +349,7 @@ object Sheets {
         AdBlock.extension?.metaData?.optionsPageUrl?.let { url -> button("uBlock Origin settings") { TabManager.newTab(url, incognito = false) } }
         button("Update filter lists now") {
             AdBlock.updateFilterLists()
-            a.snack("Updating filter lists…")
+            a.snack("Updating the block lists…")
         }
         col.addView(buttons)
         dialog = sheet(a, col)
@@ -332,36 +410,28 @@ object Sheets {
     }
 
     private fun manageProfile(a: MainActivity, p: ProfileRow) {
-        val options = mutableListOf("Rename", "Clear cookies and site data")
-        if (Profiles.all().size > 1) options += "Delete profile"
-        MaterialAlertDialogBuilder(a)
-            .setTitle(p.name)
-            .setItems(options.toTypedArray()) { _, which ->
-                when (options[which]) {
-                    "Rename" -> askText(a, "Rename profile", "Name", p.name) { name ->
-                        Profiles.rename(p.id, name)
-                        a.onTabsChanged()
-                    }
-                    "Clear cookies and site data" -> MaterialAlertDialogBuilder(a)
-                        .setMessage("Sign out of all sites in ${p.name} and delete their stored data?")
-                        .setPositiveButton("Clear") { _, _ ->
-                            Engine.runtime.storageController.clearDataForSessionContext(Profiles.contextId(p.id))
-                            a.snack("Cleared")
-                        }
-                        .setNegativeButton(android.R.string.cancel, null)
-                        .showImmersive()
-                    "Delete profile" -> MaterialAlertDialogBuilder(a)
-                        .setTitle("Delete ${p.name}?")
-                        .setMessage("Its tabs, history, bookmarks, cookies and logins will be removed.")
-                        .setPositiveButton("Delete") { _, _ ->
-                            TabManager.deleteProfile(p.id)
-                            a.snack("Profile deleted")
-                        }
-                        .setNegativeButton(android.R.string.cancel, null)
-                        .showImmersive()
+        val list = ArrayList<Action>()
+        list += Action(R.drawable.ic_edit, "Rename") {
+            askText(a, "Rename profile", "Name", p.name) { name ->
+                Profiles.rename(p.id, name)
+                a.onTabsChanged()
+            }
+        }
+        list += Action(R.drawable.ic_cookie, "Sign out of all sites", danger = true) {
+            Dialogs.confirm(a, "Sign out of all sites?", "Cookies and everything sites stored in ${p.name} are deleted.", "Sign out", danger = true) {
+                Engine.runtime.storageController.clearDataForSessionContext(Profiles.contextId(p.id))
+                a.snack("Signed out of all sites in ${p.name}")
+            }
+        }
+        if (Profiles.all().size > 1) {
+            list += Action(R.drawable.ic_delete, "Delete profile", danger = true) {
+                Dialogs.confirm(a, "Delete ${p.name}?", "Its tabs, history, bookmarks, cookies and logins are removed. This can't be undone.", "Delete", danger = true) {
+                    TabManager.deleteProfile(p.id)
+                    a.snack("${p.name} deleted")
                 }
             }
-            .showImmersive()
+        }
+        actions(a, p.name, "Profile", list)
     }
 
     fun askText(ctx: Context, title: String, hint: String, initial: String, allowEmpty: Boolean = false, onOk: (String) -> Unit) {
@@ -500,7 +570,7 @@ object Sheets {
 
     /** Reads an HLS playlist; if it offers several qualities, lets the user choose one. */
     fun downloadHls(a: MainActivity, tab: Tab, url: String, headers: Map<String, String>) {
-        a.snack("Reading video stream…")
+        a.snack("Checking the video…")
         a.lifecycleScope.launch {
             val result = withContext(Dispatchers.IO) {
                 runCatching {
@@ -513,13 +583,13 @@ object Sheets {
                     }
                 }
             }
-            result.onFailure { a.snack("Couldn't read this stream: ${it.message}") }
+            result.onFailure { a.snack("Couldn't read this video. Try again in a moment.") }
             result.onSuccess { (variants, media) ->
                 when {
                     media != null && !media.endList -> a.snack("This is a live stream, it can't be downloaded")
-                    media != null && media.unsupportedKey -> a.snack("This video is DRM-protected and can't be saved")
+                    media != null && media.unsupportedKey -> a.snack("This video is copy-protected and can't be saved")
                     media != null -> a.startHlsDownload(tab, url, headers, null)
-                    variants.isEmpty() -> a.snack("No video found in this stream")
+                    variants.isEmpty() -> a.snack("No video found here")
                     variants.size == 1 -> a.startHlsDownload(tab, variants[0].url, headers, shortQuality(variants[0]))
                     else -> chooseQuality(a, tab, variants, headers)
                 }

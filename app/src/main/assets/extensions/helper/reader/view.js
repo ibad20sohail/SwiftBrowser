@@ -18,6 +18,9 @@ function applyStyle(look) {
   const root = document.documentElement.style;
   root.setProperty('--font', FONTS[look && look.readerFont] || FONTS.serif);
   root.setProperty('--line', LINES[look && Number.isInteger(look.readerSpacing) ? look.readerSpacing : 1] || LINES[1]);
+  // Links and buttons in the app's accent colour (light and dark).
+  if (look && look.accentLight) { root.setProperty('--accent-light', look.accentLight); }
+  if (look && look.accentDark) { root.setProperty('--accent-dark', look.accentDark); }
 }
 
 browser.storage.local.get('look').then(r => applyStyle(r && r.look), () => { });
@@ -64,6 +67,7 @@ function render(article) {
   document.getElementById('byline').textContent = article.byline || '';
   document.getElementById('content').appendChild(clean(article.content || ''));
   document.getElementById('original').href = article.url;
+  restorePlace(article.url);
 }
 
 document.getElementById('smaller').addEventListener('click', () => {
@@ -80,9 +84,14 @@ document.getElementById('bigger').addEventListener('click', () => {
 // ---------------------------------------------------------------- read aloud
 
 // The phone's own text-to-speech (in the app) reads the article paragraph by paragraph and tells
-// this page which paragraph it is on, to mark it.
+// this page which paragraph it is on, to mark it. It goes on with Swift in the background, with
+// pause and stop in the notification.
 const listen = document.getElementById('listen');
-const stopButton = document.getElementById('stop');
+const player = document.getElementById('player');
+const toggle = document.getElementById('toggle');
+const rateButton = document.getElementById('rate');
+const RATES = [1, 1.25, 1.5, 2, 0.75];
+let rate = Number(localStorage.getItem('rate')) || 1;
 let paragraphs = [];
 let state = 'idle'; // idle, speaking, paused
 let marked = null;
@@ -111,9 +120,13 @@ function onState(st) {
     return;
   }
   if (st.speaking) {
+    if (state !== 'speaking') { setState('speaking'); }
     mark(st.index);
-  } else if (state === 'speaking') {
-    // Read to the end.
+  } else if (st.paused) {
+    // Paused from the notification.
+    if (state !== 'paused') { setState('paused'); }
+  } else if (state !== 'idle') {
+    // Read to the end, or stopped from the notification.
     setState('idle');
     mark(-1);
   }
@@ -134,13 +147,21 @@ function mark(index) {
   if (!el) { return; }
   el.classList.add('reading');
   const r = el.getBoundingClientRect();
-  if (r.top < 0 || r.bottom > window.innerHeight) { el.scrollIntoView({ block: 'center', behavior: 'smooth' }); }
+  if (r.top < 0 || r.bottom > window.innerHeight - 90) { el.scrollIntoView({ block: 'center', behavior: 'smooth' }); }
+}
+
+function showRate() {
+  rateButton.textContent = String(rate).replace(/^0\./, '.') + '×';
 }
 
 function setState(s) {
   state = s;
-  listen.textContent = s === 'speaking' ? 'Pause' : (s === 'paused' ? 'Resume' : 'Listen');
-  stopButton.hidden = s === 'idle';
+  const reading = s !== 'idle';
+  listen.hidden = reading;
+  player.hidden = !reading;
+  document.body.classList.toggle('playing', reading);
+  toggle.textContent = s === 'paused' ? 'Resume' : 'Pause';
+  showRate();
 }
 
 // Starts from the first paragraph on screen, so you can scroll to where you want to listen.
@@ -152,28 +173,42 @@ function firstVisible() {
 }
 
 listen.addEventListener('click', () => {
+  paragraphs = collect();
+  if (paragraphs.length === 0) { return; }
+  const from = firstVisible();
+  setState('speaking');
+  mark(from);
+  send({
+    type: 'tts-start',
+    texts: paragraphs.map(e => e.textContent.replace(/\s+/g, ' ').trim()),
+    from,
+    rate,
+    lang: document.documentElement.lang || '',
+    title: document.title,
+  });
+});
+
+toggle.addEventListener('click', () => {
   if (state === 'speaking') {
     setState('paused');
     send({ type: 'tts-pause' });
   } else if (state === 'paused') {
     setState('speaking');
     send({ type: 'tts-resume' });
-  } else {
-    paragraphs = collect();
-    if (paragraphs.length === 0) { return; }
-    const from = firstVisible();
-    setState('speaking');
-    mark(from);
-    send({
-      type: 'tts-start',
-      texts: paragraphs.map(e => e.textContent.replace(/\s+/g, ' ').trim()),
-      from,
-      lang: document.documentElement.lang || '',
-    });
   }
 });
 
-stopButton.addEventListener('click', () => {
+document.getElementById('prev').addEventListener('click', () => send({ type: 'tts-skip', delta: -1 }));
+document.getElementById('next').addEventListener('click', () => send({ type: 'tts-skip', delta: 1 }));
+
+rateButton.addEventListener('click', () => {
+  rate = RATES[(RATES.indexOf(rate) + 1) % RATES.length] || 1;
+  localStorage.setItem('rate', String(rate));
+  showRate();
+  send({ type: 'tts-rate', rate });
+});
+
+document.getElementById('stop').addEventListener('click', () => {
   setState('idle');
   mark(-1);
   send({ type: 'tts-stop' });
@@ -183,5 +218,32 @@ window.addEventListener('pagehide', () => {
   if (state !== 'idle') { send({ type: 'tts-stop' }); }
 });
 
+// ---------------------------------------------------------------- where you stopped reading
+
+// Each article opens where it was left, as a share of its length (the text size may have changed).
+let articleKey = null;
+let saveTimer = 0;
+
+function restorePlace(url) {
+  articleKey = url ? 'place:' + url.split('#')[0] : null;
+  if (!articleKey) { return; }
+  const share = Number(localStorage.getItem(articleKey));
+  if (share > 0.02) {
+    requestAnimationFrame(() => window.scrollTo(0, share * document.documentElement.scrollHeight));
+  }
+  window.addEventListener('scroll', () => {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+      const h = document.documentElement.scrollHeight;
+      const share = h > 0 ? window.scrollY / h : 0;
+      try {
+        // Near the end counts as read: next time it opens at the top.
+        if (window.scrollY + window.innerHeight >= h - 40) { localStorage.removeItem(articleKey); } else { localStorage.setItem(articleKey, share.toFixed(4)); }
+      } catch (e) { }
+    }, 400);
+  }, { passive: true });
+}
+
 applySize();
+showRate();
 browser.runtime.sendMessage({ type: 'reader-get', id: location.hash.slice(1) }).then(render, () => render(null));

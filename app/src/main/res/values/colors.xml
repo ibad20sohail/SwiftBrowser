@@ -55,4 +55,40 @@
     <color name="group_pink">#FFD01884</color>
     <color name="group_purple">#FF9334E6</color>
     <color name="group_cyan">#FF007B83</color>
+
+    <!-- Accent colours (1.9): Settings → Look & screen. Each has a strong colour, the colour on top
+         of it, a soft container and the colour on the container. Blue is the default (as above). -->
+    <color name="accent_blue">#FF1B66E4</color>
+    <color name="on_accent_blue">#FFFFFFFF</color>
+    <color name="accent_blue_container">#FFDCE7FF</color>
+    <color name="on_accent_blue_container">#FF0B3A8F</color>
+    <color name="accent_green">#FF1E7D45</color>
+    <color name="on_accent_green">#FFFFFFFF</color>
+    <color name="accent_green_container">#FFD3F2DE</color>
+    <color name="on_accent_green_container">#FF0A3D20</color>
+    <color name="accent_purple">#FF7A4CD9</color>
+    <color name="on_accent_purple">#FFFFFFFF</color>
+    <color name="accent_purple_container">#FFEADDFF</color>
+    <color name="on_accent_purple_container">#FF2E1066</color>
+    <color name="accent_orange">#FFC2570C</color>
+    <color name="on_accent_orange">#FFFFFFFF</color>
+    <color name="accent_orange_container">#FFFFDCC7</color>
+    <color name="on_accent_orange_container">#FF4A1E00</color>
+    <color name="accent_red">#FFC62845</color>
+    <color name="on_accent_red">#FFFFFFFF</color>
+    <color name="accent_red_container">#FFFFD9DD</color>
+    <color name="on_accent_red_container">#FF5A0716</color>
+    <color name="accent_teal">#FF00796B</color>
+    <color name="on_accent_teal">#FFFFFFFF</color>
+    <color name="accent_teal_container">#FFC5EEE8</color>
+    <color name="on_accent_teal_container">#FF00332D</color>
+
+    <!-- Deleting and warnings. -->
+    <color name="danger">#FFC5221F</color>
+    <color name="danger_container">#FFFCE8E6</color>
+    <color name="on_danger_container">#FF8C1D18</color>
+    <!-- Messages (the pill at the bottom): dark in light mode, light in dark mode. -->
+    <color name="message_bg">#FF2B2E36</color>
+    <color name="message_text">#FFF2F3F5</color>
+    <color name="skeleton">#FFE9ECF1</color>
 </resources>

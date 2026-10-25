@@ -28,17 +28,34 @@ object DataSaver {
     /** Told when the phone moves between Wi-Fi and mobile data (Settings, downloads waiting for Wi-Fi). */
     val networkListeners = ArrayList<() -> Unit>()
 
+    /** Told when the phone has a connection again (pages that failed to load, failed downloads). */
+    val onlineListeners = ArrayList<() -> Unit>()
+
+    /** The phone has a connection (as far as Android knows). */
+    var online = true
+        private set
+
     fun init(ctx: Context) {
         val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
         onMobileData = isMobile(cm.getNetworkCapabilities(cm.activeNetwork))
         try {
             cm.registerDefaultNetworkCallback(object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) {
+                    main.post {
+                        online = true
+                        onlineListeners.toList().forEach { it() }
+                    }
+                }
+
                 override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
                     main.post { update(isMobile(caps)) }
                 }
 
                 override fun onLost(network: Network) {
-                    main.post { update(false) }
+                    main.post {
+                        online = false
+                        update(false)
+                    }
                 }
             })
         } catch (e: Exception) {
@@ -61,9 +78,26 @@ object DataSaver {
     /** True while images are held back. */
     val active: Boolean get() = SwiftApp.prefs.dataSaver && onMobileData
 
+    /** "Show images" for this site, while it is the one on screen. */
+    private var allowedSite: String? = null
+
+    /** Shows images on [site] until another site is opened. */
+    fun showImagesOn(site: String) {
+        allowedSite = site
+        apply()
+    }
+
+    /** The screen shows a page of [site]: images held back again when it isn't the allowed one. */
+    fun onSiteShown(site: String?) {
+        if (allowedSite != null && site != allowedSite) {
+            allowedSite = null
+            apply()
+        }
+    }
+
     /** The setting or the network changed. */
     fun apply() {
-        val block = active
+        val block = active && allowedSite == null
         if (applied == block) return
         applied = block
         GeckoPreferenceController.setGeckoPrefs(

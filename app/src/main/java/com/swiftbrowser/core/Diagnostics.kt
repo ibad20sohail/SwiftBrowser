@@ -54,7 +54,16 @@ object Diagnostics {
             val old = File(dir, STATE).takeIf { it.exists() }?.readLines().orEmpty()
             val oldStart = old.getOrNull(0)?.toLongOrNull() ?: 0L
             val wasOnScreen = old.getOrNull(1) == "fg"
-            if (wasOnScreen && !File(dir, "last_crash.txt").exists()) {
+            // The phone was switched off (or its battery ran out), or Swift was updated or installed
+            // again: Android didn't close it for lack of memory, so there is nothing to tell.
+            val sameBoot = old.getOrNull(2)?.let { it == bootId() } ?: true
+            val sameVersion = old.getOrNull(3)?.let { it == BuildConfig.VERSION_CODE.toString() } ?: true
+            val reinstalled = try {
+                ctx.packageManager.getPackageInfo(ctx.packageName, 0).lastUpdateTime > oldStart
+            } catch (_: Exception) {
+                false
+            }
+            if (wasOnScreen && sameBoot && sameVersion && !reinstalled && !File(dir, "last_crash.txt").exists()) {
                 // The app's own crashes have their own report (Crash); this is everything else.
                 val crash = engineCrashes(ctx).lastOrNull { it.time >= oldStart && it.fatal }
                 if (crash != null) {
@@ -92,10 +101,23 @@ object Diagnostics {
 
     private fun writeState(onScreen: Boolean) {
         try {
-            File(app.filesDir, STATE).writeText("$runStart\n${if (onScreen) "fg" else "bg"}\n")
+            File(app.filesDir, STATE).writeText(
+                "$runStart\n${if (onScreen) "fg" else "bg"}\n${bootId()}\n${BuildConfig.VERSION_CODE}\n",
+            )
         } catch (_: Exception) {
         }
     }
+
+    private var cachedBootId: String? = null
+
+    /** Changes when the phone restarts. */
+    private fun bootId(): String = cachedBootId ?: (
+        try {
+            File("/proc/sys/kernel/random/boot_id").readText().trim()
+        } catch (_: Exception) {
+            null
+        } ?: ((System.currentTimeMillis() - android.os.SystemClock.elapsedRealtime()) / 600_000L).toString()
+        ).also { cachedBootId = it }
 
     /** Keeps this run's log on disk, so a report after Android closed the app still has it. */
     fun flushLog() {

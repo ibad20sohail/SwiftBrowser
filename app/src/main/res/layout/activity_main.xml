@@ -131,7 +131,7 @@
                 android:padding="8dp"
                 android:src="@drawable/ic_refresh"
                 android:visibility="gone"
-                app:tint="@color/accent" />
+                app:tint="?attr/colorPrimary" />
 
             <TextView
                 android:id="@+id/hud"
@@ -267,7 +267,7 @@
                             android:layout_gravity="center"
                             android:importantForAccessibility="no"
                             android:src="@drawable/ic_download"
-                            app:tint="@color/accent" />
+                            app:tint="?attr/colorPrimary" />
                     </FrameLayout>
 
                     <FrameLayout
@@ -310,8 +310,8 @@
                     android:layout_width="match_parent"
                     android:layout_height="3dp"
                     android:layout_gravity="bottom"
-                    android:max="100"
-                    android:progressTint="@color/accent"
+                    android:max="1000"
+                    android:progressTint="?attr/colorPrimary"
                     android:visibility="invisible" />
             </FrameLayout>
         </FrameLayout>
@@ -319,21 +319,26 @@
         <LinearLayout
             android:id="@+id/find_bar"
             android:layout_width="match_parent"
-            android:layout_height="52dp"
+            android:layout_height="60dp"
             android:background="@color/toolbar_bg"
             android:elevation="4dp"
             android:gravity="center_vertical"
             android:orientation="horizontal"
-            android:paddingStart="12dp"
+            android:paddingStart="10dp"
             android:paddingEnd="4dp"
             android:visibility="gone">
 
             <EditText
                 android:id="@+id/find_edit"
                 android:layout_width="0dp"
-                android:layout_height="match_parent"
+                android:layout_height="42dp"
                 android:layout_weight="1"
-                android:background="@null"
+                android:background="@drawable/bg_url"
+                android:drawableStart="@drawable/ic_find"
+                android:drawablePadding="10dp"
+                android:drawableTint="@color/text_secondary"
+                android:paddingStart="14dp"
+                android:paddingEnd="12dp"
                 android:hint="@string/find_hint"
                 android:imeOptions="actionSearch|flagNoExtractUi"
                 android:importantForAutofill="no"
@@ -347,7 +352,9 @@
                 android:id="@+id/find_count"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
                 android:layout_marginEnd="4dp"
+                android:fontFamily="sans-serif-medium"
                 android:textColor="@color/text_secondary"
                 android:textSize="13sp" />
 
@@ -412,7 +419,7 @@
                 android:layout_width="32dp"
                 android:layout_height="32dp"
                 android:indeterminate="true"
-                android:indeterminateTint="@color/accent" />
+                android:indeterminateTint="?attr/colorPrimary" />
 
             <TextView
                 android:layout_width="wrap_content"

@@ -33,7 +33,7 @@ object Engine {
      * Bump when tools/ublock-patch/swift-bridge.js changes: uBO keeps its upstream version number,
      * so GeckoView would otherwise keep the previously installed copy.
      */
-    private const val UBO_BRIDGE_REV = 6
+    private const val UBO_BRIDGE_REV = 7
 
     private const val BRANCH = GeckoPreferenceController.PREF_BRANCH_USER
 

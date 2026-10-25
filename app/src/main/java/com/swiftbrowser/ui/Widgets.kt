@@ -29,8 +29,8 @@ class SlimSwitch(context: Context) : View(context) {
     private val trackOff = ContextCompat.getColor(context, R.color.surface_alt)
     private val outline = ContextCompat.getColor(context, R.color.outline)
     private val thumbOff = ContextCompat.getColor(context, R.color.text_secondary)
-    private val trackOn = ContextCompat.getColor(context, R.color.accent)
-    private val thumbOn = ContextCompat.getColor(context, R.color.on_accent)
+    private val trackOn = ContextCompat.getColor(context, Looks.accent.primary)
+    private val thumbOn = ContextCompat.getColor(context, Looks.accent.onPrimary)
     private var position = 0f
     private var animator: ValueAnimator? = null
 

@@ -114,6 +114,11 @@ class UboActionDelegate(private val tab: Tab?) : WebExtension.ActionDelegate {
     }
 }
 
+private val CONNECTION_ERRORS = setOf(
+    WebRequestError.ERROR_UNKNOWN_HOST, WebRequestError.ERROR_OFFLINE, WebRequestError.ERROR_NET_RESET,
+    WebRequestError.ERROR_NET_INTERRUPT, WebRequestError.ERROR_NET_TIMEOUT, WebRequestError.ERROR_CONNECTION_REFUSED,
+)
+
 class TabDelegates(private val tab: Tab) :
     GeckoSession.NavigationDelegate,
     GeckoSession.ProgressDelegate,
@@ -230,8 +235,11 @@ class TabDelegates(private val tab: Tab) :
     override fun onNewSession(session: GeckoSession, uri: String): GeckoResult<GeckoSession>? =
         GeckoResult.fromValue(TabManager.openPopup(tab, uri))
 
-    override fun onLoadError(session: GeckoSession, uri: String?, error: WebRequestError): GeckoResult<String>? =
-        GeckoResult.fromValue(ErrorPage.create(uri, error))
+    override fun onLoadError(session: GeckoSession, uri: String?, error: WebRequestError): GeckoResult<String>? {
+        // No connection (or it dropped): the page tries again by itself once there is one.
+        tab.waitingForConnection = error.code in CONNECTION_ERRORS
+        return GeckoResult.fromValue(ErrorPage.create(uri, error))
+    }
 
     // ------------------------------------------------------------------ progress
 
@@ -266,13 +274,14 @@ class TabDelegates(private val tab: Tab) :
 
     /** With secure connections first on: a site without a secure version says so, once per site. */
     private fun warnIfInsecure() {
-        if (!SwiftApp.prefs.httpsOnly || tab.secure || tab !== TabManager.current) return
+        // Not for an error page (the site couldn't be reached at all).
+        if (!SwiftApp.prefs.httpsOnly || tab.secure || tab !== TabManager.current || tab.waitingForConnection) return
         val url = tab.url
         if (!url.startsWith("http://")) return
         val host = UrlUtils.host(url) ?: return
         if (host == "localhost" || host.startsWith("127.") || host.startsWith("192.168.") || host.startsWith("10.")) return
         if (!warnedInsecure.add(host)) return
-        ui?.showMessage("$host has no secure version: what you send here can be seen on the network", long = true)
+        ui?.showMessage("$host isn't secure: others on the same network could see what you send here", long = true)
     }
 
     override fun onSessionStateChange(session: GeckoSession, sessionState: GeckoSession.SessionState) {
@@ -453,7 +462,15 @@ class TabDelegates(private val tab: Tab) :
     }
 
     override fun onMetadata(session: GeckoSession, mediaSession: MediaSession, meta: MediaSession.Metadata) {
-        SwiftApp.instance?.let { Playback.onMetadata(it, tab, meta.title, meta.artist) }
+        SwiftApp.instance?.let { Playback.onMetadata(it, tab, meta) }
+    }
+
+    override fun onFeatures(session: GeckoSession, mediaSession: MediaSession, features: Long) {
+        Playback.onFeatures(tab, features)
+    }
+
+    override fun onPositionState(session: GeckoSession, mediaSession: MediaSession, state: MediaSession.PositionState) {
+        SwiftApp.instance?.let { Playback.onPosition(it, tab, state) }
     }
 
     override fun onPlay(session: GeckoSession, mediaSession: MediaSession) = setPlaying(true)

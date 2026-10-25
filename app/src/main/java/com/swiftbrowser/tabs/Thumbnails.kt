@@ -48,6 +48,9 @@ object Thumbnails {
         }
     }
 
+    /** The tab's picture if it is in memory. */
+    fun cached(tab: Tab): Bitmap? = cache.get(tab.id)
+
     /** Calls [onLoaded] on the main thread with the tab's picture, or null if there is none. */
     fun load(tab: Tab, onLoaded: (Bitmap?) -> Unit) {
         val id = tab.id

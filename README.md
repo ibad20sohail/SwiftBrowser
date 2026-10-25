@@ -5,7 +5,7 @@ ad-heavy sites on an old phone (Moto E4, Android 7.1.2).
 
 ## Download
 
-**[Download Swift 1.8 (APK)](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v1.8/Swift-1.8.apk)**
+**[Download Swift 2.0 (APK)](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v2.0/Swift-2.0.apk)**
 for Android 7 and newer (32-bit ARM, about 150 MB). It installs over an earlier Swift and keeps
 tabs and settings. From 1.4 on, Swift can also update itself: Settings → Check for updates.
 
@@ -13,6 +13,11 @@ Older versions: [all releases](https://github.com/ibad20sohail/SwiftBrowser/rele
 are attached to the releases because GitHub doesn't accept files over 100 MB in the repository.
 
 ## Features
+
+Swift 2.0 redid every screen in one consistent look: a choice of accent colour (blue, green,
+purple, orange, red or teal) and a theme that can turn dark at night, the same rounded sheets,
+rows, buttons and short animations everywhere, plain words instead of technical ones, and a short
+welcome on the first start.
 
 - **Firefox engine (GeckoView 143)**: the newest engine that still runs on Android 7.
 - **Ad blocking with four levels** (Off / Balanced / High / Extreme), set for all sites or per site.
@@ -34,15 +39,18 @@ are attached to the releases because GitHub doesn't accept files over 100 MB in 
     tab, New incognito tab, Close this tab and Recent tabs.
   - How many tabs stay loaded is a setting (1 to 10, 2 by default); the others show their last
     picture straight away and reload their page when opened.
-- **Menu** (⋮) that slides up from the bottom: the page's main actions as a row of icons, four
-  switches (Lite mode, dark mode, desktop site, full screen) that keep the menu open, and two pages
-  of buttons swiped sideways, among them **Block element** (tap a leftover ad or banner and hide it
-  on that site for good, with uBlock Origin's element picker) and the **Sleep timer**. Swipe it down,
-  tap outside it or press back to close it.
+- **Menu** (⋮) that slides up from the bottom: the page with its site settings, copy and
+  Settings buttons, the page's main actions as a row of icons, four switches (Lite mode, dark mode,
+  desktop site, full screen) that keep the menu open, then the seven buttons you chose (Settings →
+  Look & screen → Menu buttons) and **More**, which slides to the others: among them **Tap to hide**
+  (tap a leftover ad or banner and hide it on that site for good, with uBlock Origin's element
+  picker) and the **Sleep timer**. Swipe it down, tap outside it or press back to close it.
 - **Reader view**: a clean, light version of article pages (Mozilla's Readability), with text size
-  buttons, in light or dark. **Listen** reads the article aloud with the phone's text-to-speech,
-  from the paragraph on screen, marking the paragraph being read. Serif or sans-serif text and the
-  line spacing are set in Settings → Browsing.
+  buttons, in light or dark. It remembers where you stopped reading each article. **Listen** reads
+  the article aloud with the phone's text-to-speech, from the paragraph on screen, marking the
+  paragraph being read, with pause, previous and next paragraph and speed (0.75x to 2x). It goes on
+  with Swift in the background or the screen off, with pause and stop in a notification. Serif or
+  sans-serif text and the line spacing are set in Settings → Browsing.
 - **Lite mode**, one switch for all sites (menu or Settings): no animations, shadows or blur, so
   heavy sites scroll smoothly on the phone. It stays on until it is turned off; a site that looks
   broken with it can be left out (Site settings).
@@ -56,15 +64,26 @@ are attached to the releases because GitHub doesn't accept files over 100 MB in 
 - **Add to Home screen**: a shortcut to the page on the phone's home screen.
 - **Swipe from the edges**: from the left edge of a page to go back, from the right to go forward.
 - **Home page** for new tabs: a search box (with voice search) that slides into the address bar
-  when tapped, and up to 12 shortcuts. Add your own with the + tile (it gets the site's icon); hold
-  a shortcut to open it in a new or incognito tab, rename it, change its address, move it to the
-  start or remove it. Free places are filled with the most visited sites.
+  when tapped, up to 12 shortcuts, and the **news**: English headlines from Google News for your
+  country (from the phone, or chosen), with topic chips, pull down to refresh, more stories while
+  scrolling, and news sites you add yourself (their pictures show on the right). Hold a story to
+  open it in a new or incognito tab, share it or hide that site. Light on the phone: fetched at most
+  once an hour, pictures only as they come on screen and not on mobile data with Data saver; it can
+  be turned off (Settings → Home & news). shortcuts: add your own with the + tile (it gets the site's icon); hold
+  a shortcut and drag it to another place, or hold it and let go to open it in a new or incognito
+  tab, rename it, change its address, move it to the start or remove it. Free places are filled
+  with the most visited sites.
 - **Home button** next to the address (can be hidden): the home page over the open tab; Back
   returns to the page.
-- **Address bar at the top or the bottom** (Settings → Look & screen). While you type, it takes the
-  whole toolbar, and it offers a link you just copied ("Link you copied").
-- **Long press** on a link, picture or video: a sheet with what it is and what to do with it (open
-  in a new, background or incognito tab, copy the link or its text, share, download).
+- **Address bar at the top or the bottom** (Settings → Look & screen). While reading it shows just
+  the site's name and icon (tap it for the site's settings); an open red lock warns about sites that
+  aren't secure. While you type, it takes the whole toolbar and suggests, in groups, what you typed,
+  search suggestions, your **open tabs** (switch to them), bookmarks and history, with ↖ to keep
+  typing from a suggestion; it also offers a link you just copied. Hold the address for Paste and
+  go, Copy, Share and Edit.
+- **Long press** on a link, picture or video: a compact sheet with what it is (the site's name;
+  tap for the whole address; a small preview of a picture), the main actions as big buttons (new,
+  background or incognito tab, share; for pictures open, save, share, copy) and the rest as rows.
 - **Toolbar that hides while scrolling**: it slides away and back with your finger, as in Chrome,
   and finishes with a short slide when you let go (or, with that setting off, it goes and comes
   back in one go after a deliberate scroll). Pull down at the top of a page to reload.
@@ -74,11 +93,18 @@ are attached to the releases because GitHub doesn't accept files over 100 MB in 
 - **Secure connections first**: every site's secure (https) version when it has one; a site
   without one still opens and Swift says it isn't secure. Firefox also answers known cookie
   banners with "Reject".
+- **Back online**: a page that couldn't load for lack of connection loads again by itself when the
+  connection comes back.
 - **Search engine**: Google, DuckDuckGo, Bing or Startpage, with suggestions from the same engine.
-- **Data saver**: on mobile data, pages load without images (Settings → Speed & memory).
+- **Data saver**: on mobile data, pages load without images (Settings → Speed & memory); "Show"
+  brings a page's pictures back for that site.
+- **History** grouped by day (Today, Yesterday, then dates), with Delete day, and the search word
+  marked in the results. **Bookmarks** can have their name and address changed. In History,
+  Bookmarks and Downloads, swipe a row away to remove it; every removal (and deleting a downloaded
+  file) can be undone for a few seconds, with a line showing the time left.
 - **Back up and restore**: settings, profiles, bookmarks, history, open tabs and groups, and site
   settings in one file in the download folder, to restore on this or another phone. Passwords and
-  cookies aren't in it.
+  cookies aren't in it. A backup is also made by itself once a week (the last two are kept).
 - **Video**:
   - Full-screen videos use the whole screen and follow the phone's auto-rotate. Turning them to
     landscape automatically, and swipe gestures for brightness (left side) and volume (right
@@ -86,43 +112,54 @@ are attached to the releases because GitHub doesn't accept files over 100 MB in 
   - Sites get H.264 video, which the phone's video hardware plays, instead of AV1.
   - **Keep playing in the background** (a switch): a song or video goes on when you switch tabs,
     open another app or turn the screen off, even on sites that pause themselves when you leave
-    them (YouTube). One tab plays at a time. Play/pause and the sleep timer are in the notification.
-  - **Sleep timer**: stops playing after 15 to 90 minutes or at the end of the video, and stops the
-    next one a site starts by itself. The screen stays on only while a video is really playing.
+    them (YouTube). One tab plays at a time.
+  - **Media notification** with the picture, previous/next (or skip 10 seconds), play/pause, the
+    sleep timer and close, also on the lock screen. Headset and Bluetooth buttons work, and
+    playing pauses when headphones are unplugged.
+  - **Sleep timer**: stops playing after 15 to 90 minutes or at the end of the video, fading the
+    sound out over a few seconds, and stops the next one a site starts by itself. The time left
+    shows in the notification. The screen stays on only while a video is really playing.
   - Playback speed can be set from 0.5x to 3x.
   - In full screen, double-tap the left or right side to skip 10 seconds (keep tapping to skip
     more), and hold a finger down for double speed.
   - **Continue watching**: Swift remembers where long videos were left off and offers to continue
-    from there, even after a reload or reopening the tab.
+    from there (a "Continue from" button), even after a reload or reopening the tab.
   - Videos a page plays can be downloaded, including HLS (`.m3u8`) streams, choosing the quality
     with its approximate size. These are saved as MP4 when possible.
 - **Downloads** with pause/resume and notifications, saved to a folder of your choice: Download/Swift,
   Download, Movies, Swift's folder on the SD card, or any folder on the phone. Big downloads can
-  wait for Wi-Fi.
+  wait for Wi-Fi. Downloads cut off by closing Swift go on by themselves, failed ones are tried
+  again when the connection comes back, and a tab that only led to a download closes.
 - **Storage** (Settings): what Swift keeps on the phone, part by part, the sites that stored data
   (clear each one), and clearing sites you haven't visited for 30 days. The page cache is capped at
-  20 MB and uBlock Origin keeps its compiled lists once instead of twice.
-- **Settings** in the app's own look: the most used switches as tiles, eight topics that show
-  what is set, and a search box.
+  20 MB and uBlock Origin keeps its compiled lists once instead of twice. When the phone is low on
+  space, Swift empties its caches by itself (at most once a day).
+- **Settings** in the app's own look: the most used switches as tiles, nine topics that show
+  what is set, settings for experts folded under **Advanced**, and a search box that also
+  understands everyday words ("battery", "ads", "music").
+- **Updates** show their download progress, and "What's new" after an update.
 - **Light animations** for the app's own parts (never the page), short enough to keep a slow phone
   smooth, and a light vibration on long presses and tab dragging (can be turned off).
 - **Hide cookie pop-ups**: one switch (Settings → Ad blocking) for uBlock Origin's cookie-notice
   lists.
-- **Dark / light mode**, with a calm palette in both. Sites that support dark mode follow it.
+- **Light, dark, or dark at night** (7 pm to 7 am), with a calm palette in both, and an **accent
+  colour** of your choice. Sites that support dark mode follow it; so do error pages and reader
+  view.
 - **Text size** for all sites, and **zoom** even on sites that turn it off.
 - **Tuned for a 2 GB phone**: uBlock Origin runs in its own process, filter lists update only
   while the app is in the background, the web cache is capped, and Firefox's own Safe Browsing
   lists are off (uBlock Origin covers them). Silent videos don't start by themselves (YouTube
   feed previews), and the app's own toolbar is redrawn as little as possible while a page scrolls.
   All tabs share one engine process for pages, decoded images are capped at 48 MB, and when the
-  phone runs low on memory only the open tab stays loaded.
+  phone runs low on memory, or a minute after Swift goes to the background, only the open (or
+  playing) tab stays loaded.
 - **Problem reports**: engine crashes and Android closing Swift (usually for lack of memory) are
-  noted, and Settings → Send a problem report shares them with the app's log (nothing is sent by
-  itself).
+  noted (not when the phone was restarted or Swift updated), and Settings → Send a problem report
+  shares them with the app's log (nothing is sent by itself).
 - **Lighter pages**: frosted-glass effects (CSS `backdrop-filter`) are off, sites that offer a
   version without decorative animations get it, and YouTube's and TheFlixer's large blur effects
   are left out. Each of these makes scrolling several times more work on a slow phone.
-- **Start-up screen**: the logo while the app starts, and a loading screen while an open page
+- **Start-up screen**: the logo while the app starts, then the open page's last picture while it
   waits for the ad blocker to load its filters.
 - **Drawing method**: on Adreno 3xx graphics chips, where Firefox's GPU drawing is slow on
   text-heavy pages, pages are drawn with the CPU by default (videos still go through the GPU).

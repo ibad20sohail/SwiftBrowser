@@ -117,11 +117,15 @@ object Downloads {
                 parseHeaders(r.headers), r.pageUrl, r.extra?.let { runCatching { JSONObject(it) }.getOrNull() } ?: JSONObject(),
                 r.created,
             )
-            // Anything interrupted by the app closing waits for the user to resume it.
-            if (item.status == RUNNING || item.status == QUEUED || item.status == CONVERTING) item.status = PAUSED
+            // Anything interrupted by Swift or the phone closing goes on by itself (a download the
+            // user paused stays paused).
+            if (item.status == RUNNING || item.status == QUEUED || item.status == CONVERTING) item.status = QUEUED
             items[item.id] = item
         }
         com.swiftbrowser.engine.DataSaver.networkListeners += { onNetworkChanged() }
+        com.swiftbrowser.engine.DataSaver.onlineListeners += { retryFailed() }
+        // A moment after starting, so the app comes up first.
+        main.postDelayed({ schedule() }, 4000)
     }
 
     fun all(): List<Item> = synchronized(items) { items.values.reversed() }
@@ -303,6 +307,7 @@ object Downloads {
         if (item.status != PAUSED && item.status != FAILED) return
         item.status = QUEUED
         item.error = null
+        item.extra.remove("retries")
         persist(item)
         changed(immediate = true)
         schedule()
@@ -331,6 +336,33 @@ object Downloads {
     private fun mustWait(item: Item): Boolean =
         prefs.wifiOnlyDownloads && com.swiftbrowser.engine.DataSaver.onMobileData &&
             (item.kind == KIND_HLS || item.total > BIG || (item.total <= 0 && item.mime?.startsWith("video/") == true))
+
+    /**
+     * The connection is back: downloads that failed for lack of it try again, a few times at most
+     * (not those whose link expired or that the server refused).
+     */
+    private fun retryFailed() {
+        var any = false
+        synchronized(items) { items.values.toList() }.forEach { item ->
+            if (item.status != FAILED || !networkError(item.error)) return@forEach
+            val tries = item.extra.optInt("retries", 0)
+            if (tries >= 3) return@forEach
+            item.extra.put("retries", tries + 1)
+            item.status = QUEUED
+            item.error = null
+            persist(item)
+            any = true
+        }
+        if (any) {
+            changed(immediate = true)
+            schedule()
+        }
+    }
+
+    private fun networkError(error: String?): Boolean {
+        val e = error?.lowercase() ?: return true
+        return !e.contains("expired") && !e.contains("server error") && !e.contains("drm") && !e.contains("not a video")
+    }
 
     /** The phone moved between Wi-Fi and mobile data, or the setting changed. */
     fun onNetworkChanged() {
@@ -571,7 +603,7 @@ object Downloads {
         val media = Hls.parseMedia(text, playlistUrl)
         if (media.segments.isEmpty()) throw IOException("Empty playlist")
         if (!media.endList) throw IOException("This is a live stream, it can't be downloaded")
-        if (media.unsupportedKey) throw IOException("This video is DRM-protected and can't be saved")
+        if (media.unsupportedKey) throw IOException("This video is copy-protected and can't be saved")
 
         val extra = item.extra
         if (media.fragmentedMp4 && !item.fileName.endsWith(".mp4")) {

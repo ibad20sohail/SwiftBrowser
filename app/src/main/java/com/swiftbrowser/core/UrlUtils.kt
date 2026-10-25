@@ -89,6 +89,28 @@ object UrlUtils {
 
     fun stripFragment(url: String): String = url.substringBefore('#')
 
+    /**
+     * Just the site (host, without "www."), as the address bar shows it while reading a page and
+     * sheets show under a title. Other addresses (files, data) are shown in short.
+     */
+    fun siteName(url: String?): String {
+        if (url.isNullOrBlank() || url == "about:blank") return ""
+        if (url.startsWith("data:")) return "data:…"
+        return try {
+            val u = Uri.parse(url)
+            if (isHttp(url) && !u.host.isNullOrEmpty()) {
+                val port = if (u.port > 0) ":${u.port}" else ""
+                u.host!!.lowercase(Locale.ROOT).removePrefix("www.") + port
+            } else if (url.startsWith("file:")) {
+                Uri.decode(u.lastPathSegment ?: url)
+            } else {
+                display(url)
+            }
+        } catch (_: Exception) {
+            url
+        }
+    }
+
     /** What the address bar shows when not editing. */
     fun display(url: String?): String {
         if (url.isNullOrBlank() || url == "about:blank") return ""

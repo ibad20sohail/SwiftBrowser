@@ -79,9 +79,15 @@
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
-        <!-- Background play: keeps a playing video or song going, with play/pause. -->
+        <!-- Keep playing in the background: keeps a playing video or song going, with its controls. -->
         <service
             android:name=".media.PlaybackService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
+
+        <!-- Read aloud (reader view) going on in the background, with pause and stop. -->
+        <service
+            android:name=".media.ReadAloudService"
             android:exported="false"
             android:foregroundServiceType="mediaPlayback" />
 

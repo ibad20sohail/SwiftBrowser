@@ -25,12 +25,41 @@ object Backup {
     private const val HISTORY_LIMIT = 5000
 
     /** Settings that describe this phone, not the user's choices. */
-    private val SKIP_SETTINGS = setOf("prefs_version", Prefs.LAST_UPDATE_CHECK, "ubo_last_update_check", Prefs.CURRENT_PROFILE)
+    private val SKIP_SETTINGS = setOf(
+        "prefs_version", Prefs.LAST_UPDATE_CHECK, "ubo_last_update_check", Prefs.CURRENT_PROFILE,
+        Prefs.LAST_AUTO_BACKUP, Prefs.LAST_LOW_SPACE_CLEANUP, Prefs.SEEN_VERSION, Prefs.WELCOME_DONE,
+    )
+
+    private const val AUTO_PREFIX = "Swift backup (automatic)"
+    private const val WEEK = 7L * 24 * 3600 * 1000
 
     class Summary(val profiles: Int, val bookmarks: Int, val tabs: Int, val history: Int, val created: String)
 
     /** Blocking: writes the backup and returns its file. */
-    fun write(ctx: Context): File {
+    fun write(ctx: Context): File = write(ctx, automatic = false)
+
+    /**
+     * Blocking: the weekly backup, if it is due (Settings → Privacy → Back up every week). Only the
+     * two newest automatic backups are kept. Returns the file written, or null.
+     */
+    fun autoBackupIfDue(ctx: Context): File? {
+        val prefs = SwiftApp.prefs
+        if (!prefs.autoBackup || System.currentTimeMillis() - prefs.lastAutoBackup < WEEK) return null
+        if (TabManager.tabs.none { !it.incognito && !it.isBlank }) return null
+        val file = try {
+            write(ctx, automatic = true)
+        } catch (e: Exception) {
+            L.w("Automatic backup failed", e)
+            return null
+        }
+        prefs.lastAutoBackup = System.currentTimeMillis()
+        file.parentFile?.listFiles { f -> f.name.startsWith(AUTO_PREFIX) && f.name.endsWith(".json") }
+            ?.sortedByDescending { it.lastModified() }?.drop(2)?.forEach { it.delete() }
+        L.d("Automatic backup written: ${file.name}")
+        return file
+    }
+
+    private fun write(ctx: Context, automatic: Boolean): File {
         val db = SwiftApp.db
         val root = JSONObject()
             .put("app", "Swift")
@@ -80,9 +109,10 @@ object Backup {
 
         val day = SimpleDateFormat("yyyy-MM-dd", Locale.ROOT).format(Date())
         val dir = Downloads.directory()
-        var file = File(dir, "Swift backup $day.json")
+        val base = if (automatic) "$AUTO_PREFIX $day" else "Swift backup $day"
+        var file = File(dir, "$base.json")
         var n = 2
-        while (file.exists()) file = File(dir, "Swift backup $day ($n).json").also { n++ }
+        while (file.exists()) file = File(dir, "$base ($n).json").also { n++ }
         file.writeText(root.toString())
         // So file managers and other apps see it straight away.
         android.media.MediaScannerConnection.scanFile(ctx.applicationContext, arrayOf(file.path), null, null)

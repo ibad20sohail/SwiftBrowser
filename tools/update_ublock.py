@@ -7,6 +7,8 @@ The patch:
   * copies tools/ublock-patch/swift-bridge.js into js/,
   * loads it from background.html (after uBO's own start.js),
   * adds the "nativeMessaging" and "geckoViewAddons" permissions it needs,
+  * lists document-blocked.html as web-accessible: GeckoView refuses uBO's redirect to its
+    "page blocked" screen otherwise, and a blocked site (phishing, malware) shows a blank page,
   * makes js/cachestorage.js keep compiled lists and the filter snapshot only in
     uBO's fast IndexedDB cache, not a second time in extension storage (~25 MB),
   * sizes the element picker for a phone (css/epicker-ui.css).
@@ -146,6 +148,9 @@ def main():
     for p in ("nativeMessaging", "geckoViewAddons"):
         if p not in perms:
             perms.append(p)
+    war = manifest.setdefault("web_accessible_resources", [])
+    if "/document-blocked.html" not in war:
+        war.append("/document-blocked.html")
     with open(manifest_path, "w", encoding="utf-8", newline="\n") as f:
         json.dump(manifest, f, indent=2, ensure_ascii=False)
         f.write("\n")

@@ -79,7 +79,8 @@
     <color name="danger">#FFF28B82</color>
     <color name="danger_container">#FF5C2B29</color>
     <color name="on_danger_container">#FFFFDAD6</color>
-    <color name="message_bg">#FFE6E8EC</color>
-    <color name="message_text">#FF1A1C21</color>
+    <!-- 2.2: messages stay dark at night too, a step lighter than the screen so they stand out. -->
+    <color name="message_bg">#FF353944</color>
+    <color name="message_text">#FFF2F3F5</color>
     <color name="skeleton">#FF262931</color>
 </resources>

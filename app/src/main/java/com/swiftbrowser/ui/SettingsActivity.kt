@@ -279,18 +279,6 @@ class SettingsActivity : AppCompatActivity() {
             bottomMargin = dp(12)
         })
 
-        // The switches changed most, as the same tiles as in the ⋮ menu.
-        val tiles = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        tile(tiles, R.drawable.ic_lite, "Lite mode", { prefs.liteMode }) { PageActions.setLite(null, it) }
-        tile(tiles, R.drawable.ic_dark, "Dark mode", { prefs.darkMode }) { Sheets.setDarkMode(it) }
-        tile(tiles, R.drawable.ic_fullscreen, "Full screen", { prefs.fullScreen }) {
-            prefs.fullScreen = it
-            SystemBars.apply(this)
-        }
-        normal.addView(tiles, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-            bottomMargin = dp(16)
-        })
-
         val card = card()
         val topics = Section(card)
         for (t in Topic.entries) {
@@ -464,10 +452,8 @@ class SettingsActivity : AppCompatActivity() {
                 prefs.toolbarAtBottom = it
             }
         }
-        def(Topic.LOOK, "Address bar", "Home button", "house home page start") {
-            switch(R.drawable.ic_home, "Home button", { "A home icon next to the address" }, checked = { prefs.showHomeButton }) {
-                prefs.showHomeButton = it
-            }
+        def(Topic.LOOK, "Address bar", "Address bar buttons", "toolbar buttons home house profile tabs menu reload share bookmark new tab scan qr arrange customize") {
+            action(R.drawable.ic_toolbar_buttons, "Address bar buttons", { toolbarButtonsText() }) { arrangeToolbar() }
         }
         def(Topic.LOOK, "Address bar", "Address bar swipes", "swipe up down hide show address bar toolbar gesture") {
             action(R.drawable.ic_gesture, "Address bar swipes", { barSwipesText(prefs.barSwipes) }) { chooseBarSwipes() }
@@ -488,8 +474,11 @@ class SettingsActivity : AppCompatActivity() {
                 checked = { prefs.toolbarFollowsScroll },
             ) { prefs.toolbarFollowsScroll = it }
         }
-        def(Topic.LOOK, "Menu", "Menu buttons", "menu buttons choose order customize more") {
-            action(R.drawable.ic_more, "Menu buttons", { menuButtonsText() }) { chooseMenuButtons() }
+        def(Topic.LOOK, "Menu", "Arrange the menu", "menu buttons order arrange move hide customize more pages") {
+            action(R.drawable.ic_menu, "Arrange the menu", { "Move or hide its buttons (or hold any button in the menu)" }) { arrangeMenu() }
+        }
+        def(Topic.LOOK, "Menu", "Reset the menu", "menu buttons default reset order") {
+            action(R.drawable.ic_update, "Reset the menu", { "Every button back where it started" }) { resetMenu() }
         }
         def(Topic.LOOK, "Feel", "Light vibration", "haptic vibrate feedback touch") {
             switch(R.drawable.ic_vibration, "Light vibration", { "A short buzz when you hold something or drag a tab" }, checked = { prefs.haptics }) {
@@ -502,6 +491,16 @@ class SettingsActivity : AppCompatActivity() {
             switch(R.drawable.ic_news, "Show news", { "Headlines under the shortcuts on the home page" }, checked = { prefs.newsEnabled }) {
                 prefs.newsEnabled = it
             }
+        }
+        def(Topic.NEWS, "News", "Stories with big pictures", "news pictures images cards big chrome compact layout") {
+            switch(
+                R.drawable.ic_image, "Stories with big pictures",
+                { if (prefs.newsCards) "Cards with the picture across the top, as in Chrome" else "Off: compact rows with a small picture" },
+                details = "Each story becomes a card: its picture across the top, then the site and the headline. Pictures come " +
+                    "from the news sites themselves: Google News' headlines often have none, sites you add usually do. " +
+                    "They load only as you scroll to them, and not on mobile data with Data saver.",
+                checked = { prefs.newsCards },
+            ) { prefs.newsCards = it }
         }
         def(Topic.NEWS, "News", "News country", "country region edition pakistan india uk us") {
             action(R.drawable.ic_globe, "Country", { newsCountryText() }) { chooseNewsCountry() }
@@ -518,7 +517,7 @@ class SettingsActivity : AppCompatActivity() {
 
         // Browsing & tabs
         def(Topic.BROWSING, "Search", "Search engine", "google duckduckgo bing startpage") {
-            action(R.drawable.ic_search, "Search engine", { SearchEngine.current.label }) { chooseSearchEngine() }
+            action(SearchEngine.current.icon, "Search engine", { SearchEngine.current.label }, icon = { SearchEngine.current.icon }) { chooseSearchEngine() }
         }
         def(Topic.BROWSING, "Search", "Search suggestions", "google suggest typing") {
             switch(R.drawable.ic_lightbulb, "Search suggestions", { "${SearchEngine.current.label} suggests searches as you type" }, checked = { prefs.searchSuggestions }) {
@@ -592,7 +591,7 @@ class SettingsActivity : AppCompatActivity() {
             switch(
                 R.drawable.ic_lite, "Lite mode", { "Plainer sites that scroll the smoothest" },
                 details = "The smoothest scrolling on this phone: all sites without animations, shadows or blur. " +
-                    "Some sites look plainer. Stays on until you turn it off; also in the ⋮ menu.",
+                    "Some sites look plainer. Stays on until you turn it off; also in the ≡ menu.",
                 checked = { prefs.liteMode },
             ) { PageActions.setLite(null, it) }
         }
@@ -642,7 +641,7 @@ class SettingsActivity : AppCompatActivity() {
             }
         }
         def(Topic.VIDEO, "Playing", "Sleep timer", "stop music video sleep night minutes") {
-            action(R.drawable.ic_timer, "Sleep timer", { SleepTimer.label() ?: "Off. Also in the ⋮ menu and the playback notification." }) {
+            action(R.drawable.ic_timer, "Sleep timer", { SleepTimer.label() ?: "Off. Also in the ≡ menu and the playback notification." }) {
                 Sheets.sleepTimer(this@SettingsActivity) { refreshAll() }
             }
         }
@@ -714,6 +713,9 @@ class SettingsActivity : AppCompatActivity() {
                 Engine.applyPrivacyPrefs()
             }
         }
+        def(Topic.PRIVACY, null, "Secure DNS", "dns doh dns over https cloudflare quad9 google lookup private encrypted") {
+            action(R.drawable.ic_globe, "Secure DNS", { secureDnsText() }) { chooseSecureDns() }
+        }
         def(Topic.PRIVACY, null, "Reject cookie banners", "cookies consent gdpr reject banner") {
             switch(
                 R.drawable.ic_cookie, "Reject cookie banners",
@@ -752,6 +754,9 @@ class SettingsActivity : AppCompatActivity() {
         def(Topic.VPN, "Locations", "VPN locations", "location server country proton") {
             custom(vpnLocations(refresh))
         }
+        def(Topic.VPN, "Locations", "Test the locations", "test speed fastest working server ping answer") {
+            action(R.drawable.ic_speed, "Test the locations", { vpnTestText() }) { testVpnLocations() }
+        }
         def(Topic.VPN, "Locations", "Add a location", "add proton wireguard file conf setup") {
             action(R.drawable.ic_add, "Add a location", { "A Proton VPN setup file (.conf), one per server" }) { addVpnLocation() }
         }
@@ -762,6 +767,15 @@ class SettingsActivity : AppCompatActivity() {
             switch(R.drawable.ic_vpn, "Connect when Swift starts", { "If it was on when you left Swift" }, checked = { com.swiftbrowser.vpn.Vpn.connectAtStart }) {
                 com.swiftbrowser.vpn.Vpn.connectAtStart = it
             }
+        }
+        def(Topic.VPN, "Options", "Switch to another location", "automatic failover switch server not answering backup") {
+            switch(
+                R.drawable.ic_swap, "Switch to another location",
+                { "If a server stops answering, Swift moves to another location by itself" },
+                details = "Swift picks the same country first, and the fastest one from your last test. It tells you where " +
+                    "it went. Off: the VPN stops and pages wait (if paused) until you pick another location.",
+                checked = { com.swiftbrowser.vpn.Vpn.autoSwitch },
+            ) { com.swiftbrowser.vpn.Vpn.autoSwitch = it }
         }
         def(Topic.VPN, "Options", "Pause pages if the VPN drops", "kill switch leak block vpn drops") {
             switch(
@@ -858,43 +872,6 @@ class SettingsActivity : AppCompatActivity() {
         })
     }
 
-    /** A tile like the ⋮ menu's: an icon over its name, filled with the accent colour when on. */
-    private fun tile(row: LinearLayout, icon: Int, label: String, checked: () -> Boolean, onChange: (Boolean) -> Unit) {
-        val fill = GradientDrawable().apply { cornerRadius = dp(16).toFloat() }
-        val glyph = ContextCompat.getDrawable(this, icon)!!.mutate().also { it.setBounds(0, 0, dp(22), dp(22)) }
-        val view = TextView(this).apply {
-            text = label
-            textSize = 12f
-            gravity = Gravity.CENTER
-            maxLines = 1
-            ellipsize = TextUtils.TruncateAt.END
-            setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL))
-            setPadding(dp(4), dp(12), dp(4), dp(10))
-            compoundDrawablePadding = dp(6)
-            setCompoundDrawablesRelative(null, glyph, null, null)
-            background = fill
-            foreground = ContextCompat.getDrawable(this@SettingsActivity, RowHolder.selectableBackground(this@SettingsActivity))
-        }
-        val update = {
-            val on = checked()
-            fill.setColor(color(if (on) Looks.accent.container else R.color.card_bg))
-            val tint = color(if (on) Looks.accent.onContainer else R.color.text_primary)
-            view.setTextColor(tint)
-            glyph.setTint(tint)
-            view.isSelected = on
-            view.contentDescription = "$label, ${if (on) "on" else "off"}"
-        }
-        update()
-        refreshers += update
-        view.setOnClickListener {
-            onChange(!checked())
-            refreshAll()
-        }
-        row.addView(view, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
-            if (row.childCount > 0) marginStart = dp(8)
-        })
-    }
-
     private inner class Section(val card: LinearLayout, val refresh: MutableList<() -> Unit> = refreshers) {
         fun add(view: View) {
             if (card.childCount > 0) {
@@ -905,8 +882,13 @@ class SettingsActivity : AppCompatActivity() {
         }
 
         /** A row that opens something; its summary shows the current value. */
-        fun action(icon: Int, title: String, summary: () -> String?, badge: Boolean = false, onClick: () -> Unit) {
-            val (row, sub) = row(icon, title, summary(), badge)
+        /** [icon]: a row whose icon follows a setting (the search engine's logo). */
+        fun action(iconRes: Int, title: String, summary: () -> String?, badge: Boolean = false, icon: (() -> Int)? = null, onClick: () -> Unit) {
+            val (row, sub) = row(iconRes, title, summary(), badge)
+            if (icon != null) {
+                val image = row.getChildAt(0) as ImageView
+                refresh += { setRowIcon(image, icon(), badge) }
+            }
             row.isClickable = true
             row.setBackgroundResource(RowHolder.selectableBackground(this@SettingsActivity))
             row.setOnClickListener { onClick() }
@@ -984,8 +966,8 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     /**
-     * An icon in a grey circle (as in the ⋮ menu; in the accent's soft colour for the main page's
-     * topics), a title and a one- or two-line summary.
+     * An icon in a grey circle (as in the ≡ menu; in the accent's soft colour for the main page's
+     * topics), a title and a summary of up to three lines.
      */
     private fun row(icon: Int, title: String, summary: String?, badge: Boolean = false): Pair<LinearLayout, TextView> {
         val row = LinearLayout(this).apply {
@@ -995,11 +977,10 @@ class SettingsActivity : AppCompatActivity() {
             setPadding(dp(14), dp(10), dp(12), dp(10))
         }
         row.addView(ImageView(this).apply {
-            setImageResource(icon)
-            imageTintList = ColorStateList.valueOf(if (badge) Ui.onAccentContainer(this@SettingsActivity) else color(R.color.text_primary))
             background = Ui.circle(if (badge) Ui.accentContainer(this@SettingsActivity) else color(R.color.surface_alt))
             setPadding(dp(8), dp(8), dp(8), dp(8))
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            setRowIcon(this, icon, badge)
         }, LinearLayout.LayoutParams(dp(38), dp(38)))
         val texts = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -1012,7 +993,7 @@ class SettingsActivity : AppCompatActivity() {
         })
         val sub = TextView(this).apply {
             textSize = 13f
-            maxLines = 2
+            maxLines = 3
             ellipsize = TextUtils.TruncateAt.END
             setTextColor(color(R.color.text_secondary))
             setPadding(0, dp(2), 0, 0)
@@ -1021,6 +1002,16 @@ class SettingsActivity : AppCompatActivity() {
         texts.addView(sub)
         row.addView(texts, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         return row to sub
+    }
+
+    /** A row's icon in the text colour, or a search engine's logo in its own colours. */
+    private fun setRowIcon(image: ImageView, icon: Int, badge: Boolean) {
+        image.setImageResource(icon)
+        image.imageTintList = if (SearchEngine.isLogo(icon)) {
+            null
+        } else {
+            ColorStateList.valueOf(if (badge) Ui.onAccentContainer(this) else color(R.color.text_primary))
+        }
     }
 
     /** The blocking levels side by side; the chosen one is explained below. */
@@ -1281,35 +1272,50 @@ class SettingsActivity : AppCompatActivity() {
         return box
     }
 
-    private fun menuButtonsText(): String =
-        MenuButtons.chosen().mapNotNull { k -> MenuButtons.all.firstOrNull { it.key == k }?.label }.joinToString(", ") + ", More"
+    /** The browser with its menu open, ready to arrange (2.2). */
+    private fun arrangeMenu() {
+        startActivity(
+            Intent(this, MainActivity::class.java).putExtra(MainActivity.EXTRA_ARRANGE_MENU, true)
+                .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+        )
+        finish()
+    }
 
-    /** Which buttons the ⋮ menu shows first (up to 7, next to More); the others are one swipe away. */
-    private fun chooseMenuButtons() {
-        val all = MenuButtons.all
-        val chosen = BooleanArray(all.size) { all[it].key in MenuButtons.chosen() }
-        MaterialAlertDialogBuilder(this)
-            .setTitle("Menu buttons")
-            .setMultiChoiceItems(all.map { it.label }.toTypedArray(), chosen) { d, which, on ->
-                if (on && chosen.count { it } > MenuButtons.MAIN) {
-                    // One too many: the tick doesn't stay.
-                    chosen[which] = false
-                    (d as androidx.appcompat.app.AlertDialog).listView.setItemChecked(which, false)
-                    snack("Up to ${MenuButtons.MAIN} buttons fit next to More")
-                } else {
-                    chosen[which] = on
-                }
-            }
-            .setPositiveButton("Save") { _, _ ->
-                prefs.menuButtons = all.filterIndexed { i, _ -> chosen[i] }.map { it.key }
-                refreshAll()
-            }
-            .setNeutralButton("Reset") { _, _ ->
-                prefs.menuButtons = Prefs.DEFAULT_MENU_BUTTONS.split(',')
-                refreshAll()
-            }
-            .setNegativeButton(android.R.string.cancel, null)
-            .showImmersive()
+    private fun resetMenu() {
+        MenuButtons.save(MenuButtons.defaultLayout())
+        snack("The menu is back as it started")
+    }
+
+    /** "Profile, Home · address · Tabs, Menu". */
+    private fun toolbarButtonsText(): String {
+        val l = ToolbarButtons.layout()
+        fun names(keys: List<String>) = keys.joinToString(", ") { ToolbarButtons.button(it).label }
+        return listOf(names(l.left), "address", names(l.right)).filter { it.isNotEmpty() }.joinToString("  ·  ")
+    }
+
+    /** The address bar's buttons, arranged by dragging (2.2), in a sheet (a dialog leaves too little room). */
+    private fun arrangeToolbar() {
+        val editor = ToolbarEditor(this)
+        val col = Sheets.column(this)
+        col.addView(Sheets.header(this, "Address bar buttons"))
+        col.addView(editor)
+        lateinit var dialog: com.google.android.material.bottomsheet.BottomSheetDialog
+        col.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.END
+            setPadding(dp(16), dp(8), dp(16), 0)
+            addView(com.google.android.material.button.MaterialButton(this@SettingsActivity, null, androidx.appcompat.R.attr.borderlessButtonStyle).apply {
+                text = "Reset"
+                setOnClickListener { editor.reset() }
+            })
+            addView(com.google.android.material.button.MaterialButton(this@SettingsActivity).apply {
+                text = "Done"
+                setOnClickListener { dialog.dismiss() }
+            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = dp(8) })
+        })
+        dialog = Sheets.sheet(this, col)
+        dialog.setOnDismissListener { refreshAll() }
+        dialog.showImmersive()
     }
 
     private fun newsCountryText(): String =
@@ -1495,7 +1501,7 @@ class SettingsActivity : AppCompatActivity() {
         box.addView(off, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(52)).apply { topMargin = dp(4) })
         val update = {
             val vpn = com.swiftbrowser.vpn.Vpn
-            title.text = when (vpn.state) {
+            title.text = if (vpn.testing) "Testing…" else when (vpn.state) {
                 com.swiftbrowser.vpn.Vpn.State.ON -> "Connected"
                 com.swiftbrowser.vpn.Vpn.State.CONNECTING -> "Connecting…"
                 com.swiftbrowser.vpn.Vpn.State.FAILED -> if (vpn.wanted) "Not connected" else "Off"
@@ -1507,6 +1513,7 @@ class SettingsActivity : AppCompatActivity() {
             off.visibility = if (dropped) View.VISIBLE else View.GONE
             button.text = when {
                 empty -> "How to get free locations"
+                vpn.testing -> "Stop testing"
                 dropped -> "Reconnect"
                 vpn.wanted -> "Turn off"
                 else -> "Turn on"
@@ -1514,6 +1521,8 @@ class SettingsActivity : AppCompatActivity() {
             button.setOnClickListener {
                 when {
                     empty -> vpnHowTo()
+                    // Stopping a test: back to how it was (on, or off).
+                    vpn.testing -> if (vpn.wanted) VpnUi.turnOn(this, vpnPermission) else vpn.turnOff()
                     dropped -> VpnUi.turnOn(this, vpnPermission)
                     vpn.wanted -> {
                         vpn.turnOff()
@@ -1534,7 +1543,8 @@ class SettingsActivity : AppCompatActivity() {
         val update = {
             box.removeAllViews()
             val vpn = com.swiftbrowser.vpn.Vpn
-            val list = vpn.locations()
+            // By country (2.2: there can be several servers in one).
+            val list = vpn.locations().sortedWith(compareBy({ it.countryName }, { it.server }))
             // With none yet, the card above says so.
             val chosen = vpn.current()?.id
             for (loc in list) {
@@ -1555,6 +1565,14 @@ class SettingsActivity : AppCompatActivity() {
                         orientation = LinearLayout.VERTICAL
                         addView(Ui.text(this@SettingsActivity, Ui.Type.BODY, loc.countryName))
                         addView(Ui.text(this@SettingsActivity, Ui.Type.CAPTION, loc.server + if (loc.id == chosen) " · in use" else ""))
+                        // 2.2: how it did in the last test, and when it needs extending at Proton.
+                        val result = VpnUi.testResult(loc)
+                        val soon = loc.renewBy - System.currentTimeMillis() < 14L * 24 * 3600 * 1000
+                        addView(Ui.text(
+                            this@SettingsActivity, Ui.Type.CAPTION,
+                            listOfNotNull(result, VpnUi.renewText(loc)).joinToString(" · "),
+                            if (soon || result == "No answer") Ui.danger(this@SettingsActivity) else null,
+                        ))
                     }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
                     if (loc.id == chosen) {
                         addView(ImageView(this@SettingsActivity).apply {
@@ -1572,12 +1590,65 @@ class SettingsActivity : AppCompatActivity() {
                         if (vpn.wanted) VpnUi.turnOn(this@SettingsActivity, vpnPermission, loc)
                         refreshAll()
                     }
+                    setOnLongClickListener {
+                        vpnLocationSheet(loc)
+                        true
+                    }
                 })
             }
         }
         update()
         target += update
         return box
+    }
+
+    /** Held: connect, mark it extended at Proton (another year), or remove it. */
+    private fun vpnLocationSheet(loc: com.swiftbrowser.vpn.Vpn.Location) {
+        val vpn = com.swiftbrowser.vpn.Vpn
+        Sheets.actions(
+            this, "${loc.flag} ${loc.countryName}", "${loc.server} · ${VpnUi.renewText(loc)}",
+            listOf(
+                Sheets.Action(R.drawable.ic_vpn, "Connect", primary = true) {
+                    vpn.choose(loc)
+                    VpnUi.turnOn(this, vpnPermission, loc)
+                    refreshAll()
+                },
+                Sheets.Action(R.drawable.ic_update, "I extended it", primary = true) {
+                    vpn.markExtended(loc)
+                    refreshAll()
+                    snack("${loc.countryName}: ${VpnUi.renewText(vpn.locations().firstOrNull { it.id == loc.id } ?: loc).replaceFirstChar { it.lowercase() }}")
+                },
+                Sheets.Action(R.drawable.ic_open_new, "Open Proton's page") { openInBrowser(com.swiftbrowser.vpn.Vpn.PROTON_DOWNLOADS) },
+                Sheets.Action(R.drawable.ic_close, "Remove", danger = true) { removeVpnLocation(loc) },
+            ),
+            iconRes = R.drawable.ic_vpn,
+        )
+    }
+
+    private fun vpnTestText(): String {
+        val vpn = com.swiftbrowser.vpn.Vpn
+        return when {
+            vpn.testing -> vpn.testStep?.let { "Testing ${it.first} of ${it.second}…" } ?: "Testing…"
+            vpn.testResults.isNotEmpty() -> "Done: the results are under each location"
+            else -> "Which ones answer, and how fast"
+        }
+    }
+
+    private fun testVpnLocations() {
+        val vpn = com.swiftbrowser.vpn.Vpn
+        if (vpn.testing) return
+        if (vpn.locations().isEmpty()) {
+            snack("Add a location first")
+            return
+        }
+        val pause = vpn.wanted && vpn.pauseWhenDown
+        Dialogs.confirm(
+            this, "Test the locations?",
+            "Swift connects to each location in turn to see which ones answer and how fast (up to 15 seconds each). " +
+                "The VPN is off meanwhile" + (if (pause) ", so pages wait" else "") +
+                (if (vpn.wanted) ", and it reconnects when it's done." else "."),
+            "Test",
+        ) { VpnUi.test(this, vpnPermission) }
     }
 
     private fun removeVpnLocation(loc: com.swiftbrowser.vpn.Vpn.Location) {
@@ -1679,9 +1750,32 @@ class SettingsActivity : AppCompatActivity() {
             .showImmersive()
     }
 
+    private fun secureDnsText(): String = when (prefs.secureDns) {
+        "off" -> "Off: your network can see which sites you look up"
+        "quad9" -> "Quad9: site lookups are encrypted, known bad sites blocked"
+        "google" -> "Google: site lookups are encrypted"
+        else -> "Cloudflare: site lookups are encrypted"
+    }
+
+    /** DNS over HTTPS (2.2): who looks up sites' addresses, encrypted; your network's own when off. */
+    private fun chooseSecureDns() {
+        val keys = listOf("cloudflare", "quad9", "google", "off")
+        val labels = arrayOf("Cloudflare (recommended)", "Quad9 (also blocks known bad sites)", "Google", "Off (your network's own)")
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Secure DNS")
+            .setSingleChoiceItems(labels, keys.indexOf(prefs.secureDns).coerceAtLeast(0)) { d, which ->
+                d.dismiss()
+                prefs.secureDns = keys[which]
+                Engine.applySecureDns()
+                refreshAll()
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .showImmersive()
+    }
+
     private fun siteSettingsText(): String {
         val n = SiteSettings.sites().size
-        return if (n == 0) "None yet. On a site, open ⋮ and tap the settings button next to its name." else "$n ${if (n == 1) "site" else "sites"}"
+        return if (n == 0) "None yet. On a site, open ≡ and tap the settings button next to its name." else "$n ${if (n == 1) "site" else "sites"}"
     }
 
     private fun chooseSite() {
@@ -1834,7 +1928,7 @@ class SettingsActivity : AppCompatActivity() {
 
     private fun siteLevelsText(): String {
         val n = AdBlock.overrides().size
-        return if (n == 0) "None yet. Set one from ⋮ → Ad blocker on a site." else "$n ${if (n == 1) "site" else "sites"}"
+        return if (n == 0) "None yet. Set one from ≡ → Ad blocker on a site." else "$n ${if (n == 1) "site" else "sites"}"
     }
 
     private fun showSiteLevels() {
@@ -2109,7 +2203,13 @@ class SettingsActivity : AppCompatActivity() {
             "save" to listOf("download", "backup", "data saver"),
             "phone" to listOf("backup", "restore", "storage"),
             "vibrat" to listOf("vibration"),
-            "home" to listOf("home button", "address bar"),
+            "home" to listOf("address bar buttons", "address bar"),
+            "button" to listOf("address bar buttons", "arrange the menu"),
+            "toolbar" to listOf("address bar buttons", "address bar"),
+            "menu" to listOf("arrange the menu", "reset the menu"),
+            "dns" to listOf("secure dns"),
+            "test" to listOf("test the locations"),
+            "expir" to listOf("vpn locations"),
             "search" to listOf("search engine", "suggestions"),
             "google" to listOf("search engine", "suggestions"),
             "update" to listOf("updates", "filter lists"),

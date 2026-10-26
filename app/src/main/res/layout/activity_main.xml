@@ -258,6 +258,16 @@
                             android:src="@drawable/ic_mic"
                             android:visibility="gone" />
 
+                        <!-- 2.2: scan a QR code. -->
+                        <ImageButton
+                            android:id="@+id/url_scan"
+                            android:layout_width="36dp"
+                            android:layout_height="36dp"
+                            android:background="?attr/selectableItemBackgroundBorderless"
+                            android:contentDescription="Scan a QR code"
+                            android:src="@drawable/ic_qr"
+                            android:visibility="gone" />
+
                         <ImageButton
                             android:id="@+id/url_clear"
                             android:layout_width="36dp"
@@ -308,7 +318,7 @@
                         android:id="@+id/menu_btn"
                         style="@style/Swift.ToolbarButton"
                         android:contentDescription="Menu"
-                        android:src="@drawable/ic_more" />
+                        android:src="@drawable/ic_menu" />
                 </LinearLayout>
 
                 <!-- A hairline between the toolbar and the page (both are often white). -->

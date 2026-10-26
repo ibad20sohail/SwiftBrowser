@@ -100,11 +100,15 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     private lateinit var urlEdit: EditText
     private lateinit var urlIcon: ImageView
     private lateinit var urlMic: ImageButton
+    private lateinit var urlScan: ImageButton
     private lateinit var urlClear: ImageButton
     private lateinit var videoBtn: View
     private lateinit var tabsCount: TextView
     private lateinit var menuBtn: ImageButton
     private lateinit var homeBtn: ImageButton
+
+    /** Kept here: arranging the address bar (2.2) takes it out of the toolbar for a moment. */
+    private lateinit var tabsBtn: View
     private lateinit var progress: ProgressBar
     private lateinit var gestureLayer: GestureFrameLayout
     private lateinit var home: HomeView
@@ -342,6 +346,200 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             // Update APKs stay in the download folder after installing (about 150 MB each).
             val oldApks = withContext(Dispatchers.IO) { com.swiftbrowser.core.Updates.deleteOldApks(this@MainActivity) }
             if (oldApks > 0) snack("Deleted the old update file (${UrlUtils.formatBytes(oldApks)})")
+            // 2.2: Proton's free VPN files stop working after a year unless extended.
+            com.swiftbrowser.vpn.Vpn.expiringToRemind()?.let { loc ->
+                snack(VpnUi.expiryText(loc), "Open Proton", long = true) {
+                    TabManager.newTab(com.swiftbrowser.vpn.Vpn.PROTON_DOWNLOADS, incognito = false)
+                }
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------ address bar buttons (2.2)
+
+    /** The buttons next to the address as arranged in Settings (ToolbarButtons). */
+    private var toolbarLayout: ToolbarButtons.Layout? = null
+
+    /** Buttons made for the address bar when chosen (new tab, reload, share, bookmark, VPN, scan). */
+    private val extraButtons = HashMap<String, ImageButton>()
+
+    /** The page whose bookmark star the toolbar shows (asked of the database once per page). */
+    private var bookmarkShownFor: String? = null
+
+    private fun toolbarView(key: String): View = when (key) {
+        "profile" -> profileChip.parent as View
+        "home" -> homeBtn
+        "tabs" -> tabsBtn
+        "menu" -> menuBtn
+        else -> extraButtons.getOrPut(key) { toolbarButton(key) }
+    }
+
+    private fun toolbarButton(key: String): ImageButton {
+        val b = ToolbarButtons.button(key)
+        return ImageButton(this, null, 0, R.style.Swift_ToolbarButton).apply {
+            setImageResource(b.icon)
+            contentDescription = b.label
+            imageTintList = ColorStateList.valueOf(iconColor())
+            layoutParams = LinearLayout.LayoutParams(dp(40f).toInt(), dp(40f).toInt())
+            Ui.pressable(this, 0.88f)
+            setOnClickListener { toolbarAction(key) }
+        }
+    }
+
+    private fun toolbarAction(key: String) {
+        val tab = current ?: return
+        when (key) {
+            "new_tab" -> TabManager.newTab(incognito = tab.incognito)
+            "reload" -> if (tab.loading) tab.session?.stop() else TabManager.reload(tab)
+            "share" -> if (UrlUtils.isHttp(tab.url)) share(tab.url)
+            "bookmark" -> if (UrlUtils.isHttp(tab.url)) toggleBookmark(tab)
+            "vpn" -> showVpnSheet()
+            "scan" -> scanQr()
+        }
+    }
+
+    /** Puts the chosen buttons on their sides of the address: at start, and after Settings changed them. */
+    private fun applyToolbarButtons() {
+        val l = ToolbarButtons.layout()
+        if (toolbarLayout?.encode() == l.encode()) return
+        toolbarLayout = l
+        for (v in listOf(profileChip.parent as View, homeBtn, tabsBtn, menuBtn) + extraButtons.values) toolbar.removeView(v)
+        var at = 0
+        for (key in l.left) toolbar.addView(toolbarView(key), at++)
+        for (key in l.right) toolbar.addView(toolbarView(key))
+        for (v in toolbarButtons()) v.visibility = if (editing) View.GONE else View.VISIBLE
+        bookmarkShownFor = null
+        updateToolbarExtras()
+    }
+
+    private fun toolbarButtons(): List<View> = toolbarLayout?.let { l -> (l.left + l.right).map { toolbarView(it) } }.orEmpty()
+
+    /** Reload turns into stop while loading, the star fills on a bookmarked page, VPN takes the accent while on. */
+    private fun updateToolbarExtras() {
+        if (extraButtons.isEmpty()) return
+        val tab = current ?: return
+        val normal = iconColor()
+        for ((key, b) in extraButtons) {
+            var tint = normal
+            when (key) {
+                "reload" -> {
+                    b.setImageResource(if (tab.loading) R.drawable.ic_close else R.drawable.ic_refresh)
+                    b.contentDescription = if (tab.loading) "Stop" else "Reload"
+                }
+                "share" -> {
+                    val ok = UrlUtils.isHttp(tab.url)
+                    b.isEnabled = ok
+                    b.alpha = if (ok) 1f else 0.4f
+                }
+                "bookmark" -> {
+                    val page = "${tab.profileId} ${tab.url}"
+                    if (bookmarkShownFor != page) {
+                        bookmarkShownFor = page
+                        b.tag = UrlUtils.isHttp(tab.url) && SwiftApp.db.isBookmarked(tab.profileId, tab.url)
+                    }
+                    val on = b.tag == true
+                    b.setImageResource(if (on) R.drawable.ic_star else R.drawable.ic_star_border)
+                    if (on) tint = color(Looks.accent.primary)
+                    b.alpha = if (UrlUtils.isHttp(tab.url)) 1f else 0.4f
+                }
+                "vpn" -> if (com.swiftbrowser.vpn.Vpn.state == com.swiftbrowser.vpn.Vpn.State.ON) tint = color(Looks.accent.primary)
+            }
+            b.imageTintList = ColorStateList.valueOf(tint)
+        }
+    }
+
+    /** Adds or removes the page's bookmark (the menu's star and the toolbar's). */
+    fun toggleBookmark(tab: Tab) {
+        val pid = tab.profileId
+        val url = tab.url
+        if (SwiftApp.db.isBookmarked(pid, url)) {
+            TabManager.io.execute { SwiftApp.db.removeBookmark(pid, url) }
+            snack("Bookmark removed")
+            extraButtons["bookmark"]?.tag = false
+        } else {
+            val title = tab.title
+            TabManager.io.execute { SwiftApp.db.addBookmark(pid, url, title) }
+            snack("Bookmarked")
+            extraButtons["bookmark"]?.tag = true
+        }
+        bookmarkShownFor = "$pid $url"
+        updateToolbarExtras()
+    }
+
+    // ------------------------------------------------------------------ QR codes (2.2)
+
+    private val qrScan = registerForActivityResult(com.journeyapps.barcodescanner.ScanContract()) { r ->
+        r.contents?.let { onScanned(it) }
+    }
+
+    private val cameraPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) {
+            launchScan()
+        } else {
+            snack("Swift needs the camera to scan QR codes", "Settings", long = true) {
+                startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
+            }
+        }
+    }
+
+    /** The camera, for a QR code: a web address opens, other text can be searched, copied or shared. */
+    fun scanQr() {
+        stopEditing()
+        if (checkSelfPermission(android.Manifest.permission.CAMERA) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            launchScan()
+        } else {
+            cameraPermission.launch(android.Manifest.permission.CAMERA)
+        }
+    }
+
+    private fun launchScan() {
+        try {
+            qrScan.launch(
+                com.journeyapps.barcodescanner.ScanOptions()
+                    .setDesiredBarcodeFormats(com.journeyapps.barcodescanner.ScanOptions.QR_CODE)
+                    .setPrompt("Point the camera at a QR code")
+                    .setBeepEnabled(false)
+                    .setOrientationLocked(false)
+                    .setCaptureActivity(QrScanActivity::class.java),
+            )
+        } catch (_: Exception) {
+            snack("The camera can't be opened")
+        }
+    }
+
+    private fun onScanned(raw: String) {
+        val text = raw.trim()
+        if (text.isEmpty()) return
+        val wifi = QrCodes.wifi(text)
+        when {
+            wifi != null -> {
+                val actions = ArrayList<Sheets.Action>()
+                if (wifi.password.isNotEmpty()) actions += Sheets.Action(R.drawable.ic_copy, "Copy password", primary = true) { copy(wifi.password) }
+                actions += Sheets.Action(R.drawable.ic_wifi, "Wi-Fi settings", primary = true) {
+                    try {
+                        startActivity(Intent(android.provider.Settings.ACTION_WIFI_SETTINGS))
+                    } catch (_: Exception) {
+                    }
+                }
+                Sheets.actions(
+                    this, "Wi-Fi: ${wifi.name}",
+                    if (wifi.password.isEmpty()) "No password" else "Password: ${wifi.password}",
+                    actions, iconRes = R.drawable.ic_wifi,
+                )
+            }
+            UrlUtils.isHttp(text) -> {
+                val tab = current
+                if (tab != null && (tab.showsHome || tab.isBlank)) openInCurrent(text) else TabManager.newTab(text, incognito = tab?.incognito == true)
+            }
+            else -> Sheets.actions(
+                this, "Text from the QR code", text.take(300),
+                listOf(
+                    Sheets.Action(R.drawable.ic_search, "Search", primary = true) { navigate(text) },
+                    Sheets.Action(R.drawable.ic_copy, "Copy", primary = true) { copy(text) },
+                    Sheets.Action(R.drawable.ic_share, "Share", primary = true) { share(text) },
+                ),
+                iconRes = R.drawable.ic_qr,
+            )
         }
     }
 
@@ -375,14 +573,31 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         val before = shownVpnState
         shownVpnState = state
         updateVpnBadge()
+        updateToolbarExtras()
         if (before == null || before == state) return
         when (state) {
             com.swiftbrowser.vpn.Vpn.State.ON -> {
                 val where = vpn.current()?.let { "${it.flag} ${it.countryName}" } ?: ""
                 TabManager.onOnline()
-                snack("VPN on · $where", "Reload") { current?.let { TabManager.reload(it) } }
+                val note = vpn.switchNote
+                vpn.switchNote = null
+                if (note != null) {
+                    snack(note, "Reload", long = true) { current?.let { TabManager.reload(it) } }
+                } else {
+                    snack("VPN on · $where", "Reload") { current?.let { TabManager.reload(it) } }
+                }
             }
-            com.swiftbrowser.vpn.Vpn.State.FAILED -> if (vpn.wanted) snack(vpn.error ?: "The VPN isn't connected", "VPN") { showVpnSheet() }
+            com.swiftbrowser.vpn.Vpn.State.FAILED -> if (vpn.wanted) {
+                // 2.2: another location (the same country first) is one tap away.
+                // With automatic switching on, every other location was tried already.
+                val spare = if (vpn.autoSwitch) null else vpn.spareFor(vpn.current())
+                if (spare != null) {
+                    val first = vpn.error?.substringBefore(". ")?.trimEnd('.')?.plus(".") ?: "The VPN isn't connected."
+                    snack(first, "Try ${spare.server}", long = true) { VpnUi.turnOn(this, vpnPermission, spare) }
+                } else {
+                    snack(vpn.error ?: "The VPN isn't connected", "VPN") { showVpnSheet() }
+                }
+            }
             else -> Unit
         }
     }
@@ -423,9 +638,11 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         handler.removeCallbacks(freeBackgroundTabs)
         // Settings → Look & screen may have moved the address bar.
         if (bottomBar != prefs.toolbarAtBottom) applyToolbarPosition()
-        // Settings → Browsing may have changed the search engine, Look & screen the home button.
+        // Settings → Browsing may have changed the search engine, Look & screen the address bar's buttons.
         urlEdit.hint = com.swiftbrowser.core.SearchEngine.current.hint
-        updateHomeButton()
+        applyToolbarButtons()
+        bookmarkShownFor = null
+        updateToolbarExtras()
         if (home.visibility == View.VISIBLE) current?.let { home.show(it.incognito) }
         Diagnostics.setOnScreen(true)
         if (!switcher.isOpen) current?.session?.let { if (it.isOpen) it.setActive(true) }
@@ -499,11 +716,13 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             if (site == null) startEditing() else Sheets.siteSettings(this, site, tab)
         }
         urlMic = findViewById(R.id.url_mic)
+        urlScan = findViewById(R.id.url_scan)
         urlClear = findViewById(R.id.url_clear)
         videoBtn = findViewById(R.id.video_btn)
         tabsCount = findViewById(R.id.tabs_count)
         menuBtn = findViewById(R.id.menu_btn)
         homeBtn = findViewById(R.id.home_btn)
+        tabsBtn = findViewById(R.id.tabs_btn)
         progress = findViewById(R.id.progress)
         gestureLayer = findViewById(R.id.gesture_layer)
         gecko = findViewById(R.id.gecko)
@@ -525,7 +744,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         shownVpnState = com.swiftbrowser.vpn.Vpn.state
         updateVpnBadge()
         // The toolbar's buttons give the same small press as every button in the app.
-        for (v in listOf<View>(homeBtn, findViewById(R.id.tabs_btn), menuBtn, videoBtn, profileChip.parent as View)) Ui.pressable(v, 0.88f)
+        for (v in listOf<View>(homeBtn, tabsBtn, menuBtn, videoBtn, profileChip.parent as View)) Ui.pressable(v, 0.88f)
     }
 
     private fun handleIntent(intent: Intent?) {
@@ -537,6 +756,13 @@ class MainActivity : AppCompatActivity(), BrowserUi {
                 switcher.close()
                 if (t !== current) TabManager.select(t)
             }
+            return
+        }
+        if (intent.getBooleanExtra(EXTRA_ARRANGE_MENU, false)) {
+            intent.removeExtra(EXTRA_ARRANGE_MENU)
+            stopEditing()
+            switcher.close()
+            root.post { if (!isFinishing) quickMenu.open(arrange = true) }
             return
         }
         intent.getStringExtra(EXTRA_OPEN_FILE)?.let { path ->
@@ -565,8 +791,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
     private fun setupToolbar() {
         profileChip.setOnClickListener { Sheets.profiles(this) }
-        findViewById<View>(R.id.tabs_btn).setOnClickListener { openTabSwitcher() }
-        findViewById<View>(R.id.tabs_btn).setOnLongClickListener {
+        tabsBtn.setOnClickListener { openTabSwitcher() }
+        tabsBtn.setOnLongClickListener {
             tabButtonMenu()
             true
         }
@@ -623,6 +849,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             true
         }
         urlMic.setOnClickListener { voiceSearch() }
+        urlScan.setOnClickListener { scanQr() }
     }
 
     /** The address bar was held: letting go doesn't start typing. */
@@ -733,15 +960,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             ordering = android.transition.TransitionSet.ORDERING_TOGETHER
         }
         android.transition.TransitionManager.beginDelayedTransition(toolbar, transition)
-        val around = listOf<View>(profileChip.parent as View, findViewById(R.id.tabs_btn), menuBtn)
-        for (v in around) v.visibility = if (on) View.GONE else View.VISIBLE
-        updateHomeButton()
+        for (v in toolbarButtons()) v.visibility = if (on) View.GONE else View.VISIBLE
         if (on) videoBtn.visibility = View.GONE else refreshToolbarNow()
-    }
-
-    private fun updateHomeButton() {
-        val v = if (prefs.showHomeButton && !editing) View.VISIBLE else View.GONE
-        if (homeBtn.visibility != v) homeBtn.visibility = v
     }
 
     fun stopEditing() {
@@ -767,6 +987,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         val empty = urlEdit.text.isNullOrEmpty()
         urlClear.visibility = if (editing && !empty) View.VISIBLE else View.GONE
         urlMic.visibility = if (editing && empty) View.VISIBLE else View.GONE
+        urlScan.visibility = urlMic.visibility
     }
 
     private fun navigate(text: String) {
@@ -907,7 +1128,9 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         val query = UrlUtils.searchQuery(url)
         val reader = Helper.isReaderUrl(url)
         val saved = url?.startsWith("file://") == true
+        val blocked = AdBlock.isBlockedPage(url)
         val text = when {
+            blocked -> "Page blocked · " + UrlUtils.siteName(AdBlock.blockedPageTarget(url))
             reader -> "Reader view · ${tab?.title.orEmpty()}"
             saved -> "Saved page · " + Uri.decode(url.orEmpty().substringAfterLast('/')).removeSuffix(".pdf")
             // While reading, just the site (the whole address shows when the bar is tapped).
@@ -917,7 +1140,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             shownUrlText = text
             urlEdit.setText(text)
         }
-        val page = tab != null && !tab.isBlank && query == null && !reader && !saved
+        val page = tab != null && !tab.isBlank && query == null && !reader && !saved && !blocked
         // A secure site shows its own icon; only a site that isn't secure gets a warning.
         val favicon = if (page && tab!!.secure) com.swiftbrowser.core.Favicons.cached(url) else null
         if (favicon != null) {
@@ -932,6 +1155,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         }
         shownFavicon = null
         val icon = when {
+            blocked -> R.drawable.ic_shield
             reader -> R.drawable.ic_reader
             saved -> R.drawable.ic_offline
             !page -> com.swiftbrowser.core.SearchEngine.current.icon
@@ -950,9 +1174,9 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         shownUrlIcon = res
         shownFavicon = null
         urlIcon.setImageResource(res)
-        urlIcon.imageTintList = when (res) {
-            R.drawable.ic_google_g -> null
-            R.drawable.ic_not_secure -> ColorStateList.valueOf(Ui.danger(this))
+        urlIcon.imageTintList = when {
+            com.swiftbrowser.core.SearchEngine.isLogo(res) -> null
+            res == R.drawable.ic_not_secure -> ColorStateList.valueOf(Ui.danger(this))
             else -> ColorStateList.valueOf(iconColor())
         }
     }
@@ -1037,11 +1261,14 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         menuBtn.imageTintList = icons
         homeBtn.imageTintList = icons
         urlClear.imageTintList = icons
+        urlScan.imageTintList = icons
         styledTabCount = null
         styleTabCount()
         profileChip.visibility = if (incognito) View.GONE else View.VISIBLE
         incognitoIcon.visibility = if (incognito) View.VISIBLE else View.GONE
         shownUrlIcon = 0
+        bookmarkShownFor = null
+        updateToolbarExtras()
     }
 
     private fun iconColor(): Int =
@@ -1238,7 +1465,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     /** Holding the tab button: the quick things to do with tabs. */
     private fun tabButtonMenu() {
         val tab = current ?: return
-        Haptics.hold(findViewById(R.id.tabs_btn))
+        Haptics.hold(tabsBtn)
         val actions = listOf(
             Sheets.Action(R.drawable.ic_add, "New tab", primary = true) { TabManager.newTab(incognito = false) },
             Sheets.Action(R.drawable.ic_incognito, "Incognito tab", primary = true) { TabManager.newTab(incognito = true) },
@@ -1442,7 +1669,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         }
         tabsCount.setTextColor(text)
         tabsCount.background = tabCountBackground(this, if (group != null || incognito) text else color(R.color.text_secondary))
-        findViewById<View>(R.id.tabs_btn).contentDescription = if (group != null) "Tabs (group ${TabManager.groupTitle(group)})" else "Tabs"
+        tabsBtn.contentDescription = if (group != null) "Tabs (group ${TabManager.groupTitle(group)})" else "Tabs"
     }
 
     override fun onTabUpdated(tab: Tab) {
@@ -1492,6 +1719,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         updateProgress()
         val video = if (tab.media.isNotEmpty() && fullscreenTab == null && !tab.showsHome && !editing) View.VISIBLE else View.GONE
         if (videoBtn.visibility != video) videoBtn.visibility = video
+        updateToolbarExtras()
     }
 
     private fun updateAll() {
@@ -2339,7 +2567,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     private fun handleBack() {
         val tab = current
         when {
-            quickMenu.isOpen -> quickMenu.close()
+            quickMenu.isOpen -> quickMenu.onBack()
             switcher.isOpen -> if (!switcher.back()) switcher.close(pageRect())
             fullscreenTab != null -> tab?.session?.exitFullScreen() ?: exitFullscreen()
             findBar.visibility == View.VISIBLE -> closeFind()
@@ -2789,6 +3017,9 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
         /** Opens this file in a new tab (a page saved as PDF, from Downloads). */
         const val EXTRA_OPEN_FILE = "open_file"
+
+        /** From Settings → Look & screen: open the menu ready to arrange (2.2). */
+        const val EXTRA_ARRANGE_MENU = "arrange_menu"
 
         /** The square outline around the tab count, in [color]. */
         fun tabCountBackground(ctx: Context, color: Int) = android.graphics.drawable.GradientDrawable().apply {

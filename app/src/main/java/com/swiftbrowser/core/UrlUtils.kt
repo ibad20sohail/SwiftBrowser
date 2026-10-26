@@ -112,6 +112,22 @@ object UrlUtils {
     }
 
     /** What the address bar shows when not editing. */
+    /**
+     * A page's name for lists (history, bookmarks): its title, except that a search results page
+     * whose title is only its address reads "swift browser – DuckDuckGo" (2.2).
+     */
+    fun readableTitle(title: String?, url: String?): String {
+        val query = SearchEngine.queryOf(url)
+        val t = title?.trim().orEmpty()
+        val onlyAddress = t.isEmpty() || t.startsWith("http") || (' ' !in t && '.' in t)
+        val host = host(url).orEmpty()
+        val engine = SearchEngine.entries.firstOrNull { host.contains(it.key) }?.label
+        if (query != null && onlyAddress) return "$query – ${engine ?: siteName(url)}"
+        // A search engine's own page in between (Bing's redirect): just its name.
+        if (engine != null && onlyAddress) return engine
+        return t.ifEmpty { display(url) }
+    }
+
     fun display(url: String?): String {
         if (url.isNullOrBlank() || url == "about:blank") return ""
         return try {

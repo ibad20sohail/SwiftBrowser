@@ -23,18 +23,20 @@ object WhatsNew {
     private class Item(val icon: Int, val title: String, val text: String)
 
     private val NEW = listOf(
-        Item(R.drawable.ic_vpn, "A free VPN in Swift", "Browse from another country with Proton VPN's free servers. Only Swift's own traffic uses it: Settings → VPN."),
-        Item(R.drawable.ic_gesture, "Swipe the address bar away", "Swipe up on it to hide it, down from the top to bring it back. Choose in Settings → Look & screen."),
-        Item(R.drawable.ic_storage, "Less space used", "Old update files are deleted by themselves, and Storage now counts everything Android counts."),
-        Item(R.drawable.ic_lock, "Safer", "Other apps can only send Swift web links, problem reports leave out the pages you read, and incognito stays off the lock screen."),
+        Item(R.drawable.ic_menu, "Arrange your menu", "Hold any button in the menu to move it, put it on another page or hide it. Lite mode, dark mode, desktop and full screen are buttons there now."),
+        Item(R.drawable.ic_toolbar, "Your address bar buttons", "Pick up to 4 buttons for either side of the address, like reload, new tab or share: Settings → Look & screen."),
+        Item(R.drawable.ic_vpn, "VPN reminders and tests", "Swift reminds you before a free location stops working, offers another one when a server doesn't answer, and tests them all for you."),
+        Item(R.drawable.ic_qr, "Scan QR codes", "Next to the microphone in the address bar, or as a menu button."),
+        Item(R.drawable.ic_image, "News with big pictures", "Turn on Stories with big pictures in Settings → Home & news for Chrome-style cards."),
+        Item(R.drawable.ic_lock, "Secure DNS", "The sites you visit are looked up privately, so your network can't see them: Settings → Privacy & security."),
     )
 
     private class Card(val icon: Int, val title: String, val text: String)
 
     private val WELCOME = listOf(
-        Card(R.drawable.ic_shield, "Ads blocked on every site", "Swift's ad blocker stops ads, pop-ups and trackers. Choose how strict it is from ⋮ → Ad blocker."),
+        Card(R.drawable.ic_shield, "Ads blocked on every site", "Swift's ad blocker stops ads, pop-ups and trackers. Choose how strict it is from ≡ → Ad blocker."),
         Card(R.drawable.ic_headphones, "Music and videos keep playing", "They go on when you switch tabs, open another app or turn the screen off. Set a sleep timer from the notification."),
-        Card(R.drawable.ic_lite, "Smooth on your phone", "If a site feels slow, turn on Lite mode in the ⋮ menu for the smoothest scrolling."),
+        Card(R.drawable.ic_lite, "Smooth on your phone", "If a site feels slow, turn on Lite mode in the ≡ menu for the smoothest scrolling."),
     )
 
     /** At start: the welcome on a new install, what's new after an update. */

@@ -58,10 +58,37 @@ class Prefs(ctx: Context) {
         get() = sp.getStringSet(NEWS_HIDDEN, null)?.toSet() ?: emptySet()
         set(v) = sp.edit { putStringSet(NEWS_HIDDEN, v) }
 
-    /** The ⋮ menu's main buttons (MenuButtons keys, in the menu's order), chosen in Settings. */
-    var menuButtons: List<String>
+    /** Before 2.2: the menu's first-page buttons (MenuButtons keys). Only read to carry them over. */
+    val menuButtons: List<String>
         get() = (sp.getString(MENU_BUTTONS, null) ?: DEFAULT_MENU_BUTTONS).split(',').filter { it.isNotBlank() }
-        set(v) = sp.edit { putString(MENU_BUTTONS, v.joinToString(",")) }
+
+    /**
+     * 2.2: the menu as arranged, page by page ("new_tab,incognito,…|recent,vpn,…"); null until the
+     * first arranging (MenuButtons makes the starting layout).
+     */
+    var menuLayout: String?
+        get() = sp.getString(MENU_LAYOUT, null)
+        set(v) = sp.edit { if (v == null) remove(MENU_LAYOUT) else putString(MENU_LAYOUT, v) }
+
+    /** 2.2: menu buttons hidden while arranging (MenuButtons keys). */
+    var menuHidden: List<String>
+        get() = (sp.getString(MENU_HIDDEN, null) ?: "").split(',').filter { it.isNotBlank() }
+        set(v) = sp.edit { putString(MENU_HIDDEN, v.joinToString(",")) }
+
+    /** 2.2: the buttons next to the address ("profile,home|tabs,menu"); null until arranged. */
+    var toolbarLayout: String?
+        get() = sp.getString(TOOLBAR_LAYOUT, null)
+        set(v) = sp.edit { if (v == null) remove(TOOLBAR_LAYOUT) else putString(TOOLBAR_LAYOUT, v) }
+
+    /** 2.2: news stories as cards with a big picture (as in Chrome) instead of compact rows. */
+    var newsCards: Boolean
+        get() = sp.getBoolean(NEWS_CARDS, false)
+        set(v) = sp.edit { putBoolean(NEWS_CARDS, v) }
+
+    /** 2.2: secure DNS (DNS over HTTPS): "off", "cloudflare", "quad9" or "google". */
+    var secureDns: String
+        get() = sp.getString(SECURE_DNS, "cloudflare") ?: "cloudflare"
+        set(v) = sp.edit { putString(SECURE_DNS, v) }
 
     /** The accent colour's key (Accent.key): blue, green, purple, orange, red or teal. */
     var accent: String
@@ -174,10 +201,9 @@ class Prefs(ctx: Context) {
         get() = sp.getBoolean(KEEP_PLAYING, true)
         set(v) = sp.edit { putBoolean(KEEP_PLAYING, v) }
 
-    /** The house button in the toolbar, which shows the home page. */
-    var showHomeButton: Boolean
+    /** Before 2.2: the house button next to the address. Only read to carry it over (ToolbarButtons). */
+    val showHomeButton: Boolean
         get() = sp.getBoolean(SHOW_HOME_BUTTON, true)
-        set(v) = sp.edit { putBoolean(SHOW_HOME_BUTTON, v) }
 
     /** A light vibration on long presses, dragging tabs and grouping them. */
     var haptics: Boolean
@@ -304,6 +330,11 @@ class Prefs(ctx: Context) {
         const val THEME_MODE = "theme_mode"
         const val ACCENT = "accent"
         const val MENU_BUTTONS = "menu_buttons"
+        const val MENU_LAYOUT = "menu_layout"
+        const val MENU_HIDDEN = "menu_hidden"
+        const val TOOLBAR_LAYOUT = "toolbar_layout"
+        const val SECURE_DNS = "secure_dns"
+        const val NEWS_CARDS = "news_cards"
         const val NEWS_ENABLED = "news_enabled"
         const val WELCOME_DONE = "welcome_done"
         const val BAR_SWIPES = "bar_swipes"

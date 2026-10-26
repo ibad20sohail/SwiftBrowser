@@ -17,11 +17,11 @@ enum class SearchEngine(
         "google", "Google", "https://www.google.com/search?q=",
         "https://suggestqueries.google.com/complete/search?client=firefox&ie=utf-8&oe=utf-8&q=", R.drawable.ic_google_g,
     ),
-    DUCKDUCKGO("duckduckgo", "DuckDuckGo", "https://duckduckgo.com/?q=", "https://ac.duckduckgo.com/ac/?type=list&q=", R.drawable.ic_search),
-    BING("bing", "Bing", "https://www.bing.com/search?q=", "https://api.bing.com/osjson.aspx?query=", R.drawable.ic_search),
+    DUCKDUCKGO("duckduckgo", "DuckDuckGo", "https://duckduckgo.com/?q=", "https://ac.duckduckgo.com/ac/?type=list&q=", R.drawable.ic_engine_duckduckgo),
+    BING("bing", "Bing", "https://www.bing.com/search?q=", "https://api.bing.com/osjson.aspx?query=", R.drawable.ic_engine_bing),
     STARTPAGE(
         "startpage", "Startpage", "https://www.startpage.com/sp/search?query=",
-        "https://www.startpage.com/suggestions?format=opensearch&q=", R.drawable.ic_search,
+        "https://www.startpage.com/suggestions?format=opensearch&q=", R.drawable.ic_engine_startpage,
     );
 
     /** The empty search box's hint. */
@@ -33,6 +33,9 @@ enum class SearchEngine(
     fun suggestUrl(query: String): String = suggest + URLEncoder.encode(query, "UTF-8")
 
     companion object {
+        /** Whether [icon] is one of the engines' logos (drawn in its own colours). */
+        fun isLogo(icon: Int) = entries.any { it.icon == icon }
+
         fun fromKey(key: String?): SearchEngine = entries.firstOrNull { it.key == key } ?: GOOGLE
 
         val current: SearchEngine get() = fromKey(SwiftApp.prefs.searchEngine)

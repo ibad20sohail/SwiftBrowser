@@ -23,7 +23,8 @@ import com.swiftbrowser.news.Story
 
 /**
  * The news under the home page's shortcuts (2.0): topic chips, then compact rows (the site's icon,
- * name and how long ago, the headline, and a small picture on the right when the story has one).
+ * name and how long ago, the headline, and a small picture on the right when the story has one),
+ * or, with "Stories with big pictures" (2.2), cards with the picture across the top, as in Chrome.
  * Grey shapes stand in while the first stories load; more rows appear while scrolling down, and
  * pictures load only as their rows come near the screen.
  */
@@ -39,6 +40,9 @@ class NewsSection(context: Context, private val listener: Listener) : LinearLayo
     private companion object {
         const val PAGE = 15
         const val PICTURE_DP = 76
+
+        /** A card's picture is decoded to about this many dp on its short side (sharp, still light). */
+        const val CARD_PICTURE_DP = 180
 
         /** Sites whose icon was asked for in this run (a site without one isn't asked again). */
         val askedIcons = HashSet<String>()
@@ -59,6 +63,12 @@ class NewsSection(context: Context, private val listener: Listener) : LinearLayo
     private val refreshButton: ImageButton
     private var refreshing = false
     private val pictureSize = Ui.dp(context, PICTURE_DP)
+    private val cardPictureSize = Ui.dp(context, CARD_PICTURE_DP)
+
+    /** The look the rows were made in (Settings can change it while the home page is away). */
+    private var builtCards = com.swiftbrowser.SwiftApp.prefs.newsCards
+
+    private fun pictureSize() = if (builtCards) cardPictureSize else pictureSize
 
     private val iconListener: (String) -> Unit = { key ->
         for (i in 0 until body.childCount) {
@@ -162,7 +172,7 @@ class NewsSection(context: Context, private val listener: Listener) : LinearLayo
         val kept = News.cached(context, topic)
         if (kept != null) {
             // Opening the home page again doesn't rebuild the same rows.
-            if (kept != stories || body.childCount == 0) setStories(kept, animate = false)
+            if (kept != stories || body.childCount == 0 || builtCards != com.swiftbrowser.SwiftApp.prefs.newsCards) setStories(kept, animate = false)
             if (News.stale(topic)) refresh(force = false)
         } else {
             stories = emptyList()
@@ -209,6 +219,7 @@ class NewsSection(context: Context, private val listener: Listener) : LinearLayo
 
     private fun setStories(list: List<Story>, animate: Boolean) {
         stories = list
+        builtCards = com.swiftbrowser.SwiftApp.prefs.newsCards
         skeleton.visibility = View.GONE
         message.visibility = View.GONE
         body.removeAllViews()
@@ -221,8 +232,12 @@ class NewsSection(context: Context, private val listener: Listener) : LinearLayo
     private fun showMore() {
         val end = (shown + PAGE).coerceAtMost(stories.size)
         for (i in shown until end) {
-            if (body.childCount > 0) body.addView(Ui.divider(context, 16))
-            body.addView(row(stories[i]))
+            if (builtCards) {
+                body.addView(card(stories[i]))
+            } else {
+                if (body.childCount > 0) body.addView(Ui.divider(context, 16))
+                body.addView(row(stories[i]))
+            }
         }
         shown = end
     }
@@ -247,7 +262,7 @@ class NewsSection(context: Context, private val listener: Listener) : LinearLayo
             val pending = row.getTag(R.id.row_action) as? String ?: continue
             row.setTag(R.id.row_action, null)
             val picture = row.findViewById<ImageView>(R.id.row_icon)
-            PreviewLoader.load(context as Activity, pending, pictureSize) { bmp ->
+            PreviewLoader.load(context as Activity, pending, pictureSize()) { bmp ->
                 picture.setImageBitmap(bmp)
                 picture.alpha = 0f
                 picture.animate().alpha(1f).setDuration(Motion.NORMAL).start()
@@ -301,6 +316,69 @@ class NewsSection(context: Context, private val listener: Listener) : LinearLayo
         }
         bindIcon(row, s)
         return row
+    }
+
+    /** A story as a card (2.2): the picture across the top when it has one, then the site and the headline. */
+    private fun card(s: Story): View {
+        val ctx = context
+        val card = LinearLayout(ctx).apply {
+            orientation = VERTICAL
+            background = Ui.shape(ctx, Ui.color(ctx, R.color.card_bg), Ui.R_MEDIUM)
+            foreground = Ui.ripple(ctx, null, Ui.R_MEDIUM)
+            clipToOutline = true
+            elevation = Ui.dp(ctx, 1).toFloat()
+            tag = s
+            contentDescription = "${s.title}. ${s.source}"
+            setOnClickListener { listener.onStoryClicked(s) }
+            setOnLongClickListener {
+                Haptics.hold(this)
+                listener.onStoryLongClicked(s)
+                true
+            }
+            layoutParams = LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                setMargins(Ui.dp(ctx, 4), Ui.dp(ctx, 6), Ui.dp(ctx, 4), Ui.dp(ctx, 6))
+            }
+        }
+        Ui.pressable(card, 0.98f)
+        if (s.image != null && !DataSaver.active) {
+            val picture = WidePicture(ctx).apply {
+                id = R.id.row_icon
+                scaleType = ImageView.ScaleType.CENTER_CROP
+                setBackgroundColor(Ui.color(ctx, R.color.skeleton))
+                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            }
+            card.addView(picture, LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            val kept = PreviewLoader.cached(s.image, cardPictureSize)
+            if (kept != null) picture.setImageBitmap(kept) else card.setTag(R.id.row_action, s.image)
+        }
+        val texts = LinearLayout(ctx).apply {
+            orientation = VERTICAL
+            setPadding(Ui.dp(ctx, 14), Ui.dp(ctx, 12), Ui.dp(ctx, 14), Ui.dp(ctx, 14))
+        }
+        val meta = LinearLayout(ctx).apply {
+            orientation = HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        meta.addView(ImageView(ctx).apply {
+            id = R.id.tile_icon
+            setImageDrawable(Ui.icon(ctx, R.drawable.ic_globe, Ui.textSecondary(ctx)))
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }, LayoutParams(Ui.dp(ctx, 16), Ui.dp(ctx, 16)).apply { marginEnd = Ui.dp(ctx, 8) })
+        val ago = if (s.time > 0) " · " + DateUtils.getRelativeTimeSpanString(s.time, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS, DateUtils.FORMAT_ABBREV_RELATIVE) else ""
+        meta.addView(Ui.text(ctx, Ui.Type.CAPTION, s.source + ago, lines = 1), LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        texts.addView(meta)
+        texts.addView(Ui.text(ctx, Ui.Type.TITLE, s.title, lines = 3).apply { setPadding(0, Ui.dp(ctx, 8), 0, 0) })
+        card.addView(texts)
+        bindIcon(card, s)
+        return card
+    }
+
+    /** A picture as wide as its card and 16:9 high. */
+    private class WidePicture(ctx: Context) : ImageView(ctx) {
+        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+            val w = MeasureSpec.getSize(widthMeasureSpec)
+            setMeasuredDimension(w, w * 9 / 16)
+        }
     }
 
     private fun bindIcon(row: View, s: Story) {

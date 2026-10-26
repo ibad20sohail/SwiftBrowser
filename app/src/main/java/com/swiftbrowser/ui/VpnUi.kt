@@ -14,12 +14,15 @@ import com.swiftbrowser.vpn.Vpn
 import java.io.File
 
 /**
- * The VPN's screens (2.1): Android's one-time "allow VPN" question, the quick sheet from the ⋮
+ * The VPN's screens (2.1): Android's one-time "allow VPN" question, the quick sheet from the ≡
  * menu and the address bar, and adding a location from a Proton VPN setup file.
  */
 object VpnUi {
     /** The location to connect to once Android allowed the VPN. */
     private var pending: Vpn.Location? = null
+
+    /** Testing the locations once Android allowed the VPN. */
+    private var pendingTest = false
 
     /** "VPN · Netherlands", "VPN connecting…", "VPN off". */
     fun label(): String = when (Vpn.state) {
@@ -33,7 +36,11 @@ object VpnUi {
     fun dropped(): Boolean = Vpn.wanted && Vpn.state == Vpn.State.FAILED
 
     /** A line about the state for sheets and Settings. */
-    fun status(): String = when (Vpn.state) {
+    fun status(): String = if (Vpn.testing) {
+        val step = Vpn.testStep
+        "Testing the locations" + (step?.let { " (${it.first} of ${it.second})" } ?: "") + "…" +
+            if (Vpn.wanted && Vpn.pauseWhenDown) "\nPages wait until it's done." else ""
+    } else when (Vpn.state) {
         Vpn.State.ON -> "Connected to " + (Vpn.current()?.let { "${it.flag} ${it.countryName}" } ?: "the VPN") +
             (Vpn.seenAs?.let { "\nSites see: $it" } ?: "\nChecking what sites see…")
         Vpn.State.CONNECTING -> "Connecting to " + (Vpn.current()?.countryName ?: "the VPN") + "…" +
@@ -66,13 +73,59 @@ object VpnUi {
 
     fun onPermission(a: Activity, granted: Boolean) {
         val loc = pending
+        val test = pendingTest
         pending = null
-        if (granted && loc != null) {
+        pendingTest = false
+        if (granted && test) {
+            Vpn.testAll(a)
+        } else if (granted && loc != null) {
             Vpn.turnOn(a, loc)
         } else if (!granted) {
             Messages.show(a, "The VPN needs Android's permission. Turn it on again and tap OK.", long = true)
         }
     }
+
+    /** Tries every location in turn (2.2), asking Android for the VPN permission first if needed. */
+    fun test(a: Activity, permission: ActivityResultLauncher<Intent>) {
+        val ask = try {
+            VpnService.prepare(a)
+        } catch (_: Exception) {
+            null
+        }
+        if (ask != null) {
+            pendingTest = true
+            permission.launch(ask)
+        } else {
+            Vpn.testAll(a)
+        }
+    }
+
+    /** "Fast · 0.3 s", "Slow · 4.2 s", "No answer", or null when it wasn't tested. */
+    fun testResult(loc: Vpn.Location): String? {
+        val ms = Vpn.testResults[loc.id] ?: return null
+        if (ms == Vpn.NO_ANSWER) return "No answer"
+        val s = String.format(java.util.Locale.US, "%.1f s", ms / 1000.0)
+        return when {
+            ms < 1000 -> "Fast · $s"
+            ms < 3000 -> "Good · $s"
+            else -> "Slow · $s"
+        }
+    }
+
+    /** "Renew by 26 Oct 2027", from two weeks before: "Stops working in 5 days". */
+    fun renewText(loc: Vpn.Location): String {
+        val days = ((loc.renewBy - System.currentTimeMillis()) / (24L * 3600 * 1000)).toInt()
+        return when {
+            days < 0 -> "Expired: extend it at Proton"
+            days <= 14 -> if (days <= 1) "Stops working tomorrow" else "Stops working in $days days"
+            else -> "Renew by " + java.text.SimpleDateFormat("d MMM yyyy", java.util.Locale.getDefault()).format(java.util.Date(loc.renewBy))
+        }
+    }
+
+    /** The reminder at start: which location stops working when, and what to do. */
+    fun expiryText(loc: Vpn.Location): String =
+        "VPN ${loc.flag} ${loc.countryName} (${loc.server}): ${renewText(loc).replaceFirstChar { it.lowercase() }}. " +
+            "Tap Extend next to it on Proton's page, then \"I extended it\" in Settings → VPN."
 
     /** A WireGuard setup file (.conf) downloaded in Swift (Android 7's file picker hardly finds them). */
     fun isSetupFile(d: Downloads.Item) = d.status == Downloads.DONE && d.fileName.endsWith(".conf", ignoreCase = true)
@@ -114,10 +167,12 @@ object VpnUi {
                 orientation = LinearLayout.VERTICAL
                 setPadding(Ui.dp(a, 24), Ui.dp(a, 4), Ui.dp(a, 24), Ui.dp(a, 8))
                 addView(com.google.android.material.button.MaterialButton(a).apply {
-                    text = if (dropped) "Reconnect" else if (on) "Turn off" else "Turn on"
+                    text = if (Vpn.testing) "Stop testing" else if (dropped) "Reconnect" else if (on) "Turn off" else "Turn on"
                     setOnClickListener {
                         dialog.dismiss()
-                        if (on && !dropped) {
+                        if (Vpn.testing) {
+                            if (on) turnOn(a, permission) else Vpn.turnOff()
+                        } else if (on && !dropped) {
                             Vpn.turnOff()
                             Messages.show(a, "VPN off")
                         } else {
@@ -137,26 +192,73 @@ object VpnUi {
                 }
             })
             col.addView(Sheets.label(a, "Locations"))
-            val chosen = Vpn.current()?.id
-            for (loc in locations) {
-                col.addView(TextView(a).apply {
-                    text = "${loc.flag}  ${loc.countryName}"
-                    Ui.style(this, Ui.Type.BODY)
+            val chosen = Vpn.current()
+            // One row per country (2.2); tapping it connects to its fastest server, the arrow shows them all.
+            for (servers in locations.groupBy { it.country.ifEmpty { it.server } }.values.sortedBy { it.first().countryName }) {
+                val best = Vpn.ranked(servers).first()
+                val here = chosen?.let { c -> servers.any { it.id == c.id } } == true
+                val detail = listOfNotNull(
+                    if (servers.size > 1) "${servers.size} servers" else best.server,
+                    if (here && servers.size > 1) "${chosen!!.server} in use" else null,
+                    testResult(if (here) chosen!! else best),
+                ).joinToString(" · ")
+                val list = LinearLayout(a).apply {
+                    orientation = LinearLayout.VERTICAL
+                    visibility = android.view.View.GONE
+                }
+                col.addView(LinearLayout(a).apply {
+                    orientation = LinearLayout.HORIZONTAL
                     gravity = Gravity.CENTER_VERTICAL
-                    minHeight = Ui.dp(a, 52)
-                    setPadding(Ui.dp(a, 24), 0, Ui.dp(a, 24), 0)
-                    if (loc.id == chosen) {
-                        setCompoundDrawablesRelativeWithIntrinsicBounds(null, null, Ui.icon(a, R.drawable.ic_check, Ui.accent(a)), null)
-                    }
+                    minimumHeight = Ui.dp(a, 60)
+                    setPadding(Ui.dp(a, 24), Ui.dp(a, 6), Ui.dp(a, 8), Ui.dp(a, 6))
                     background = Ui.ripple(a, null, 0)
-                    contentDescription = loc.countryName + if (loc.id == chosen) ", chosen" else ""
+                    contentDescription = best.countryName + if (here) ", in use" else ""
+                    addView(TextView(a).apply {
+                        text = best.flag
+                        textSize = 22f
+                    }, LinearLayout.LayoutParams(Ui.dp(a, 36), ViewGroup.LayoutParams.WRAP_CONTENT))
+                    addView(LinearLayout(a).apply {
+                        orientation = LinearLayout.VERTICAL
+                        addView(Ui.text(a, Ui.Type.BODY, best.countryName))
+                        addView(Ui.text(a, Ui.Type.CAPTION, detail))
+                    }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                    if (here) addView(android.widget.ImageView(a).apply {
+                        setImageDrawable(Ui.icon(a, R.drawable.ic_check, Ui.accent(a)))
+                    }, LinearLayout.LayoutParams(Ui.dp(a, 24), Ui.dp(a, 24)).apply { marginEnd = Ui.dp(a, 8) })
+                    if (servers.size > 1) addView(android.widget.ImageButton(a).apply {
+                        setImageDrawable(Ui.icon(a, R.drawable.ic_down, Ui.textSecondary(a)))
+                        background = Ui.rippleBorderless(a)
+                        contentDescription = "Servers in ${best.countryName}"
+                        setOnClickListener {
+                            val open = list.visibility != android.view.View.VISIBLE
+                            list.visibility = if (open) android.view.View.VISIBLE else android.view.View.GONE
+                            rotation = if (open) 180f else 0f
+                        }
+                    }, LinearLayout.LayoutParams(Ui.dp(a, 48), Ui.dp(a, 48)))
                     setOnClickListener {
                         dialog.dismiss()
-                        // Picking a location connects to it (or switches to it when connected).
-                        turnOn(a, permission, loc)
+                        // The country's fastest server (or the one in use, when it's already on there).
+                        turnOn(a, permission, if (here && Vpn.state == Vpn.State.ON) chosen else best)
                     }
                 })
-                col.addView(Ui.text(a, Ui.Type.CAPTION, loc.server).apply { setPadding(Ui.dp(a, 24) + Ui.dp(a, 32), 0, Ui.dp(a, 24), Ui.dp(a, 6)) })
+                for (loc in Vpn.ranked(servers)) {
+                    list.addView(TextView(a).apply {
+                        text = listOfNotNull(loc.server, testResult(loc)).joinToString("  ·  ")
+                        Ui.style(this, Ui.Type.BODY_SECONDARY)
+                        gravity = Gravity.CENTER_VERTICAL
+                        minHeight = Ui.dp(a, 48)
+                        setPadding(Ui.dp(a, 24) + Ui.dp(a, 36), 0, Ui.dp(a, 24), 0)
+                        if (loc.id == chosen?.id) {
+                            setCompoundDrawablesRelativeWithIntrinsicBounds(null, null, Ui.icon(a, R.drawable.ic_check, Ui.accent(a)), null)
+                        }
+                        background = Ui.ripple(a, null, 0)
+                        setOnClickListener {
+                            dialog.dismiss()
+                            turnOn(a, permission, loc)
+                        }
+                    })
+                }
+                col.addView(list)
             }
         }
         actions += Sheets.Action(R.drawable.ic_settings, if (locations.isEmpty()) "Add a free location" else "VPN settings") {

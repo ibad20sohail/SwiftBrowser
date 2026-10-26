@@ -263,7 +263,7 @@ class HomeView @JvmOverloads constructor(
         val engine = SearchEngine.current
         hint.text = engine.hint
         searchIcon.setImageResource(engine.icon)
-        searchIcon.imageTintList = if (engine.icon == R.drawable.ic_google_g) null else hint.textColors
+        searchIcon.imageTintList = if (com.swiftbrowser.core.SearchEngine.isLogo(engine.icon)) null else hint.textColors
         post { updateTopSpace() }
     }
 

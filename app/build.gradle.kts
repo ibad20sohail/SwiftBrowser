@@ -21,8 +21,8 @@ android {
         applicationId = "com.swiftbrowser.app"
         minSdk = 24
         targetSdk = 35
-        versionCode = 11
-        versionName = "2.1"
+        versionCode = 12
+        versionName = "2.2"
     }
 
     flavorDimensions += "abi"
@@ -121,6 +121,8 @@ dependencies {
 
     // The VPN (2.1): the official WireGuard tunnel (Apache-2.0), for Proton VPN's free servers.
     implementation("com.wireguard.android:tunnel:1.0.20260102")
+    // 2.2: scanning QR codes with the camera (ZXing).
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
 
     // Reports leaked screens and objects in test builds on the PC emulator only.

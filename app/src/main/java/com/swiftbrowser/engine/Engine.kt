@@ -33,7 +33,7 @@ object Engine {
      * Bump when tools/ublock-patch/swift-bridge.js changes: uBO keeps its upstream version number,
      * so GeckoView would otherwise keep the previously installed copy.
      */
-    private const val UBO_BRIDGE_REV = 7
+    private const val UBO_BRIDGE_REV = 8
 
     private const val BRANCH = GeckoPreferenceController.PREF_BRANCH_USER
 
@@ -83,6 +83,9 @@ object Engine {
             .forceUserScalableEnabled(prefs.forceZoom)
             .build()
         runtime = GeckoRuntime.create(app, settings)
+        // The builder's colour scheme doesn't reach pages after a restart: set it again (2.2).
+        setDark(prefs.darkMode)
+        applySecureDns()
         runtime.delegate = GeckoRuntime.Delegate {
             L.e("Gecko runtime shut down")
             Diagnostics.markCleanExit()
@@ -235,6 +238,27 @@ object Engine {
 
     fun applyPrivacyPrefs() {
         GeckoPreferenceController.setGeckoPrefs(privacyPrefs(SwiftApp.prefs))
+    }
+
+    /**
+     * Secure DNS (2.2, Settings → Privacy & security): sites' names are looked up over HTTPS with the
+     * chosen service instead of the network's own lookups, which anyone on the network can read.
+     * When the service can't be reached the network's own is used, so Wi-Fi sign-in pages still work.
+     */
+    fun applySecureDns() {
+        val uri = when (SwiftApp.prefs.secureDns) {
+            "cloudflare" -> "https://mozilla.cloudflare-dns.com/dns-query"
+            "quad9" -> "https://dns.quad9.net/dns-query"
+            "google" -> "https://dns.google/dns-query"
+            else -> null
+        }
+        val s = runtime.settings
+        if (uri == null) {
+            s.setTrustedRecursiveResolverMode(GeckoRuntimeSettings.TRR_MODE_DISABLED)
+        } else {
+            s.setTrustedRecursiveResolverUri(uri)
+            s.setTrustedRecursiveResolverMode(GeckoRuntimeSettings.TRR_MODE_FIRST)
+        }
     }
 
     /** Whether pages are held back now (see [setNetworkBlocked]). */

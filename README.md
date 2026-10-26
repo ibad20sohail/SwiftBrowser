@@ -5,7 +5,7 @@ ad-heavy sites on an old phone (Moto E4, Android 7.1.2).
 
 ## Download
 
-**[Download Swift 2.1 (APK)](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v2.1/Swift-2.1.apk)**
+**[Download Swift 2.2 (APK)](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v2.2/Swift-2.2.apk)**
 for Android 7 and newer (32-bit ARM, about 150 MB). It installs over an earlier Swift and keeps
 tabs and settings. From 1.4 on, Swift can also update itself: Settings → Check for updates.
 
@@ -33,7 +33,17 @@ welcome on the first start.
     themselves when it reconnects. Reconnect or Turn off from the menu, the "VPN off" mark in the
     address bar or Settings.
   - **Connect when Swift starts**, if it was on when you left.
+  - **Renew reminders** (2.2): each location shows when Proton's free file stops working (a year after
+    it was made); two weeks before, Swift reminds you to tap Extend on Proton's page. Hold a location
+    for "I extended it".
+  - **Switch to another location** (on by default): when a server doesn't answer, or connects but
+    passes nothing (an expired or revoked file), Swift moves to the next location by itself (the
+    same country first, the fastest from the last test) and says where it went. **Test the
+    locations** tries them all and shows which answer and how fast. The VPN sheet groups locations
+    by country.
 - **Ad blocking with four levels** (Off / Balanced / High / Extreme), set for all sites or per site.
+  From High up (2.2) it also blocks known fake login (phishing) sites, showing uBlock Origin's
+  "page blocked" screen with the list that caught it and a way to go on anyway.
   - Uses a bundled **uBlock Origin**, with the app switching its filter lists and rules.
   - Has its own **pop-up and redirect blocker**, which stops the "tap anywhere opens an ad" trick.
 - **Profiles**: each profile has its own Google login, cookies, history, bookmarks and tabs.
@@ -52,12 +62,14 @@ welcome on the first start.
     tab, New incognito tab, Close this tab and Recent tabs.
   - How many tabs stay loaded is a setting (1 to 10, 2 by default); the others show their last
     picture straight away and reload their page when opened.
-- **Menu** (⋮) that slides up from the bottom: the page with its site settings, copy and
-  Settings buttons, the page's main actions as a row of icons, four switches (Lite mode, dark mode,
-  desktop site, full screen) that keep the menu open, then the seven buttons you chose (Settings →
-  Look & screen → Menu buttons) and **More**, which slides to the others: among them **Tap to hide**
-  (tap a leftover ad or banner and hide it on that site for good, with uBlock Origin's element
-  picker) and the **Sleep timer**. Swipe it down, tap outside it or press back to close it.
+- **Menu** (≡) that slides up from the bottom: the page with its site settings, copy and
+  Settings buttons, the page's main actions as a row of icons, then pages of buttons (3 rows of 4,
+  swipe sideways or tap the dots). **Arrange it yourself** (2.2): hold any button, then drag it to
+  another place or page, or onto the strip to hide it (tap a hidden one to bring it back). The
+  switches (Lite mode, dark mode, desktop site, full screen) are buttons there too and keep the menu
+  open. Among the others: **Tap to hide** (tap a leftover ad or banner and hide it on that site for
+  good, with uBlock Origin's element picker), the **Sleep timer** and **Scan QR**. Swipe it down,
+  tap outside it or press back to close it.
 - **Reader view**: a clean, light version of article pages (Mozilla's Readability), with text size
   buttons, in light or dark. It remembers where you stopped reading each article. **Listen** reads
   the article aloud with the phone's text-to-speech, from the paragraph on screen, marking the
@@ -79,15 +91,20 @@ welcome on the first start.
 - **Home page** for new tabs: a search box (with voice search) that slides into the address bar
   when tapped, up to 12 shortcuts, and the **news**: English headlines from Google News for your
   country (from the phone, or chosen), with topic chips, pull down to refresh, more stories while
-  scrolling, and news sites you add yourself (their pictures show on the right). Hold a story to
+  scrolling, and news sites you add yourself (their pictures show on the right). **Stories with
+  big pictures** (2.2) turns them into cards with the picture across the top, as in Chrome (Google
+  News' headlines often have no picture; sites you add usually do). Hold a story to
   open it in a new or incognito tab, share it or hide that site. Light on the phone: fetched at most
   once an hour, pictures only as they come on screen and not on mobile data with Data saver; it can
   be turned off (Settings → Home & news). shortcuts: add your own with the + tile (it gets the site's icon); hold
   a shortcut and drag it to another place, or hold it and let go to open it in a new or incognito
   tab, rename it, change its address, move it to the start or remove it. Free places are filled
   with the most visited sites.
-- **Home button** next to the address (can be hidden): the home page over the open tab; Back
-  returns to the page.
+- **Address bar buttons** (2.2, Settings → Look & screen): up to 4 buttons on either side of the
+  address, arranged by dragging: profile, home (the home page over the open tab; Back returns to
+  the page), tabs, menu (always there), new tab, reload, share, bookmark, VPN and Scan QR.
+- **Scan QR codes** (2.2): next to the microphone while typing an address, or as a button. Web
+  addresses open; other text can be searched, copied or shared; Wi-Fi codes show the password.
 - **Address bar at the top or the bottom** (Settings → Look & screen). While reading it shows just
   the site's name and icon (tap it for the site's settings); an open red lock warns about sites that
   aren't secure. While you type, it takes the whole toolbar and suggests, in groups, what you typed,
@@ -106,12 +123,15 @@ welcome on the first start.
 - **Site settings**: the settings button next to the site's name in the menu sets, for that site,
   desktop mode (remembered), sound that starts by itself, location (ask, allow or block), the
   ad-blocking level, Lite mode, and clears its cookies and data. Settings → Privacy lists the sites.
+- **Secure DNS** (2.2, on with Cloudflare; or Quad9, Google, off): the names of the sites you visit
+  are looked up encrypted, so the network can't read them. Wi-Fi sign-in pages still work.
 - **Secure connections first**: every site's secure (https) version when it has one; a site
   without one still opens and Swift says it isn't secure. Firefox also answers known cookie
   banners with "Reject".
 - **Back online**: a page that couldn't load for lack of connection loads again by itself when the
   connection comes back.
-- **Search engine**: Google, DuckDuckGo, Bing or Startpage, with suggestions from the same engine.
+- **Search engine**: Google, DuckDuckGo, Bing or Startpage, with suggestions from the same engine
+  and its logo in the address bar.
 - **Data saver**: on mobile data, pages load without images (Settings → Speed & memory); "Show"
   brings a page's pictures back for that site.
 - **History** grouped by day (Today, Yesterday, then dates), with Delete day, and the search word
@@ -233,5 +253,7 @@ To update uBlock Origin, run `python tools/update_ublock.py --version X.Y.Z`. If
 
 - GeckoView is MPL 2.0.
 - The WireGuard tunnel library (`com.wireguard.android:tunnel`) is Apache 2.0.
-- uBlock Origin is GPLv3; the bundled copy is modified only by adding `js/swift-bridge.js` and two
-  permissions to its manifest.
+- The QR scanner (`com.journeyapps:zxing-android-embedded`, with ZXing) is Apache 2.0.
+- uBlock Origin is GPLv3; the bundled copy is modified by adding `js/swift-bridge.js`, two
+  permissions and one web-accessible page (its "page blocked" screen) to its manifest, and the
+  storage and picker tweaks listed in `tools/update_ublock.py`.

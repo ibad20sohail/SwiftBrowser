@@ -34,8 +34,14 @@ import javax.crypto.spec.GCMParameterSpec
 object Vpn {
     enum class State { OFF, CONNECTING, ON, FAILED }
 
-    /** A server: its name in the file ("NL-FREE#133"), its country, and the encrypted file's id. */
-    class Location(val id: String, val server: String, val country: String) {
+    /**
+     * A server: its name in the file ("NL-FREE#133"), its country, the encrypted file's id, and when it
+     * was added (or last extended at Proton): free files stop working a year later.
+     */
+    class Location(val id: String, val server: String, val country: String, val added: Long) {
+        /** When the file stops working unless extended at Proton. */
+        val renewBy: Long get() = added + YEAR_MS
+
         /** "Netherlands" from "NL" (the name in the phone's language). */
         val countryName: String
             get() = if (country.length == 2) Locale("", country).getDisplayCountry(Locale.getDefault()).ifBlank { country } else server
@@ -96,13 +102,18 @@ object Vpn {
         }
         return (0 until arr.length()).map {
             val o = arr.getJSONObject(it)
-            Location(o.getString("id"), o.optString("server"), o.optString("country"))
+            val id = o.getString("id")
+            // Added before 2.2: the day its encrypted file was written.
+            val added = o.optLong("added", 0L).takeIf { it > 0 }
+                ?: SwiftApp.instance?.let { File(File(it.filesDir, "vpn"), "$id.bin").lastModified() }?.takeIf { it > 0 }
+                ?: System.currentTimeMillis()
+            Location(id, o.optString("server"), o.optString("country"), added)
         }
     }
 
     private fun saveLocations(list: List<Location>) {
         val arr = JSONArray()
-        for (l in list) arr.put(JSONObject().put("id", l.id).put("server", l.server).put("country", l.country))
+        for (l in list) arr.put(JSONObject().put("id", l.id).put("server", l.server).put("country", l.country).put("added", l.added))
         SwiftApp.prefs.sp.edit().putString(KEY_LOCATIONS, arr.toString()).apply()
     }
 
@@ -121,6 +132,11 @@ object Vpn {
     var connectAtStart: Boolean
         get() = SwiftApp.prefs.sp.getBoolean(KEY_AT_START, false)
         set(v) = SwiftApp.prefs.sp.edit().putBoolean(KEY_AT_START, v).apply()
+
+    /** 2.2: when a server doesn't answer (or stops answering), move on to another location by itself. */
+    var autoSwitch: Boolean
+        get() = SwiftApp.prefs.sp.getBoolean(KEY_AUTO_SWITCH, true)
+        set(v) = SwiftApp.prefs.sp.edit().putBoolean(KEY_AUTO_SWITCH, v).apply()
 
     var pauseWhenDown: Boolean
         get() = SwiftApp.prefs.sp.getBoolean(KEY_PAUSE, true)
@@ -150,7 +166,7 @@ object Vpn {
         if (existing.any { it.server == server }) throw IllegalArgumentException("$server is already there.")
         val id = "l" + System.currentTimeMillis().toString(36)
         File(dir(ctx), "$id.bin").writeBytes(Secret.seal(text.toByteArray()))
-        val loc = Location(id, server, country)
+        val loc = Location(id, server, country, System.currentTimeMillis())
         saveLocations(existing + loc)
         if (existing.isEmpty()) choose(loc)
         changed()
@@ -183,8 +199,16 @@ object Vpn {
      * Connects to [loc] (or the chosen location). Android's permission (VpnService.prepare) must
      * have been given: the screens ask for it first.
      */
-    fun turnOn(ctx: Context, loc: Location? = current()) {
+    fun turnOn(ctx: Context, loc: Location? = current(), auto: Boolean = false) {
         val target = loc ?: return
+        // Chosen by the user: a fresh start; switched by itself: the ones that failed stay out.
+        if (!auto) {
+            failedInChain.clear()
+            switchNote = null
+        }
+        stopWatching()
+        testing = false
+        testStep = null
         choose(target)
         wanted = true
         state = State.CONNECTING
@@ -213,13 +237,22 @@ object Vpn {
                     applyBlock()
                     changed()
                     checkCountry()
+                    // Proton's files keep the tunnel alive (a handshake every 2 minutes), so a long
+                    // silence means the server stopped answering.
+                    config.peers.firstOrNull()?.takeIf { it.persistentKeepalive.isPresent }?.let { watch(app, b, it.publicKey, attempt) }
                 }
             } catch (e: Exception) {
                 L.w("VPN didn't connect", e)
                 main.post {
                     if (attempt != attempts) return@post
+                    if (e is NoAnswer && switchAway(app, target)) return@post
                     state = State.FAILED
-                    error = describe(e)
+                    error = if (e is NoAnswer && failedInChain.size > 1) {
+                        "None of your locations answered. Check your connection, or try again in a while."
+                    } else {
+                        describe(e)
+                    }
+                    failedInChain.clear()
                     applyBlock()
                     changed()
                 }
@@ -236,7 +269,7 @@ object Vpn {
      * Blocking: true once the server answered (a WireGuard handshake), false after [HANDSHAKE_WAIT_MS]
      * (the server is full, switched off or blocked) or when a newer attempt took over.
      */
-    private fun waitForHandshake(b: GoBackend, config: Config, attempt: Int): Boolean {
+    private fun waitForHandshake(b: GoBackend, config: Config, attempt: Int, pollMs: Long = 250): Boolean {
         val peer = config.peers.firstOrNull()?.publicKey ?: return true
         val until = android.os.SystemClock.elapsedRealtime() + HANDSHAKE_WAIT_MS
         while (android.os.SystemClock.elapsedRealtime() < until && attempt == attempts) {
@@ -246,13 +279,18 @@ object Vpn {
                 0L
             }
             if (last > 0L) return true
-            Thread.sleep(250)
+            Thread.sleep(pollMs)
         }
         return false
     }
 
     fun turnOff() {
         attempts++
+        stopWatching()
+        failedInChain.clear()
+        switchNote = null
+        testing = false
+        testStep = null
         wanted = false
         state = State.OFF
         seenAs = null
@@ -279,13 +317,193 @@ object Vpn {
     }
 
     private fun onTunnelState(s: Tunnel.State) {
-        if (s == Tunnel.State.DOWN && state == State.ON) {
+        if (s == Tunnel.State.DOWN && state == State.ON && !testing) {
             // Android took it down (another VPN app started, or it was turned off in Android's settings).
             state = if (wanted) State.FAILED else State.OFF
             error = if (wanted) "The VPN was stopped by Android or another VPN app." else null
             seenAs = null
             applyBlock()
             changed()
+        }
+    }
+
+    // ------------------------------------------------------------------ expiry and spares (2.2)
+
+    /** The location ends its year again: the user extended it on Proton's page. */
+    fun markExtended(loc: Location) {
+        saveLocations(locations().map { if (it.id == loc.id) Location(it.id, it.server, it.country, System.currentTimeMillis()) else it })
+        changed()
+    }
+
+    /** The location that stops working soonest, if within two weeks; once a day at most. */
+    fun expiringToRemind(): Location? {
+        val now = System.currentTimeMillis()
+        val soonest = locations().filter { it.renewBy - now < REMIND_BEFORE_MS }.minByOrNull { it.renewBy } ?: return null
+        val day = now / DAY_MS
+        val sp = SwiftApp.prefs.sp
+        if (sp.getLong(KEY_REMINDED, -1L) == day) return null
+        sp.edit().putLong(KEY_REMINDED, day).apply()
+        return soonest
+    }
+
+    /**
+     * Another location to try when [loc] doesn't answer: the same country first, then any, the
+     * fastest in the last test first (ones that didn't answer then last); none in [exclude].
+     */
+    fun spareFor(loc: Location?, exclude: Set<String> = emptySet()): Location? {
+        val others = ranked(locations().filter { it.id != loc?.id && it.id !in exclude })
+        return others.firstOrNull { it.country == loc?.country } ?: others.firstOrNull()
+    }
+
+    /** Fastest first by the last test: measured ones, then untested ones, then ones that didn't answer. */
+    fun ranked(list: List<Location>): List<Location> = list.sortedBy {
+        when (val ms = testResults[it.id]) {
+            null -> Long.MAX_VALUE - 1
+            NO_ANSWER -> Long.MAX_VALUE
+            else -> ms
+        }
+    }
+
+    /** Locations that didn't answer since the user last chose one (automatic switching skips them). */
+    private val failedInChain = HashSet<String>()
+
+    /** "NL-FREE#133 stopped answering": why Swift switched by itself; shown once it's connected. */
+    var switchNote: String? = null
+
+    /** [from] didn't answer: on to the next location by itself (Settings: "Switch to another location"). True when it did. */
+    private fun switchAway(ctx: Context, from: Location, stopped: Boolean = false): Boolean {
+        if (!autoSwitch || !wanted) return false
+        failedInChain += from.id
+        val next = spareFor(from, failedInChain) ?: return false
+        switchNote = "${from.server} " + (if (stopped) "stopped answering" else "didn't answer") + ": switched to ${next.flag} ${next.countryName} (${next.server})"
+        L.d("VPN: ${from.server} not answering, trying ${next.server}")
+        turnOn(ctx, next, auto = true)
+        return true
+    }
+
+    private var watcher: Runnable? = null
+
+    /**
+     * While connected: every 30 seconds, whether the server still answers. WireGuard renews the
+     * handshake every 2 minutes on a kept-alive tunnel; none for over 3 minutes means it stopped.
+     */
+    private fun watch(ctx: Context, b: GoBackend, peer: com.wireguard.crypto.Key, attempt: Int) {
+        stopWatching()
+        val check = object : Runnable {
+            override fun run() {
+                if (attempt != attempts || state != State.ON) return
+                val self = this
+                io.execute {
+                    val last = try {
+                        b.getStatistics(tunnel).peer(peer)?.latestHandshakeEpochMillis() ?: 0L
+                    } catch (_: Exception) {
+                        -1L
+                    }
+                    main.post {
+                        if (attempt != attempts || state != State.ON) return@post
+                        if (last > 0L && System.currentTimeMillis() - last > SILENT_MS) {
+                            val loc = current() ?: return@post
+                            L.w("VPN: no handshake with ${loc.server} for ${(System.currentTimeMillis() - last) / 1000} s")
+                            if (!switchAway(ctx, loc, stopped = true)) {
+                                state = State.FAILED
+                                error = "${loc.server} stopped answering. Try another location, or again in a while."
+                                seenAs = null
+                                applyBlock()
+                                changed()
+                            }
+                        } else {
+                            main.postDelayed(self, WATCH_MS)
+                        }
+                    }
+                }
+            }
+        }
+        watcher = check
+        main.postDelayed(check, WATCH_MS)
+    }
+
+    private fun stopWatching() {
+        watcher?.let { main.removeCallbacks(it) }
+        watcher = null
+    }
+
+    // ------------------------------------------------------------------ testing the locations (2.2)
+
+    /** Locations being tried one after another (the VPN is off meanwhile; pages wait if it should be on). */
+    @Volatile var testing = false
+        private set
+
+    /** While testing: which one (1-based) of how many. */
+    var testStep: Pair<Int, Int>? = null
+        private set
+
+    /** Location id → how long its server took to answer (ms), or [NO_ANSWER]. Kept until Swift closes. */
+    val testResults = HashMap<String, Long>()
+
+    const val NO_ANSWER = -1L
+
+    /**
+     * Connects to each location in turn and times its server's answer (up to 15 seconds each),
+     * then reconnects to the chosen location if the VPN was on. Turning the VPN on or off meanwhile
+     * stops the test. Android's permission must have been given (VpnUi.test asks first).
+     */
+    fun testAll(ctx: Context) {
+        val list = locations()
+        if (testing || list.isEmpty()) return
+        val resume = wanted
+        val attempt = ++attempts
+        testing = true
+        testStep = 1 to list.size
+        state = State.CONNECTING
+        error = null
+        seenAs = null
+        applyBlock()
+        changed()
+        val app = ctx.applicationContext
+        io.execute {
+            val b = backend ?: GoBackend(app).also { backend = it }
+            for ((n, loc) in list.withIndex()) {
+                if (attempt != attempts) break
+                main.post {
+                    testStep = n + 1 to list.size
+                    changed()
+                }
+                val ms = try {
+                    val text = String(Secret.open(File(dir(app), "${loc.id}.bin").readBytes()))
+                    val config = Config.parse(onlySwift(text, app.packageName).byteInputStream())
+                    val start = android.os.SystemClock.elapsedRealtime()
+                    b.setState(tunnel, Tunnel.State.UP, config)
+                    if (waitForHandshake(b, config, attempt, pollMs = 100)) android.os.SystemClock.elapsedRealtime() - start else NO_ANSWER
+                } catch (e: Exception) {
+                    L.w("VPN test of ${loc.server} failed", e)
+                    NO_ANSWER
+                }
+                if (attempt != attempts) break
+                main.post {
+                    testResults[loc.id] = ms
+                    changed()
+                }
+            }
+            val stillOurs = attempt == attempts
+            if (stillOurs) {
+                try {
+                    b.setState(tunnel, Tunnel.State.DOWN, null)
+                } catch (_: Exception) {
+                }
+            }
+            main.post {
+                testing = false
+                testStep = null
+                // Turned on or off meanwhile: that took over.
+                if (!stillOurs) return@post
+                if (resume) {
+                    turnOn(app)
+                } else {
+                    state = State.OFF
+                    applyBlock()
+                    changed()
+                }
+            }
         }
     }
 
@@ -300,22 +518,43 @@ object Vpn {
 
     /** What sites see now: asked of a public "what's my IP" service, through the VPN. */
     fun checkCountry() {
+        val attempt = attempts
         io.execute {
             val r = Net.get("https://ipinfo.io/json", 8192, "application/json", 10_000)
             val text = r?.let { String(it.bytes) }
             val seen = try {
-                val o = JSONObject(text ?: return@execute)
+                val o = JSONObject(text ?: throw IllegalStateException("No answer"))
                 val country = o.optString("country").let { c -> if (c.length == 2) Locale("", c).displayCountry else c }
                 listOf(o.optString("ip"), listOf(o.optString("city"), country).filter { it.isNotBlank() }.joinToString(", "))
                     .filter { it.isNotBlank() }.joinToString(" · ")
             } catch (_: Exception) {
                 null
             }
+            // Nothing from that service: a second one tells a server that passes nothing (a revoked or
+            // expired file still completes the handshake) from that one service being down.
+            val passesNothing = seen == null && Net.get("https://www.cloudflare.com/cdn-cgi/trace", 4096, "text/plain", 10_000) == null
             main.post {
-                if (state == State.ON) {
-                    seenAs = seen
+                if (state != State.ON || attempt != attempts) return@post
+                if (passesNothing) {
+                    val loc = current()
+                    val app = SwiftApp.instance
+                    if (loc != null && app != null && switchAway(app, loc, stopped = true)) return@post
+                    state = State.FAILED
+                    error = if (failedInChain.size > 1) {
+                        "None of your locations answered. Check your connection, or try again in a while."
+                    } else {
+                        "${loc?.server ?: "The server"} connects but passes nothing (its file may have expired or been revoked at Proton). Try another location."
+                    }
+                    failedInChain.clear()
+                    seenAs = null
+                    applyBlock()
                     changed()
+                    return@post
                 }
+                // It works: earlier failures no longer matter for automatic switching.
+                failedInChain.clear()
+                seenAs = seen ?: CHECK_FAILED
+                changed()
             }
         }
     }
@@ -342,6 +581,21 @@ object Vpn {
         }
     }
 
+    /** [seenAs] when nothing came back through the VPN (the server took the key but passes nothing). */
+    const val CHECK_FAILED = "not known (the address service didn't answer)"
+
+    /** Proton's free WireGuard files work for a year unless extended on its downloads page. */
+    const val PROTON_DOWNLOADS = "https://account.protonvpn.com/downloads"
+    private const val DAY_MS = 24L * 3600 * 1000
+    private const val YEAR_MS = 365 * DAY_MS
+    private const val REMIND_BEFORE_MS = 14 * DAY_MS
+    private const val KEY_REMINDED = "vpn_reminded_day"
+
+    private const val WATCH_MS = 30_000L
+
+    /** WireGuard's handshake is renewed every 2 minutes and a session ends after 3: past that, nothing gets through. */
+    private const val SILENT_MS = 200_000L
+
     /** WireGuard tries the handshake every 5 seconds: three tries. */
     private const val HANDSHAKE_WAIT_MS = 15_000L
 
@@ -350,9 +604,10 @@ object Vpn {
     private const val KEY_WANTED = "vpn_wanted"
     private const val KEY_AT_START = "vpn_at_start"
     private const val KEY_PAUSE = "vpn_pause_when_down"
+    private const val KEY_AUTO_SWITCH = "vpn_auto_switch"
 
     /** Settings that stay on this phone (Backup leaves them out; the files themselves never go). */
-    val PREF_KEYS = setOf(KEY_LOCATIONS, KEY_CURRENT, KEY_WANTED, KEY_AT_START, KEY_PAUSE)
+    val PREF_KEYS = setOf(KEY_LOCATIONS, KEY_CURRENT, KEY_WANTED, KEY_AT_START, KEY_PAUSE, KEY_REMINDED, KEY_AUTO_SWITCH)
 
     /** AES-GCM with a key that never leaves Android's keystore. */
     private object Secret {

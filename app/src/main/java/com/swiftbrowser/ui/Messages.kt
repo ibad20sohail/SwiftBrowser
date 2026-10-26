@@ -98,12 +98,10 @@ object Messages {
         return pill
     }
 
-    /** The accent as it looks in the other mode: readable on the pill (dark in light mode, light in dark). */
-    private fun inverseAccent(ctx: Context): Int {
+    /** The accent as it looks at night: readable on the pill, which is dark in both modes (2.2). */
+    private fun pillAccent(ctx: Context): Int {
         val config = Configuration(ctx.resources.configuration)
-        val night = config.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES
-        config.uiMode = (config.uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or
-            if (night) Configuration.UI_MODE_NIGHT_NO else Configuration.UI_MODE_NIGHT_YES
+        config.uiMode = (config.uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or Configuration.UI_MODE_NIGHT_YES
         return ctx.createConfigurationContext(config).getColor(Looks.accent.primary)
     }
 
@@ -128,7 +126,7 @@ object Messages {
 
         init {
             val fg = Ui.color(ctx, R.color.message_text)
-            val accent = inverseAccent(ctx)
+            val accent = pillAccent(ctx)
             background = Ui.shape(ctx, Ui.color(ctx, R.color.message_bg), 18)
             elevation = Ui.dpf(ctx, 6f)
             clipToOutline = true

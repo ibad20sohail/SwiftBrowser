@@ -397,7 +397,7 @@ class HistoryActivity : ListActivity() {
                 is HistoryRow -> {
                     val h = holder as RowHolder
                     val time = DateUtils.formatDateTime(this@HistoryActivity, item.lastVisit, DateUtils.FORMAT_SHOW_TIME)
-                    h.set(R.drawable.ic_globe, marked(item.title.ifBlank { UrlUtils.display(item.url) }), marked("${UrlUtils.siteName(item.url)} · $time"))
+                    h.set(R.drawable.ic_globe, marked(UrlUtils.readableTitle(item.title, item.url)), marked("${UrlUtils.siteName(item.url)} · $time"))
                     h.setFavicon(item.url)
                     h.setAction(R.drawable.ic_close, "Remove from history") { remove(item) }
                     h.itemView.setOnClickListener { openUrl(item.url) }
@@ -412,7 +412,7 @@ class HistoryActivity : ListActivity() {
 
     private fun rowMenu(r: HistoryRow) {
         Sheets.actions(
-            this, r.title.ifBlank { UrlUtils.display(r.url) }, UrlUtils.siteName(r.url),
+            this, UrlUtils.readableTitle(r.title, r.url), UrlUtils.siteName(r.url),
             listOf(
                 Sheets.Action(R.drawable.ic_open_new, "New tab", primary = true) { openUrl(r.url, newTab = true) },
                 Sheets.Action(R.drawable.ic_share, "Share", primary = true) { share(r.url) },
@@ -430,7 +430,7 @@ class BookmarksActivity : ListActivity() {
 
     private val adapter = RowAdapter<BookmarkRow>(
         bind = { h, r ->
-            h.set(R.drawable.ic_star, r.title.ifBlank { UrlUtils.display(r.url) }, UrlUtils.siteName(r.url))
+            h.set(R.drawable.ic_star, UrlUtils.readableTitle(r.title, r.url), UrlUtils.siteName(r.url))
             h.setFavicon(r.url)
             h.setAction(R.drawable.ic_more, "More") { rowMenu(r) }
         },
@@ -457,7 +457,7 @@ class BookmarksActivity : ListActivity() {
     private fun render() {
         val shown = rows.filter { it.id !in hiddenIds }
         adapter.items = shown
-        showEmpty(shown.isEmpty(), "No bookmarks yet", "Tap the star in the ⋮ menu to keep a page here.", R.drawable.ic_star_border)
+        showEmpty(shown.isEmpty(), "No bookmarks yet", "Tap the star in the ≡ menu to keep a page here.", R.drawable.ic_star_border)
     }
 
     private fun delete(r: BookmarkRow) {
@@ -513,7 +513,7 @@ class BookmarksActivity : ListActivity() {
 
     private fun rowMenu(r: BookmarkRow) {
         Sheets.actions(
-            this, r.title.ifBlank { UrlUtils.display(r.url) }, UrlUtils.siteName(r.url),
+            this, UrlUtils.readableTitle(r.title, r.url), UrlUtils.siteName(r.url),
             listOf(
                 Sheets.Action(R.drawable.ic_open_new, "New tab", primary = true) { openUrl(r.url, newTab = true) },
                 Sheets.Action(R.drawable.ic_edit, "Edit", primary = true) { editBookmark(r) },

@@ -73,6 +73,16 @@ object SessionFactory {
                     TabManager.bySession(session)?.let { TabManager.close(it) }
                     return GeckoResult.allow()
                 }
+
+                // 2.2: a page blocked outright (phishing, malware) shows uBlock Origin's "page blocked"
+                // screen, with the list that blocked it, instead of a blank page. Only that page.
+                override fun onUpdateTab(source: WebExtension, session: GeckoSession, details: WebExtension.UpdateTabDetails): GeckoResult<AllowOrDeny> {
+                    val url = details.url ?: return GeckoResult.deny()
+                    val base = ext.metaData.baseUrl
+                    if (!url.startsWith(base + "document-blocked.html")) return GeckoResult.deny()
+                    session.loadUri(url)
+                    return GeckoResult.allow()
+                }
             })
         }
         Helper.attachSession(tab, session)

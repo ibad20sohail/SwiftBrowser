@@ -1,11 +1,15 @@
 package com.swiftbrowser.ui
 
+import android.animation.ValueAnimator
 import android.annotation.SuppressLint
 import android.content.res.ColorStateList
 import android.graphics.Typeface
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.InsetDrawable
 import android.graphics.drawable.LayerDrawable
+import android.os.Handler
+import android.os.Looper
 import android.text.TextUtils
 import android.view.Gravity
 import android.view.MotionEvent
@@ -15,6 +19,7 @@ import android.view.ViewConfiguration
 import android.view.ViewGroup
 import android.view.animation.AccelerateInterpolator
 import android.view.animation.DecelerateInterpolator
+import android.view.animation.LinearInterpolator
 import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
 import android.widget.ImageButton
@@ -22,7 +27,7 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.core.content.ContextCompat
-import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.google.android.material.button.MaterialButton
 import com.swiftbrowser.R
 import com.swiftbrowser.SwiftApp
 import com.swiftbrowser.adblock.AdBlock
@@ -34,12 +39,17 @@ import com.swiftbrowser.media.Helper
 import com.swiftbrowser.tabs.Tab
 import com.swiftbrowser.tabs.TabManager
 import kotlin.math.abs
+import kotlin.math.hypot
+import kotlin.math.sin
 
-/** The ⋮ menu's buttons that can be chosen for its first page (Settings → Look & screen). */
+/**
+ * The ⋮ menu's buttons and how they are arranged (2.2): pages of 3 rows of 4, in the order the
+ * user put them (hold a button to arrange), and the ones they hid.
+ */
 object MenuButtons {
     class Button(val key: String, val icon: Int, val label: String)
 
-    /** In the order they appear. */
+    /** Every button, in the order a new menu has them. */
     val all = listOf(
         Button("new_tab", R.drawable.ic_add, "New tab"),
         Button("incognito", R.drawable.ic_incognito, "Incognito"),
@@ -48,8 +58,13 @@ object MenuButtons {
         Button("downloads", R.drawable.ic_download, "Downloads"),
         Button("reader", R.drawable.ic_reader, "Reader view"),
         Button("save", R.drawable.ic_offline, "Save offline"),
+        Button("lite", R.drawable.ic_lite, "Lite mode"),
+        Button("dark", R.drawable.ic_dark, "Dark mode"),
+        Button("desktop", R.drawable.ic_desktop, "Desktop"),
+        Button("fullscreen", R.drawable.ic_fullscreen, "Full screen"),
         Button("recent", R.drawable.ic_reopen, "Recent tabs"),
         Button("vpn", R.drawable.ic_vpn, "VPN"),
+        Button("scan", R.drawable.ic_qr, "Scan QR"),
         Button("home_screen", R.drawable.ic_home_add, "Add to Home"),
         Button("ad_blocker", R.drawable.ic_shield, "Ad blocker"),
         Button("speed", R.drawable.ic_speed, "Speed"),
@@ -59,12 +74,67 @@ object MenuButtons {
         Button("close_all", R.drawable.ic_close, "Close all tabs"),
     )
 
-    /** How many fit the first page next to More. */
-    const val MAIN = 7
+    /** The switches (they were tiles above the buttons until 2.2): tapping one leaves the menu open. */
+    val switches = setOf("lite", "dark", "desktop", "fullscreen")
 
-    fun chosen(): List<String> {
-        val keys = SwiftApp.prefs.menuButtons.filter { k -> all.any { it.key == k } }.distinct()
-        return all.map { it.key }.filter { it in keys }.take(MAIN)
+    const val COLUMNS = 4
+    const val ROWS = 3
+    const val PER_PAGE = COLUMNS * ROWS
+
+    fun button(key: String) = all.first { it.key == key }
+
+    /** The pages (each up to [PER_PAGE] keys) and the hidden buttons. */
+    class Layout(val pages: MutableList<MutableList<String>>, val hidden: MutableList<String>) {
+        fun pageOf(key: String) = pages.indexOfFirst { key in it }
+
+        /** No empty pages, none too full (the extra ones move on to the next page), at least one page. */
+        fun tidy() {
+            var i = 0
+            while (i < pages.size) {
+                val page = pages[i]
+                if (page.size > PER_PAGE) {
+                    val extra = page.subList(PER_PAGE, page.size).toList()
+                    page.subList(PER_PAGE, page.size).clear()
+                    if (i + 1 < pages.size) pages[i + 1].addAll(0, extra) else pages.add(extra.toMutableList())
+                }
+                i++
+            }
+            pages.removeAll { it.isEmpty() }
+            if (pages.isEmpty()) pages.add(mutableListOf())
+        }
+
+        fun encode(): String = pages.filter { it.isNotEmpty() }.joinToString("|") { it.joinToString(",") }
+    }
+
+    /** A new menu's layout: every button, in order, page after page. */
+    fun defaultLayout(): Layout = Layout(all.map { it.key }.chunked(PER_PAGE).map { it.toMutableList() }.toMutableList(), mutableListOf())
+
+    /** The menu as arranged; from before 2.2, the 7 chosen buttons first, then the switches, then the rest. */
+    fun layout(): Layout {
+        val prefs = SwiftApp.prefs
+        val keys = all.map { it.key }
+        val hidden = prefs.menuHidden.filter { it in keys }.distinct().toMutableList()
+        val saved = prefs.menuLayout
+        val seen = HashSet<String>(hidden)
+        val pages = if (saved != null) {
+            saved.split('|').map { page -> page.split(',').filter { it in keys && seen.add(it) }.toMutableList() }.toMutableList()
+        } else {
+            val chosen = keys.filter { it in prefs.menuButtons }.take(7)
+            (chosen + listOf("lite", "dark", "desktop", "fullscreen") + keys).distinct()
+                .onEach { seen.add(it) }.chunked(PER_PAGE).map { it.toMutableList() }.toMutableList()
+        }
+        // Buttons added in a later version go at the end.
+        val missing = keys.filter { it !in seen }
+        if (missing.isNotEmpty()) {
+            if (pages.isEmpty()) pages.add(mutableListOf())
+            pages.last().addAll(missing)
+        }
+        return Layout(pages, hidden).also { it.tidy() }
+    }
+
+    fun save(layout: Layout) {
+        SwiftApp.prefs.menuLayout = layout.encode()
+        SwiftApp.prefs.menuHidden = layout.hidden
     }
 }
 
@@ -72,11 +142,12 @@ object MenuButtons {
  * The ⋮ menu, sliding up from the bottom:
  *  - the page it is about (with its site settings, copy and Settings buttons), and the most used
  *    page actions as a row of icons,
- *  - four switches (Lite mode, dark mode, desktop site, full screen) that stay open when tapped,
- *  - the chosen main buttons with More, which slides to the second page with the others.
- * Swiping the menu down (or tapping outside it) closes it. It is built once and lives in the
- * browser screen itself (a dialog would make a new window every time, which takes a moment on this
- * phone); opening it only updates what depends on the page.
+ *  - the buttons, in pages of 3 rows of 4 swiped sideways (or picked with the dots). The switches
+ *    among them (Lite mode, dark mode, desktop site, full screen) leave the menu open.
+ * Holding a button arranges the menu: buttons are dragged to another place or page, or onto the
+ * strip at the bottom to hide them (2.2). Swiping the menu down (or tapping outside it) closes it.
+ * It is built once and lives in the browser screen itself (a dialog would make a new window every
+ * time, which takes a moment on this phone); opening it only updates what depends on the page.
  */
 class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
 
@@ -126,6 +197,8 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
     }
     private val headerTitle = TextView(a)
     private val headerSite = TextView(a)
+    private val headerRow: View
+    private val actionsRow: View
 
     private val forward: IconAction
     private val reload: IconAction
@@ -133,14 +206,25 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
     private val share: IconAction
     private val find: IconAction
 
-    private val lite: Toggle
-    private val dark: Toggle
-    private val desktop: Toggle
-    private val fullScreen: Toggle
+    /** Every button by MenuButtons key, made once; arranging moves them between the pages. */
+    private val items = LinkedHashMap<String, Item>()
+    private val grids = ArrayList<PageGrid>()
+    private var layout = MenuButtons.layout()
 
-    /** The buttons on the pages, by MenuButtons key. */
-    private val items = HashMap<String, Item>()
-    private var builtFor: List<String> = emptyList()
+    // Arranging (2.2).
+    private var arranging = false
+    private val arrangeBar: View
+    private val tray = LinearLayout(a)
+    private val trayRow = LinearLayout(a)
+    private val trayHint = TextView(a)
+    private val trayChips = LinkedHashMap<String, TextView>()
+    private val ghost = DragGhost(root)
+    private var dragKey: String? = null
+    private var lastX = 0f
+    private var lastY = 0f
+    private var edge = 0
+    private val handler = Handler(Looper.getMainLooper())
+    private var wiggle: ValueAnimator? = null
 
     init {
         panel.orientation = LinearLayout.VERTICAL
@@ -166,7 +250,10 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
             bottomMargin = dp(8)
         })
 
-        content.addView(header())
+        headerRow = header()
+        content.addView(headerRow)
+        arrangeBar = arrangeBar()
+        content.addView(arrangeBar)
 
         val actions = LinearLayout(a).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -174,41 +261,31 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
         }
         forward = iconAction(actions, R.drawable.ic_forward, "Forward") { TabManager.goForward(it) }
         reload = iconAction(actions, R.drawable.ic_refresh, "Reload") { if (it.loading) it.session?.stop() else TabManager.reload(it) }
-        bookmark = iconAction(actions, R.drawable.ic_star_border, "Bookmark") { toggleBookmark(it) }
+        bookmark = iconAction(actions, R.drawable.ic_star_border, "Bookmark") { a.toggleBookmark(it) }
         share = iconAction(actions, R.drawable.ic_share, "Share") { a.share(it.url) }
         find = iconAction(actions, R.drawable.ic_find, "Find in page") { a.openFind() }
+        actionsRow = actions
         content.addView(actions)
-
-        // The switches, as a row of tiles.
-        val switches = LinearLayout(a).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(dp(14), dp(2), dp(14), dp(10))
-        }
-        lite = toggle(switches, R.drawable.ic_lite, "Lite mode") { PageActions.setLite(a, it) }
-        // The screen restarts in the other theme; MainActivity opens the menu again.
-        dark = toggle(switches, R.drawable.ic_dark, "Dark mode") { Sheets.setDarkMode(it) }
-        desktop = toggle(switches, R.drawable.ic_desktop, "Desktop") { on ->
-            TabManager.current?.let { TabManager.setDesktop(it, on) }
-        }
-        fullScreen = toggle(switches, R.drawable.ic_fullscreen, "Full screen") { on ->
-            SwiftApp.prefs.fullScreen = on
-            a.applySystemBars()
-        }
-        content.addView(switches)
+        // While arranging, the hidden buttons wait above the pages (the menu grows upwards, so the
+        // buttons stay under the finger).
+        content.addView(tray(), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            setMargins(dp(14), dp(2), dp(14), dp(10))
+        })
         content.addView(View(a).apply { setBackgroundColor(color(R.color.divider)) },
             LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)).apply {
                 setMargins(dp(18), 0, dp(18), dp(4))
             })
 
-        // Pages of buttons, swiped sideways: the chosen ones and More, then the others.
-        buildPages()
+        // Pages of buttons, swiped sideways.
+        for (b in MenuButtons.all) items[b.key] = item(b.key, b.icon, b.label, closes = b.key !in MenuButtons.switches)
         content.addView(pager, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
             topMargin = dp(2)
         })
 
         dots.orientation = LinearLayout.HORIZONTAL
         dots.gravity = Gravity.CENTER
-        content.addView(dots, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(10)).apply { topMargin = dp(2) })
+        content.addView(dots, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(20)))
+        render(animate = false)
         pager.reset()
 
         scrim.setBackgroundColor(color(R.color.scrim))
@@ -222,10 +299,18 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
         root.addView(panel, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {
             topMargin = dp(24)
         })
+        // Turned while open: the menu takes the new screen's width (a phone's width when sideways).
+        root.addOnLayoutChangeListener { _, l, _, r, _, oldL, _, oldR, _ ->
+            if (r - l != oldR - oldL && isOpen) root.post {
+                fitWidth()
+                pager.goTo(pager.page)
+            }
+        }
     }
 
     /** What each button does. */
     private fun run(key: String, tab: Tab) {
+        val prefs = SwiftApp.prefs
         when (key) {
             "new_tab" -> TabManager.newTab(incognito = false)
             "incognito" -> TabManager.newTab(incognito = true)
@@ -234,8 +319,17 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
             "downloads" -> a.openDownloads()
             "reader" -> PageActions.reader(a, tab)
             "save" -> PageActions.savePage(a, tab)
+            "lite" -> PageActions.setLite(a, !prefs.liteMode)
+            // The screen restarts in the other theme; MainActivity opens the menu again.
+            "dark" -> Sheets.setDarkMode(!prefs.darkMode)
+            "desktop" -> TabManager.setDesktop(tab, !tab.desktop)
+            "fullscreen" -> {
+                prefs.fullScreen = !prefs.fullScreen
+                a.applySystemBars()
+            }
             "recent" -> Sheets.recentlyClosed(a)
             "vpn" -> a.showVpnSheet()
+            "scan" -> a.scanQr()
             "home_screen" -> PageActions.addToHomeScreen(a, tab)
             "ad_blocker" -> Sheets.shield(a)
             "speed" -> Sheets.speed(a, tab)
@@ -248,58 +342,56 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
             }
             "close_all" -> confirmCloseAll(tab)
         }
+        if (key in MenuButtons.switches && isOpen) update(tab)
     }
 
-    /** (Re)builds the pages for the chosen buttons: when made, and after they were changed in Settings. */
-    private fun buildPages() {
-        val chosen = MenuButtons.chosen()
-        if (chosen == builtFor && items.isNotEmpty()) return
-        builtFor = chosen
-        items.clear()
-        pager.clear()
-        val first = page()
-        for (key in chosen) addItem(first, key)
-        item(first, R.drawable.ic_more, "More", closes = false) { pager.next() }
-        // The others, two rows a page: 7 and More while more follow, up to 8 on the last.
-        val pages = mutableListOf(first)
-        val rest = MenuButtons.all.map { it.key }.filter { it !in chosen }
-        var i = 0
-        while (i < rest.size) {
-            val p = page()
-            val take = if (rest.size - i > 8) 7 else rest.size - i
-            for (key in rest.subList(i, i + take)) addItem(p, key)
-            i += take
-            if (i < rest.size) item(p, R.drawable.ic_more, "More", closes = false) { pager.next() }
-            pages += p
+    /**
+     * Puts the buttons on their pages as [layout] says (and, while arranging, an empty page at the
+     * end to start a new one, and the hidden ones in the tray). [animate]: buttons that only moved
+     * on their page slide there.
+     */
+    private fun render(animate: Boolean) {
+        val count = layout.pages.size + if (arranging) 1 else 0
+        while (grids.size < count) PageGrid().also {
+            grids += it
+            pager.addPage(it)
         }
-        for (p in pages) {
-            // A last row with fewer buttons keeps them in their columns.
-            val last = p.getChildAt(p.childCount - 1) as? LinearLayout ?: continue
-            while (last.childCount < 4) last.addView(View(a), LinearLayout.LayoutParams(0, dp(88), 1f))
-            pager.addPage(p)
+        while (grids.size > count) grids.removeAt(grids.lastIndex).also {
+            it.removeAllViews()
+            pager.removePage(it)
         }
-        dots.removeAllViews()
-        repeat(pages.size) {
-            dots.addView(View(a), LinearLayout.LayoutParams(dp(6), dp(6)).apply { setMargins(dp(3), 0, dp(3), 0) })
+        grids.forEachIndexed { i, grid ->
+            grid.show(layout.pages.getOrNull(i).orEmpty().map { items.getValue(it).view }, animate)
         }
-        pager.reset()
+        if (dots.childCount != count) {
+            dots.removeAllViews()
+            repeat(count) { i ->
+                dots.addView(View(a).apply {
+                    contentDescription = "Page ${i + 1}"
+                    setOnClickListener { pager.goTo(i) }
+                }, LinearLayout.LayoutParams(dp(18), dp(20)))
+            }
+        }
+        if (pager.page >= count) pager.goTo(count - 1) else showPage(pager.page)
+        renderTray()
     }
 
-    private fun addItem(page: LinearLayout, key: String) {
-        val b = MenuButtons.all.first { it.key == key }
-        items[key] = item(page, b.icon, b.label) { tab -> run(key, tab) }
-    }
-
-    /** [animate] false: shown at once, as when the screen restarts in the other theme. */
-    fun open(animate: Boolean = true) {
+    /** [animate] false: shown at once, as when the screen restarts in the other theme. [arrange]: ready to arrange (from Settings). */
+    fun open(animate: Boolean = true, arrange: Boolean = false) {
         val tab = TabManager.current ?: return
         if (isOpen) return
         isOpen = true
-        buildPages()
+        // Arranged in another window of the app, or reset in Settings.
+        val saved = MenuButtons.layout()
+        if (saved.encode() != layout.encode() || saved.hidden != layout.hidden) {
+            layout = saved
+            render(animate = false)
+        }
         fitWidth()
         scroller.scrollTo(0, 0)
         update(tab)
         pager.reset()
+        if (arrange) startArranging()
         scrim.animate().cancel()
         panel.animate().cancel()
         scrim.visibility = View.VISIBLE
@@ -317,6 +409,7 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
 
     fun close() {
         if (!isOpen) return
+        finishArranging()
         isOpen = false
         scrim.animate().cancel()
         panel.animate().cancel()
@@ -325,6 +418,11 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
         scrim.animate().alpha(0f).setDuration((140 * remaining).toLong()).withEndAction { scrim.visibility = View.GONE }.start()
         panel.animate().translationY(h).setDuration((140 * remaining).toLong()).setInterpolator(AccelerateInterpolator())
             .withLayer().withEndAction { panel.visibility = View.GONE }.start()
+    }
+
+    /** Back: ends arranging first, then closes. */
+    fun onBack() {
+        if (arranging) finishArranging() else close()
     }
 
     /** Refreshes what depends on the page; also after a switch changes something. */
@@ -366,11 +464,10 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
         find.set(R.drawable.ic_find, enabled = page)
 
         val prefs = SwiftApp.prefs
-        lite.set(prefs.liteMode)
-        dark.set(prefs.darkMode)
-        desktop.set(tab.desktop, enabled = !tab.isHome)
-        fullScreen.set(prefs.fullScreen)
-
+        items["lite"]?.set(R.drawable.ic_lite, "Lite mode", active = prefs.liteMode)
+        items["dark"]?.set(R.drawable.ic_dark, "Dark mode", active = prefs.darkMode)
+        items["desktop"]?.set(R.drawable.ic_desktop, "Desktop", active = tab.desktop, enabled = !tab.isHome)
+        items["fullscreen"]?.set(R.drawable.ic_fullscreen, "Full screen", active = prefs.fullScreen)
         items["reader"]?.set(R.drawable.ic_reader, if (inReader) "Exit reader" else "Reader view", active = inReader, enabled = (http && page) || inReader)
         items["save"]?.set(R.drawable.ic_offline, "Save offline", enabled = http && page)
         items["home_screen"]?.set(R.drawable.ic_home_add, "Add to Home", enabled = http)
@@ -388,19 +485,6 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
         items["sleep"]?.set(R.drawable.ic_timer, timer ?: "Sleep timer", active = timer != null)
         val vpnOn = com.swiftbrowser.vpn.Vpn.state == com.swiftbrowser.vpn.Vpn.State.ON
         items["vpn"]?.set(R.drawable.ic_vpn, if (vpnOn) "VPN · " + (com.swiftbrowser.vpn.Vpn.current()?.country ?: "on") else "VPN", active = vpnOn)
-    }
-
-    private fun toggleBookmark(tab: Tab) {
-        val pid = tab.profileId
-        val url = tab.url
-        if (SwiftApp.db.isBookmarked(pid, url)) {
-            TabManager.io.execute { SwiftApp.db.removeBookmark(pid, url) }
-            a.snack("Bookmark removed")
-        } else {
-            val title = tab.title
-            TabManager.io.execute { SwiftApp.db.addBookmark(pid, url, title) }
-            a.snack("Bookmarked")
-        }
     }
 
     private fun confirmCloseAll(tab: Tab) {
@@ -437,31 +521,354 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
 
     private fun showPage(index: Int) {
         for (i in 0 until dots.childCount) {
-            dots.getChildAt(i).background = GradientDrawable().apply {
+            // A small dot in a finger-sized place.
+            dots.getChildAt(i).background = InsetDrawable(GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
                 setColor(color(if (i == index) Looks.accent.primary else R.color.outline))
-            }
+            }, dp(6), dp(7), dp(6), dp(7))
         }
+    }
+
+    // ------------------------------------------------------------------ arranging (2.2)
+
+    private fun startArranging() {
+        if (arranging) return
+        arranging = true
+        headerRow.visibility = View.GONE
+        actionsRow.visibility = View.GONE
+        arrangeBar.visibility = View.VISIBLE
+        tray.visibility = View.VISIBLE
+        TabManager.current?.let { update(it) }
+        render(animate = false)
+        // The buttons sway a little, so it's clear they can be moved.
+        wiggle = ValueAnimator.ofFloat(0f, (2 * Math.PI).toFloat()).apply {
+            duration = 700
+            repeatCount = ValueAnimator.INFINITE
+            interpolator = LinearInterpolator()
+            addUpdateListener { anim ->
+                val t = anim.animatedValue as Float
+                val grid = grids.getOrNull(pager.page) ?: return@addUpdateListener
+                for (i in 0 until grid.childCount) grid.getChildAt(i).rotation = 1.6f * sin(t + i * 1.7f)
+            }
+            start()
+        }
+    }
+
+    private fun finishArranging() {
+        if (!arranging) return
+        dragKey?.let {
+            ghost.cancel()
+            items.getValue(it).view.visibility = View.VISIBLE
+            trayChips[it]?.visibility = View.VISIBLE
+        }
+        dragKey = null
+        handler.removeCallbacksAndMessages(null)
+        wiggle?.cancel()
+        wiggle = null
+        for (item in items.values) item.view.rotation = 0f
+        arranging = false
+        headerRow.visibility = View.VISIBLE
+        actionsRow.visibility = View.VISIBLE
+        arrangeBar.visibility = View.GONE
+        tray.visibility = View.GONE
+        layout.tidy()
+        MenuButtons.save(layout)
+        render(animate = false)
+        TabManager.current?.let { update(it) }
+    }
+
+    /** The bar that takes the header's place while arranging. */
+    private fun arrangeBar(): View = LinearLayout(a).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(dp(20), 0, dp(12), dp(8))
+        visibility = View.GONE
+        addView(LinearLayout(a).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(Ui.text(a, Ui.Type.TITLE, "Arrange the menu"))
+            addView(Ui.text(a, Ui.Type.CAPTION, "Drag a button to move it, or up onto the strip to hide it.").apply {
+                setPadding(0, dp(2), dp(8), 0)
+            })
+        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        addView(MaterialButton(a, null, androidx.appcompat.R.attr.borderlessButtonStyle).apply {
+            text = "Reset"
+            setOnClickListener {
+                this@QuickMenu.layout = MenuButtons.defaultLayout()
+                MenuButtons.save(this@QuickMenu.layout)
+                render(animate = true)
+            }
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(48)))
+        addView(MaterialButton(a).apply {
+            text = "Done"
+            setOnClickListener { finishArranging() }
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(48)).apply { marginStart = dp(4) })
+    }
+
+    /** Where hidden buttons wait while arranging (above the pages); dropping a button here hides it. */
+    private fun tray(): View {
+        tray.orientation = LinearLayout.VERTICAL
+        tray.setPadding(dp(12), dp(10), dp(12), dp(10))
+        tray.visibility = View.GONE
+        trayHint.apply {
+            textSize = 13f
+            setTextColor(color(R.color.text_secondary))
+            gravity = Gravity.CENTER_VERTICAL
+            compoundDrawablePadding = dp(8)
+            setCompoundDrawablesRelativeWithIntrinsicBounds(Ui.icon(a, R.drawable.ic_hide, color(R.color.text_secondary)), null, null, null)
+        }
+        tray.addView(trayHint)
+        trayRow.orientation = LinearLayout.HORIZONTAL
+        tray.addView(HorizontalScrollView(a).apply {
+            isHorizontalScrollBarEnabled = false
+            overScrollMode = View.OVER_SCROLL_NEVER
+            addView(trayRow)
+        })
+        trayLit(false)
+        return tray
+    }
+
+    private fun trayLit(lit: Boolean) {
+        tray.background = GradientDrawable().apply {
+            cornerRadius = dp(16).toFloat()
+            setColor(color(if (lit) Looks.accent.container else R.color.surface_alt))
+        }
+    }
+
+    private fun renderTray() {
+        if (!arranging) return
+        trayHint.text = if (layout.hidden.isEmpty()) "Drop a button here to hide it" else "Hidden: tap one to put it back"
+        trayRow.removeAllViews()
+        trayChips.clear()
+        for (key in layout.hidden) {
+            val b = MenuButtons.button(key)
+            val chip = TextView(a).apply {
+                text = b.label
+                textSize = 11.5f
+                maxLines = 1
+                ellipsize = TextUtils.TruncateAt.END
+                gravity = Gravity.CENTER_HORIZONTAL
+                setTextColor(color(R.color.text_primary))
+                setPadding(dp(2), dp(8), dp(2), dp(2))
+                compoundDrawablePadding = dp(6)
+                // White circles: the tray itself is the grey of the buttons' circles.
+                setCompoundDrawablesRelativeWithIntrinsicBounds(null, roundIcon(b.icon, false, 40, color(R.color.sheet_bg)), null, null)
+                setBackgroundResource(borderless())
+                contentDescription = "${b.label}, hidden"
+                visibility = if (key == dragKey) View.INVISIBLE else View.VISIBLE
+                setOnClickListener { putBack(key) }
+                setOnLongClickListener {
+                    startDrag(key, this)
+                    true
+                }
+            }
+            trayChips[key] = chip
+            trayRow.addView(chip, LinearLayout.LayoutParams(dp(76), ViewGroup.LayoutParams.WRAP_CONTENT))
+        }
+        trayRow.visibility = if (layout.hidden.isEmpty()) View.GONE else View.VISIBLE
+    }
+
+    /** A hidden button back in the first free place. */
+    private fun putBack(key: String) {
+        layout.hidden.remove(key)
+        val page = layout.pages.firstOrNull { it.size < MenuButtons.PER_PAGE } ?: mutableListOf<String>().also { layout.pages.add(it) }
+        page.add(key)
+        MenuButtons.save(layout)
+        Haptics.tick(tray)
+        render(animate = true)
+        pager.goTo(layout.pageOf(key))
+    }
+
+    private fun startDrag(key: String, source: View) {
+        if (!arranging) startArranging()
+        dragKey = key
+        // Its picture without the press highlight or the sway.
+        source.isPressed = false
+        source.jumpDrawablesToCurrentState()
+        source.rotation = 0f
+        ghost.start(source, lastX, lastY)
+        // Held from the tray or the page: it shows only in the finger until let go.
+        items.getValue(key).view.visibility = View.INVISIBLE
+        trayChips[key]?.visibility = View.INVISIBLE
+        Haptics.hold(source)
+    }
+
+    private fun dragMove(x: Float, y: Float) {
+        lastX = x
+        lastY = y
+        ghost.move(x, y)
+        // Held at the menu's left or right edge: on to the page before or after.
+        val at = IntArray(2)
+        panel.getLocationOnScreen(at)
+        val side = when {
+            x < at[0] + dp(28) -> -1
+            x > at[0] + panel.width - dp(28) -> 1
+            else -> 0
+        }
+        if (side != edge) {
+            edge = side
+            handler.removeCallbacks(flip)
+            if (side != 0) handler.postDelayed(flip, 600)
+        }
+        retarget(x, y)
+    }
+
+    private val flip = object : Runnable {
+        override fun run() {
+            val to = pager.page + edge
+            if (dragKey == null || edge == 0 || to !in 0 until grids.size) return
+            pager.goTo(to)
+            handler.postDelayed({ retarget(lastX, lastY) }, 260)
+            // Still held there: one more page after a longer moment (not two at once).
+            handler.postDelayed(this, 1300)
+        }
+    }
+
+    /** Moves the held button to the place under the finger (on the page shown), or to the hidden ones. */
+    private fun retarget(x: Float, y: Float) {
+        val key = dragKey ?: return
+        val overTray = within(tray, x, y)
+        trayLit(overTray)
+        if (overTray) {
+            if (key in layout.hidden) return
+            layout.pages.forEach { it.remove(key) }
+            layout.hidden.add(key)
+            render(animate = true)
+            return
+        }
+        val pageIndex = pager.page
+        val grid = grids.getOrNull(pageIndex) ?: return
+        val place = grid.indexAt(x, y)
+        if (place < 0) return
+        while (layout.pages.size <= pageIndex) layout.pages.add(mutableListOf())
+        val page = layout.pages[pageIndex]
+        val now = page.indexOf(key)
+        val to = place.coerceAtMost(if (now >= 0) page.size - 1 else page.size)
+        if (now == to) return
+        layout.hidden.remove(key)
+        layout.pages.forEach { it.remove(key) }
+        page.add(to.coerceAtMost(page.size), key)
+        // A full page passes its last button on to the next one.
+        var i = pageIndex
+        while (i < layout.pages.size && layout.pages[i].size > MenuButtons.PER_PAGE) {
+            val extra = layout.pages[i].removeAt(layout.pages[i].lastIndex)
+            if (i + 1 >= layout.pages.size) layout.pages.add(mutableListOf())
+            layout.pages[i + 1].add(0, extra)
+            i++
+        }
+        render(animate = true)
+    }
+
+    private fun dragDrop() {
+        val key = dragKey ?: return
+        dragKey = null
+        edge = 0
+        handler.removeCallbacksAndMessages(null)
+        trayLit(false)
+        layout.tidy()
+        MenuButtons.save(layout)
+        render(animate = true)
+        val target = if (key in layout.hidden) trayChips[key] else items.getValue(key).view
+        target?.visibility = View.INVISIBLE
+        ghost.drop(target) {
+            items.getValue(key).view.visibility = View.VISIBLE
+            trayChips[key]?.visibility = View.VISIBLE
+        }
+        Haptics.tick(panel)
+    }
+
+    /** Tapped while arranging: move it a place, to another page, or hide it. */
+    private fun arrangeSheet(key: String) {
+        val b = MenuButtons.button(key)
+        val pageIndex = layout.pageOf(key)
+        if (pageIndex < 0) return
+        val page = layout.pages[pageIndex]
+        val place = page.indexOf(key)
+        val actions = ArrayList<Sheets.Action>()
+        fun moveTo(p: Int, at: Int) {
+            page.remove(key)
+            while (layout.pages.size <= p) layout.pages.add(mutableListOf())
+            layout.pages[p].add(at.coerceIn(0, layout.pages[p].size), key)
+            layout.tidy()
+            MenuButtons.save(layout)
+            render(animate = true)
+            pager.goTo(layout.pageOf(key))
+        }
+        if (place > 0) actions += Sheets.Action(R.drawable.ic_back, "Move left", primary = true) { moveTo(pageIndex, place - 1) }
+        if (place < page.size - 1) actions += Sheets.Action(R.drawable.ic_forward, "Move right", primary = true) { moveTo(pageIndex, place + 1) }
+        actions += Sheets.Action(R.drawable.ic_hide, "Hide", primary = true) {
+            page.remove(key)
+            layout.hidden.add(key)
+            layout.tidy()
+            MenuButtons.save(layout)
+            render(animate = true)
+        }
+        for (p in layout.pages.indices) {
+            if (p != pageIndex) actions += Sheets.Action(R.drawable.ic_layers, "Move to page ${p + 1}") { moveTo(p, layout.pages[p].size) }
+        }
+        if (page.size > 1) actions += Sheets.Action(R.drawable.ic_add, "Move to a new page") { moveTo(layout.pages.size, 0) }
+        Sheets.actions(a, b.label, "Page ${pageIndex + 1}, place ${place + 1}", actions, iconRes = b.icon)
+    }
+
+    /** The button (in the grid or the tray) under a point on the screen, for a drag that starts while arranging. */
+    private fun keyAt(x: Float, y: Float): String? {
+        for ((key, chip) in trayChips) if (chip.visibility == View.VISIBLE && within(chip, x, y)) return key
+        val page = layout.pages.getOrNull(pager.page) ?: return null
+        val grid = grids.getOrNull(pager.page) ?: return null
+        if (!within(grid, x, y)) return null
+        return page.getOrNull(grid.indexAt(x, y))
+    }
+
+    private fun within(v: View, x: Float, y: Float): Boolean {
+        if (!v.isShown) return false
+        val at = IntArray(2)
+        v.getLocationOnScreen(at)
+        return x >= at[0] && x < at[0] + v.width && y >= at[1] && y < at[1] + v.height
     }
 
     // ------------------------------------------------------------------ the panel and its pages
 
-    /** The menu itself; a downward swipe anywhere on it drags it down and closes it. */
+    /**
+     * The menu itself; a downward swipe anywhere on it drags it down and closes it. While arranging
+     * it follows a held button instead.
+     */
     private inner class Panel : LinearLayout(a) {
         private val slop = ViewConfiguration.get(a).scaledTouchSlop
         private var downX = 0f
         private var downY = 0f
         private var dragging = false
         private var velocity: VelocityTracker? = null
+        private var pressedKey: String? = null
 
         override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
+            if (dragKey != null) {
+                arrangeTouch(ev)
+                return true
+            }
             when (ev.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     downX = ev.rawX
                     downY = ev.rawY
+                    lastX = ev.rawX
+                    lastY = ev.rawY
                     dragging = false
+                    pressedKey = if (arranging) keyAt(ev.rawX, ev.rawY) else null
                 }
                 MotionEvent.ACTION_MOVE -> {
+                    lastX = ev.rawX
+                    lastY = ev.rawY
+                    if (arranging) {
+                        // While arranging, a button moves as soon as it's dragged (no need to hold it first).
+                        val key = pressedKey
+                        if (key != null && hypot(ev.rawX - downX, ev.rawY - downY) > slop) {
+                            val source = trayChips[key]?.takeIf { key in layout.hidden } ?: items.getValue(key).view
+                            lastX = downX
+                            lastY = downY
+                            startDrag(key, source)
+                            dragMove(ev.rawX, ev.rawY)
+                            return true
+                        }
+                        return false
+                    }
                     val dy = ev.rawY - downY
                     // Down drags close the menu, unless its content is scrolled and should scroll back.
                     if (dy > slop && dy > abs(ev.rawX - downX) * 1.2f && scroller.scrollY == 0) {
@@ -475,6 +882,11 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
 
         @SuppressLint("ClickableViewAccessibility")
         override fun onTouchEvent(ev: MotionEvent): Boolean {
+            if (dragKey != null) {
+                arrangeTouch(ev)
+                return true
+            }
+            if (arranging) return true
             when (ev.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     // A drag that starts on the panel's own background (not on a button).
@@ -513,6 +925,14 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
             return true
         }
 
+        /** A held button follows the finger and lands where it's let go. */
+        private fun arrangeTouch(ev: MotionEvent) {
+            when (ev.actionMasked) {
+                MotionEvent.ACTION_MOVE -> dragMove(ev.rawX, ev.rawY)
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> dragDrop()
+            }
+        }
+
         private fun startDrag(ev: MotionEvent) {
             dragging = true
             downY = ev.rawY
@@ -528,7 +948,8 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
     private inner class Pager : HorizontalScrollView(a) {
         private val strip = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
         private var flung = false
-        private var page = 0
+        var page = 0
+            private set
 
         init {
             isHorizontalScrollBarEnabled = false
@@ -537,16 +958,10 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
         }
 
         fun addPage(page: View) {
-            strip.addView(page, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT))
+            strip.addView(page, LinearLayout.LayoutParams(width.coerceAtLeast(0), ViewGroup.LayoutParams.WRAP_CONTENT))
         }
 
-        fun clear() {
-            strip.removeAllViews()
-            page = 0
-        }
-
-        /** More: to the next page (and back from the last). */
-        fun next() = goTo(if (page + 1 < strip.childCount) page + 1 else 0)
+        fun removePage(page: View) = strip.removeView(page)
 
         fun reset() {
             page = 0
@@ -582,10 +997,85 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
             return handled
         }
 
-        private fun goTo(target: Int) {
+        fun goTo(target: Int) {
             page = target.coerceIn(0, (strip.childCount - 1).coerceAtLeast(0))
             smoothScrollTo(page * width, 0)
             showPage(page)
+        }
+    }
+
+    /**
+     * A page of buttons: up to 12 in 3 rows of 4, always 3 rows high so every page (and the menu)
+     * keeps its height. Buttons that move on the page slide to their new place.
+     */
+    private inner class PageGrid : ViewGroup(a) {
+        private val before = HashMap<View, IntArray>()
+        private var cellW = 1
+        private var cellH = 1
+
+        init {
+            setPadding(dp(6), 0, dp(6), 0)
+            clipChildren = false
+        }
+
+        /** Shows [views] in this order. */
+        fun show(views: List<View>, animate: Boolean) {
+            if (childCount == views.size && views.indices.all { getChildAt(it) === views[it] }) return
+            before.clear()
+            if (animate) {
+                for (i in 0 until childCount) getChildAt(i).let { if (it.width > 0) before[it] = intArrayOf(it.left, it.top) }
+            }
+            removeAllViews()
+            for (v in views) {
+                (v.parent as? ViewGroup)?.removeView(v)
+                addView(v)
+            }
+        }
+
+        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+            val w = MeasureSpec.getSize(widthMeasureSpec)
+            cellW = ((w - paddingLeft - paddingRight) / MenuButtons.COLUMNS).coerceAtLeast(1)
+            // At least 88 dp, taller with large phone text (the names never get cut).
+            var h = dp(88)
+            val unspecified = MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED)
+            val cellWidth = MeasureSpec.makeMeasureSpec(cellW, MeasureSpec.EXACTLY)
+            for (i in 0 until childCount) {
+                val c = getChildAt(i)
+                c.measure(cellWidth, unspecified)
+                h = maxOf(h, c.measuredHeight)
+            }
+            cellH = h
+            val cellHeight = MeasureSpec.makeMeasureSpec(cellH, MeasureSpec.EXACTLY)
+            for (i in 0 until childCount) getChildAt(i).measure(cellWidth, cellHeight)
+            setMeasuredDimension(w, cellH * MenuButtons.ROWS)
+        }
+
+        override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
+            for (i in 0 until childCount) {
+                val c = getChildAt(i)
+                val x = paddingLeft + (i % MenuButtons.COLUMNS) * cellW
+                val y = (i / MenuButtons.COLUMNS) * cellH
+                val old = before.remove(c)
+                c.layout(x, y, x + cellW, y + cellH)
+                if (old != null && (old[0] != x || old[1] != y)) {
+                    c.translationX = (old[0] - x).toFloat()
+                    c.translationY = (old[1] - y).toFloat()
+                    c.animate().translationX(0f).translationY(0f).setDuration(160).setInterpolator(DecelerateInterpolator()).start()
+                }
+            }
+            before.clear()
+        }
+
+        /** The place (0–11) under a point on the screen, or -1 well outside this page. */
+        fun indexAt(x: Float, y: Float): Int {
+            val at = IntArray(2)
+            getLocationOnScreen(at)
+            val inX = x - at[0] - paddingLeft
+            val inY = y - at[1]
+            if (inY < -dp(24) || inY > height + dp(12)) return -1
+            val col = (inX / cellW).toInt().coerceIn(0, MenuButtons.COLUMNS - 1)
+            val row = (inY / cellH).toInt().coerceIn(0, MenuButtons.ROWS - 1)
+            return row * MenuButtons.COLUMNS + col
         }
     }
 
@@ -670,65 +1160,6 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
         return item
     }
 
-    /** A switch tile: an icon over its name, filled with the accent colour when on. Tapping it leaves the menu open. */
-    private inner class Toggle(val view: TextView, val onChange: (Boolean) -> Unit) {
-        var on = false
-            private set
-        private val glyph = view.compoundDrawablesRelative[1]
-        private val fill = GradientDrawable().apply { cornerRadius = dp(16).toFloat() }
-
-        init {
-            view.background = fill
-        }
-
-        fun set(on: Boolean, enabled: Boolean = true) {
-            this.on = on
-            fill.setColor(color(if (on) Looks.accent.container else R.color.surface_alt))
-            val tint = color(if (on) Looks.accent.onContainer else R.color.text_primary)
-            view.setTextColor(tint)
-            glyph?.setTint(tint)
-            view.isEnabled = enabled
-            view.alpha = if (enabled) 1f else 0.38f
-        }
-    }
-
-    private fun toggle(row: LinearLayout, icon: Int, label: String, onChange: (Boolean) -> Unit): Toggle {
-        val view = TextView(a).apply {
-            text = label
-            textSize = 12f
-            gravity = Gravity.CENTER
-            maxLines = 1
-            ellipsize = TextUtils.TruncateAt.END
-            setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL))
-            setPadding(dp(4), dp(10), dp(4), dp(8))
-            compoundDrawablePadding = dp(5)
-            val d = ContextCompat.getDrawable(a, icon)!!.mutate()
-            d.setBounds(0, 0, dp(22), dp(22))
-            setCompoundDrawablesRelative(null, d, null, null)
-            foreground = ContextCompat.getDrawable(a, RowHolder.selectableBackground(a))
-        }
-        row.addView(view, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
-            if (row.childCount > 0) marginStart = dp(8)
-        })
-        Ui.pressable(view, 0.95f)
-        val t = Toggle(view, onChange)
-        t.set(false)
-        view.setOnClickListener {
-            if (!view.isEnabled) return@setOnClickListener
-            val on = !t.on
-            t.set(on)
-            t.onChange(on)
-        }
-        return t
-    }
-
-    /** A page of the pager: 4 columns, 2 rows (always two rows high, so the pages don't jump in size). */
-    private fun page() = LinearLayout(a).apply {
-        orientation = LinearLayout.VERTICAL
-        setPadding(dp(6), 0, dp(6), 0)
-        minimumHeight = dp(2 * 88)
-    }
-
     /** A button: a round icon with its name below, all in one view so the menu stays light. */
     private inner class Item(val view: TextView, val action: (Tab) -> Unit) {
         private var icon = 0
@@ -741,19 +1172,16 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
                 view.setCompoundDrawablesRelativeWithIntrinsicBounds(null, roundIcon(icon, active), null, null)
             }
             if (view.text.toString() != label) view.text = label
-            if (view.isEnabled != enabled) {
-                view.isEnabled = enabled
-                view.alpha = if (enabled) 1f else 0.38f
+            // While arranging, every button can be moved, even one the page can't use now.
+            val usable = enabled || arranging
+            if (view.isEnabled != usable) {
+                view.isEnabled = usable
+                view.alpha = if (usable) 1f else 0.38f
             }
         }
     }
 
-    private fun item(page: LinearLayout, icon: Int, label: String, closes: Boolean = true, action: (Tab) -> Unit): Item {
-        var row = page.getChildAt(page.childCount - 1) as? LinearLayout
-        if (row == null || row.childCount == 4) {
-            row = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
-            page.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-        }
+    private fun item(key: String, icon: Int, label: String, closes: Boolean, action: ((Tab) -> Unit)? = null): Item {
         val view = TextView(a).apply {
             gravity = Gravity.CENTER_HORIZONTAL
             setPadding(dp(2), dp(8), dp(2), dp(6))
@@ -766,28 +1194,36 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
         }
         // At least this tall, taller with large phone text (the name never gets cut).
         view.minHeight = dp(88)
-        row.addView(view, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         Ui.pressable(view, 0.92f)
-        val item = Item(view, action)
+        val item = Item(view, action ?: { tab -> run(key, tab) })
         item.set(icon, label)
         view.setOnClickListener {
+            if (arranging) {
+                arrangeSheet(key)
+                return@setOnClickListener
+            }
             val tab = TabManager.current ?: return@setOnClickListener
             if (closes) close()
             item.action(tab)
         }
+        // Holding a button arranges the menu, starting with that button in hand.
+        view.setOnLongClickListener {
+            if (dragKey == null) startDrag(key, view)
+            true
+        }
         return item
     }
 
-    private fun roundIcon(icon: Int, active: Boolean): Drawable {
+    private fun roundIcon(icon: Int, active: Boolean, size: Int = 48, fill: Int? = null): Drawable {
         val circle = GradientDrawable().apply {
             shape = GradientDrawable.OVAL
-            setColor(color(if (active) Looks.accent.container else R.color.surface_alt))
+            setColor(fill ?: color(if (active) Looks.accent.container else R.color.surface_alt))
         }
         val glyph = ContextCompat.getDrawable(a, icon)!!.mutate()
         glyph.setTint(color(if (active) Looks.accent.onContainer else R.color.text_primary))
         return LayerDrawable(arrayOf(circle, glyph)).apply {
-            setLayerSize(0, dp(48), dp(48))
-            setLayerSize(1, dp(22), dp(22))
+            setLayerSize(0, dp(size), dp(size))
+            setLayerSize(1, dp(size * 22 / 48), dp(size * 22 / 48))
             setLayerGravity(1, Gravity.CENTER)
         }
     }

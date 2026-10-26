@@ -22,7 +22,7 @@ enum class AdLevel(val key: String, val label: String, val summary: String) {
     ),
     HIGH(
         "high", "High",
-        "Also blocks pop-ups and redirects to other sites, mobile ads and ad overlays.",
+        "Also blocks pop-ups and redirects to other sites, mobile ads, ad overlays and fake login (phishing) sites.",
     ),
     EXTREME(
         "extreme", "Extreme",
@@ -59,19 +59,34 @@ object AdBlock {
 
     val uboVersion: String get() = extension?.metaData?.version ?: ""
 
+    /** uBlock Origin's "page blocked" screen (a phishing or malware site stopped before it loaded). */
+    fun isBlockedPage(url: String?): Boolean {
+        val base = extension?.metaData?.baseUrl ?: return false
+        return url != null && url.startsWith(base + "document-blocked.html")
+    }
+
+    /** The address the "page blocked" screen stopped (from its details). */
+    fun blockedPageTarget(url: String?): String? = try {
+        val details = android.net.Uri.parse(url).getQueryParameter("details")
+        details?.let { org.json.JSONObject(it).optString("url").ifEmpty { null } }
+    } catch (_: Exception) {
+        null
+    }
+
     private val BALANCED_LISTS = listOf(
         "user-filters", "ublock-filters", "ublock-badware", "ublock-privacy", "ublock-unbreak",
         "ublock-quick-fixes", "easylist", "easyprivacy", "urlhaus-1", "plowe-0",
     )
     // Every list costs memory and filtering time on a 2 GB phone, so High sticks to ads, pop-ups and
-    // overlays. Annoyance lists and the 167k-entry phishing list are only in Extreme; the malware
-    // list (urlhaus-1) is on at every level.
+    // overlays, plus (2.2) the phishing list: the engine gets no security fixes any more, so fake
+    // login pages are blocked at High too. Annoyance lists are only in Extreme; the malware list
+    // (urlhaus-1) is on at every level.
     private val HIGH_EXTRA = listOf(
-        "adguard-mobile", "adguard-popup-overlays", "adguard-mobile-app-banners",
+        "adguard-mobile", "adguard-popup-overlays", "adguard-mobile-app-banners", "curben-phishing",
     )
     private val EXTREME_EXTRA = listOf(
         "ublock-annoyances", "ublock-cookies-easylist", "fanboy-cookiemonster",
-        "curben-phishing", "adguard-generic", "adguard-spyware-url", "adguard-other-annoyances", "adguard-widgets",
+        "adguard-generic", "adguard-spyware-url", "adguard-other-annoyances", "adguard-widgets",
         "easylist-annoyances", "easylist-notifications", "easylist-newsletters", "easylist-chat",
         "adguard-social", "fanboy-social", "block-lan",
     )

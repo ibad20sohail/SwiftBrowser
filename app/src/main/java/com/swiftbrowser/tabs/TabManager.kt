@@ -60,8 +60,11 @@ object TabManager {
 
     var ui: BrowserUi? = null
 
-    /** The connection is back: the open tab's failed page loads again (other tabs when opened). */
-    private fun onOnline() {
+    /**
+     * The connection is back (or the VPN connected): the open tab's failed page loads again
+     * (other tabs when opened).
+     */
+    fun onOnline() {
         val tab = current ?: return
         if (tab.waitingForConnection && tab.session != null) {
             L.d("Connection back: loading the page again")

@@ -214,13 +214,14 @@ object Diagnostics {
         val extra = "Settings: tabs kept in memory ${prefs.maxLiveTabs}, pages drawn with ${if (prefs.softwareRendering) "CPU" else "GPU"}, " +
             "ad blocking ${AdBlock.global.label}, Lite mode ${prefs.liteMode}, sites as designed ${prefs.sitesAsDesigned}, full screen ${prefs.fullScreen}, " +
             "keep playing ${prefs.keepPlaying}, text size ${(prefs.textScale * 100).toInt()}%\n" +
-            "Tabs: ${tabs.size} open, ${tabs.count { it.session != null }} loaded; current: ${TabManager.current?.url?.take(200)}"
+            "Tabs: ${tabs.size} open, ${tabs.count { it.session != null }} loaded; current site: ${UrlUtils.siteName(TabManager.current?.url)}"
         share(activity, extra)
     }
 
     /** Opens Android's share sheet with the report as a text file (for WhatsApp, Gmail, ...). */
     fun share(activity: Activity, extra: String) {
-        val text = report(extra)
+        // Page addresses in the log are cut to their site: the report says where, not what you read.
+        val text = report(extra).replace(Regex("(https?://[^/\\s\"'<>]+)[^\\s\"'<>]*"), "$1/…")
         val dir = File(activity.filesDir, "reports").apply { mkdirs() }
         val file = File(dir, "swift-report.txt")
         val intent = Intent(Intent.ACTION_SEND).apply {

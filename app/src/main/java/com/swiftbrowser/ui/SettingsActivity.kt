@@ -68,6 +68,7 @@ class SettingsActivity : AppCompatActivity() {
         SPEED("Speed & memory", R.drawable.ic_speed),
         VIDEO("Video & downloads", R.drawable.ic_movie),
         PRIVACY("Privacy & backup", R.drawable.ic_lock),
+        VPN("VPN", R.drawable.ic_vpn),
         STORAGE("Storage", R.drawable.ic_storage),
         ABOUT("About Swift", R.drawable.ic_info),
     }
@@ -94,6 +95,17 @@ class SettingsActivity : AppCompatActivity() {
     /** What Swift keeps on the phone; null until measured. */
     private var usage: com.swiftbrowser.core.Storage.Usage? = null
     private val networkChanged: () -> Unit = { refreshAll() }
+    private val vpnChanged: () -> Unit = { refreshAll() }
+
+    /** Android's one-time "allow VPN" question. */
+    private val vpnPermission = registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()) {
+        VpnUi.onPermission(this, it.resultCode == RESULT_OK)
+    }
+
+    /** A Proton VPN setup file (.conf) to add. */
+    private val vpnFilePicker = registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) addVpnFile(uri)
+    }
 
     private val defs: List<Def> by lazy { buildDefs() }
 
@@ -138,10 +150,12 @@ class SettingsActivity : AppCompatActivity() {
         refreshAll()
         // Data saver says whether the phone is on mobile data right now.
         DataSaver.networkListeners += networkChanged
+        com.swiftbrowser.vpn.Vpn.addListener(vpnChanged)
     }
 
     override fun onPause() {
         DataSaver.networkListeners -= networkChanged
+        com.swiftbrowser.vpn.Vpn.removeListener(vpnChanged)
         super.onPause()
     }
 
@@ -410,6 +424,7 @@ class SettingsActivity : AppCompatActivity() {
             "Clear history and data",
             "Back up",
         ).joinToString(" · ")
+        Topic.VPN -> VpnUi.label().let { if (com.swiftbrowser.vpn.Vpn.locations().isEmpty()) "Change your country for free (Proton VPN)" else it }
         Topic.STORAGE -> usage?.let { "Swift uses ${UrlUtils.formatBytes(it.total)} · cache ${UrlUtils.formatBytes(it.cache)}" } ?: "Calculating…"
         Topic.ABOUT -> "Swift ${BuildConfig.VERSION_NAME} · Updates · Problem report"
     }
@@ -453,6 +468,9 @@ class SettingsActivity : AppCompatActivity() {
             switch(R.drawable.ic_home, "Home button", { "A home icon next to the address" }, checked = { prefs.showHomeButton }) {
                 prefs.showHomeButton = it
             }
+        }
+        def(Topic.LOOK, "Address bar", "Address bar swipes", "swipe up down hide show address bar toolbar gesture") {
+            action(R.drawable.ic_gesture, "Address bar swipes", { barSwipesText(prefs.barSwipes) }) { chooseBarSwipes() }
         }
         def(Topic.LOOK, "Address bar", "Hide while scrolling", "toolbar address bar url bar top") {
             switch(R.drawable.ic_toolbar, "Hide while scrolling", { "More room for the page; scroll back a little to bring it back" }, checked = { prefs.hideToolbarOnScroll }) {
@@ -674,7 +692,9 @@ class SettingsActivity : AppCompatActivity() {
             }
         }
         def(Topic.VIDEO, "Downloads", "Download folder", "storage location where save sd card") {
-            action(R.drawable.ic_folder, "Download folder", { Downloads.describe(Downloads.directory()) }) { chooseDownloadFolder() }
+            action(R.drawable.ic_folder, "Download folder", { downloadFolderText() }) {
+                if (Downloads.hasStoragePermission(this@SettingsActivity)) chooseDownloadFolder() else askStorageAccess()
+            }
         }
 
         // Privacy & storage
@@ -725,6 +745,35 @@ class SettingsActivity : AppCompatActivity() {
             }
         }
 
+        // VPN
+        def(Topic.VPN, null, "VPN", "vpn proton wireguard country ip hide location change country") {
+            custom(vpnCard(refresh))
+        }
+        def(Topic.VPN, "Locations", "VPN locations", "location server country proton") {
+            custom(vpnLocations(refresh))
+        }
+        def(Topic.VPN, "Locations", "Add a location", "add proton wireguard file conf setup") {
+            action(R.drawable.ic_add, "Add a location", { "A Proton VPN setup file (.conf), one per server" }) { addVpnLocation() }
+        }
+        def(Topic.VPN, "Locations", "How to get free locations", "proton free account download wireguard") {
+            action(R.drawable.ic_info, "How to get free locations", { "Free from Proton VPN, in a few minutes" }) { vpnHowTo() }
+        }
+        def(Topic.VPN, "Options", "Connect when Swift starts", "vpn automatic start") {
+            switch(R.drawable.ic_vpn, "Connect when Swift starts", { "If it was on when you left Swift" }, checked = { com.swiftbrowser.vpn.Vpn.connectAtStart }) {
+                com.swiftbrowser.vpn.Vpn.connectAtStart = it
+            }
+        }
+        def(Topic.VPN, "Options", "Pause pages if the VPN drops", "kill switch leak block vpn drops") {
+            switch(
+                R.drawable.ic_lock, "Pause pages if the VPN drops",
+                { "Sites never see your own connection by accident" },
+                details = "While the VPN is connecting, or if it stops (another VPN app started, or Android stopped it), " +
+                    "pages wait instead of loading over your own connection. They load by themselves once it is connected " +
+                    "again; turning the VPN off lets them load normally.",
+                checked = { com.swiftbrowser.vpn.Vpn.pauseWhenDown },
+            ) { com.swiftbrowser.vpn.Vpn.pauseWhenDown = it }
+        }
+
         // Storage
         def(Topic.STORAGE, null, "Storage used", "space size phone memory") {
             custom(storageBreakdown(refresh))
@@ -734,6 +783,11 @@ class SettingsActivity : AppCompatActivity() {
         }
         def(Topic.STORAGE, "Free up space", "Data sites stored", "site storage sites space clear") {
             action(R.drawable.ic_globe, "Data sites stored", { usage?.let { "${UrlUtils.formatBytes(it.sites)} · see and clear each site" } }) { showSiteStorage() }
+        }
+        def(Topic.STORAGE, "Free up space", "Downloads kept inside Swift", "downloads inside app folder android data deleted uninstall") {
+            action(R.drawable.ic_download, "Downloads kept inside Swift", { keptText() }) {
+                startActivity(Intent(this@SettingsActivity, DownloadsActivity::class.java))
+            }
         }
         def(Topic.STORAGE, "Free up space", "Clear sites you don't visit", "old unused sites 30 days") {
             action(R.drawable.ic_history, "Clear sites you don't visit", { "Everything of sites not visited for 30 days" }) { clearUnusedSites() }
@@ -1057,6 +1111,48 @@ class SettingsActivity : AppCompatActivity() {
             .showImmersive()
     }
 
+    /**
+     * Without storage access, downloads stay in Swift's own folder: they count as Swift's data and
+     * are deleted with Swift. Says so, with a way to allow access.
+     */
+    private fun downloadFolderText(): String =
+        if (Downloads.hasStoragePermission(this)) Downloads.describe(Downloads.directory())
+        else "Inside Swift (deleted with Swift). Tap to let Swift save to your Download folder."
+
+    private fun askStorageAccess() {
+        Dialogs.confirm(
+            this, "Save downloads to your phone's storage?",
+            "Without storage access, downloads stay inside Swift: they take up Swift's space and are deleted if Swift is uninstalled. Allow access to save them in your Download folder instead.",
+            "Allow",
+        ) {
+            if (androidx.core.app.ActivityCompat.shouldShowRequestPermissionRationale(this, android.Manifest.permission.WRITE_EXTERNAL_STORAGE) ||
+                !prefs.sp.getBoolean("storage_asked", false)
+            ) {
+                prefs.sp.edit().putBoolean("storage_asked", true).apply()
+                androidx.core.app.ActivityCompat.requestPermissions(this, arrayOf(android.Manifest.permission.WRITE_EXTERNAL_STORAGE), REQUEST_STORAGE)
+            } else {
+                // Android won't ask again ("Don't ask again" was chosen): its settings page for Swift.
+                snack("Tap Permissions, then turn on Storage")
+                startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.fromParts("package", packageName, null)))
+            }
+        }
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != REQUEST_STORAGE) return
+        refreshAll()
+        if (grantResults.firstOrNull() == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            snack("New downloads go to ${Downloads.describe(Downloads.directory())}")
+        }
+    }
+
+    private fun keptText(): String {
+        val u = usage ?: return "Calculating…"
+        if (u.kept <= 0) return "None"
+        return UrlUtils.formatBytes(u.kept) + if (Downloads.hasStoragePermission(this)) " in Swift's folder" else " · deleted if Swift is uninstalled"
+    }
+
     private fun chooseDownloadFolder() {
         val phone = android.os.Environment.getExternalStorageDirectory()
         val options = ArrayList<Pair<String, String>>()
@@ -1089,6 +1185,34 @@ class SettingsActivity : AppCompatActivity() {
         refreshAll()
         if (path.isNotBlank() && dir.path != path) snack("Swift can't write there; downloads go to ${Downloads.describe(dir)}")
         else snack("New downloads go to ${Downloads.describe(dir)}")
+    }
+
+    /** The swipes as they work where the address bar is (mirrored when it is at the bottom). */
+    private fun barSwipeLabels(): List<String> = if (prefs.toolbarAtBottom) {
+        listOf("Swipe down on it to hide it", "Swipe up from the bottom edge to show it", "Both", "Off")
+    } else {
+        listOf("Swipe up on it to hide it", "Swipe down from the top edge to show it", "Both", "Off")
+    }
+
+    private fun barSwipesText(mode: Int): String = when (mode) {
+        Prefs.SWIPE_HIDE -> barSwipeLabels()[0]
+        Prefs.SWIPE_SHOW -> barSwipeLabels()[1]
+        0 -> "Off"
+        else -> if (prefs.toolbarAtBottom) "Swipe down to hide it, up from the bottom edge to show it"
+        else "Swipe up to hide it, down from the top edge to show it"
+    }
+
+    private fun chooseBarSwipes() {
+        val modes = intArrayOf(Prefs.SWIPE_HIDE, Prefs.SWIPE_SHOW, Prefs.SWIPE_HIDE or Prefs.SWIPE_SHOW, 0)
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Address bar swipes")
+            .setSingleChoiceItems(barSwipeLabels().toTypedArray(), modes.indexOf(prefs.barSwipes).coerceAtLeast(0)) { d, which ->
+                prefs.barSwipes = modes[which]
+                d.dismiss()
+                refreshAll()
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .showImmersive()
     }
 
     private fun themeText() = when (prefs.themeMode) {
@@ -1335,6 +1459,222 @@ class SettingsActivity : AppCompatActivity() {
                 refreshAll()
                 snack("${hidden[which]} shows again")
             }
+            .setNegativeButton("Close", null)
+            .showImmersive()
+    }
+
+    // ------------------------------------------------------------------ VPN
+
+    /** The VPN's state (and what sites see), with Turn on / Turn off. */
+    private fun vpnCard(target: MutableList<() -> Unit>): View {
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(16), dp(18), dp(16))
+        }
+        val head = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val badge = Ui.iconBadge(this, R.drawable.ic_vpn, 44)
+        head.addView(badge, LinearLayout.LayoutParams(dp(44), dp(44)).apply { marginEnd = dp(14) })
+        val title = Ui.text(this, Ui.Type.TITLE, "")
+        head.addView(title, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        box.addView(head)
+        val status = Ui.text(this, Ui.Type.BODY_SECONDARY, "").apply { setPadding(0, dp(10), 0, dp(12)) }
+        box.addView(status)
+        val button = com.google.android.material.button.MaterialButton(this)
+        box.addView(button, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(52)))
+        // After the VPN dropped: Reconnect above, and Turn off here.
+        val off = com.google.android.material.button.MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
+            text = "Turn off"
+            setOnClickListener {
+                com.swiftbrowser.vpn.Vpn.turnOff()
+                snack("VPN off")
+            }
+        }
+        box.addView(off, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(52)).apply { topMargin = dp(4) })
+        val update = {
+            val vpn = com.swiftbrowser.vpn.Vpn
+            title.text = when (vpn.state) {
+                com.swiftbrowser.vpn.Vpn.State.ON -> "Connected"
+                com.swiftbrowser.vpn.Vpn.State.CONNECTING -> "Connecting…"
+                com.swiftbrowser.vpn.Vpn.State.FAILED -> if (vpn.wanted) "Not connected" else "Off"
+                com.swiftbrowser.vpn.Vpn.State.OFF -> "Off"
+            }
+            status.text = VpnUi.status()
+            val empty = vpn.locations().isEmpty()
+            val dropped = VpnUi.dropped()
+            off.visibility = if (dropped) View.VISIBLE else View.GONE
+            button.text = when {
+                empty -> "How to get free locations"
+                dropped -> "Reconnect"
+                vpn.wanted -> "Turn off"
+                else -> "Turn on"
+            }
+            button.setOnClickListener {
+                when {
+                    empty -> vpnHowTo()
+                    dropped -> VpnUi.turnOn(this, vpnPermission)
+                    vpn.wanted -> {
+                        vpn.turnOff()
+                        snack("VPN off")
+                    }
+                    else -> VpnUi.turnOn(this, vpnPermission)
+                }
+            }
+        }
+        update()
+        target += update
+        return box
+    }
+
+    /** The locations: tap one to use it (it connects at once when the VPN is on), ✕ removes it. */
+    private fun vpnLocations(target: MutableList<() -> Unit>): View {
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val update = {
+            box.removeAllViews()
+            val vpn = com.swiftbrowser.vpn.Vpn
+            val list = vpn.locations()
+            // With none yet, the card above says so.
+            val chosen = vpn.current()?.id
+            for (loc in list) {
+                if (box.childCount > 0) box.addView(Ui.divider(this, 62))
+                box.addView(LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    minimumHeight = dp(64)
+                    setPadding(dp(14), dp(8), dp(4), dp(8))
+                    background = Ui.ripple(this@SettingsActivity, null, 0)
+                    contentDescription = loc.countryName + if (loc.id == chosen) ", chosen" else ""
+                    addView(TextView(this@SettingsActivity).apply {
+                        text = loc.flag
+                        textSize = 24f
+                        gravity = Gravity.CENTER
+                    }, LinearLayout.LayoutParams(dp(38), dp(38)).apply { marginEnd = dp(14) })
+                    addView(LinearLayout(this@SettingsActivity).apply {
+                        orientation = LinearLayout.VERTICAL
+                        addView(Ui.text(this@SettingsActivity, Ui.Type.BODY, loc.countryName))
+                        addView(Ui.text(this@SettingsActivity, Ui.Type.CAPTION, loc.server + if (loc.id == chosen) " · in use" else ""))
+                    }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                    if (loc.id == chosen) {
+                        addView(ImageView(this@SettingsActivity).apply {
+                            setImageDrawable(Ui.icon(this@SettingsActivity, R.drawable.ic_check, Ui.accent(this@SettingsActivity)))
+                        }, LinearLayout.LayoutParams(dp(24), dp(24)).apply { marginEnd = dp(4) })
+                    }
+                    addView(ImageButton(this@SettingsActivity).apply {
+                        setImageDrawable(Ui.icon(this@SettingsActivity, R.drawable.ic_close, color(R.color.text_secondary)))
+                        background = Ui.rippleBorderless(this@SettingsActivity)
+                        contentDescription = "Remove ${loc.countryName}"
+                        setOnClickListener { removeVpnLocation(loc) }
+                    }, LinearLayout.LayoutParams(dp(48), dp(48)))
+                    setOnClickListener {
+                        vpn.choose(loc)
+                        if (vpn.wanted) VpnUi.turnOn(this@SettingsActivity, vpnPermission, loc)
+                        refreshAll()
+                    }
+                })
+            }
+        }
+        update()
+        target += update
+        return box
+    }
+
+    private fun removeVpnLocation(loc: com.swiftbrowser.vpn.Vpn.Location) {
+        val vpn = com.swiftbrowser.vpn.Vpn
+        val sealed = vpn.sealedFile(this, loc)
+        vpn.remove(this, loc)
+        refreshAll()
+        Messages.show(this, "Removed ${loc.countryName}", if (sealed != null) "Undo" else null) {
+            if (sealed != null) vpn.restore(this, loc, sealed)
+            refreshAll()
+        }
+    }
+
+    private fun addVpnLocation() {
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Add a location")
+            .setItems(arrayOf("Open a .conf file", "Paste the file's text")) { _, which ->
+                if (which == 0) {
+                    try {
+                        vpnFilePicker.launch(arrayOf("*/*"))
+                    } catch (_: Exception) {
+                        snack("No app on this phone can pick files")
+                    }
+                } else {
+                    pasteVpnText()
+                }
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .showImmersive()
+    }
+
+    private fun addVpnFile(uri: android.net.Uri) {
+        lifecycleScope.launch {
+            val (text, name) = withContext(Dispatchers.IO) {
+                try {
+                    val name = contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+                        if (c.moveToFirst()) c.getString(0) else null
+                    }
+                    val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                    (bytes?.takeIf { it.size < 64 * 1024 }?.let { String(it) }) to name
+                } catch (_: Exception) {
+                    null to null
+                }
+            }
+            if (text == null) {
+                snack("Couldn't read that file")
+                return@launch
+            }
+            addVpnText(text, name)
+        }
+    }
+
+    private fun addVpnText(text: String, name: String?) {
+        try {
+            val loc = com.swiftbrowser.vpn.Vpn.add(this, text, name)
+            refreshAll()
+            snack("Added ${loc.flag} ${loc.countryName}")
+        } catch (e: IllegalArgumentException) {
+            Messages.show(this, e.message ?: "That isn't a WireGuard setup file", long = true)
+        }
+    }
+
+    /** For a file opened elsewhere: its text pasted in a box (several lines). */
+    private fun pasteVpnText() {
+        val input = EditText(this).apply {
+            hint = "[Interface] … [Peer] …"
+            minLines = 6
+            maxLines = 12
+            gravity = Gravity.TOP
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE or
+                android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+            textSize = 13f
+            typeface = android.graphics.Typeface.MONOSPACE
+        }
+        val box = LinearLayout(this).apply {
+            setPadding(dp(24), dp(8), dp(24), 0)
+            addView(input, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        }
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Paste the setup file")
+            .setView(box)
+            .setPositiveButton("Add") { _, _ -> addVpnText(input.text.toString(), null) }
+            .setNegativeButton(android.R.string.cancel, null)
+            .showImmersive()
+    }
+
+    private fun vpnHowTo() {
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Free locations from Proton VPN")
+            .setMessage(
+                "1. Make a free account at protonvpn.com (no card needed).\n\n" +
+                    "2. At account.protonvpn.com, open Downloads, then WireGuard configuration.\n\n" +
+                    "3. Give it a name, choose Android, pick a free server in the country you want, and tap Create.\n\n" +
+                    "4. Tap Download: Swift offers \"Add to VPN\" when it's done (or tap the file in Swift's Downloads).\n\n" +
+                    "One file is one server; add one per country you want. Keep the files private: they work like a password.",
+            )
+            .setPositiveButton("Open Proton") { _, _ -> openInBrowser("https://account.protonvpn.com/downloads") }
             .setNegativeButton("Close", null)
             .showImmersive()
     }
@@ -1597,22 +1937,29 @@ class SettingsActivity : AppCompatActivity() {
         })
         val rows = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         box.addView(rows)
-        box.addView(TextView(this).apply {
-            text = "The app is mostly the Firefox engine and can't get smaller. The ad-block lists stay so blocking is fast."
+        val note = TextView(this).apply {
             textSize = 12.5f
             setTextColor(color(R.color.text_secondary))
             setPadding(0, dp(10), 0, 0)
-        })
-        val colors = intArrayOf(R.color.group_blue, R.color.group_red, R.color.group_green, R.color.group_yellow, R.color.group_purple, R.color.group_grey)
+        }
+        box.addView(note)
+        val colors = intArrayOf(
+            R.color.group_blue, R.color.group_red, R.color.group_green, R.color.group_yellow,
+            R.color.group_purple, R.color.group_cyan, R.color.group_pink, R.color.group_grey,
+        )
         val update = {
             val u = usage
             total.text = if (u == null) "Calculating…" else "Swift uses ${UrlUtils.formatBytes(u.total)}"
+            // Android's App info lists the cache on its own, outside its Total.
+            note.text = (if (u == null) "" else "Android's App info shows ${UrlUtils.formatBytes(u.androidTotal)} for Swift, plus the cache on its own line. ") +
+                "The app is mostly the Firefox engine and can't get smaller; the ad-block lists stay so blocking is fast. Old update files are deleted by themselves."
             bar.removeAllViews()
             rows.removeAllViews()
             if (u != null) {
                 val parts = listOf(
                     "The app" to u.app, "Ad-block lists" to u.adBlock, "Data sites stored" to u.sites,
                     "Cache" to u.cache, "Engine data" to u.engine, "Tabs, history and pictures" to u.swift,
+                    "Downloads inside Swift" to u.kept, "Other" to u.other,
                 )
                 parts.forEachIndexed { i, (label, bytes) ->
                     val c = color(colors[i])
@@ -1754,7 +2101,7 @@ class SettingsActivity : AppCompatActivity() {
             "black" to listOf("dark"),
             "privacy" to listOf("clear", "secure", "cookie", "incognito", "site settings"),
             "password" to listOf("site settings", "clear"),
-            "location" to listOf("site settings"),
+            "location" to listOf("site settings", "vpn"),
             "desktop" to listOf("site settings", "desktop"),
             "youtube" to listOf("playing", "background", "designed", "autoplay", "video"),
             "film" to listOf("continue", "video", "download"),
@@ -1766,9 +2113,13 @@ class SettingsActivity : AppCompatActivity() {
             "search" to listOf("search engine", "suggestions"),
             "google" to listOf("search engine", "suggestions"),
             "update" to listOf("updates", "filter lists"),
+            "country" to listOf("vpn", "country"),
+            "ip" to listOf("vpn"),
+            "proton" to listOf("vpn"),
         )
 
         private const val STATE_TOPIC = "topic"
         private const val STATE_SCROLL = "scroll"
+        private const val REQUEST_STORAGE = 41
     }
 }

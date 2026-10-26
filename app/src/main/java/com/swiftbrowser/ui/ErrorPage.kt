@@ -22,7 +22,12 @@ object ErrorPage {
     private const val ICON_OTHER = "M11 15h2v2h-2zm0-8h2v6h-2zm.99-5C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8z"
 
     fun create(uri: String?, error: WebRequestError): String {
-        val (title, message) = describe(error)
+        val paused = com.swiftbrowser.engine.Engine.networkBlocked && error.category == WebRequestError.ERROR_CATEGORY_PROXY
+        val (title, message) = if (paused) {
+            "Waiting for the VPN" to "Swift holds pages back until the VPN is connected, so sites never see your own connection. Turn the VPN off to browse without it."
+        } else {
+            describe(error)
+        }
         val kind = when {
             error.category == WebRequestError.ERROR_CATEGORY_SECURITY || error.category == WebRequestError.ERROR_CATEGORY_SAFEBROWSING -> Kind.SECURITY
             error.code in OFFLINE_CODES -> Kind.OFFLINE
@@ -36,7 +41,11 @@ object ErrorPage {
             Kind.SECURITY -> ICON_SECURITY
             Kind.OTHER -> ICON_OTHER
         }
-        val waiting = if (kind == Kind.OFFLINE) "<p class=\"wait\">This page loads by itself when you're back online.</p>" else ""
+        val waiting = when {
+            paused -> "<p class=\"wait\">This page loads by itself when the VPN is connected.</p>"
+            kind == Kind.OFFLINE -> "<p class=\"wait\">This page loads by itself when you're back online.</p>"
+            else -> ""
+        }
         val extra = if (certError) {
             "<button class=\"secondary\" onclick=\"document.addCertException(true).then(function(){location.reload()})\">" +
                 "Open anyway (not safe)</button>"

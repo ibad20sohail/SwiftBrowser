@@ -237,7 +237,9 @@ class TabDelegates(private val tab: Tab) :
 
     override fun onLoadError(session: GeckoSession, uri: String?, error: WebRequestError): GeckoResult<String>? {
         // No connection (or it dropped): the page tries again by itself once there is one.
-        tab.waitingForConnection = error.code in CONNECTION_ERRORS
+        // Failed while pages were paused for the VPN (Engine.setNetworkBlocked): loads once it's connected.
+        tab.waitingForConnection = error.code in CONNECTION_ERRORS ||
+            (com.swiftbrowser.engine.Engine.networkBlocked && error.category == WebRequestError.ERROR_CATEGORY_PROXY)
         return GeckoResult.fromValue(ErrorPage.create(uri, error))
     }
 

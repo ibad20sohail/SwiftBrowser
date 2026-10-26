@@ -6,3 +6,6 @@ keystore/
 *.iml
 .idea/
 *.apk
+
+# Private VPN setup files (contain private keys): never in Git.
+private/

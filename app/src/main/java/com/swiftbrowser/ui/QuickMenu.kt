@@ -49,6 +49,7 @@ object MenuButtons {
         Button("reader", R.drawable.ic_reader, "Reader view"),
         Button("save", R.drawable.ic_offline, "Save offline"),
         Button("recent", R.drawable.ic_reopen, "Recent tabs"),
+        Button("vpn", R.drawable.ic_vpn, "VPN"),
         Button("home_screen", R.drawable.ic_home_add, "Add to Home"),
         Button("ad_blocker", R.drawable.ic_shield, "Ad blocker"),
         Button("speed", R.drawable.ic_speed, "Speed"),
@@ -207,9 +208,6 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
 
         dots.orientation = LinearLayout.HORIZONTAL
         dots.gravity = Gravity.CENTER
-        repeat(2) {
-            dots.addView(View(a), LinearLayout.LayoutParams(dp(6), dp(6)).apply { setMargins(dp(3), 0, dp(3), 0) })
-        }
         content.addView(dots, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(10)).apply { topMargin = dp(2) })
         pager.reset()
 
@@ -237,6 +235,7 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
             "reader" -> PageActions.reader(a, tab)
             "save" -> PageActions.savePage(a, tab)
             "recent" -> Sheets.recentlyClosed(a)
+            "vpn" -> a.showVpnSheet()
             "home_screen" -> PageActions.addToHomeScreen(a, tab)
             "ad_blocker" -> Sheets.shield(a)
             "speed" -> Sheets.speed(a, tab)
@@ -259,15 +258,29 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
         items.clear()
         pager.clear()
         val first = page()
-        val second = page()
         for (key in chosen) addItem(first, key)
         item(first, R.drawable.ic_more, "More", closes = false) { pager.next() }
-        for (b in MenuButtons.all) if (b.key !in chosen) addItem(second, b.key)
-        for (p in listOf(first, second)) {
+        // The others, two rows a page: 7 and More while more follow, up to 8 on the last.
+        val pages = mutableListOf(first)
+        val rest = MenuButtons.all.map { it.key }.filter { it !in chosen }
+        var i = 0
+        while (i < rest.size) {
+            val p = page()
+            val take = if (rest.size - i > 8) 7 else rest.size - i
+            for (key in rest.subList(i, i + take)) addItem(p, key)
+            i += take
+            if (i < rest.size) item(p, R.drawable.ic_more, "More", closes = false) { pager.next() }
+            pages += p
+        }
+        for (p in pages) {
             // A last row with fewer buttons keeps them in their columns.
             val last = p.getChildAt(p.childCount - 1) as? LinearLayout ?: continue
             while (last.childCount < 4) last.addView(View(a), LinearLayout.LayoutParams(0, dp(88), 1f))
             pager.addPage(p)
+        }
+        dots.removeAllViews()
+        repeat(pages.size) {
+            dots.addView(View(a), LinearLayout.LayoutParams(dp(6), dp(6)).apply { setMargins(dp(3), 0, dp(3), 0) })
         }
         pager.reset()
     }
@@ -373,6 +386,8 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
         items["hide"]?.set(R.drawable.ic_block, "Tap to hide", enabled = http && page && AdBlock.global != AdLevel.OFF)
         val timer = com.swiftbrowser.media.SleepTimer.label()
         items["sleep"]?.set(R.drawable.ic_timer, timer ?: "Sleep timer", active = timer != null)
+        val vpnOn = com.swiftbrowser.vpn.Vpn.state == com.swiftbrowser.vpn.Vpn.State.ON
+        items["vpn"]?.set(R.drawable.ic_vpn, if (vpnOn) "VPN · " + (com.swiftbrowser.vpn.Vpn.current()?.country ?: "on") else "VPN", active = vpnOn)
     }
 
     private fun toggleBookmark(tab: Tab) {

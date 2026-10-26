@@ -5,7 +5,7 @@ ad-heavy sites on an old phone (Moto E4, Android 7.1.2).
 
 ## Download
 
-**[Download Swift 2.0 (APK)](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v2.0/Swift-2.0.apk)**
+**[Download Swift 2.1 (APK)](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v2.1/Swift-2.1.apk)**
 for Android 7 and newer (32-bit ARM, about 150 MB). It installs over an earlier Swift and keeps
 tabs and settings. From 1.4 on, Swift can also update itself: Settings → Check for updates.
 
@@ -20,6 +20,19 @@ rows, buttons and short animations everywhere, plain words instead of technical 
 welcome on the first start.
 
 - **Firefox engine (GeckoView 143)**: the newest engine that still runs on Android 7.
+- **Free VPN for Swift only** (2.1, Settings → VPN, or VPN in the menu): change the country sites
+  see you in, with free setup files from Proton VPN (WireGuard, one file per server; the how-to is
+  in Settings). Only Swift's own traffic goes through it; other apps keep their connection.
+  - Add a location by downloading its `.conf` file in Swift ("Add to VPN"), by tapping it in
+    Downloads, or from a file or pasted text. Its key is kept encrypted with a key in Android's
+    keystore, the downloaded copy is deleted, and VPN files are never in backups.
+  - Tap a location to connect or switch to it; Swift waits for the server to answer before it says
+    "Connected" and shows the address and city sites see.
+  - **Pause pages if the VPN drops** (on by default): while the VPN should be on but isn't, pages
+    wait ("Waiting for the VPN") instead of loading over your own connection, and load by
+    themselves when it reconnects. Reconnect or Turn off from the menu, the "VPN off" mark in the
+    address bar or Settings.
+  - **Connect when Swift starts**, if it was on when you left.
 - **Ad blocking with four levels** (Off / Balanced / High / Extreme), set for all sites or per site.
   - Uses a bundled **uBlock Origin**, with the app switching its filter lists and rules.
   - Has its own **pop-up and redirect blocker**, which stops the "tap anywhere opens an ad" trick.
@@ -81,6 +94,9 @@ welcome on the first start.
   search suggestions, your **open tabs** (switch to them), bookmarks and history, with ↖ to keep
   typing from a suggestion; it also offers a link you just copied. Hold the address for Paste and
   go, Copy, Share and Edit.
+- **Address bar swipes** (2.1, Settings → Look & screen): swipe up on the address bar to hide it,
+  and down from the top edge of the screen to bring it back (mirrored for a bar at the bottom).
+  Scrolling also brings it back. Swipe up, swipe down, both or off.
 - **Long press** on a link, picture or video: a compact sheet with what it is (the site's name;
   tap for the whole address; a small preview of a picture), the main actions as big buttons (new,
   background or incognito tab, share; for pictures open, save, share, copy) and the rest as rows.
@@ -130,8 +146,11 @@ welcome on the first start.
   Download, Movies, Swift's folder on the SD card, or any folder on the phone. Big downloads can
   wait for Wi-Fi. Downloads cut off by closing Swift go on by themselves, failed ones are tried
   again when the connection comes back, and a tab that only led to a download closes.
-- **Storage** (Settings): what Swift keeps on the phone, part by part, the sites that stored data
-  (clear each one), and clearing sites you haven't visited for 30 days. The page cache is capped at
+- **Storage** (Settings): what Swift keeps on the phone, part by part, counted the way Android
+  counts it (the app with its compiled code, its data, and its own folder on the phone storage, where
+  downloads go without storage permission), the sites that stored data (clear each one), and
+  clearing sites you haven't visited for 30 days. Update files are deleted by themselves once
+  installed. The page cache is capped at
   20 MB and uBlock Origin keeps its compiled lists once instead of twice. When the phone is low on
   space, Swift empties its caches by itself (at most once a day).
 - **Settings** in the app's own look: the most used switches as tiles, nine topics that show
@@ -201,6 +220,7 @@ signed with the same key.
 | `.../adblock` | Ad-block levels, the uBlock Origin bridge and the pop-up/redirect policy |
 | `.../media` | Bridge to the helper extension: video detection, playback speed, tap tracking |
 | `.../download` | Download manager, HLS downloader, TS→MP4 remuxer, notification service |
+| `.../vpn` | The VPN: WireGuard tunnel for Swift only, locations, encrypted setup files |
 | `.../ui` | Activities, home page, tab grid, settings, bottom sheets and dialogs |
 | `app/src/main/assets/extensions/ublock` | uBlock Origin 1.75.0, patched by `tools/update_ublock.py` |
 | `app/src/main/assets/extensions/helper` | Small built-in extension used by the app |
@@ -212,5 +232,6 @@ To update uBlock Origin, run `python tools/update_ublock.py --version X.Y.Z`. If
 ## Licenses
 
 - GeckoView is MPL 2.0.
+- The WireGuard tunnel library (`com.wireguard.android:tunnel`) is Apache 2.0.
 - uBlock Origin is GPLv3; the bundled copy is modified only by adding `js/swift-bridge.js` and two
   permissions to its manifest.

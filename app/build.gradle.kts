@@ -21,8 +21,8 @@ android {
         applicationId = "com.swiftbrowser.app"
         minSdk = 24
         targetSdk = 35
-        versionCode = 10
-        versionName = "2.0"
+        versionCode = 11
+        versionName = "2.1"
     }
 
     flavorDimensions += "abi"
@@ -65,6 +65,8 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+        // Newer Java classes (java.time) that the WireGuard library uses and Android 7 lacks.
+        isCoreLibraryDesugaringEnabled = true
     }
 
     buildFeatures {
@@ -116,6 +118,10 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.9.2")
     implementation("com.google.android.material:material:1.12.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
+
+    // The VPN (2.1): the official WireGuard tunnel (Apache-2.0), for Proton VPN's free servers.
+    implementation("com.wireguard.android:tunnel:1.0.20260102")
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
 
     // Reports leaked screens and objects in test builds on the PC emulator only.
     emuDebugImplementation("com.squareup.leakcanary:leakcanary-android:2.14")

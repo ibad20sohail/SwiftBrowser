@@ -237,6 +237,52 @@ object Engine {
         GeckoPreferenceController.setGeckoPrefs(privacyPrefs(SwiftApp.prefs))
     }
 
+    /** Whether pages are held back now (see [setNetworkBlocked]). */
+    @Volatile var networkBlocked = false
+        private set
+
+    /**
+     * While the VPN should be on but isn't (connecting, or it dropped), nothing leaves the pages:
+     * every request goes to a proxy that doesn't exist (nothing listens on port 9 of the phone), so
+     * it fails at once, names included (no DNS lookups outside), and WebRTC may only use that proxy.
+     * Afterwards the engine's own settings come back.
+     */
+    fun setNetworkBlocked(blocked: Boolean) {
+        if (blocked == networkBlocked) return
+        networkBlocked = blocked
+        if (blocked) {
+            GeckoPreferenceController.setGeckoPrefs(
+                listOf(
+                    SetGeckoPreference.setStringPref("network.proxy.http", "127.0.0.1", BRANCH),
+                    SetGeckoPreference.setIntPref("network.proxy.http_port", 9, BRANCH),
+                    SetGeckoPreference.setStringPref("network.proxy.ssl", "127.0.0.1", BRANCH),
+                    SetGeckoPreference.setIntPref("network.proxy.ssl_port", 9, BRANCH),
+                    SetGeckoPreference.setStringPref("network.proxy.socks", "127.0.0.1", BRANCH),
+                    SetGeckoPreference.setIntPref("network.proxy.socks_port", 9, BRANCH),
+                    SetGeckoPreference.setBoolPref("network.proxy.socks_remote_dns", true, BRANCH),
+                    SetGeckoPreference.setStringPref("network.proxy.no_proxies_on", "", BRANCH),
+                    SetGeckoPreference.setBoolPref("network.proxy.allow_hijacking_localhost", true, BRANCH),
+                    SetGeckoPreference.setBoolPref("media.peerconnection.ice.proxy_only", true, BRANCH),
+                    SetGeckoPreference.setIntPref("network.proxy.type", 1, BRANCH),
+                ),
+            )
+        } else {
+            for (name in BLOCK_PREFS) GeckoPreferenceController.clearGeckoUserPref(name)
+        }
+    }
+
+    /** At start: pages are never held back by a previous run (these settings would survive it). */
+    fun resetNetworkBlock() {
+        networkBlocked = true
+        setNetworkBlocked(false)
+    }
+
+    private val BLOCK_PREFS = listOf(
+        "network.proxy.type", "network.proxy.http", "network.proxy.http_port", "network.proxy.ssl", "network.proxy.ssl_port",
+        "network.proxy.socks", "network.proxy.socks_port", "network.proxy.socks_remote_dns", "network.proxy.no_proxies_on",
+        "network.proxy.allow_hijacking_localhost", "media.peerconnection.ice.proxy_only",
+    )
+
     fun setDrawSpeedMeter(enabled: Boolean) {
         GeckoPreferenceController.setGeckoPrefs(
             listOf(

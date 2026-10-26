@@ -671,6 +671,10 @@ class DownloadsActivity : ListActivity() {
     }
 
     private fun open(d: Downloads.Item) {
+        if (VpnUi.isSetupFile(d)) {
+            VpnUi.addDownloaded(this, d)
+            return
+        }
         if (PageActions.isSavedPage(d)) {
             // PDFs (pages saved for offline reading among them) open in Swift's own viewer.
             startActivity(

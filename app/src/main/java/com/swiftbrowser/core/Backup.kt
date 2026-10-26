@@ -28,7 +28,7 @@ object Backup {
     private val SKIP_SETTINGS = setOf(
         "prefs_version", Prefs.LAST_UPDATE_CHECK, "ubo_last_update_check", Prefs.CURRENT_PROFILE,
         Prefs.LAST_AUTO_BACKUP, Prefs.LAST_LOW_SPACE_CLEANUP, Prefs.SEEN_VERSION, Prefs.WELCOME_DONE,
-    )
+    ) + com.swiftbrowser.vpn.Vpn.PREF_KEYS
 
     private const val AUTO_PREFIX = "Swift backup (automatic)"
     private const val WEEK = 7L * 24 * 3600 * 1000

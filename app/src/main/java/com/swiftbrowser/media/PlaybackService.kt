@@ -319,13 +319,14 @@ object Playback {
         return !dismissed && t.mediaSession != null && t in TabManager.tabs
     }
 
-    fun displayTitle(t: Tab): String = title?.takeIf { it.isNotBlank() } ?: t.displayTitle
+    // An incognito tab shows nothing about its page (the notification is also on the lock screen).
+    fun displayTitle(t: Tab): String = if (t.incognito) "Playing in an incognito tab" else title?.takeIf { it.isNotBlank() } ?: t.displayTitle
 
-    fun subtitle(t: Tab): String =
+    fun subtitle(t: Tab): String = if (t.incognito) "Swift" else
         listOfNotNull(artist?.takeIf { it.isNotBlank() }, UrlUtils.host(t.url)?.removePrefix("www.")).joinToString(" • ")
 
-    /** The page's own artwork, or else the tab's picture or the site's icon. */
-    fun artwork(t: Tab): Bitmap? = art ?: com.swiftbrowser.tabs.Thumbnails.cached(t) ?: Favicons.cached(t.url)
+    /** The page's own artwork, or else the tab's picture or the site's icon (none in incognito). */
+    fun artwork(t: Tab): Bitmap? = if (t.incognito) null else art ?: com.swiftbrowser.tabs.Thumbnails.cached(t) ?: Favicons.cached(t.url)
 
     fun onPlayingChanged(ctx: Context, t: Tab) {
         if (t.playing) {

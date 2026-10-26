@@ -314,6 +314,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         // almost full.
         handler.postDelayed({ if (!isFinishing) startupChores() }, 20_000)
         Downloads.addListener(updateDownloadListener)
+        Downloads.all().filter { VpnUi.isSetupFile(it) }.mapTo(setupFilesSeen) { it.id }
+        Downloads.addListener(setupFileListener)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -337,8 +339,75 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             val freed = withContext(Dispatchers.IO) { com.swiftbrowser.core.Storage.freeSpaceIfLow(this@MainActivity) }
             if (freed > 0) snack("Your phone is almost full: Swift freed ${UrlUtils.formatBytes(freed)} of saved files", long = true)
             withContext(Dispatchers.IO) { com.swiftbrowser.core.Backup.autoBackupIfDue(this@MainActivity) }
+            // Update APKs stay in the download folder after installing (about 150 MB each).
+            val oldApks = withContext(Dispatchers.IO) { com.swiftbrowser.core.Updates.deleteOldApks(this@MainActivity) }
+            if (oldApks > 0) snack("Deleted the old update file (${UrlUtils.formatBytes(oldApks)})")
         }
     }
+
+    // ------------------------------------------------------------------ VPN (2.1)
+
+    /** Android's one-time "allow VPN" question. */
+    private val vpnPermission = registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()) {
+        VpnUi.onPermission(this, it.resultCode == RESULT_OK)
+    }
+    private var shownVpnState: com.swiftbrowser.vpn.Vpn.State? = null
+    private val vpnListener: () -> Unit = { onVpnChanged() }
+
+    /** Setup files (.conf) already finished: each new one is offered as a VPN location once. */
+    private val setupFilesSeen = HashSet<Long>()
+    private val setupFileListener: () -> Unit = {
+        for (d in Downloads.all()) {
+            if (!VpnUi.isSetupFile(d) || !setupFilesSeen.add(d.id)) continue
+            snack("Downloaded ${d.fileName}", "Add to VPN", long = true) { VpnUi.addDownloaded(this, d) }
+        }
+    }
+
+    fun showVpnSheet() {
+        VpnUi.sheet(this, vpnPermission) {
+            openUrlLauncher.launch(Intent(this, SettingsActivity::class.java).putExtra(SettingsActivity.EXTRA_TOPIC, "VPN"))
+        }
+    }
+
+    private fun onVpnChanged() {
+        val vpn = com.swiftbrowser.vpn.Vpn
+        val state = vpn.state
+        val before = shownVpnState
+        shownVpnState = state
+        updateVpnBadge()
+        if (before == null || before == state) return
+        when (state) {
+            com.swiftbrowser.vpn.Vpn.State.ON -> {
+                val where = vpn.current()?.let { "${it.flag} ${it.countryName}" } ?: ""
+                TabManager.onOnline()
+                snack("VPN on · $where", "Reload") { current?.let { TabManager.reload(it) } }
+            }
+            com.swiftbrowser.vpn.Vpn.State.FAILED -> if (vpn.wanted) snack(vpn.error ?: "The VPN isn't connected", "VPN") { showVpnSheet() }
+            else -> Unit
+        }
+    }
+
+    /** "VPN" at the end of the address while it is on (or should be); tapping it opens the VPN sheet. */
+    private fun updateVpnBadge() {
+        val badge = findViewById<TextView>(R.id.vpn_badge)
+        val vpn = com.swiftbrowser.vpn.Vpn
+        val (show, fill, ink, text) = when {
+            editing -> Quad(false, 0, 0, "")
+            vpn.state == com.swiftbrowser.vpn.Vpn.State.ON -> Quad(true, Looks.accent.container, Looks.accent.onContainer, "VPN")
+            vpn.wanted && vpn.state == com.swiftbrowser.vpn.Vpn.State.CONNECTING -> Quad(true, R.color.surface_alt, R.color.text_secondary, "VPN…")
+            vpn.wanted -> Quad(true, R.color.danger_container, R.color.on_danger_container, "VPN off")
+            else -> Quad(false, 0, 0, "")
+        }
+        badge.visibility = if (show) View.VISIBLE else View.GONE
+        if (!show) return
+        badge.text = text
+        badge.setTextColor(color(ink))
+        badge.background = Ui.shape(this, color(fill), 12)
+        badge.contentDescription = VpnUi.label()
+        badge.setOnClickListener { showVpnSheet() }
+    }
+
+    private data class Quad(val show: Boolean, val fill: Int, val ink: Int, val text: String)
 
     /** The accent this screen was drawn with: a new one (chosen in Settings) redraws it. */
     private var appliedAccent: Accent? = null
@@ -388,10 +457,12 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     }
 
     override fun onDestroy() {
+        com.swiftbrowser.vpn.Vpn.removeListener(vpnListener)
         handler.removeCallbacksAndMessages(null)
         ptrSpin?.cancel()
         AdBlock.removeListener(adListener)
         Downloads.removeListener(updateDownloadListener)
+        Downloads.removeListener(setupFileListener)
         if (TabManager.ui === this) TabManager.ui = null
         if (Engine.activityDelegate != null) Engine.activityDelegate = null
         home.listener = null
@@ -450,6 +521,9 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         // Drawn above the pull-to-refresh circle, without a shadow on the page.
         appBar.elevation = dp(8f)
         appBar.outlineProvider = null
+        com.swiftbrowser.vpn.Vpn.addListener(vpnListener)
+        shownVpnState = com.swiftbrowser.vpn.Vpn.state
+        updateVpnBadge()
         // The toolbar's buttons give the same small press as every button in the app.
         for (v in listOf<View>(homeBtn, findViewById(R.id.tabs_btn), menuBtn, videoBtn, profileChip.parent as View)) Ui.pressable(v, 0.88f)
     }
@@ -467,7 +541,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         }
         intent.getStringExtra(EXTRA_OPEN_FILE)?.let { path ->
             intent.removeExtra(EXTRA_OPEN_FILE)
-            openFileInTab(path)
+            // Only Swift's own downloads (another app could otherwise make Swift show its private files).
+            if (Downloads.all().any { it.filePath == path }) openFileInTab(path)
             return
         }
         val url = when (intent.action) {
@@ -478,7 +553,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             Intent.ACTION_WEB_SEARCH -> intent.getStringExtra("query")?.let { UrlUtils.searchUrl(it) }
             else -> null
         }
-        if (!url.isNullOrBlank()) {
+        // Other apps can send Swift only web addresses (not file:, content: or javascript: ones).
+        if (!url.isNullOrBlank() && UrlUtils.isHttp(url)) {
             stopEditing()
             switcher.close()
             TabManager.newTab(url, incognito = false)
@@ -687,6 +763,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     }
 
     private fun updateUrlButtons() {
+        updateVpnBadge()
         val empty = urlEdit.text.isNullOrEmpty()
         urlClear.visibility = if (editing && !empty) View.VISIBLE else View.GONE
         urlMic.visibility = if (editing && empty) View.VISIBLE else View.GONE
@@ -1546,6 +1623,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
     private fun applyToolbarShown(shown: Float) {
         toolbarShown = shown
+        if (shown >= toolbarPx) hiddenBySwipe = false
         if (bottomBar) {
             appBar.translationY = toolbarPx - shown
             gestureLayer.translationY = 0f
@@ -1594,6 +1672,15 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         if (byUser) lastUserScrollAt = SystemClock.uptimeMillis()
         val last = lastScrollY
         lastScrollY = scrollY
+        if (hiddenBySwipe && !toolbarWanted) {
+            // Hidden by a swipe: the page's own shift right after doesn't bring it back; scrolling does
+            // (any scroll when the bar doesn't hide while scrolling, else as usual: scrolling back up).
+            if (!byUser || SystemClock.uptimeMillis() - swipeHiddenAt < 500) return
+            if (!prefs.hideToolbarOnScroll) {
+                if (followsFinger()) settleToolbar(true) else showToolbar()
+                return
+            }
+        }
         if (followsFinger()) {
             // Back at the top after a fling upwards (not the engine making up for the toolbar's own move).
             if (!toolbarWanted && scrollY <= toolbarPx / 2f && last >= 0f && scrollY < last && !gestureLayer.fingerDown &&
@@ -2363,17 +2450,124 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         tabSwipe = TabSwipe(host, findViewById(R.id.swipe_peek), findViewById(R.id.swipe_peek_image), findViewById(R.id.swipe_peek_title))
     }
 
-    override fun dispatchTouchEvent(ev: MotionEvent): Boolean = when (tabSwipe.onTouchEvent(ev)) {
-        TabSwipe.Result.PASS -> super.dispatchTouchEvent(ev)
-        TabSwipe.Result.STARTED -> {
-            // The address bar and buttons under the finger let go of the touch.
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        // An address bar swipe takes the rest of its gesture.
+        if (barSwipeTaken) {
+            // Taken early on the bar (see barSwipe): it still hides the bar once long enough.
+            barSwipe(ev)
+            if (ev.actionMasked == MotionEvent.ACTION_UP || ev.actionMasked == MotionEvent.ACTION_CANCEL) barSwipeTaken = false
+            return true
+        }
+        if (barSwipe(ev)) {
+            barSwipeTaken = true
+            // The page, the address bar and a tab swipe that may have started let go of the touch.
             val cancel = MotionEvent.obtain(ev)
             cancel.action = MotionEvent.ACTION_CANCEL
+            tabSwipe.onTouchEvent(cancel)
             super.dispatchTouchEvent(cancel)
             cancel.recycle()
-            true
+            return true
         }
-        TabSwipe.Result.CONSUMED -> true
+        return when (tabSwipe.onTouchEvent(ev)) {
+            TabSwipe.Result.PASS -> super.dispatchTouchEvent(ev)
+            TabSwipe.Result.STARTED -> {
+                // The address bar and buttons under the finger let go of the touch.
+                val cancel = MotionEvent.obtain(ev)
+                cancel.action = MotionEvent.ACTION_CANCEL
+                super.dispatchTouchEvent(cancel)
+                cancel.recycle()
+                true
+            }
+            TabSwipe.Result.CONSUMED -> true
+        }
+    }
+
+    // ------------------------------------------------------------------ address bar swipes
+
+    /** 1: a swipe on the bar may hide it; 2: a swipe in from the screen's edge may show it. */
+    private var barSwipeMode = 0
+    private var barSwipeTaken = false
+    private var barSwipeX = 0f
+    private var barSwipeY = 0f
+
+    /** The bar was hidden by a swipe (only scrolling, or a swipe from the edge, brings it back). */
+    private var hiddenBySwipe = false
+    private var swipeHiddenAt = 0L
+
+    /**
+     * Settings → Look & screen → Address bar swipes: swiping up on the address bar hides it (down
+     * when it is at the bottom), only while it shows; swiping down from the top edge of the screen
+     * (up from the bottom edge) shows it again, only while it is hidden. Sideways swipes stay tab
+     * swipes. True when [ev] completes such a swipe.
+     */
+    private fun barSwipe(ev: MotionEvent): Boolean {
+        when (ev.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                barSwipeMode = 0
+                val tab = current ?: return false
+                val mode = prefs.barSwipes
+                if (mode == 0 || editing || fullscreenTab != null || switcher.isOpen || quickMenu.isOpen || tab.showsHome ||
+                    startup.visibility == View.VISIBLE || findBar.visibility == View.VISIBLE
+                ) {
+                    return false
+                }
+                barSwipeX = ev.rawX
+                barSwipeY = ev.rawY
+                barSwipeMode = when {
+                    mode and Prefs.SWIPE_HIDE != 0 && toolbarWanted && toolbarShown >= toolbarPx && within(appBar, ev) -> 1
+                    mode and Prefs.SWIPE_SHOW != 0 && toolbarShown <= 0f && atScreenEdge(ev) -> 2
+                    else -> 0
+                }
+                return false
+            }
+            MotionEvent.ACTION_MOVE -> {
+                if (barSwipeMode == 0) return false
+                val dx = ev.rawX - barSwipeX
+                val dy = ev.rawY - barSwipeY
+                // Hiding goes away from the bar's edge of the screen, showing towards the page.
+                val along = when (barSwipeMode) {
+                    1 -> if (bottomBar) dy else -dy
+                    else -> if (bottomBar) -dy else dy
+                }
+                val slop = android.view.ViewConfiguration.get(this).scaledTouchSlop
+                if ((abs(dx) > slop && abs(dx) > abs(dy)) || along < -slop) {
+                    // Sideways (a tab swipe) or the other way: not an address bar swipe.
+                    barSwipeMode = 0
+                    return false
+                }
+                if (along > dp(28f) && abs(dy) > abs(dx) * 1.5f) {
+                    val hide = barSwipeMode == 1
+                    barSwipeMode = 0
+                    hiddenBySwipe = hide
+                    if (hide) swipeHiddenAt = SystemClock.uptimeMillis()
+                    if (followsFinger()) settleToolbar(!hide) else setToolbarWanted(!hide)
+                    Haptics.tick(appBar)
+                    return true
+                }
+                // On the bar, a clear move up is already the swipe: the address lets go of the touch, so
+                // a slow swipe doesn't also open its long-press menu.
+                if (barSwipeMode == 1 && !barSwipeTaken && along > slop && abs(dy) > abs(dx) * 1.5f) return true
+                return false
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL, MotionEvent.ACTION_POINTER_DOWN -> barSwipeMode = 0
+        }
+        return false
+    }
+
+    private fun within(v: View, ev: MotionEvent): Boolean {
+        val at = IntArray(2)
+        v.getLocationOnScreen(at)
+        return ev.rawX >= at[0] && ev.rawX < at[0] + v.width && ev.rawY >= at[1] && ev.rawY < at[1] + v.height
+    }
+
+    /** A thin strip at the page's top edge (bottom edge when the address bar is at the bottom). */
+    private fun atScreenEdge(ev: MotionEvent): Boolean {
+        val page = findViewById<View>(R.id.content)
+        val at = IntArray(2)
+        page.getLocationOnScreen(at)
+        val strip = dp(32f)
+        return if (bottomBar) ev.rawY > at[1] + page.height - strip && ev.rawY <= at[1] + page.height
+        else ev.rawY >= at[1] && ev.rawY < at[1] + strip
     }
 
     override fun onPageDrawn(tab: Tab, contentful: Boolean) {

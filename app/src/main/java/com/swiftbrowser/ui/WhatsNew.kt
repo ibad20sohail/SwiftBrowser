@@ -23,14 +23,10 @@ object WhatsNew {
     private class Item(val icon: Int, val title: String, val text: String)
 
     private val NEW = listOf(
-        Item(R.drawable.ic_palette, "A fresh new look", "Every screen redone, with your choice of colour and a theme that turns dark at night."),
-        Item(R.drawable.ic_news, "News on the home page", "Headlines from your country. Pick topics or add your own news sites."),
-        Item(R.drawable.ic_more, "A tidier menu", "Choose the buttons you use most; the others are under More."),
-        Item(R.drawable.ic_delete, "Undo instead of \"Are you sure?\"", "Swipe away history, bookmarks and downloads, and undo if you change your mind."),
-        Item(R.drawable.ic_globe, "A smarter address bar", "It shows the site's name, warns about sites that aren't secure, and finds your open tabs."),
-        Item(R.drawable.ic_headphones, "Better for music and videos", "Lock screen controls, headset buttons, a pause when headphones come out, and a sleep timer that fades out."),
-        Item(R.drawable.ic_download, "Downloads that don't give up", "They go on after a restart, and when the connection comes back."),
-        Item(R.drawable.ic_reader, "Read aloud, improved", "Change the speed, skip paragraphs, and it keeps reading with the screen off."),
+        Item(R.drawable.ic_vpn, "A free VPN in Swift", "Browse from another country with Proton VPN's free servers. Only Swift's own traffic uses it: Settings → VPN."),
+        Item(R.drawable.ic_gesture, "Swipe the address bar away", "Swipe up on it to hide it, down from the top to bring it back. Choose in Settings → Look & screen."),
+        Item(R.drawable.ic_storage, "Less space used", "Old update files are deleted by themselves, and Storage now counts everything Android counts."),
+        Item(R.drawable.ic_lock, "Safer", "Other apps can only send Swift web links, problem reports leave out the pages you read, and incognito stays off the lock screen."),
     )
 
     private class Card(val icon: Int, val title: String, val text: String)

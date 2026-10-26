@@ -26,15 +26,26 @@ object Storage {
         val engine: Long,
         /** Swift's tabs, history, bookmarks, tab pictures and site icons. */
         val swift: Long,
+        /**
+         * Files downloaded into Swift's own folders (without storage permission, or the SD card
+         * folder): they count as Swift's data and go when Swift is uninstalled.
+         */
+        val kept: Long,
+        /** Everything else Swift's folders hold (news, crash notes, the engine's start-up files). */
+        val other: Long,
     ) {
-        val total get() = app + adBlock + sites + cache + engine + swift
+        /** The app, its data folder and its own folders on the storage. */
+        val total get() = app + adBlock + sites + cache + engine + swift + kept + other
+
+        /** Android 7's App info shows the cache on its own line, outside its Total. */
+        val androidTotal get() = total - cache
     }
 
     class SiteUsage(val site: String, val bytes: Long, val lastVisit: Long)
 
     /** Blocking: everything measured. */
     fun measure(ctx: Context): Usage {
-        val app = File(ctx.applicationInfo.sourceDir).length()
+        val app = appSize(ctx)
         var adBlock = 0L
         var sites = 0L
         var profiles = 0L
@@ -47,7 +58,45 @@ object Storage {
         }
         val swift = sizeOf(File(ctx.filesDir, "thumbs")) + sizeOf(File(ctx.filesDir, "favicons")) +
             sizeOf(File(ctx.applicationInfo.dataDir, "databases")) + sizeOf(File(ctx.applicationInfo.dataDir, "shared_prefs"))
-        return Usage(app, adBlock, sites, sizeOf(ctx.cacheDir), (profiles - adBlock - sites).coerceAtLeast(0), swift)
+        val cache = sizeOf(ctx.cacheDir)
+        val internalDownloads = sizeOf(File(ctx.filesDir, "downloads"))
+        // Swift's own folders on the phone storage and SD card (Android/data/<package>).
+        val kept = internalDownloads + ownExternalDirs(ctx).sumOf { sizeOf(it) }
+        // The whole data folder (not "lib", a link to the installed app), less what is counted above.
+        val dataTotal = File(ctx.applicationInfo.dataDir).listFiles()?.filter { it.name != "lib" }?.sumOf { sizeOf(it) } ?: 0L
+        val other = (dataTotal - profiles - cache - swift - internalDownloads).coerceAtLeast(0)
+        return Usage(app, adBlock, sites, cache, (profiles - adBlock - sites).coerceAtLeast(0), swift, kept, other)
+    }
+
+    /**
+     * The installed app as Android counts it: its folder (the APK and any unpacked engine libraries)
+     * and the compiled code, whose folder can't be listed but whose file can be read by name.
+     */
+    private fun appSize(ctx: Context): Long {
+        val apk = File(ctx.applicationInfo.sourceDir)
+        val folder = apk.parentFile ?: return apk.length()
+        val isas = android.os.Build.SUPPORTED_ABIS.mapNotNull {
+            when (it) {
+                "arm64-v8a" -> "arm64"
+                "armeabi-v7a", "armeabi" -> "arm"
+                "x86_64" -> "x86_64"
+                "x86" -> "x86"
+                else -> null
+            }
+        }.distinct()
+        val compiled = isas.sumOf { File(folder, "oat/$it/base.odex").length() }
+        return (folder.listFiles()?.filter { it.name != "oat" }?.sumOf { sizeOf(it) } ?: apk.length()) + compiled
+    }
+
+    /** Android/data/<package> on the phone storage and on an SD card. */
+    private fun ownExternalDirs(ctx: Context): List<File> =
+        (ctx.getExternalFilesDirs(null).toList() + ctx.externalCacheDirs.toList()).filterNotNull()
+            .mapNotNull { it.parentFile }.distinctBy { it.absolutePath }
+
+    /** The files downloaded into Swift's own folders, biggest first. */
+    fun keptDownloads(ctx: Context): List<File> {
+        val dirs = ctx.getExternalFilesDirs(android.os.Environment.DIRECTORY_DOWNLOADS).filterNotNull() + File(ctx.filesDir, "downloads")
+        return dirs.flatMap { d -> d.walkTopDown().filter { it.isFile }.toList() }.sortedByDescending { it.length() }
     }
 
     /**

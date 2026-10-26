@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 2.1: an item of a plain list dialog (setItems): Material's, in normal text instead of the
+     grey of the dialog's message. -->
+<TextView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@android:id/text1"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:minHeight="?attr/listPreferredItemHeightSmall"
+    style="?attr/materialAlertDialogBodyTextStyle"
+    android:textColor="@color/text_primary"
+    android:gravity="center_vertical"
+    android:paddingLeft="?attr/listPreferredItemPaddingLeft"
+    android:paddingRight="?attr/listPreferredItemPaddingRight"
+    android:ellipsize="marquee" />

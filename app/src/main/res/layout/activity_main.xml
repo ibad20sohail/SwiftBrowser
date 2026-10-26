@@ -234,6 +234,21 @@
                             android:textColorHint="@color/text_secondary"
                             android:textSize="15sp" />
 
+                        <!-- 2.1: the VPN is on (or should be); tapping it opens the VPN sheet. -->
+                        <TextView
+                            android:id="@+id/vpn_badge"
+                            android:layout_width="wrap_content"
+                            android:layout_height="24dp"
+                            android:layout_marginStart="4dp"
+                            android:layout_marginEnd="6dp"
+                            android:fontFamily="sans-serif-medium"
+                            android:gravity="center"
+                            android:paddingStart="8dp"
+                            android:paddingEnd="8dp"
+                            android:text="VPN"
+                            android:textSize="11sp"
+                            android:visibility="gone" />
+
                         <ImageButton
                             android:id="@+id/url_mic"
                             android:layout_width="36dp"

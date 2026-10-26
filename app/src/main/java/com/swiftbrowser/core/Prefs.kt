@@ -20,6 +20,14 @@ class Prefs(ctx: Context) {
         get() = sp.getInt(THEME_MODE, if (darkMode) 1 else 0)
         set(v) = sp.edit { putInt(THEME_MODE, v) }
 
+    /**
+     * Address bar swipes (2.1): [SWIPE_HIDE] swiping on the bar hides it, [SWIPE_SHOW] swiping in
+     * from the screen's edge shows it again; both by default.
+     */
+    var barSwipes: Int
+        get() = sp.getInt(BAR_SWIPES, SWIPE_HIDE or SWIPE_SHOW)
+        set(v) = sp.edit { putInt(BAR_SWIPES, v) }
+
     /** The welcome cards were shown (first start of a new install, 2.0). */
     var welcomeDone: Boolean
         get() = sp.getBoolean(WELCOME_DONE, false)
@@ -298,6 +306,9 @@ class Prefs(ctx: Context) {
         const val MENU_BUTTONS = "menu_buttons"
         const val NEWS_ENABLED = "news_enabled"
         const val WELCOME_DONE = "welcome_done"
+        const val BAR_SWIPES = "bar_swipes"
+        const val SWIPE_HIDE = 1
+        const val SWIPE_SHOW = 2
         const val NEWS_COUNTRY = "news_country"
         const val NEWS_TOPICS = "news_topics"
         const val NEWS_FEEDS = "news_feeds"

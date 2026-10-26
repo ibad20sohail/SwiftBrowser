@@ -70,6 +70,42 @@ object Updates {
         }
     }
 
+    private const val RELEASE_DOWNLOADS = "https://github.com/ibad20sohail/SwiftBrowser/releases/download/"
+    private val APK_NAME = Regex("^Swift-([0-9.]+)\\.apk$", RegexOption.IGNORE_CASE)
+
+    /**
+     * Blocking: deletes update APKs of this version or older (they were installed, or are of no use
+     * any more), from the downloads list and from Swift's own download folders, where they would
+     * otherwise stay (about 150 MB each). Returns how many bytes were freed.
+     */
+    fun deleteOldApks(ctx: android.content.Context): Long {
+        val current = BuildConfig.VERSION_NAME
+        fun outdated(name: String): Boolean {
+            val v = APK_NAME.find(name)?.groupValues?.get(1) ?: return false
+            return !isNewer(v, current)
+        }
+        var freed = 0L
+        for (d in com.swiftbrowser.download.Downloads.all()) {
+            if (d.id == downloadId || d.status != com.swiftbrowser.download.Downloads.DONE) continue
+            if (!d.url.startsWith(RELEASE_DOWNLOADS) || !outdated(d.fileName)) continue
+            freed += java.io.File(d.filePath).length()
+            com.swiftbrowser.download.Downloads.remove(d.id, deleteFile = true)
+        }
+        // Left in Swift's own folders without an entry in the list (removed from the list only).
+        val dirs = ctx.getExternalFilesDirs(android.os.Environment.DIRECTORY_DOWNLOADS).filterNotNull() +
+            java.io.File(ctx.filesDir, "downloads")
+        for (dir in dirs) {
+            for (f in dir.listFiles().orEmpty()) {
+                if (f.isFile && outdated(f.name)) {
+                    freed += f.length()
+                    f.delete()
+                }
+            }
+        }
+        if (freed > 0) L.d("Deleted old update files: ${freed / (1024 * 1024)} MB")
+        return freed
+    }
+
     /** "1.10" is newer than "1.9". */
     fun isNewer(candidate: String, current: String): Boolean {
         val a = candidate.split('.').map { it.toIntOrNull() ?: 0 }

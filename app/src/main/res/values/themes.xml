@@ -88,11 +88,17 @@
              normal text, not the grey of secondary text. -->
         <item name="colorOnSurfaceVariant">@color/text_primary</item>
         <item name="android:textColorAlertDialogListItem">@color/text_primary</item>
+        <item name="alertDialogStyle">@style/Swift.AlertDialog</item>
         <item name="materialAlertDialogTitleTextStyle">@style/Swift.DialogTitle</item>
         <item name="materialAlertDialogBodyTextStyle">@style/Swift.DialogBody</item>
         <item name="buttonBarPositiveButtonStyle">@style/Swift.DialogButton</item>
         <item name="buttonBarNegativeButtonStyle">@style/Swift.DialogButton</item>
         <item name="buttonBarNeutralButtonStyle">@style/Swift.DialogButton</item>
+    </style>
+
+    <!-- 2.1: plain lists (setItems) in normal text too. -->
+    <style name="Swift.AlertDialog" parent="MaterialAlertDialog.Material3">
+        <item name="listItemLayout">@layout/dialog_list_item</item>
     </style>
 
     <style name="Swift.DialogShape" parent="">

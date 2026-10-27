@@ -155,7 +155,7 @@ class NewsSection(context: Context, private val listener: Listener) : LinearLayo
                     if (!isChecked) isChecked = true
                     if (topic != t.key) {
                         topic = t.key
-                        load()
+                        load(switched = true)
                     }
                 }
             })
@@ -168,11 +168,12 @@ class NewsSection(context: Context, private val listener: Listener) : LinearLayo
         load()
     }
 
-    private fun load() {
+    /** [switched]: another topic was chosen, so its stories come in with a short fade (2.3). */
+    private fun load(switched: Boolean = false) {
         val kept = News.cached(context, topic)
         if (kept != null) {
             // Opening the home page again doesn't rebuild the same rows.
-            if (kept != stories || body.childCount == 0 || builtCards != com.swiftbrowser.SwiftApp.prefs.newsCards) setStories(kept, animate = false)
+            if (kept != stories || body.childCount == 0 || builtCards != com.swiftbrowser.SwiftApp.prefs.newsCards) setStories(kept, animate = switched)
             if (News.stale(topic)) refresh(force = false)
         } else {
             stories = emptyList()
@@ -214,7 +215,7 @@ class NewsSection(context: Context, private val listener: Listener) : LinearLayo
         body.removeAllViews()
         message.removeAllViews()
         message.addView(Ui.emptyState(context, icon, title, hint).apply { setPadding(0, 0, 0, 0) })
-        message.visibility = View.VISIBLE
+        Motion.fadeIn(message, fromDy = 8)
     }
 
     private fun setStories(list: List<Story>, animate: Boolean) {
@@ -246,19 +247,38 @@ class NewsSection(context: Context, private val listener: Listener) : LinearLayo
 
     /** Loads pictures and more rows for what can be seen now (the home page scrolled or changed). */
     fun checkVisible() {
-        if (visibility == View.VISIBLE && getLocalVisibleRect(visible)) onScrolled(visible.bottom)
+        if (visibility == View.VISIBLE && getLocalVisibleRect(visible)) onScrolled(visible.bottom, visible.top)
+    }
+
+    /** The home page went out of sight: its pictures are let go (recent ones stay in PreviewLoader's small cache). */
+    fun releasePictures() {
+        for (i in 0 until body.childCount) release(body.getChildAt(i))
+    }
+
+    private fun release(row: View) {
+        val image = row.getTag(R.id.row_image) as? String ?: return
+        if (row.getTag(R.id.row_action) != null) return
+        row.findViewById<ImageView>(R.id.row_icon)?.setImageDrawable(null)
+        row.setTag(R.id.row_action, image)
     }
 
     /**
      * The home page scrolled: [visibleBottom] is how far down this section can be seen (px from
      * its top). Pictures load for rows coming into view, and more rows are added near the end.
      */
-    fun onScrolled(visibleBottom: Int) {
+    fun onScrolled(visibleBottom: Int, visibleTop: Int = 0) {
         if (shown < stories.size && visibleBottom > body.top + body.height - Ui.dp(context, 600)) showMore()
         val limit = visibleBottom + Ui.dp(context, 300)
+        // Pictures far out of sight (2.3) are let go, so a long scroll down the news doesn't keep them all.
+        val far = Ui.dp(context, 1600)
         for (i in 0 until body.childCount) {
             val row = body.getChildAt(i)
-            if (body.top + row.top > limit) break
+            val top = body.top + row.top
+            if (top + row.height < visibleTop - far || top > visibleBottom + far) {
+                release(row)
+                continue
+            }
+            if (top > limit) continue
             val pending = row.getTag(R.id.row_action) as? String ?: continue
             row.setTag(R.id.row_action, null)
             val picture = row.findViewById<ImageView>(R.id.row_icon)
@@ -313,6 +333,7 @@ class NewsSection(context: Context, private val listener: Listener) : LinearLayo
             row.addView(picture, LayoutParams(pictureSize, pictureSize).apply { marginStart = Ui.dp(ctx, 14) })
             val kept = PreviewLoader.cached(s.image, pictureSize)
             if (kept != null) picture.setImageBitmap(kept) else row.setTag(R.id.row_action, s.image)
+            row.setTag(R.id.row_image, s.image)
         }
         bindIcon(row, s)
         return row
@@ -350,6 +371,7 @@ class NewsSection(context: Context, private val listener: Listener) : LinearLayo
             card.addView(picture, LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
             val kept = PreviewLoader.cached(s.image, cardPictureSize)
             if (kept != null) picture.setImageBitmap(kept) else card.setTag(R.id.row_action, s.image)
+            card.setTag(R.id.row_image, s.image)
         }
         val texts = LinearLayout(ctx).apply {
             orientation = VERTICAL

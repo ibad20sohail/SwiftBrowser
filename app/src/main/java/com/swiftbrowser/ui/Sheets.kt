@@ -1,5 +1,6 @@
 package com.swiftbrowser.ui
 
+import android.app.Activity
 import android.content.Context
 import android.content.res.ColorStateList
 import android.graphics.Typeface
@@ -49,18 +50,21 @@ import com.swiftbrowser.tabs.TabManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.math.abs
+import kotlin.math.roundToInt
 
 /** The bottom sheets opened from the toolbar and the menu. */
 object Sheets {
 
     private fun Context.dp(v: Int) = (v * resources.displayMetrics.density).toInt()
-    private fun Context.color(res: Int) = ContextCompat.getColor(this, res)
+    private fun Context.color(res: Int) = Palette.color(this, res)
 
     /**
      * Every sheet: a handle to drag it by, then [content] (scrolling when long). It opens fully and
      * its rows come in one after another.
      */
     fun sheet(ctx: Context, content: View, expand: Boolean = true): BottomSheetDialog {
+        Palette.paint(content)
         val dialog = BottomSheetDialog(ctx)
         val scroll = if (content is RecyclerView || content is ScrollView) content else ScrollView(ctx).apply {
             isVerticalScrollBarEnabled = false
@@ -151,6 +155,37 @@ object Sheets {
                 })
             }
         }
+
+    /** Text sizes a site can have of its own (as in Settings → Text size). */
+    private val TEXT_SCALES = floatArrayOf(0.8f, 0.9f, 1f, 1.1f, 1.25f, 1.5f)
+
+    /** "Same as all sites" and the sizes; a pick shows on the site's open page straight away (2.3). */
+    private fun textSizeChips(ctx: Context, site: String, tab: Tab?, onChanged: (() -> Unit)?): View {
+        val own = SiteSettings.textScale(site)
+        val all = SwiftApp.prefs.textScale
+        val labels = listOf("Same as all sites (${(all * 100).roundToInt()}%)") + TEXT_SCALES.map { "${(it * 100).roundToInt()}%" }
+        val selected = if (own == null) 0 else TEXT_SCALES.indexOfFirst { abs(it - own) < 0.01f } + 1
+        return chips(ctx, labels, selected) { i ->
+            SiteSettings.setTextScale(site, if (i == 0) null else TEXT_SCALES[i - 1])
+            val current = TabManager.current
+            if (current != null && UrlUtils.site(current.url) == site) Engine.showTextScaleFor(site, force = true)
+            onChanged?.invoke()
+        }
+    }
+
+    /** Text size for the site on screen, from the ≡ menu (2.3). */
+    fun textSize(ctx: Context, tab: Tab) {
+        val site = UrlUtils.site(tab.url)
+        if (tab.showsHome || site == null || !UrlUtils.isHttp(tab.url)) {
+            if (ctx is Activity) Messages.show(ctx, "Open a site to change its text size")
+            return
+        }
+        val col = column(ctx)
+        col.addView(header(ctx, "Text size", "On $site, for all its pages. Other sites keep theirs."))
+        col.addView(textSizeChips(ctx, site, tab, null))
+        col.addView(note(ctx, "Pinch to zoom in on a page for a moment."))
+        sheet(ctx, col).showImmersive()
+    }
 
     // ------------------------------------------------------------------ action lists
 
@@ -300,9 +335,11 @@ object Sheets {
         lateinit var dialog: BottomSheetDialog
 
         val blocked = tab.badge?.takeIf { it.isNotBlank() && it != "0" }
+        val week = com.swiftbrowser.adblock.AdStats.week()
         val sub = when {
             AdBlock.extension == null || !AdBlock.ready -> "uBlock Origin is getting ready…"
-            blocked != null -> "uBlock Origin ${AdBlock.uboVersion} • $blocked blocked on this page"
+            blocked != null -> "$blocked blocked on this page" + if (week > 0) " • ${java.text.NumberFormat.getIntegerInstance().format(week)} this week" else ""
+            week > 0 -> "${java.text.NumberFormat.getIntegerInstance().format(week)} ads and trackers blocked this week"
             else -> "uBlock Origin ${AdBlock.uboVersion}"
         }
         col.addView(header(a, "Ad blocking", sub))
@@ -906,7 +943,13 @@ object Sheets {
             if (onThisSite && tab != null && SwiftApp.prefs.liteMode) TabManager.reload(tab)
             onChanged?.invoke()
         })
-        col.addView(label(ctx, "Location", top = 12))
+        col.addView(switchRow(ctx, R.drawable.ic_reader, "Open articles in reader view", "Pages with an article open as a clean read by themselves", SiteSettings.autoReader(site)) { on ->
+            SiteSettings.setAutoReader(site, on)
+            onChanged?.invoke()
+        })
+        col.addView(label(ctx, "Text size", top = 12))
+        col.addView(textSizeChips(ctx, site, tab, onChanged))
+        col.addView(label(ctx, "Location", top = 16))
         val places = SiteSettings.Location.entries
         col.addView(chips(ctx, places.map { it.label }, places.indexOf(SiteSettings.location(site))) { i ->
             SiteSettings.setLocation(site, places[i])

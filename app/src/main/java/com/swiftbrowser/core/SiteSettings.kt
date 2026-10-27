@@ -17,7 +17,11 @@ object SiteSettings {
     private const val LOCATION_ALLOW = "site_location_allow"
     private const val LOCATION_BLOCK = "site_location_block"
     private const val NO_LITE = "site_no_lite"
-    private val KEYS = listOf(DESKTOP, AUTOPLAY, LOCATION_ALLOW, LOCATION_BLOCK, NO_LITE)
+    private const val READER = "site_reader"
+
+    /** "site=scale" entries: the site's own text size (2.3). */
+    private const val TEXT_SCALE = "site_text_scale"
+    private val KEYS = listOf(DESKTOP, AUTOPLAY, LOCATION_ALLOW, LOCATION_BLOCK, NO_LITE, READER)
 
     private val sp get() = SwiftApp.prefs.sp
 
@@ -56,6 +60,24 @@ object SiteSettings {
 
     fun liteExceptions(): List<String> = set(NO_LITE).sorted()
 
+    /** The site's articles open in reader view by themselves (2.3). */
+    fun autoReader(site: String?): Boolean = site != null && site in set(READER)
+
+    fun setAutoReader(site: String, on: Boolean) = put(READER, site, on)
+
+    /** The site's own text size (1 = as designed); null: the size for all sites. */
+    fun textScale(site: String?): Float? {
+        site ?: return null
+        val prefix = "$site="
+        return set(TEXT_SCALE).firstOrNull { it.startsWith(prefix) }?.substring(prefix.length)?.toFloatOrNull()
+    }
+
+    fun setTextScale(site: String, scale: Float?) {
+        val prefix = "$site="
+        val others = set(TEXT_SCALE).filterNot { it.startsWith(prefix) }.toSet()
+        sp.edit { putStringSet(TEXT_SCALE, if (scale == null) others else others + "$prefix$scale") }
+    }
+
     fun setLocation(site: String, value: Location) {
         put(LOCATION_ALLOW, site, value == Location.ALLOW)
         put(LOCATION_BLOCK, site, value == Location.BLOCK)
@@ -63,13 +85,14 @@ object SiteSettings {
 
     /** Sites with anything set, for the list in Settings. */
     fun sites(): List<String> =
-        (KEYS.flatMap { set(it) } + AdBlock.overrides().keys).toSortedSet().toList()
+        (KEYS.flatMap { set(it) } + set(TEXT_SCALE).map { it.substringBefore('=') } + AdBlock.overrides().keys).toSortedSet().toList()
 
     fun hasSettings(site: String) = site in sites()
 
     fun reset(site: String) {
         val hadNoLite = noLite(site)
         for (key in KEYS) put(key, site, false)
+        setTextScale(site, null)
         AdBlock.setOverride(site, null)
         if (hadNoLite) com.swiftbrowser.media.Helper.sendLook()
     }

@@ -10,6 +10,7 @@ import android.app.Activity
 import android.content.Context
 import android.content.res.ColorStateList
 import android.graphics.Canvas
+import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.RectF
 import android.graphics.Typeface
@@ -41,22 +42,53 @@ import java.util.Calendar
  * never touches the page.
  */
 
-/** The accent colours to choose from (Settings → Look & screen). */
+/**
+ * The accent colours to choose from (Settings → Look & screen → Colours). The first six have their
+ * own hand-picked colours for light and dark; the others, and the user's own ([CUSTOM], 2.3), are
+ * worked out from one colour (Palette).
+ */
 enum class Accent(
     val key: String,
     val label: String,
-    val overlay: Int,
-    val primary: Int,
-    val onPrimary: Int,
-    val container: Int,
-    val onContainer: Int,
+    /** The colour it is known by (its swatch), and the one its tones are worked out from. */
+    val seed: Int,
+    private val overlayRes: Int = 0,
+    val primaryRes: Int = 0,
+    val onPrimaryRes: Int = 0,
+    val containerRes: Int = 0,
+    val onContainerRes: Int = 0,
 ) {
-    BLUE("blue", "Blue", R.style.ThemeOverlay_Swift_Accent_Blue, R.color.accent_blue, R.color.on_accent_blue, R.color.accent_blue_container, R.color.on_accent_blue_container),
-    GREEN("green", "Green", R.style.ThemeOverlay_Swift_Accent_Green, R.color.accent_green, R.color.on_accent_green, R.color.accent_green_container, R.color.on_accent_green_container),
-    PURPLE("purple", "Purple", R.style.ThemeOverlay_Swift_Accent_Purple, R.color.accent_purple, R.color.on_accent_purple, R.color.accent_purple_container, R.color.on_accent_purple_container),
-    ORANGE("orange", "Orange", R.style.ThemeOverlay_Swift_Accent_Orange, R.color.accent_orange, R.color.on_accent_orange, R.color.accent_orange_container, R.color.on_accent_orange_container),
-    RED("red", "Red", R.style.ThemeOverlay_Swift_Accent_Red, R.color.accent_red, R.color.on_accent_red, R.color.accent_red_container, R.color.on_accent_red_container),
-    TEAL("teal", "Teal", R.style.ThemeOverlay_Swift_Accent_Teal, R.color.accent_teal, R.color.on_accent_teal, R.color.accent_teal_container, R.color.on_accent_teal_container);
+    BLUE("blue", "Blue", 0xFF1B66E4.toInt(), R.style.ThemeOverlay_Swift_Accent_Blue, R.color.accent_blue, R.color.on_accent_blue, R.color.accent_blue_container, R.color.on_accent_blue_container),
+    INDIGO("indigo", "Indigo", 0xFF4355C9.toInt()),
+    PURPLE("purple", "Purple", 0xFF7A4CD9.toInt(), R.style.ThemeOverlay_Swift_Accent_Purple, R.color.accent_purple, R.color.on_accent_purple, R.color.accent_purple_container, R.color.on_accent_purple_container),
+    PINK("pink", "Pink", 0xFFD0306E.toInt()),
+    RED("red", "Red", 0xFFC62845.toInt(), R.style.ThemeOverlay_Swift_Accent_Red, R.color.accent_red, R.color.on_accent_red, R.color.accent_red_container, R.color.on_accent_red_container),
+    ORANGE("orange", "Orange", 0xFFC2570C.toInt(), R.style.ThemeOverlay_Swift_Accent_Orange, R.color.accent_orange, R.color.on_accent_orange, R.color.accent_orange_container, R.color.on_accent_orange_container),
+    AMBER("amber", "Amber", 0xFFE09B00.toInt()),
+    GREEN("green", "Green", 0xFF1E7D45.toInt(), R.style.ThemeOverlay_Swift_Accent_Green, R.color.accent_green, R.color.on_accent_green, R.color.accent_green_container, R.color.on_accent_green_container),
+    TEAL("teal", "Teal", 0xFF00796B.toInt(), R.style.ThemeOverlay_Swift_Accent_Teal, R.color.accent_teal, R.color.on_accent_teal, R.color.accent_teal_container, R.color.on_accent_teal_container),
+    CYAN("cyan", "Cyan", 0xFF0097A7.toInt()),
+    BROWN("brown", "Brown", 0xFF8A5A44.toInt()),
+    GRAPHITE("graphite", "Graphite", 0xFF5B6270.toInt()),
+    CUSTOM("custom", "Your colour", 0);
+
+    // Every screen asks for the accent by these ids; Palette answers with this accent's colours.
+    val primary: Int get() = R.color.accent
+    val onPrimary: Int get() = R.color.on_accent
+    val container: Int get() = R.color.accent_container
+    val onContainer: Int get() = R.color.on_accent_container
+
+    /** Its colour: the seed, or the one the user picked. */
+    val seedColor: Int get() = if (this == CUSTOM) SwiftApp.prefs.accentCustom else seed
+
+    /**
+     * The hand-picked accent closest in hue: the theme of Android's own parts (a text cursor), which
+     * can't take any colour while the app runs.
+     */
+    val nearestPreset: Accent
+        get() = if (primaryRes != 0) this else entries.filter { it.primaryRes != 0 }.minBy { Tones.hueDistance(seedColor, it.seed) }
+
+    val overlay: Int get() = nearestPreset.overlayRes
 
     companion object {
         fun of(key: String?): Accent = entries.firstOrNull { it.key == key } ?: BLUE
@@ -78,6 +110,8 @@ object Looks {
     /** Every screen calls this in onCreate, before its views are made. */
     fun apply(activity: Activity) {
         activity.theme.applyStyle(accent.overlay, true)
+        // The window behind the screen in the chosen background (2.3), so nothing flashes the default.
+        activity.window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Palette.color(activity, R.color.page_bg)))
     }
 
     fun modeLabel(mode: Int) = when (mode) {
@@ -86,7 +120,8 @@ object Looks {
         else -> "Light"
     }
 
-    private fun isNight(): Boolean {
+    /** 7 in the evening until 7 in the morning ("Dark at night", the night light). */
+    fun isNightTime(): Boolean {
         val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
         return hour >= NIGHT_FROM || hour < NIGHT_UNTIL
     }
@@ -94,7 +129,7 @@ object Looks {
     /** Whether the app should be dark now, by the chosen mode (and the time, for "Dark at night"). */
     fun wantsDark(): Boolean = when (SwiftApp.prefs.themeMode) {
         DARK -> true
-        NIGHT -> isNight()
+        NIGHT -> isNightTime()
         else -> false
     }
 
@@ -129,21 +164,56 @@ object Looks {
         sync()
     }
 
-    fun setAccent(activity: Activity, a: Accent) {
-        if (SwiftApp.prefs.accent == a.key) return
-        SwiftApp.prefs.accent = a.key
+    fun setAccent(activity: Activity, a: Accent, custom: Int? = null) {
+        val prefs = SwiftApp.prefs
+        if (prefs.accent == a.key && (custom == null || custom == prefs.accentCustom)) return
+        prefs.accent = a.key
+        if (custom != null) prefs.accentCustom = custom
+        colorsChanged(activity)
+    }
+
+    /** The background of light or dark mode (2.3): a preset's key, or Palette.CUSTOM with [custom]. */
+    fun setBackground(activity: Activity, night: Boolean, key: String, custom: Int? = null) {
+        val prefs = SwiftApp.prefs
+        if (night) {
+            prefs.darkBg = key
+            if (custom != null) prefs.darkBgCustom = custom
+        } else {
+            prefs.lightBg = key
+            if (custom != null) prefs.lightBgCustom = custom
+        }
+        colorsChanged(activity)
+    }
+
+    /** A ready-made combination (2.3): accent, light and dark mode's background in one go. */
+    fun setColours(activity: Activity, accent: Accent, lightBg: String, darkBg: String) {
+        val prefs = SwiftApp.prefs
+        if (prefs.accent == accent.key && prefs.lightBg == lightBg && prefs.darkBg == darkBg) return
+        prefs.accent = accent.key
+        prefs.lightBg = lightBg
+        prefs.darkBg = darkBg
+        colorsChanged(activity)
+    }
+
+    private fun colorsChanged(activity: Activity) {
+        Palette.invalidate()
         // Reader view's links follow too.
         com.swiftbrowser.media.Helper.sendReaderStyle()
         activity.recreate()
     }
 
     private val handler = Handler(Looper.getMainLooper())
-    private val nightCheck = Runnable { sync() }
+    private val nightCheck = Runnable {
+        NightLight.refreshAll()
+        sync()
+        watchClock(true)
+    }
 
-    /** While a screen is open with "Dark at night": switch at 7 o'clock even if nothing else happens. */
+    /** While a screen is open with "Dark at night" or the night light at night: switch at 7 o'clock even if nothing else happens. */
     fun watchClock(on: Boolean) {
         handler.removeCallbacks(nightCheck)
-        if (!on || SwiftApp.prefs.themeMode != NIGHT) return
+        val prefs = SwiftApp.prefs
+        if (!on || (prefs.themeMode != NIGHT && prefs.nightLight != NightLight.AT_NIGHT)) return
         val now = Calendar.getInstance()
         val next = (now.clone() as Calendar).apply {
             set(Calendar.MINUTE, 0)
@@ -178,7 +248,7 @@ object Ui {
     fun dp(ctx: Context, v: Int): Int = (v * ctx.resources.displayMetrics.density + 0.5f).toInt()
     fun dpf(ctx: Context, v: Float): Float = v * ctx.resources.displayMetrics.density
 
-    fun color(ctx: Context, res: Int) = ContextCompat.getColor(ctx, res)
+    fun color(ctx: Context, res: Int) = Palette.color(ctx, res)
 
     fun accent(ctx: Context) = color(ctx, Looks.accent.primary)
     fun onAccent(ctx: Context) = color(ctx, Looks.accent.onPrimary)
@@ -225,6 +295,33 @@ object Ui {
             cornerRadius = dpf(ctx, radiusDp.toFloat())
             if (stroke != null) setStroke(dpf(ctx, strokeDp).toInt().coerceAtLeast(1), stroke)
         }
+
+    /**
+     * Swift's logo in the accent colour (2.3): the white S on a rounded square with a soft diagonal
+     * gradient. Blue (the default) is exactly the app icon's blue, so nothing changes colour when
+     * Swift starts.
+     */
+    fun logo(ctx: Context): Drawable {
+        val accent = Looks.accent
+        val colors = if (accent == Accent.BLUE) {
+            intArrayOf(0xFF5A97FF.toInt(), 0xFF1542C2.toInt())
+        } else {
+            // A very light colour of your own is deepened a little, so the white S stays clear.
+            var seed = accent.seedColor or 0xFF000000.toInt()
+            var i = 0
+            while (Color.luminance(seed) > 0.3f && i++ < 20) seed = Tones.mix(seed, Color.BLACK, 0.08)
+            intArrayOf(Tones.mix(seed, Color.WHITE, 0.24), Tones.mix(seed, Color.BLACK, 0.22))
+        }
+        val size = dp(ctx, 48)
+        val square = object : GradientDrawable(Orientation.TL_BR, colors) {
+            // The corners keep their share of the size, however big the logo is drawn.
+            override fun onBoundsChange(r: android.graphics.Rect) {
+                super.onBoundsChange(r)
+                cornerRadius = r.width() * 0.22f
+            }
+        }.apply { setSize(size, size) }
+        return android.graphics.drawable.LayerDrawable(arrayOf(square, ContextCompat.getDrawable(ctx, R.drawable.ic_logo_mark)!!))
+    }
 
     fun circle(fill: Int): GradientDrawable = GradientDrawable().apply {
         shape = GradientDrawable.OVAL
@@ -350,19 +447,101 @@ object Motion {
         v.alpha = 0f
         v.translationY = Ui.dpf(v.context, fromDy.toFloat())
         v.visibility = View.VISIBLE
-        v.animate().alpha(1f).translationY(0f).setStartDelay(delay).setDuration(duration).setInterpolator(enter).withLayer().start()
+        v.animate().alpha(1f).translationY(0f).setStartDelay(delay).setDuration(duration).setInterpolator(enter).layerIfFits(v).start()
+    }
+
+    /**
+     * Draws [v] through a hardware layer while it animates, unless it is bigger than the screen:
+     * the GPU can't hold a picture that tall (a long list of results crashed drawing, 2.3).
+     */
+    private fun android.view.ViewPropertyAnimator.layerIfFits(v: View): android.view.ViewPropertyAnimator {
+        val dm = v.resources.displayMetrics
+        val tooBig = v.isLaidOut && (v.height > dm.heightPixels || v.width > dm.widthPixels)
+        return if (tooBig) this else withLayer()
     }
 
     /** Fades [v] out (sinking [toDy] dp), then hides it and runs [then]. */
     fun fadeOut(v: View, toDy: Int = 8, duration: Long = SHORT, gone: Boolean = true, then: (() -> Unit)? = null) {
         v.animate().cancel()
         v.animate().alpha(0f).translationY(Ui.dpf(v.context, toDy.toFloat())).setStartDelay(0).setDuration(duration)
-            .setInterpolator(exit).withLayer().withEndAction {
+            .setInterpolator(exit).layerIfFits(v).withEndAction {
                 v.visibility = if (gone) View.GONE else View.INVISIBLE
                 v.alpha = 1f
                 v.translationY = 0f
                 then?.invoke()
             }.start()
+    }
+
+    /**
+     * Shows or hides a small button with a quick pop (address bar icons, 2.3). Safe to call again
+     * and again with the same answer: only a change animates.
+     */
+    fun pop(v: View, show: Boolean) {
+        val hiding = v.getTag(R.id.motion_hiding) == true
+        if (show) {
+            if (v.visibility == View.VISIBLE && !hiding) return
+            v.animate().cancel()
+            v.setTag(R.id.motion_hiding, null)
+            if (v.visibility != View.VISIBLE) {
+                v.alpha = 0f
+                v.scaleX = 0.6f
+                v.scaleY = 0.6f
+            }
+            v.visibility = View.VISIBLE
+            v.animate().alpha(1f).scaleX(1f).scaleY(1f).setStartDelay(0).setDuration(SHORT).setInterpolator(enter).start()
+        } else {
+            if (v.visibility != View.VISIBLE || hiding) return
+            if (!v.isShown) {
+                v.visibility = View.GONE
+                return
+            }
+            v.setTag(R.id.motion_hiding, true)
+            v.animate().cancel()
+            v.animate().alpha(0f).scaleX(0.6f).scaleY(0.6f).setStartDelay(0).setDuration(110).setInterpolator(exit).withEndAction {
+                v.setTag(R.id.motion_hiding, null)
+                v.visibility = View.GONE
+                v.alpha = 1f
+                v.scaleX = 1f
+                v.scaleY = 1f
+            }.start()
+        }
+    }
+
+    /** Changes [v]'s icon with a quick turn and settle (reload ↔ stop, 2.3); the same icon again does nothing. */
+    fun swapIcon(v: android.widget.ImageView, res: Int) {
+        val shown = v.getTag(R.id.motion_icon) as? Int
+        if (shown == res) return
+        v.setTag(R.id.motion_icon, res)
+        if (shown == null || !v.isShown) {
+            v.setImageResource(res)
+            return
+        }
+        v.animate().cancel()
+        v.animate().rotation(-45f).scaleX(0.7f).scaleY(0.7f).alpha(0.3f).setStartDelay(0).setDuration(80).setInterpolator(exit).withEndAction {
+            v.setImageResource(res)
+            v.rotation = 45f
+            v.animate().rotation(0f).scaleX(1f).scaleY(1f).alpha(1f).setDuration(SHORT).setInterpolator(enter).start()
+        }.start()
+    }
+
+    /** Changes [tv]'s text with a quick cross-fade (status lines, 2.3); the same text does nothing. */
+    fun swapText(tv: TextView, text: CharSequence) {
+        val coming = tv.getTag(R.id.motion_text) as? CharSequence ?: tv.text
+        if (coming.toString() == text.toString()) return
+        if (!tv.isShown || tv.text.isNullOrEmpty()) {
+            tv.animate().cancel()
+            tv.setTag(R.id.motion_text, null)
+            tv.alpha = 1f
+            tv.text = text
+            return
+        }
+        tv.setTag(R.id.motion_text, text)
+        tv.animate().cancel()
+        tv.animate().alpha(0f).setStartDelay(0).setDuration(90).setInterpolator(exit).withEndAction {
+            tv.setTag(R.id.motion_text, null)
+            tv.text = text
+            tv.animate().alpha(1f).setDuration(SHORT).setInterpolator(enter).start()
+        }.start()
     }
 
     /** A quick grow-and-settle, to show something changed (the tab count, a new item). */
@@ -396,6 +575,45 @@ object Motion {
                     v.layoutParams = lp
                     v.alpha = 1f
                     then()
+                }
+            })
+            start()
+        }
+    }
+
+    /** Opens [v] (hidden before) by growing its height and fading it in: a list folding open (2.3). */
+    fun expand(v: View) {
+        val parent = v.parent as? View
+        val margins = (v.layoutParams as? ViewGroup.MarginLayoutParams)?.let { it.leftMargin + it.rightMargin } ?: 0
+        val width = (parent?.width ?: 0) - (parent?.paddingLeft ?: 0) - (parent?.paddingRight ?: 0) - margins
+        if (width <= 0 || !v.isAttachedToWindow) {
+            v.visibility = View.VISIBLE
+            return
+        }
+        v.measure(
+            View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
+        )
+        val target = v.measuredHeight
+        val lp = v.layoutParams
+        lp.height = 1
+        v.layoutParams = lp
+        v.alpha = 0f
+        v.visibility = View.VISIBLE
+        ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = NORMAL
+            interpolator = standard
+            addUpdateListener {
+                val f = it.animatedValue as Float
+                v.alpha = f
+                lp.height = maxOf(1, (target * f).toInt())
+                v.layoutParams = lp
+            }
+            addListener(object : AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: Animator) {
+                    lp.height = ViewGroup.LayoutParams.WRAP_CONTENT
+                    v.layoutParams = lp
+                    v.alpha = 1f
                 }
             })
             start()

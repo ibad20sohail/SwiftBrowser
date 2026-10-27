@@ -227,12 +227,12 @@ object TabManager {
         SwiftApp.instance?.let { Playback.onMediaGone(it, tab) }
     }
 
-    private fun trimLiveSessions() {
+    fun trimLiveSessions() {
         // Whatever the setting says, when the phone is close to running out of memory only the
-        // open tab keeps its page: otherwise Android closes Swift altogether.
+        // open tab keeps its page: otherwise Android closes Swift altogether. Same on low battery.
         val low = prefs.maxLiveTabs > 1 && Diagnostics.memoryLow()
         if (low) L.d("Memory low (${Diagnostics.memoryText()}): keeping only the open tab loaded")
-        val max = if (low) 1 else prefs.maxLiveTabs
+        val max = if (low || com.swiftbrowser.engine.Power.saving) 1 else prefs.maxLiveTabs
         val others = tabs.filter { it.session != null && it !== current }.sortedBy { it.lastUsed }
         var live = others.size + if (current?.session != null) 1 else 0
         for (t in others) {
@@ -404,8 +404,9 @@ object TabManager {
         return profileTabs(pid).maxByOrNull { it.lastUsed } ?: createTab("about:blank", pid, null, false, false)
     }
 
+    /** Normal tabs can come back with Undo (2.3); incognito ones are gone for good, with their data. */
     fun closeAll(incognito: Boolean) {
-        closeTabs(if (incognito) incognitoTabs() else profileTabs())
+        closeTabs(if (incognito) incognitoTabs() else profileTabs(), undoable = !incognito)
     }
 
     // ------------------------------------------------------------------ order and groups

@@ -97,7 +97,7 @@ object ErrorPage {
                 if (night) Configuration.UI_MODE_NIGHT_YES else Configuration.UI_MODE_NIGHT_NO
             val c = app.createConfigurationContext(config)
             val a = Looks.accent
-            fun hex(res: Int) = String.format("#%06x", c.getColor(res) and 0xFFFFFF)
+            fun hex(res: Int) = String.format("#%06x", Palette.color(c, res) and 0xFFFFFF)
             return Triple(hex(a.primary), hex(a.onPrimary), hex(a.container))
         }
         return of(false) to of(true)

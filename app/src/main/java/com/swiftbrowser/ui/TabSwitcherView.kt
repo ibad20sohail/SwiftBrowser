@@ -569,7 +569,7 @@ class TabSwitcherView @JvmOverloads constructor(
         subSearch.clearFocus()
     }
 
-    private fun color(res: Int) = ContextCompat.getColor(context, res)
+    private fun color(res: Int) = Palette.color(context, res)
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
@@ -908,16 +908,16 @@ class TabSwitcherView @JvmOverloads constructor(
             val inflater = LayoutInflater.from(parent.context)
             return when (viewType) {
                 0 -> {
-                    val v = inflater.inflate(R.layout.item_tab_card, parent, false)
+                    val v = Palette.paint(inflater.inflate(R.layout.item_tab_card, parent, false))
                     v.clipToOutline = true
                     CardHolder(v)
                 }
                 1 -> {
-                    val v = inflater.inflate(R.layout.item_group_card, parent, false)
+                    val v = Palette.paint(inflater.inflate(R.layout.item_group_card, parent, false))
                     v.clipToOutline = true
                     GroupHolder(v)
                 }
-                else -> BannerHolder(inflater.inflate(R.layout.item_tab_banner, parent, false))
+                else -> BannerHolder(Palette.paint(inflater.inflate(R.layout.item_tab_banner, parent, false)))
             }
         }
 
@@ -950,7 +950,7 @@ class TabSwitcherView @JvmOverloads constructor(
             h.thumbBox.setBackgroundColor(color(if (dark) R.color.incognito_bg else R.color.tab_thumb_bg))
             h.selected.visibility = if (card.current) View.VISIBLE else View.GONE
 
-            h.icon.setImageResource(if (tab.isBlank) R.drawable.ic_logo else R.drawable.ic_globe)
+            if (tab.isBlank) h.icon.setImageDrawable(Ui.logo(context)) else h.icon.setImageResource(R.drawable.ic_globe)
             h.icon.imageTintList = if (tab.isBlank) null else ColorStateList.valueOf(color(R.color.text_secondary))
             if (!tab.isBlank) {
                 Favicons.load(card.url) { bmp ->
@@ -964,7 +964,7 @@ class TabSwitcherView @JvmOverloads constructor(
             h.thumb.setImageDrawable(null)
             h.placeholder.visibility = View.VISIBLE
             if (tab.isHome) {
-                h.placeholder.setImageResource(if (tab.incognito) R.drawable.ic_incognito else R.drawable.ic_logo)
+                if (tab.incognito) h.placeholder.setImageResource(R.drawable.ic_incognito) else h.placeholder.setImageDrawable(Ui.logo(context))
                 h.placeholder.imageTintList = if (tab.incognito) ColorStateList.valueOf(color(R.color.incognito_hint)) else null
             } else {
                 h.placeholder.setImageResource(R.drawable.ic_globe)
@@ -1019,7 +1019,7 @@ class TabSwitcherView @JvmOverloads constructor(
                     Thumbnails.load(tab) { bmp -> if (bmp != null && h.group === group) view.setImageBitmap(bmp) }
                 } else if (tab != null) {
                     view.scaleType = ImageView.ScaleType.CENTER_INSIDE
-                    view.setImageResource(if (tab.incognito) R.drawable.ic_incognito else R.drawable.ic_logo)
+                    if (tab.incognito) view.setImageResource(R.drawable.ic_incognito) else view.setImageDrawable(Ui.logo(context))
                 }
                 if (tab != null && !tab.isHome) view.scaleType = ImageView.ScaleType.CENTER_CROP
             }

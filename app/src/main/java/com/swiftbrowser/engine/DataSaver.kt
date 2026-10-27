@@ -75,8 +75,8 @@ object DataSaver {
         networkListeners.toList().forEach { it() }
     }
 
-    /** True while images are held back. */
-    val active: Boolean get() = SwiftApp.prefs.dataSaver && onMobileData
+    /** True while images are held back (also on mobile data while saving battery, see [Power]). */
+    val active: Boolean get() = (SwiftApp.prefs.dataSaver || Power.saving) && onMobileData
 
     /** "Show images" for this site, while it is the one on screen. */
     private var allowedSite: String? = null

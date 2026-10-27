@@ -151,7 +151,7 @@ class ToolbarEditor(private val a: Activity) : FrameLayout(a) {
         layout = ToolbarButtons.defaultLayout()
         ToolbarButtons.save(layout)
         say(null)
-        render()
+        render(animate = true)
     }
 
     /** The usual hint, or a short warning in its place. */
@@ -160,7 +160,13 @@ class ToolbarEditor(private val a: Activity) : FrameLayout(a) {
         note.setTextColor(if (warning != null) Ui.danger(a) else color(R.color.text_secondary))
     }
 
-    private fun render() {
+    /** [animate]: the buttons glide from where they were to their new places (2.3). */
+    private fun render(animate: Boolean = false) {
+        val before = if (animate && isAttachedToWindow) {
+            views.mapValues { (_, v) -> IntArray(2).also { v.getLocationOnScreen(it) } }
+        } else {
+            emptyMap()
+        }
         views.clear()
         bar.removeAllViews()
         for (key in layout.left) bar.addView(barButton(key), LinearLayout.LayoutParams(dp(44), dp(44)))
@@ -180,6 +186,33 @@ class ToolbarEditor(private val a: Activity) : FrameLayout(a) {
             repeat(4 - row.size) { line.addView(View(a), LinearLayout.LayoutParams(0, 1, 1f)) }
             trayBox.addView(line)
         }
+        if (before.isNotEmpty()) glide(before)
+    }
+
+    /** Just before the next frame: each button starts at its old place and glides to the new one. */
+    private fun glide(before: Map<String, IntArray>) {
+        viewTreeObserver.addOnPreDrawListener(object : android.view.ViewTreeObserver.OnPreDrawListener {
+            override fun onPreDraw(): Boolean {
+                viewTreeObserver.removeOnPreDrawListener(this)
+                val now = IntArray(2)
+                for ((key, v) in views) {
+                    if (key == dragKey) continue
+                    val old = before[key]
+                    if (old == null) {
+                        Motion.fadeIn(v, fromDy = 0, duration = Motion.SHORT)
+                        continue
+                    }
+                    v.getLocationOnScreen(now)
+                    val dx = (old[0] - now[0]).toFloat()
+                    val dy = (old[1] - now[1]).toFloat()
+                    if (dx == 0f && dy == 0f) continue
+                    v.translationX = dx
+                    v.translationY = dy
+                    v.animate().translationX(0f).translationY(0f).setDuration(Motion.NORMAL).setInterpolator(Motion.standard).start()
+                }
+                return true
+            }
+        })
     }
 
     private fun barButton(key: String): View {
@@ -288,7 +321,7 @@ class ToolbarEditor(private val a: Activity) : FrameLayout(a) {
     private fun changed() {
         ToolbarButtons.save(layout)
         say(null)
-        render()
+        render(animate = true)
     }
 
     // ------------------------------------------------------------------ dragging
@@ -369,7 +402,7 @@ class ToolbarEditor(private val a: Activity) : FrameLayout(a) {
             layout.remove(key)
             side.add(index.coerceAtMost(side.size), key)
             say(null)
-            render()
+            render(animate = true)
         } else if (within(trayBox, x, y)) {
             if (key == "menu") {
                 say("The menu button always stays in the bar.")
@@ -378,7 +411,7 @@ class ToolbarEditor(private val a: Activity) : FrameLayout(a) {
             if (layout.has(key)) {
                 layout.remove(key)
                 say(null)
-                render()
+                render(animate = true)
             }
         }
     }
@@ -401,7 +434,7 @@ class ToolbarEditor(private val a: Activity) : FrameLayout(a) {
         return x >= at[0] && x < at[0] + v.width && y >= at[1] && y < at[1] + v.height
     }
 
-    private fun color(res: Int) = ContextCompat.getColor(a, res)
+    private fun color(res: Int) = Palette.color(a, res)
 
     private fun dp(v: Int) = (v * a.resources.displayMetrics.density).toInt()
 }

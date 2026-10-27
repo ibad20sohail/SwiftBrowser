@@ -98,6 +98,7 @@ class UboActionDelegate(private val tab: Tab?) : WebExtension.ActionDelegate {
         val t = tab ?: return
         t.uboAction = action
         if (t.badge == action.badgeText) return
+        com.swiftbrowser.adblock.AdStats.onBadge(t.badge, action.badgeText)
         t.badge = action.badgeText
         // The count changes with nearly every blocked request; redraw the toolbar at most 3 times a second.
         if (pending) return

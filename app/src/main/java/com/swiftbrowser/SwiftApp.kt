@@ -53,7 +53,9 @@ class SwiftApp : Application() {
         prefs.autoSitesAsDesigned = !prefs.autoSoftwareRendering && totalMemory() >= 3_500_000_000L
         Engine.init(this, prefs)
         com.swiftbrowser.engine.DataSaver.init(this)
+        com.swiftbrowser.engine.Power.init(this)
         com.swiftbrowser.vpn.Vpn.onAppStart(this)
+        com.swiftbrowser.vpn.VpnTileService.watch(this)
         L.d("Swift ${BuildConfig.VERSION_NAME} started")
     }
 

@@ -71,6 +71,15 @@ class Tab(
 
     /** The page whose video Swift offered to continue, and from where (once per page load; see WatchPositions). */
     var resumeOffered: String? = null
+
+    /** Opened from the home page's "Continue": reader view comes up once this page has loaded (2.3). */
+    var readerOnLoad: String? = null
+
+    /** Pages of this tab already opened in reader view by themselves (back to the page stays there). */
+    val autoReaderDone = HashSet<String>()
+
+    /** Reader view was asked for by itself: a page without an article says nothing. */
+    var quietReader = false
     var resumePosition = 0.0
 
     /** A pop-up allowed by NavPolicy may load exactly this address once without a second check. */

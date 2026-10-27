@@ -403,12 +403,13 @@
         </LinearLayout>
     </LinearLayout>
 
-    <com.swiftbrowser.ui.TabSwitcherView
-        android:id="@+id/tab_switcher"
+    <!-- The tab grid, made the first time it opens (2.3). -->
+    <ViewStub
+        android:id="@+id/tab_switcher_stub"
+        android:inflatedId="@+id/tab_switcher"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:elevation="8dp"
-        android:visibility="gone" />
+        android:layout="@layout/stub_tab_switcher" />
 
     <!-- Shown when the app starts until the engine and the ad blocker are ready. -->
     <FrameLayout
@@ -425,6 +426,7 @@
              which is lower than the middle of this view by half the navigation bar minus half the
              status bar. -->
         <ImageView
+            android:id="@+id/startup_logo"
             android:layout_width="96dp"
             android:layout_height="96dp"
             android:layout_gravity="center"

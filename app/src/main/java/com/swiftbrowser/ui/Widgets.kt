@@ -26,11 +26,11 @@ class SlimSwitch(context: Context) : View(context) {
     private val density = resources.displayMetrics.density
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val rect = RectF()
-    private val trackOff = ContextCompat.getColor(context, R.color.surface_alt)
-    private val outline = ContextCompat.getColor(context, R.color.outline)
-    private val thumbOff = ContextCompat.getColor(context, R.color.text_secondary)
-    private val trackOn = ContextCompat.getColor(context, Looks.accent.primary)
-    private val thumbOn = ContextCompat.getColor(context, Looks.accent.onPrimary)
+    private val trackOff = Palette.color(context, R.color.surface_alt)
+    private val outline = Palette.color(context, R.color.outline)
+    private val thumbOff = Palette.color(context, R.color.text_secondary)
+    private val trackOn = Palette.color(context, Looks.accent.primary)
+    private val thumbOn = Palette.color(context, Looks.accent.onPrimary)
     private var position = 0f
     private var animator: ValueAnimator? = null
 
@@ -169,6 +169,7 @@ object Immersive {
         })
         if (window == null || flags and View.SYSTEM_UI_FLAG_FULLSCREEN == 0) {
             d.show()
+            paintColors(d)
             return
         }
         window.setFlags(
@@ -183,6 +184,13 @@ object Immersive {
         window.decorView.systemUiVisibility = flags or layout or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
             View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
         window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE)
+        paintColors(d)
+    }
+
+    /** The chosen colours (2.3): a sheet's background, a dialog's buttons and list ticks. */
+    private fun paintColors(d: android.app.Dialog) {
+        if (d is com.google.android.material.bottomsheet.BottomSheetDialog) Palette.paintSheet(d)
+        Palette.paintDialog(d)
     }
 
     private fun hasTextField(v: View): Boolean = v is android.widget.EditText ||
@@ -201,7 +209,7 @@ object Immersive {
 fun android.app.Dialog.showImmersive() = Immersive.show(this)
 
 fun com.google.android.material.dialog.MaterialAlertDialogBuilder.showImmersive(): androidx.appcompat.app.AlertDialog =
-    create().also { Immersive.show(it) }
+    setBackground(Palette.dialogBackground(context)).create().also { Immersive.show(it) }
 
 /** Fills its box with the picture's top part (a page's top), cut to width, instead of its middle. */
 class TopCropImageView @JvmOverloads constructor(

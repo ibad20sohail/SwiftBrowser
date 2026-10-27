@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Motion.pop: the view is on its way out. -->
+    <item name="motion_hiding" type="id" />
+    <!-- Motion.swapIcon: the icon the view shows. -->
+    <item name="motion_icon" type="id" />
+    <!-- Motion.swapText: the text on its way in. -->
+    <item name="motion_text" type="id" />
+    <!-- Palette.paint leaves the view and what's in it as they are (colour swatches, previews). -->
+    <item name="palette_keep" type="id" />
+    <!-- A news row's picture address, to load it again after it was let go. -->
+    <item name="row_image" type="id" />
+</resources>

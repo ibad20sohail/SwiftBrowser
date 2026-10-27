@@ -41,6 +41,7 @@ import com.swiftbrowser.core.UrlUtils
 import com.swiftbrowser.download.Downloads
 import com.swiftbrowser.engine.Engine
 import com.swiftbrowser.engine.GpuInfo
+import com.swiftbrowser.engine.Power
 import com.swiftbrowser.media.PlaybackService
 import com.swiftbrowser.media.SleepTimer
 import com.swiftbrowser.tabs.TabManager
@@ -146,6 +147,7 @@ class SettingsActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        NightLight.attach(this)
         computeStorage()
         refreshAll()
         // Data saver says whether the phone is on mobile data right now.
@@ -209,7 +211,7 @@ class SettingsActivity : AppCompatActivity() {
             isFillViewport = true
             isVerticalScrollBarEnabled = false
             // On a turned phone the page doesn't stretch across the whole screen.
-            addView(MaxWidthLayout(this@SettingsActivity).apply { addView(if (t == null) mainPage() else topicPage(t)) })
+            addView(MaxWidthLayout(this@SettingsActivity).apply { addView(Palette.paint(if (t == null) mainPage() else topicPage(t))) })
         }
         val old = container.getChildAt(0)
         container.addView(page)
@@ -308,6 +310,11 @@ class SettingsActivity : AppCompatActivity() {
             val title = d.title.lowercase()
             words.any { w -> title.contains(w) || d.keywords.contains(w) || d.topic.title.lowercase().contains(w) }
         }
+        // Each new word brings its results in with a short fade (2.3). No layer: the list can be
+        // taller than the GPU's biggest picture.
+        results.animate().cancel()
+        results.alpha = 0.4f
+        results.animate().alpha(1f).setDuration(Motion.SHORT).setInterpolator(Motion.enter).start()
         if (found.isEmpty()) {
             results.addView(Ui.emptyState(this, R.drawable.ic_search, "Nothing found for \"$query\"", "Try another word, such as \"dark\", \"ads\" or \"video\"."))
             return
@@ -388,19 +395,22 @@ class SettingsActivity : AppCompatActivity() {
         ).joinToString(" · ")
         Topic.ADBLOCK -> {
             val n = AdBlock.overrides().size
+            val week = com.swiftbrowser.adblock.AdStats.week()
             listOfNotNull(
                 AdBlock.global.label,
+                if (week > 0 && AdBlock.global != AdLevel.OFF) "${java.text.NumberFormat.getIntegerInstance().format(week)} blocked this week" else null,
                 if (prefs.hideCookieNotices && AdBlock.global != AdLevel.OFF) "Cookie pop-ups hidden" else null,
                 if (n > 0) "$n ${if (n == 1) "site" else "sites"} with their own level" else null,
             ).joinToString(" · ")
         }
-        Topic.SPEED -> listOf(
+        Topic.SPEED -> listOfNotNull(
+            if (Power.saving) "Saving battery now" else null,
             when {
-                prefs.liteMode -> "Lite mode"
+                prefs.liteMode || Power.saving -> "Lite mode"
                 prefs.sitesAsDesigned -> "Sites as designed"
                 else -> "Lighter sites for this phone"
             },
-            if (prefs.maxLiveTabs == 1) "1 tab kept loaded" else "${prefs.maxLiveTabs} tabs kept loaded",
+            if (prefs.maxLiveTabs == 1 || Power.saving) "1 tab kept loaded" else "${prefs.maxLiveTabs} tabs kept loaded",
         ).joinToString(" · ")
         Topic.VIDEO -> listOfNotNull(
             if (prefs.keepPlaying) "Keeps playing in the background" else null,
@@ -429,8 +439,15 @@ class SettingsActivity : AppCompatActivity() {
         def(Topic.LOOK, null, "Theme", "dark mode light night black colours evening") {
             action(R.drawable.ic_dark, "Theme", { themeText() }) { chooseTheme() }
         }
-        def(Topic.LOOK, null, "Accent colour", "color colour accent blue green purple orange red teal personal") {
-            custom(accentChooser(refresh))
+        def(Topic.LOOK, "Colours", "Colours", "color colour accent background black amoled navy warm blue green purple orange red teal pink indigo amber cyan brown graphite custom own personal") {
+            custom(ColoursPanel.build(this@SettingsActivity))
+        }
+        def(Topic.LOOK, null, "Night light", "night light warm amber blue light eyes sleep evening") {
+            action(R.drawable.ic_night_light, "Night light", {
+                val mode = prefs.nightLight
+                if (mode == NightLight.OFF) "Off: a warm screen at night, easier on the eyes"
+                else "${if (mode == NightLight.AT_NIGHT) "7 pm to 7 am" else "Always"} · ${NightLight.strengthLabel(prefs.nightLightStrength).lowercase()}"
+            }) { nightLightSheet() }
         }
         def(Topic.LOOK, null, "Text size", "font letters bigger smaller zoom") {
             action(R.drawable.ic_text_size, "Text size", { textSizeText(prefs.textScale) }) { chooseTextSize() }
@@ -475,7 +492,7 @@ class SettingsActivity : AppCompatActivity() {
             ) { prefs.toolbarFollowsScroll = it }
         }
         def(Topic.LOOK, "Menu", "Arrange the menu", "menu buttons order arrange move hide customize more pages") {
-            action(R.drawable.ic_menu, "Arrange the menu", { "Move or hide its buttons (or hold any button in the menu)" }) { arrangeMenu() }
+            action(R.drawable.ic_menu, "Arrange the menu", { "Hold any button in the menu to move it, or drag it to the top to hide it" }) { arrangeMenu() }
         }
         def(Topic.LOOK, "Menu", "Reset the menu", "menu buttons default reset order") {
             action(R.drawable.ic_update, "Reset the menu", { "Every button back where it started" }) { resetMenu() }
@@ -490,6 +507,15 @@ class SettingsActivity : AppCompatActivity() {
         def(Topic.NEWS, null, "Show news", "news headlines stories home page feed") {
             switch(R.drawable.ic_news, "Show news", { "Headlines under the shortcuts on the home page" }, checked = { prefs.newsEnabled }) {
                 prefs.newsEnabled = it
+            }
+        }
+        def(Topic.NEWS, null, "Continue watching and reading", "continue unfinished videos articles reading resume home") {
+            switch(
+                R.drawable.ic_reopen, "Continue watching and reading",
+                { "Videos and articles you left half-way, on the home page" },
+                checked = { prefs.homeContinue },
+            ) {
+                prefs.homeContinue = it
             }
         }
         def(Topic.NEWS, "News", "Stories with big pictures", "news pictures images cards big chrome compact layout") {
@@ -542,6 +568,9 @@ class SettingsActivity : AppCompatActivity() {
         }
 
         // Ad blocking
+        def(Topic.ADBLOCK, "This week", "Blocked this week", "stats count numbers trackers blocked week") {
+            custom(AdStatsCard.build(this@SettingsActivity))
+        }
         def(Topic.ADBLOCK, "How much to block", "Blocking level", "ads off balanced high extreme ublock") {
             custom(levelChooser(refresh))
         }
@@ -589,7 +618,7 @@ class SettingsActivity : AppCompatActivity() {
         }
         def(Topic.SPEED, "How sites look", "Lite mode", "smooth scrolling fast animations shadows blur") {
             switch(
-                R.drawable.ic_lite, "Lite mode", { "Plainer sites that scroll the smoothest" },
+                R.drawable.ic_lite, "Lite mode", { if (Power.saving && !prefs.liteMode) "On for now: saving battery" else "Plainer sites that scroll the smoothest" },
                 details = "The smoothest scrolling on this phone: all sites without animations, shadows or blur. " +
                     "Some sites look plainer. Stays on until you turn it off; also in the ≡ menu.",
                 checked = { prefs.liteMode },
@@ -604,6 +633,15 @@ class SettingsActivity : AppCompatActivity() {
                 prefs.dataSaver = it
                 DataSaver.apply()
             }
+        }
+        def(Topic.SPEED, "Data", "Battery saver", "battery low power charge saver percent level") {
+            action(R.drawable.ic_battery, "Battery saver", {
+                when {
+                    !prefs.batterySaver -> "Off"
+                    Power.saving -> "Saving battery now, until you charge"
+                    else -> "Below ${prefs.batterySaverLevel}% battery: Lite mode, one tab kept loaded"
+                }
+            }) { chooseBatterySaver() }
         }
         def(Topic.SPEED, "Memory", "Tabs kept loaded", "memory ram live tabs") {
             action(R.drawable.ic_memory, "Tabs kept loaded", { liveTabsText(prefs.maxLiveTabs) }) { chooseLiveTabs() }
@@ -853,7 +891,7 @@ class SettingsActivity : AppCompatActivity() {
             topMargin = dp(8)
             bottomMargin = dp(14)
         }
-        addView(ImageView(this@SettingsActivity).apply { setImageResource(R.drawable.ic_logo) }, LinearLayout.LayoutParams(dp(52), dp(52)))
+        addView(ImageView(this@SettingsActivity).apply { setImageDrawable(Ui.logo(this@SettingsActivity)) }, LinearLayout.LayoutParams(dp(52), dp(52)))
         addView(LinearLayout(this@SettingsActivity).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(16), 0, 0, 0)
@@ -1072,6 +1110,48 @@ class SettingsActivity : AppCompatActivity() {
 
     private fun textSizeText(scale: Float) = "${(scale * 100).roundToInt()}%" + if (scale == 1f) " (normal)" else ""
 
+    /** When the night light is on and how warm (2.3); the screen shows it at once. */
+    private fun nightLightSheet() {
+        val col = Sheets.column(this)
+        col.addView(Sheets.header(this, "Night light", "A warm layer over Swift, pages and videos too, with less blue light."))
+        col.addView(Sheets.label(this, "When"))
+        val modes = listOf(NightLight.OFF, NightLight.AT_NIGHT, NightLight.ALWAYS)
+        col.addView(Sheets.chips(this, listOf("Off", "7 pm to 7 am", "Always"), modes.indexOf(prefs.nightLight).coerceAtLeast(0)) { i ->
+            prefs.nightLight = modes[i]
+            NightLight.attach(this)
+            NightLight.refreshAll()
+            Looks.watchClock(true)
+            refreshAll()
+        })
+        col.addView(Sheets.label(this, "How warm", top = 16))
+        col.addView(Sheets.chips(this, listOf("Low", "Medium", "High"), prefs.nightLightStrength.coerceIn(1, 3) - 1) { i ->
+            prefs.nightLightStrength = i + 1
+            NightLight.refreshAll()
+            refreshAll()
+        })
+        col.addView(Sheets.note(this, "Dialogs and Android's own screens stay as they are."))
+        Sheets.sheet(this, col).showImmersive()
+    }
+
+    /** Off, or the level it starts at (2.3). */
+    private fun chooseBatterySaver() {
+        val levels = intArrayOf(15, 20, 30)
+        val labels = arrayOf("Off") + levels.map { "Below $it% battery" }
+        val checked = if (!prefs.batterySaver) 0 else levels.indexOf(prefs.batterySaverLevel).coerceAtLeast(1) + 1
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Battery saver")
+            .setSingleChoiceItems(labels, checked) { d, which ->
+                prefs.batterySaver = which > 0
+                if (which > 0) prefs.batterySaverLevel = levels[which - 1]
+                Power.update()
+                d.dismiss()
+                refreshAll()
+                if (which > 0) snack("Lite mode, one tab kept loaded and no pictures on mobile data below ${levels[which - 1]}%, or with Android's battery saver")
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .showImmersive()
+    }
+
     private fun chooseTextSize() {
         val options = floatArrayOf(0.8f, 0.9f, 1f, 1.1f, 1.25f, 1.5f)
         val labels = options.map { textSizeText(it) }.toTypedArray()
@@ -1083,7 +1163,7 @@ class SettingsActivity : AppCompatActivity() {
                 Engine.setTextScale(options[which])
                 d.dismiss()
                 refreshAll()
-                snack("Pages use the new size when they reload")
+                snack("Sites without a size of their own use ${textSizeText(options[which])}")
             }
             .setNegativeButton(android.R.string.cancel, null)
             .showImmersive()
@@ -1227,51 +1307,6 @@ class SettingsActivity : AppCompatActivity() {
             .showImmersive()
     }
 
-    /** The accent colours as round swatches; the chosen one has a tick. Choosing one redraws the app. */
-    private fun accentChooser(target: MutableList<() -> Unit>): View {
-        val box = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(14), dp(12), dp(14), dp(14))
-        }
-        val (head, sub) = row(R.drawable.ic_palette, "Accent colour", Looks.accent.label)
-        head.setPadding(0, 0, 0, dp(10))
-        box.addView(head)
-        val swatches = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(dp(4), 0, dp(4), 0)
-        }
-        // Round swatches, each centred in an equal share of the row.
-        val views = Accent.entries.map { a ->
-            val swatch = ImageView(this).apply {
-                background = Ui.circle(color(a.primary))
-                scaleType = ImageView.ScaleType.CENTER
-                contentDescription = a.label
-                setOnClickListener {
-                    if (Looks.accent == a) return@setOnClickListener
-                    Haptics.tick(this)
-                    Looks.setAccent(this@SettingsActivity, a)
-                }
-                Ui.pressable(this, 0.88f)
-            }
-            swatches.addView(FrameLayout(this).apply {
-                addView(swatch, FrameLayout.LayoutParams(dp(42), dp(42), Gravity.CENTER))
-            }, LinearLayout.LayoutParams(0, dp(48), 1f))
-            swatch
-        }
-        val update = {
-            val current = Looks.accent
-            Accent.entries.forEachIndexed { i, a ->
-                views[i].setImageDrawable(if (a == current) Ui.icon(this, R.drawable.ic_check, color(a.onPrimary)) else null)
-                views[i].contentDescription = a.label + if (a == current) ", chosen" else ""
-            }
-            setSummary(sub, current.label)
-        }
-        update()
-        target += update
-        box.addView(swatches)
-        return box
-    }
-
     /** The browser with its menu open, ready to arrange (2.2). */
     private fun arrangeMenu() {
         startActivity(
@@ -1282,8 +1317,9 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     private fun resetMenu() {
+        val before = MenuButtons.layout()
         MenuButtons.save(MenuButtons.defaultLayout())
-        snack("The menu is back as it started")
+        Messages.show(this, "The menu is back as it started", "Undo") { MenuButtons.save(before) }
     }
 
     /** "Profile, Home · address · Tabs, Menu". */
@@ -1501,23 +1537,25 @@ class SettingsActivity : AppCompatActivity() {
         box.addView(off, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(52)).apply { topMargin = dp(4) })
         val update = {
             val vpn = com.swiftbrowser.vpn.Vpn
-            title.text = if (vpn.testing) "Testing…" else when (vpn.state) {
+            // The words change with a quick cross-fade rather than a jump (2.3).
+            Motion.swapText(title, if (vpn.testing) "Testing…" else when (vpn.state) {
                 com.swiftbrowser.vpn.Vpn.State.ON -> "Connected"
                 com.swiftbrowser.vpn.Vpn.State.CONNECTING -> "Connecting…"
                 com.swiftbrowser.vpn.Vpn.State.FAILED -> if (vpn.wanted) "Not connected" else "Off"
                 com.swiftbrowser.vpn.Vpn.State.OFF -> "Off"
-            }
-            status.text = VpnUi.status()
+            })
+            Motion.swapText(status, VpnUi.status())
             val empty = vpn.locations().isEmpty()
             val dropped = VpnUi.dropped()
-            off.visibility = if (dropped) View.VISIBLE else View.GONE
-            button.text = when {
+            if (dropped && off.visibility != View.VISIBLE) Motion.fadeIn(off, fromDy = 6)
+            if (!dropped && off.visibility == View.VISIBLE) Motion.fadeOut(off, toDy = 0)
+            Motion.swapText(button, when {
                 empty -> "How to get free locations"
                 vpn.testing -> "Stop testing"
                 dropped -> "Reconnect"
                 vpn.wanted -> "Turn off"
                 else -> "Turn on"
-            }
+            })
             button.setOnClickListener {
                 when {
                     empty -> vpnHowTo()
@@ -1951,7 +1989,7 @@ class SettingsActivity : AppCompatActivity() {
         val profile = Profiles.current()
         val labels = arrayOf(
             "History and recently closed tabs", "Cookies and what sites stored (signs you out)", "Saved pictures and files (cache)",
-            "Where videos were left off",
+            "Where videos and articles were left off",
         )
         val checked = booleanArrayOf(true, false, true, false)
         val d = MaterialAlertDialogBuilder(this)
@@ -2163,7 +2201,7 @@ class SettingsActivity : AppCompatActivity() {
         return res
     }
 
-    private fun color(res: Int) = ContextCompat.getColor(this, res)
+    private fun color(res: Int) = Palette.color(this, res)
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
@@ -2173,7 +2211,7 @@ class SettingsActivity : AppCompatActivity() {
 
         /** Everyday words for what settings are about, for the search box. */
         private val SYNONYMS = mapOf(
-            "battery" to listOf("lite", "data saver", "draw pages", "tabs kept", "sleep", "dark"),
+            "battery" to listOf("battery saver", "lite", "data saver", "draw pages", "tabs kept", "sleep", "dark"),
             "music" to listOf("playing", "background", "sleep", "audio"),
             "song" to listOf("playing", "background", "sleep"),
             "sound" to listOf("audio", "volume", "sound", "autoplay", "playing"),
@@ -2192,7 +2230,11 @@ class SettingsActivity : AppCompatActivity() {
             "font" to listOf("text size", "reader"),
             "big" to listOf("text size", "zoom"),
             "night" to listOf("dark"),
-            "black" to listOf("dark"),
+            "black" to listOf("dark", "colours"),
+            "colour" to listOf("colours"),
+            "color" to listOf("colours"),
+            "background" to listOf("colours"),
+            "theme" to listOf("theme", "colours"),
             "privacy" to listOf("clear", "secure", "cookie", "incognito", "site settings"),
             "password" to listOf("site settings", "clear"),
             "location" to listOf("site settings", "vpn"),

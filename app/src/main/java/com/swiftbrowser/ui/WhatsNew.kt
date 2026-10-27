@@ -23,12 +23,15 @@ object WhatsNew {
     private class Item(val icon: Int, val title: String, val text: String)
 
     private val NEW = listOf(
-        Item(R.drawable.ic_menu, "Arrange your menu", "Hold any button in the menu to move it, put it on another page or hide it. Lite mode, dark mode, desktop and full screen are buttons there now."),
-        Item(R.drawable.ic_toolbar, "Your address bar buttons", "Pick up to 4 buttons for either side of the address, like reload, new tab or share: Settings → Look & screen."),
-        Item(R.drawable.ic_vpn, "VPN reminders and tests", "Swift reminds you before a free location stops working, offers another one when a server doesn't answer, and tests them all for you."),
-        Item(R.drawable.ic_qr, "Scan QR codes", "Next to the microphone in the address bar, or as a menu button."),
-        Item(R.drawable.ic_image, "News with big pictures", "Turn on Stories with big pictures in Settings → Home & news for Chrome-style cards."),
-        Item(R.drawable.ic_lock, "Secure DNS", "The sites you visit are looked up privately, so your network can't see them: Settings → Privacy & security."),
+        Item(R.drawable.ic_palette, "Your colours", "A new logo, 12 accent colours or your own, ready-made mixes, and the main colour of light and dark mode, like warm paper or pure black: Settings → Look & screen → Colours."),
+        Item(R.drawable.ic_menu, "An easier menu", "Two rows a page. Hold a button and drag it: it stays where you drop it, or drop it on the top to hide it. Hidden ones wait under Hidden on the last page."),
+        Item(R.drawable.ic_reopen, "Continue where you left off", "Videos and articles you didn't finish are on the home page, with their pictures. An article opens in reader view where you stopped."),
+        Item(R.drawable.ic_battery, "Battery saver", "Below 20% battery (or 15 or 30, as you choose) Swift turns on Lite mode and keeps one tab loaded, until you charge."),
+        Item(R.drawable.ic_night_light, "Night light", "A warm screen at night, pages and videos too: Settings → Look & screen."),
+        Item(R.drawable.ic_reader, "Reader view by itself", "Open a site's articles in reader view every time: the site's settings, or Always after you use reader view there twice."),
+        Item(R.drawable.ic_text_size, "Text size for each site", "Bigger text on one site only: Text size in the menu, or the site's settings."),
+        Item(R.drawable.ic_shield, "Ads blocked this week", "See how many ads and trackers were blocked each day: Settings → Ad blocking."),
+        Item(R.drawable.ic_vpn, "Shortcuts and a quicker VPN", "Hold Swift's icon for New tab, Incognito or Scan QR. Hold the VPN mark to switch country, or use the Swift VPN tile in quick settings."),
     )
 
     private class Card(val icon: Int, val title: String, val text: String)
@@ -64,7 +67,7 @@ object WhatsNew {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
             setPadding(Ui.dp(a, 24), Ui.dp(a, 8), Ui.dp(a, 24), Ui.dp(a, 12))
-            addView(android.widget.ImageView(a).apply { setImageResource(R.drawable.ic_logo) }, LinearLayout.LayoutParams(Ui.dp(a, 56), Ui.dp(a, 56)))
+            addView(android.widget.ImageView(a).apply { setImageDrawable(Ui.logo(a)) }, LinearLayout.LayoutParams(Ui.dp(a, 56), Ui.dp(a, 56)))
             addView(Ui.text(a, Ui.Type.HEADLINE, "What's new in Swift ${BuildConfig.VERSION_NAME}").apply {
                 gravity = Gravity.CENTER
                 setPadding(0, Ui.dp(a, 12), 0, 0)

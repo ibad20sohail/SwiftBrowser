@@ -38,8 +38,10 @@ object WatchPositions {
         // kept until this viewing gets past it (then the offer goes).
         if (tab.resumeOffered == page && (finished || t >= tab.resumePosition - 5)) main.post { TabManager.ui?.hideResumeChip(tab) }
         if (!finished && tab.resumeOffered == page && t < tab.resumePosition) return
+        // Its picture, for the home page's "Continue" (2.3).
+        val image = msg.optString("img").takeIf { it.startsWith("http") && it.length < 2000 }
         TabManager.io.execute {
-            if (finished) SwiftApp.db.deleteVideoPosition(page) else SwiftApp.db.setVideoPosition(page, t, d)
+            if (finished) SwiftApp.db.deleteVideoPosition(page) else SwiftApp.db.setVideoPosition(page, t, d, image)
         }
     }
 

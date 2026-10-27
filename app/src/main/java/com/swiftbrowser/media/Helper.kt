@@ -121,6 +121,7 @@ object Helper {
                 TabManager.ui?.onPlayingChanged(tab)
             }
             "video-pos" -> WatchPositions.onPosition(tab, msg)
+            "reader-place" -> Unfinished.onReaderPlace(tab, msg)
             // Read aloud, from the reader view page in this tab: it hears back how far it got.
             "tts-start", "tts-pause", "tts-resume", "tts-stop", "tts-skip", "tts-rate" -> {
                 val ctx = SwiftApp.instance ?: return
@@ -162,10 +163,15 @@ object Helper {
             "reader-ready" -> {
                 val tab = tabsByExtId[msg.optInt("tabId", -1)] ?: return
                 val url = msg.optString("url")
+                tab.quietReader = false
                 if (url.startsWith("moz-extension://") && tab.session != null) TabManager.load(tab, url)
             }
             "reader-failed" -> {
                 val tab = tabsByExtId[msg.optInt("tabId", -1)] ?: return
+                if (tab.quietReader) {
+                    tab.quietReader = false
+                    return
+                }
                 if (tab === TabManager.current) TabManager.ui?.showMessage("This page has no article to show in reader view")
             }
         }
@@ -202,7 +208,7 @@ object Helper {
         val prefs = SwiftApp.prefs
         try {
             port.postMessage(
-                JSONObject().put("type", "look").put("lite", prefs.liteMode).put("fixes", !prefs.sitesAsDesigned)
+                JSONObject().put("type", "look").put("lite", prefs.liteMode || com.swiftbrowser.engine.Power.saving).put("fixes", !prefs.sitesAsDesigned)
                     .put("liteExcept", org.json.JSONArray(com.swiftbrowser.core.SiteSettings.liteExceptions()))
                     .put("keepPlaying", prefs.keepPlaying)
                     .put("readerFont", prefs.readerFont).put("readerSpacing", prefs.readerSpacing)
@@ -219,7 +225,7 @@ object Helper {
         val config = android.content.res.Configuration(app.resources.configuration)
         config.uiMode = (config.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK.inv()) or
             if (night) android.content.res.Configuration.UI_MODE_NIGHT_YES else android.content.res.Configuration.UI_MODE_NIGHT_NO
-        val c = app.createConfigurationContext(config).getColor(com.swiftbrowser.ui.Looks.accent.primary)
+        val c = app.createConfigurationContext(config).let { com.swiftbrowser.ui.Palette.color(it, com.swiftbrowser.ui.Looks.accent.primary) }
         return String.format("#%06x", c and 0xFFFFFF)
     }
 

@@ -153,6 +153,68 @@ object VpnUi {
         }
     }
 
+    /**
+     * Holding the VPN mark in the address bar (2.3): just the countries, tap one to move there (its
+     * fastest server). The whole VPN sheet is a row away.
+     */
+    fun quickSwitch(a: Activity, permission: ActivityResultLauncher<Intent>, openSheet: () -> Unit) {
+        val locations = Vpn.locations()
+        if (locations.size < 2) {
+            openSheet()
+            return
+        }
+        val col = Sheets.column(a)
+        col.addView(Sheets.header(a, "Switch country", "Sites see you in the country you pick."))
+        lateinit var dialog: com.google.android.material.bottomsheet.BottomSheetDialog
+        val chosen = Vpn.current()
+        val connected = Vpn.state == Vpn.State.ON
+        fun row(flag: String?, title: String, sub: String?, check: Boolean, icon: Int = 0, onClick: () -> Unit) = LinearLayout(a).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            minimumHeight = Ui.dp(a, 56)
+            setPadding(Ui.dp(a, 24), Ui.dp(a, 6), Ui.dp(a, 16), Ui.dp(a, 6))
+            background = Ui.ripple(a, null, 0)
+            if (flag != null) {
+                addView(TextView(a).apply {
+                    text = flag
+                    textSize = 22f
+                }, LinearLayout.LayoutParams(Ui.dp(a, 40), ViewGroup.LayoutParams.WRAP_CONTENT))
+            } else {
+                addView(android.widget.ImageView(a).apply {
+                    setImageDrawable(Ui.icon(a, icon, Ui.textSecondary(a)))
+                    scaleType = android.widget.ImageView.ScaleType.FIT_START
+                }, LinearLayout.LayoutParams(Ui.dp(a, 40), Ui.dp(a, 24)))
+            }
+            addView(LinearLayout(a).apply {
+                orientation = LinearLayout.VERTICAL
+                addView(Ui.text(a, Ui.Type.BODY, title))
+                if (sub != null) addView(Ui.text(a, Ui.Type.CAPTION, sub))
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            if (check) addView(android.widget.ImageView(a).apply {
+                setImageDrawable(Ui.icon(a, R.drawable.ic_check, Ui.accent(a)))
+            }, LinearLayout.LayoutParams(Ui.dp(a, 24), Ui.dp(a, 24)))
+            contentDescription = title + if (check) ", in use" else ""
+            setOnClickListener {
+                dialog.dismiss()
+                onClick()
+            }
+        }
+        for (servers in locations.groupBy { it.country.ifEmpty { it.server } }.values.sortedBy { it.first().countryName }) {
+            val best = Vpn.ranked(servers).first()
+            val here = chosen?.let { c -> servers.any { it.id == c.id } } == true
+            col.addView(row(best.flag, best.countryName, if (here && connected) "Connected" else null, here) {
+                if (here && connected) return@row
+                turnOn(a, permission, best)
+                Messages.show(a, "Moving to ${best.flag} ${best.countryName}…")
+            })
+        }
+        col.addView(Ui.divider(a, 24))
+        col.addView(row(null, "More VPN options", null, false, icon = R.drawable.ic_settings) { openSheet() })
+        Motion.stagger(col, step = 18, max = 8)
+        dialog = Sheets.sheet(a, col)
+        dialog.showImmersive()
+    }
+
     /** The quick sheet: the state, on/off, and the locations to pick from. */
     fun sheet(a: Activity, permission: ActivityResultLauncher<Intent>, openSettings: () -> Unit) {
         val col = Sheets.column(a)
@@ -230,9 +292,10 @@ object VpnUi {
                         background = Ui.rippleBorderless(a)
                         contentDescription = "Servers in ${best.countryName}"
                         setOnClickListener {
-                            val open = list.visibility != android.view.View.VISIBLE
-                            list.visibility = if (open) android.view.View.VISIBLE else android.view.View.GONE
-                            rotation = if (open) 180f else 0f
+                            // Folds open and shut, the arrow turning with it (2.3).
+                            val open = rotation < 90f
+                            if (open) Motion.expand(list) else Motion.collapse(list) { list.visibility = android.view.View.GONE }
+                            animate().rotation(if (open) 180f else 0f).setDuration(Motion.NORMAL).setInterpolator(Motion.standard).start()
                         }
                     }, LinearLayout.LayoutParams(Ui.dp(a, 48), Ui.dp(a, 48)))
                     setOnClickListener {

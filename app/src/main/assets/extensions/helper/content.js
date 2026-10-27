@@ -146,8 +146,19 @@
     return el && el.tagName === 'VIDEO' && Number.isFinite(el.duration) && el.duration >= MIN_LENGTH;
   }
 
+  // A picture for the home page's "Continue" (2.3): the video's poster, else the page's preview picture.
+  function videoPicture(v) {
+    let src = v.poster || '';
+    if (!src) {
+      const meta = document.querySelector('meta[property="og:image"], meta[name="twitter:image"]');
+      src = meta ? (meta.content || '') : '';
+    }
+    try { src = src ? new URL(src, location.href).href : ''; } catch (e) { src = ''; }
+    return /^https?:/.test(src) && src.length < 2000 ? src : '';
+  }
+
   function reportPosition(v, ended) {
-    send({ type: 'video-pos', t: ended ? v.duration : v.currentTime, d: v.duration, ended: ended === true });
+    send({ type: 'video-pos', t: ended ? v.duration : v.currentTime, d: v.duration, ended: ended === true, img: videoPicture(v) });
   }
 
   // Every few seconds while playing, and when paused or finished.

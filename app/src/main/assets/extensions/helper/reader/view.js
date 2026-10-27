@@ -67,7 +67,7 @@ function render(article) {
   document.getElementById('byline').textContent = article.byline || '';
   document.getElementById('content').appendChild(clean(article.content || ''));
   document.getElementById('original').href = article.url;
-  restorePlace(article.url);
+  restorePlace(article.url, article.title);
 }
 
 document.getElementById('smaller').addEventListener('click', () => {
@@ -224,7 +224,7 @@ window.addEventListener('pagehide', () => {
 let articleKey = null;
 let saveTimer = 0;
 
-function restorePlace(url) {
+function restorePlace(url, title) {
   articleKey = url ? 'place:' + url.split('#')[0] : null;
   if (!articleKey) { return; }
   const share = Number(localStorage.getItem(articleKey));
@@ -240,6 +240,11 @@ function restorePlace(url) {
         // Near the end counts as read: next time it opens at the top.
         if (window.scrollY + window.innerHeight >= h - 40) { localStorage.removeItem(articleKey); } else { localStorage.setItem(articleKey, share.toFixed(4)); }
       } catch (e) { }
+      // Swift lists articles left half-way on its home page (2.3).
+      const done = window.scrollY + window.innerHeight >= h - 40;
+      const picture = document.querySelector('#content img');
+      const img = picture && /^https?:/.test(picture.src) && picture.src.length < 2000 ? picture.src : '';
+      send({ type: 'reader-place', url: url.split('#')[0], title: title || '', share: done ? 1 : (h > 0 ? (window.scrollY + window.innerHeight) / h : 0), done, img });
     }, 400);
   }, { passive: true });
 }

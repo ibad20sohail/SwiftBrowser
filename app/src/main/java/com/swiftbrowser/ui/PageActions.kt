@@ -13,6 +13,7 @@ import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.core.graphics.drawable.IconCompat
 import com.swiftbrowser.SwiftApp
 import com.swiftbrowser.core.Favicons
+import com.swiftbrowser.core.SiteSettings
 import com.swiftbrowser.core.UrlUtils
 import com.swiftbrowser.download.Downloads
 import com.swiftbrowser.engine.Engine
@@ -34,8 +35,26 @@ object PageActions {
         }
         if (!UrlUtils.isHttp(tab.url) || tab.session == null || !Helper.startReader(tab)) {
             a.snack("Reader view isn't available on this page")
+            return
+        }
+        tab.autoReaderDone.add(tab.url.substringBefore('#'))
+        // The second time on a site: offer to always open its articles in reader view (2.3).
+        val site = UrlUtils.site(tab.url) ?: return
+        if (SiteSettings.autoReader(site) || site in readerOffered) return
+        val times = (readerUses[site] ?: 0) + 1
+        readerUses[site] = times
+        if (times >= 2) {
+            readerOffered += site
+            a.snack("Always open articles on $site in reader view?", "Always") {
+                SiteSettings.setAutoReader(site, true)
+                a.snack("Articles on $site open in reader view. Change it in the site's settings.")
+            }
         }
     }
+
+    /** Reader view opened by hand on each site this time, and the sites already offered "Always". */
+    private val readerUses = HashMap<String, Int>()
+    private val readerOffered = HashSet<String>()
 
     // ------------------------------------------------------------------ how sites look
 

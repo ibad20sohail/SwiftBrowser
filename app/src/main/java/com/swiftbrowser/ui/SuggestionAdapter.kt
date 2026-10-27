@@ -66,7 +66,7 @@ class SuggestionAdapter(
             }
             return object : RecyclerView.ViewHolder(tv) {}
         }
-        return RowHolder(LayoutInflater.from(ctx).inflate(R.layout.item_row, parent, false)).also {
+        return RowHolder(Palette.paint(LayoutInflater.from(ctx).inflate(R.layout.item_row, parent, false))).also {
             // A little lower than list rows: suggestions are mostly one line.
             it.itemView.minimumHeight = Ui.dp(ctx, 56)
         }

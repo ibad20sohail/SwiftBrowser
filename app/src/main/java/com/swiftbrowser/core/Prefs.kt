@@ -38,6 +38,21 @@ class Prefs(ctx: Context) {
         get() = sp.getBoolean(NEWS_ENABLED, true)
         set(v) = sp.edit { putBoolean(NEWS_ENABLED, v) }
 
+    /** Night light (2.3): 0 off, 1 at night, 2 always (see ui.NightLight). */
+    var nightLight: Int
+        get() = sp.getInt(NIGHT_LIGHT, 0)
+        set(v) = sp.edit { putInt(NIGHT_LIGHT, v) }
+
+    /** How warm the night light is: 1 low, 2 medium, 3 high. */
+    var nightLightStrength: Int
+        get() = sp.getInt(NIGHT_LIGHT_STRENGTH, 2)
+        set(v) = sp.edit { putInt(NIGHT_LIGHT_STRENGTH, v) }
+
+    /** The home page's "Continue" row: videos and articles left half-way (2.3). */
+    var homeContinue: Boolean
+        get() = sp.getBoolean(HOME_CONTINUE, true)
+        set(v) = sp.edit { putBoolean(HOME_CONTINUE, v) }
+
     /** The news country's code, or empty for the phone's region (News.country). */
     var newsCountry: String
         get() = sp.getString(NEWS_COUNTRY, "") ?: ""
@@ -90,10 +105,33 @@ class Prefs(ctx: Context) {
         get() = sp.getString(SECURE_DNS, "cloudflare") ?: "cloudflare"
         set(v) = sp.edit { putString(SECURE_DNS, v) }
 
-    /** The accent colour's key (Accent.key): blue, green, purple, orange, red or teal. */
+    /** The accent colour's key (Accent.key): one of the presets, or "custom" ([accentCustom]). */
     var accent: String
         get() = sp.getString(ACCENT, "blue") ?: "blue"
         set(v) = sp.edit { putString(ACCENT, v) }
+
+    /** 2.3: the colour picked for a custom accent. */
+    var accentCustom: Int
+        get() = sp.getInt(ACCENT_CUSTOM, 0xFF1B66E4.toInt())
+        set(v) = sp.edit { putInt(ACCENT_CUSTOM, v) }
+
+    /** 2.3: the background in light mode: "white", "warm", "cool" or "custom" ([lightBgCustom]). */
+    var lightBg: String
+        get() = sp.getString(LIGHT_BG, "white") ?: "white"
+        set(v) = sp.edit { putString(LIGHT_BG, v) }
+
+    var lightBgCustom: Int
+        get() = sp.getInt(LIGHT_BG_CUSTOM, 0xFFFCF8F0.toInt())
+        set(v) = sp.edit { putInt(LIGHT_BG_CUSTOM, v) }
+
+    /** 2.3: the background in dark mode: "grey", "black", "navy", "warm" or "custom" ([darkBgCustom]). */
+    var darkBg: String
+        get() = sp.getString(DARK_BG, "grey") ?: "grey"
+        set(v) = sp.edit { putString(DARK_BG, v) }
+
+    var darkBgCustom: Int
+        get() = sp.getInt(DARK_BG_CUSTOM, 0xFF0D1322.toInt())
+        set(v) = sp.edit { putInt(DARK_BG_CUSTOM, v) }
 
     var adLevel: AdLevel
         get() = AdLevel.fromKey(sp.getString(AD_LEVEL, AdLevel.HIGH.key))
@@ -286,6 +324,16 @@ class Prefs(ctx: Context) {
         get() = sp.getString(DOWNLOAD_FOLDER, "") ?: ""
         set(v) = sp.edit { putString(DOWNLOAD_FOLDER, v) }
 
+    /** Low battery: Lite mode, one tab loaded, no pictures on mobile data (see engine.Power, 2.3). */
+    var batterySaver: Boolean
+        get() = sp.getBoolean(BATTERY_SAVER, true)
+        set(v) = sp.edit { putBoolean(BATTERY_SAVER, v) }
+
+    /** The battery saver starts below this many percent (15, 20 or 30). */
+    var batterySaverLevel: Int
+        get() = sp.getInt(BATTERY_SAVER_LEVEL, 20)
+        set(v) = sp.edit { putInt(BATTERY_SAVER_LEVEL, v) }
+
     /** On mobile data, pages load without images (see DataSaver). */
     var dataSaver: Boolean
         get() = sp.getBoolean(DATA_SAVER, false)
@@ -329,6 +377,11 @@ class Prefs(ctx: Context) {
         const val DARK_MODE = "dark_mode"
         const val THEME_MODE = "theme_mode"
         const val ACCENT = "accent"
+        const val ACCENT_CUSTOM = "accent_custom"
+        const val LIGHT_BG = "light_bg"
+        const val LIGHT_BG_CUSTOM = "light_bg_custom"
+        const val DARK_BG = "dark_bg"
+        const val DARK_BG_CUSTOM = "dark_bg_custom"
         const val MENU_BUTTONS = "menu_buttons"
         const val MENU_LAYOUT = "menu_layout"
         const val MENU_HIDDEN = "menu_hidden"
@@ -336,6 +389,9 @@ class Prefs(ctx: Context) {
         const val SECURE_DNS = "secure_dns"
         const val NEWS_CARDS = "news_cards"
         const val NEWS_ENABLED = "news_enabled"
+        const val HOME_CONTINUE = "home_continue"
+        const val NIGHT_LIGHT = "night_light"
+        const val NIGHT_LIGHT_STRENGTH = "night_light_strength"
         const val WELCOME_DONE = "welcome_done"
         const val BAR_SWIPES = "bar_swipes"
         const val SWIPE_HIDE = 1
@@ -388,6 +444,8 @@ class Prefs(ctx: Context) {
         const val CONTINUE_WATCHING = "continue_watching"
         const val VIDEO_TAPS = "video_taps"
         const val DATA_SAVER = "data_saver"
+        const val BATTERY_SAVER = "battery_saver"
+        const val BATTERY_SAVER_LEVEL = "battery_saver_level"
         const val DOWNLOAD_FOLDER = "download_folder"
     }
 }

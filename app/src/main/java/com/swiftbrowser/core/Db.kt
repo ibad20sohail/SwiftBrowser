@@ -58,7 +58,7 @@ data class DownloadRow(
  * Small hand-written SQLite layer: profiles, tabs (with their order and groups), recently closed
  * tabs, history, bookmarks, downloads, per-site ad levels and where videos were left off.
  */
-class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 2) {
+class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 4) {
 
     override fun onConfigure(db: SQLiteDatabase) {
         db.enableWriteAheadLogging()
@@ -92,6 +92,8 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 2) {
         )
         db.execSQL("CREATE TABLE site_levels(site TEXT PRIMARY KEY, level TEXT NOT NULL)")
         addVersion2(db)
+        addVersion3(db)
+        addVersion4(db)
 
         db.insert("profiles", null, ContentValues().apply {
             put("name", "Personal")
@@ -106,6 +108,21 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 2) {
             // Tabs keep the order they had: the order they were opened in.
             db.execSQL("UPDATE tabs SET position = id")
         }
+        if (oldVersion < 3) addVersion3(db)
+        if (oldVersion < 4) addVersion4(db)
+    }
+
+    /** 2.3: a picture for each video and article left half-way (the "Continue" cards). */
+    private fun addVersion4(db: SQLiteDatabase) {
+        db.execSQL("ALTER TABLE video_positions ADD COLUMN image TEXT")
+        db.execSQL("ALTER TABLE reading_positions ADD COLUMN image TEXT")
+    }
+
+    /** 2.3: where articles in reader view were left off (the home page's "Continue"). */
+    private fun addVersion3(db: SQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE reading_positions(page TEXT PRIMARY KEY, title TEXT, share REAL NOT NULL, updated INTEGER NOT NULL)",
+        )
     }
 
     /** 1.6: tab order and groups, recently closed tabs, where videos were left off. */
@@ -334,14 +351,19 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 2) {
             it.getDouble(0) to it.getDouble(1)
         }.firstOrNull()
 
-    fun setVideoPosition(page: String, position: Double, duration: Double) {
+    /** [image]: a picture of it, when the page has one (an earlier one is kept otherwise). */
+    fun setVideoPosition(page: String, position: Double, duration: Double, image: String? = null) {
         val db = writableDatabase
-        db.insertWithOnConflict("video_positions", null, ContentValues().apply {
-            put("page", page)
+        val values = ContentValues().apply {
             put("position", position)
             put("duration", duration)
             put("updated", System.currentTimeMillis())
-        }, SQLiteDatabase.CONFLICT_REPLACE)
+            if (image != null) put("image", image)
+        }
+        if (db.update("video_positions", values, "page=?", arrayOf(page)) == 0) {
+            values.put("page", page)
+            db.insert("video_positions", null, values)
+        }
         db.execSQL(
             "DELETE FROM video_positions WHERE page NOT IN (SELECT page FROM video_positions ORDER BY updated DESC LIMIT 300)",
         )
@@ -353,7 +375,47 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 2) {
 
     fun clearVideoPositions() {
         writableDatabase.delete("video_positions", null, null)
+        writableDatabase.delete("reading_positions", null, null)
     }
+
+    /** Long videos left off since [since] that are in the profile's history: page, title, position, length, when. */
+    fun unfinishedVideos(profileId: Long, since: Long, limit: Int): List<Array<Any?>> =
+        query(
+            "SELECT v.page, h.title, v.position, v.duration, v.updated, v.image FROM video_positions v " +
+                "JOIN history h ON h.url = v.page AND h.profile_id = ? WHERE v.updated >= ? ORDER BY v.updated DESC LIMIT ?",
+            arrayOf("$profileId", "$since", "$limit"),
+        ) { arrayOf(it.getString(0), it.getString(1), it.getDouble(2), it.getDouble(3), it.getLong(4), it.getString(5)) }
+
+    // ---------------------------------------------------------------- where articles were left off (2.3)
+
+    fun setReadingPosition(page: String, title: String?, share: Double, image: String? = null) {
+        val db = writableDatabase
+        val values = ContentValues().apply {
+            put("title", title)
+            put("share", share)
+            put("updated", System.currentTimeMillis())
+            if (image != null) put("image", image)
+        }
+        if (db.update("reading_positions", values, "page=?", arrayOf(page)) == 0) {
+            values.put("page", page)
+            db.insert("reading_positions", null, values)
+        }
+        db.execSQL(
+            "DELETE FROM reading_positions WHERE page NOT IN (SELECT page FROM reading_positions ORDER BY updated DESC LIMIT 100)",
+        )
+    }
+
+    fun deleteReadingPosition(page: String) {
+        writableDatabase.delete("reading_positions", "page=?", arrayOf(page))
+    }
+
+    /** Articles left off since [since] that are in the profile's history: page, title, share read, when. */
+    fun unfinishedArticles(profileId: Long, since: Long, limit: Int): List<Array<Any?>> =
+        query(
+            "SELECT r.page, IFNULL(r.title, h.title), r.share, r.updated, r.image FROM reading_positions r " +
+                "JOIN history h ON h.url = r.page AND h.profile_id = ? WHERE r.updated >= ? ORDER BY r.updated DESC LIMIT ?",
+            arrayOf("$profileId", "$since", "$limit"),
+        ) { arrayOf(it.getString(0), it.getString(1), it.getDouble(2), it.getLong(3), it.getString(4)) }
 
     // ---------------------------------------------------------------- history
 

@@ -26,6 +26,9 @@ object PreviewLoader {
 
     fun cached(url: String, size: Int): Bitmap? = cache.get("$size:$url")
 
+    /** Android is short of memory: the kept pictures go (they load again when needed). */
+    fun trim() = cache.evictAll()
+
     fun load(activity: Activity, url: String, size: Int, onLoaded: (Bitmap) -> Unit) {
         cached(url, size)?.let {
             onLoaded(it)

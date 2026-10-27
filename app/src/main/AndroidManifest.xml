@@ -54,6 +54,8 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- Hold the app icon: New tab, Incognito tab, Scan QR code (2.3). -->
+            <meta-data android:name="android.app.shortcuts" android:resource="@xml/shortcuts" />
             <!-- Lets Swift be chosen to open web links from other apps. -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
@@ -94,6 +96,19 @@
             android:name=".media.ReadAloudService"
             android:exported="false"
             android:foregroundServiceType="mediaPlayback" />
+
+        <!-- The "Swift VPN" quick settings tile (2.3). -->
+        <service
+            android:name=".vpn.VpnTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_tile_vpn"
+            android:label="@string/tile_vpn"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+            <meta-data android:name="android.service.quicksettings.ACTIVE_TILE" android:value="true" />
+        </service>
 
         <!-- Notes engine crashes for the problem report; in its own process so it survives them. -->
         <service

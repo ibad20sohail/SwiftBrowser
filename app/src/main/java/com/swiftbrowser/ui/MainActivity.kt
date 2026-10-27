@@ -60,6 +60,7 @@ import com.swiftbrowser.core.Diagnostics
 import com.swiftbrowser.core.L
 import com.swiftbrowser.core.Prefs
 import com.swiftbrowser.core.Profiles
+import com.swiftbrowser.core.SiteSettings
 import com.swiftbrowser.core.TopSites
 import com.swiftbrowser.core.Updates
 import com.swiftbrowser.core.UrlUtils
@@ -120,7 +121,17 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     private lateinit var findBar: View
     private lateinit var findEdit: EditText
     private lateinit var findCount: TextView
-    private lateinit var switcher: TabSwitcherView
+    /** The tab grid: made the first time it opens (2.3), so starting Swift doesn't build it. */
+    private var switcherView: TabSwitcherView? = null
+    private val switcher: TabSwitcherView
+        get() = switcherView ?: (findViewById<android.view.ViewStub>(R.id.tab_switcher_stub).inflate() as TabSwitcherView).also {
+            switcherView = it
+            Palette.paint(it)
+            setupSwitcher(it)
+        }
+
+    /** The tab grid is open (asking doesn't make it). */
+    private val switcherOpen: Boolean get() = switcherView?.isOpen == true
     private lateinit var startup: View
     private lateinit var tabSwipe: TabSwipe
 
@@ -238,9 +249,10 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         // The manifest gives this screen the logo as its window while the app starts.
         setTheme(R.style.Theme_Swift)
         Looks.apply(this)
-        appliedAccent = Looks.accent
+        appliedColors = Palette.signature
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+        Palette.paint(findViewById<View>(android.R.id.content))
         prefs = SwiftApp.prefs
         toolbarPx = resources.getDimensionPixelSize(R.dimen.toolbar_height)
         bindViews()
@@ -250,7 +262,6 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         setupGestures()
         setupPullToRefresh()
         setupHome()
-        setupSwitcher()
         setupTabSwipe()
 
         gecko.setActivityContextDelegate { this }
@@ -306,7 +317,10 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             false
         }
         com.swiftbrowser.engine.DataSaver.listener = { active ->
-            if (active) snack("On mobile data: pages load without pictures (Data saver)")
+            if (active && prefs.dataSaver) snack("On mobile data: pages load without pictures (Data saver)")
+        }
+        com.swiftbrowser.engine.Power.listener = {
+            if (lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) announceBattery()
         }
         setupEdgeSwipe()
         // A newer Swift on GitHub? Asked at most once a day, a while after starting.
@@ -423,7 +437,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             var tint = normal
             when (key) {
                 "reload" -> {
-                    b.setImageResource(if (tab.loading) R.drawable.ic_close else R.drawable.ic_refresh)
+                    Motion.swapIcon(b, if (tab.loading) R.drawable.ic_close else R.drawable.ic_refresh)
                     b.contentDescription = if (tab.loading) "Stop" else "Reload"
                 }
                 "share" -> {
@@ -613,23 +627,29 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             vpn.wanted -> Quad(true, R.color.danger_container, R.color.on_danger_container, "VPN off")
             else -> Quad(false, 0, 0, "")
         }
-        badge.visibility = if (show) View.VISIBLE else View.GONE
+        Motion.pop(badge, show)
         if (!show) return
         badge.text = text
         badge.setTextColor(color(ink))
         badge.background = Ui.shape(this, color(fill), 12)
         badge.contentDescription = VpnUi.label()
         badge.setOnClickListener { showVpnSheet() }
+        // Holding it: switch country straight away (2.3).
+        badge.setOnLongClickListener {
+            Haptics.tick(it)
+            VpnUi.quickSwitch(this, vpnPermission) { showVpnSheet() }
+            true
+        }
     }
 
     private data class Quad(val show: Boolean, val fill: Int, val ink: Int, val text: String)
 
     /** The accent this screen was drawn with: a new one (chosen in Settings) redraws it. */
-    private var appliedAccent: Accent? = null
+    private var appliedColors: String? = null
 
     override fun onStart() {
         super.onStart()
-        if (appliedAccent != null && appliedAccent != Looks.accent) {
+        if (appliedColors != null && appliedColors != Palette.signature) {
             recreate()
             return
         }
@@ -644,8 +664,27 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         bookmarkShownFor = null
         updateToolbarExtras()
         if (home.visibility == View.VISIBLE) current?.let { home.show(it.incognito) }
+        // Settings may have changed the text size for all sites; the site on screen may have its own.
+        current?.let { Engine.showTextScaleFor(UrlUtils.site(it.url)) }
         Diagnostics.setOnScreen(true)
-        if (!switcher.isOpen) current?.session?.let { if (it.isOpen) it.setActive(true) }
+        if (!switcherOpen) current?.session?.let { if (it.isOpen) it.setActive(true) }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // The battery saver started (or ended) while Swift was away: said now (2.3).
+        announceBattery()
+        NightLight.attach(this)
+        // A change of theme rebuilds this screen behind Settings and leaves it started, so coming
+        // back doesn't pass through onStart: colours chosen after that are caught here.
+        if (appliedColors != null && appliedColors != Palette.signature) recreate()
+    }
+
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        // Android is short of memory (2.3): pictures that can be loaded again go first.
+        if (level >= TRIM_MEMORY_RUNNING_LOW && level != TRIM_MEMORY_UI_HIDDEN) home.releasePictures()
+        if (level >= TRIM_MEMORY_RUNNING_CRITICAL && level != TRIM_MEMORY_UI_HIDDEN) PreviewLoader.trim()
     }
 
     override fun onPause() {
@@ -683,11 +722,12 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         if (TabManager.ui === this) TabManager.ui = null
         if (Engine.activityDelegate != null) Engine.activityDelegate = null
         home.listener = null
-        switcher.listener = null
+        switcherView?.listener = null
         gestureLayer.pullListener = null
         gestureLayer.fingerListener = null
         settleAnim?.cancel()
         com.swiftbrowser.engine.DataSaver.listener = null
+        com.swiftbrowser.engine.Power.listener = null
         gestureLayer.edgeListener = null
         gestureLayer.listener = null
         gestureLayer.page = null
@@ -735,8 +775,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         findBar = findViewById(R.id.find_bar)
         findEdit = findViewById(R.id.find_edit)
         findCount = findViewById(R.id.find_count)
-        switcher = findViewById(R.id.tab_switcher)
         startup = findViewById(R.id.startup)
+        findViewById<ImageView>(R.id.startup_logo).setImageDrawable(Ui.logo(this))
         // Drawn above the pull-to-refresh circle, without a shadow on the page.
         appBar.elevation = dp(8f)
         appBar.outlineProvider = null
@@ -753,7 +793,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         if (tabId != Long.MIN_VALUE) {
             intent.removeExtra(EXTRA_TAB_ID)
             TabManager.tabs.firstOrNull { it.id == tabId }?.let { t ->
-                switcher.close()
+                switcherView?.close()
                 if (t !== current) TabManager.select(t)
             }
             return
@@ -761,8 +801,22 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         if (intent.getBooleanExtra(EXTRA_ARRANGE_MENU, false)) {
             intent.removeExtra(EXTRA_ARRANGE_MENU)
             stopEditing()
-            switcher.close()
+            switcherView?.close()
             root.post { if (!isFinishing) quickMenu.open(arrange = true) }
+            return
+        }
+        if (intent.action in SHORTCUTS && intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY == 0) {
+            val action = intent.action
+            intent.action = Intent.ACTION_MAIN
+            stopEditing()
+            switcherView?.close()
+            quickMenu.close()
+            when (action) {
+                ACTION_NEW_TAB -> TabManager.newTab(incognito = false)
+                ACTION_INCOGNITO -> TabManager.newTab(incognito = true)
+                ACTION_SCAN -> root.post { if (!isFinishing) scanQr() }
+                ACTION_VPN -> root.post { if (!isFinishing) showVpnSheet() }
+            }
             return
         }
         intent.getStringExtra(EXTRA_OPEN_FILE)?.let { path ->
@@ -782,7 +836,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         // Other apps can send Swift only web addresses (not file:, content: or javascript: ones).
         if (!url.isNullOrBlank() && UrlUtils.isHttp(url)) {
             stopEditing()
-            switcher.close()
+            switcherView?.close()
             TabManager.newTab(url, incognito = false)
         }
     }
@@ -985,9 +1039,9 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     private fun updateUrlButtons() {
         updateVpnBadge()
         val empty = urlEdit.text.isNullOrEmpty()
-        urlClear.visibility = if (editing && !empty) View.VISIBLE else View.GONE
-        urlMic.visibility = if (editing && empty) View.VISIBLE else View.GONE
-        urlScan.visibility = urlMic.visibility
+        Motion.pop(urlClear, editing && !empty)
+        Motion.pop(urlMic, editing && empty)
+        Motion.pop(urlScan, editing && empty)
     }
 
     private fun navigate(text: String) {
@@ -1000,7 +1054,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     /** A file Swift saved (a page as PDF): the engine shows it. */
     fun openFileInTab(path: String) {
         stopEditing()
-        switcher.close()
+        switcherView?.close()
         TabManager.newTab(android.net.Uri.fromFile(java.io.File(path)).toString(), incognito = false)
     }
 
@@ -1295,7 +1349,64 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             override fun onNewsSettings() {
                 openUrlLauncher.launch(Intent(this@MainActivity, SettingsActivity::class.java).putExtra(SettingsActivity.EXTRA_TOPIC, "NEWS"))
             }
+
+            override fun onContinueClicked(item: com.swiftbrowser.media.Unfinished.Item) {
+                openInCurrent(item.url)
+                // An article opens in reader view again, where it was left.
+                if (!item.video) current?.readerOnLoad = item.url
+            }
+
+            override fun onContinueLongClicked(item: com.swiftbrowser.media.Unfinished.Item) = continueMenu(item)
         }
+    }
+
+    /**
+     * Sites set to "Open articles in reader view" (2.3): each page once (going back to it from
+     * reader view stays on it), not the front page, and nothing said when a page has no article.
+     */
+    private fun autoReader(tab: Tab, attempt: Int = 0) {
+        val url = tab.url
+        if (!UrlUtils.isHttp(url) || Helper.isReaderUrl(url) || !SiteSettings.autoReader(UrlUtils.site(url))) return
+        val path = Uri.parse(url).path
+        if (path.isNullOrEmpty() || path == "/") return
+        val page = url.substringBefore('#')
+        if (page in tab.autoReaderDone) return
+        tab.quietReader = true
+        if (Helper.startReader(tab)) {
+            tab.autoReaderDone.add(page)
+            return
+        }
+        tab.quietReader = false
+        // The page's helper hasn't connected yet when it has just finished loading: a moment later.
+        if (attempt < 5) handler.postDelayed({ if (current === tab && tab.url == url && !tab.loading) autoReader(tab, attempt + 1) }, 400)
+    }
+
+    /** Says once that the battery saver started, and that it ended if that was said. */
+    private fun announceBattery() {
+        val power = com.swiftbrowser.engine.Power
+        if (power.saving && !power.noticeShown) {
+            power.noticeShown = true
+            snack("Battery low: Swift is saving power", "Settings") {
+                openUrlLauncher.launch(Intent(this, SettingsActivity::class.java).putExtra(SettingsActivity.EXTRA_TOPIC, "SPEED"))
+            }
+        } else if (!power.saving && power.noticeShown) {
+            power.noticeShown = false
+            snack("Battery saver off: Swift is back to full speed")
+        }
+    }
+
+    /** Holding a card in the home page's "Continue" (2.3). */
+    private fun continueMenu(item: com.swiftbrowser.media.Unfinished.Item) {
+        val actions = listOf(
+            Sheets.Action(R.drawable.ic_open_new, "New tab", primary = true) {
+                val tab = TabManager.newTab(item.url, incognito = false)
+                if (!item.video) tab.readerOnLoad = item.url
+            },
+            Sheets.Action(R.drawable.ic_share, "Share", primary = true) { share(item.url) },
+            Sheets.Action(R.drawable.ic_copy, "Copy", primary = true) { copy(item.url) },
+            Sheets.Action(R.drawable.ic_close, "Remove from Continue", danger = true) { home.removeContinue(item) },
+        )
+        Sheets.actions(this, item.title.ifBlank { item.url }, item.caption, actions, com.swiftbrowser.core.Favicons.cached(item.url))
     }
 
     /** Holding a story in the home page's news. */
@@ -1402,6 +1513,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             }
             home.visibility = View.VISIBLE
         } else {
+            if (home.visibility == View.VISIBLE) home.releasePictures()
             home.visibility = View.GONE
             homeShownFor = null
         }
@@ -1439,20 +1551,20 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
     // ------------------------------------------------------------------ tab switcher
 
-    private fun setupSwitcher() {
-        switcher.listener = object : TabSwitcherView.Listener {
+    private fun setupSwitcher(s: TabSwitcherView) {
+        s.listener = object : TabSwitcherView.Listener {
             override fun onTabChosen(tab: Tab) {
                 if (tab !== current) TabManager.select(tab)
-                switcher.close(pageRect())
+                s.close(pageRect())
             }
 
             override fun onNewTab(incognito: Boolean) {
-                switcher.close()
+                s.close()
                 TabManager.newTab(incognito = incognito)
             }
 
             override fun onNewTabInGroup(group: TabGroup) {
-                switcher.close()
+                s.close()
                 TabManager.newTabInGroup(group)
             }
 
@@ -1476,7 +1588,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     }
 
     fun openTabSwitcher() {
-        if (switcher.isOpen) return
+        if (switcherOpen) return
         quickMenu.close()
         stopEditing()
         closeFind()
@@ -1484,7 +1596,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         switcher.open(tab?.incognito == true, pageRect())
         if (tab == null) return
         captureThumbnail(tab) {
-            if (switcher.isOpen) {
+            if (switcherOpen) {
                 switcher.refreshTab(tab)
                 // Nothing on the page needs drawing while the grid covers it.
                 if (current === tab) tab.session?.let { if (it.isOpen) it.setActive(false) }
@@ -1507,7 +1619,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
     private val thumbnailRunnable: Runnable = Runnable {
         val tab = current ?: return@Runnable
-        if (tab.loading || switcher.isOpen || fullscreenTab != null) return@Runnable
+        if (tab.loading || switcherOpen || fullscreenTab != null) return@Runnable
         // Reading the screen back holds up drawing for a moment; wait until scrolling stops.
         if (SystemClock.uptimeMillis() - lastUserScrollAt < 1500 && thumbnailTries++ < 10) {
             handler.postDelayed(thumbnailRunnable, 1500)
@@ -1614,6 +1726,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
     override fun onTabSelected(tab: Tab) {
         if (resumeChipFor != null && resumeChipFor !== tab) hideResumeChip(null)
+        Engine.showTextScaleFor(UrlUtils.site(tab.url))
         val isNew = seenTabs.add(tab.id)
         syncSession(tab)
         crashView.visibility = if (tab.crashed) View.VISIBLE else View.GONE
@@ -1649,7 +1762,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         tabsCount.text = if (n > 99) ":D" else n.toString()
         styleTabCount()
         updateProfileChip()
-        if (switcher.isOpen) switcher.refresh()
+        if (switcherOpen) switcher.refresh()
     }
 
     private var styledTabCount: Int? = null
@@ -1685,11 +1798,19 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         }
         if (!tab.loading && shownLoading) {
             scheduleThumbnail(tab)
+            val wanted = tab.readerOnLoad
+            if (wanted != null) {
+                tab.readerOnLoad = null
+                if (UrlUtils.site(tab.url) == UrlUtils.site(wanted) && !Helper.isReaderUrl(tab.url)) Helper.startReader(tab)
+            } else {
+                autoReader(tab)
+            }
             if (themeReloadTab === tab && themeReloadStarted) {
                 themeReloadTab = null
                 handler.postDelayed({ if (current === tab) TabManager.reload(tab) }, 500)
             }
         }
+        Engine.showTextScaleFor(UrlUtils.site(tab.url))
         if (tab.loading != shownLoading || pageStarted) {
             com.swiftbrowser.engine.DataSaver.onSiteShown(UrlUtils.site(tab.url))
             if (!tab.loading) offerImages(tab)
@@ -1698,7 +1819,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         updateHome(tab)
         if (resumeChipFor != null && (resumeChipFor !== tab || resumeChipPage != tab.url.substringBefore('#'))) hideResumeChip(null)
         if (pageStarted) refreshToolbarNow() else requestToolbarRefresh()
-        if (switcher.isOpen) switcher.refreshTab(tab)
+        if (switcherOpen) switcher.refreshTab(tab)
     }
 
     /**
@@ -1718,7 +1839,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         updateUrlBar()
         updateProgress()
         val video = if (tab.media.isNotEmpty() && fullscreenTab == null && !tab.showsHome && !editing) View.VISIBLE else View.GONE
-        if (videoBtn.visibility != video) videoBtn.visibility = video
+        Motion.pop(videoBtn, video == View.VISIBLE)
         updateToolbarExtras()
     }
 
@@ -1753,7 +1874,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
     override fun onTabCrashed(tab: Tab) {
         if (tab === current) {
-            crashView.visibility = View.VISIBLE
+            Motion.fadeIn(crashView, fromDy = 0)
             showToolbar()
         }
     }
@@ -1892,7 +2013,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     private fun canAutoHideToolbar(): Boolean {
         val tab = current ?: return false
         return prefs.hideToolbarOnScroll && !editing && fullscreenTab == null && !ptrRefreshing &&
-            findBar.visibility != View.VISIBLE && !switcher.isOpen && !tab.showsHome && !tab.crashed
+            findBar.visibility != View.VISIBLE && !switcherOpen && !tab.showsHome && !tab.crashed
     }
 
     override fun onPageScroll(tab: Tab, scrollY: Float, byUser: Boolean) {
@@ -2024,7 +2145,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         gestureLayer.pullListener = object : GestureFrameLayout.PullListener {
             override fun canPull(): Boolean {
                 val tab = current ?: return false
-                return prefs.pullToRefresh && !ptrRefreshing && fullscreenTab == null && !editing && !switcher.isOpen &&
+                return prefs.pullToRefresh && !ptrRefreshing && fullscreenTab == null && !editing && !switcherOpen &&
                     findBar.visibility != View.VISIBLE && tab.session != null && !tab.showsHome &&
                     toolbarWanted && toolbarShown >= toolbarPx
             }
@@ -2534,7 +2655,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         if (current?.session == null) return
         stopEditing()
         showToolbar()
-        findBar.visibility = View.VISIBLE
+        Motion.fadeIn(findBar, fromDy = 0, duration = Motion.SHORT)
         findEdit.setText("")
         findCount.text = ""
         findEdit.requestFocus()
@@ -2543,7 +2664,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
     private fun closeFind() {
         if (findBar.visibility != View.VISIBLE) return
-        findBar.visibility = View.GONE
+        Motion.fadeOut(findBar, toDy = 0, duration = 120)
         current?.session?.finder?.clear()
         hideKeyboard()
     }
@@ -2568,7 +2689,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         val tab = current
         when {
             quickMenu.isOpen -> quickMenu.onBack()
-            switcher.isOpen -> if (!switcher.back()) switcher.close(pageRect())
+            switcherOpen -> if (!switcher.back()) switcher.close(pageRect())
             fullscreenTab != null -> tab?.session?.exitFullScreen() ?: exitFullscreen()
             findBar.visibility == View.VISIBLE -> closeFind()
             editing -> stopEditing()
@@ -2653,7 +2774,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         val host = object : TabSwipe.Host {
             override fun canSwipeTabs(rawX: Float, rawY: Float): Boolean {
                 val tab = current ?: return false
-                if (editing || fullscreenTab != null || switcher.isOpen || quickMenu.isOpen) return false
+                if (editing || fullscreenTab != null || switcherOpen || quickMenu.isOpen) return false
                 if (startup.visibility == View.VISIBLE || findBar.visibility == View.VISIBLE) return false
                 if (!toolbarWanted || toolbarShown < toolbarPx || TabManager.swipeOrder(tab).size < 2) return false
                 val at = IntArray(2)
@@ -2734,7 +2855,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
                 barSwipeMode = 0
                 val tab = current ?: return false
                 val mode = prefs.barSwipes
-                if (mode == 0 || editing || fullscreenTab != null || switcher.isOpen || quickMenu.isOpen || tab.showsHome ||
+                if (mode == 0 || editing || fullscreenTab != null || switcherOpen || quickMenu.isOpen || tab.showsHome ||
                     startup.visibility == View.VISIBLE || findBar.visibility == View.VISIBLE
                 ) {
                     return false
@@ -2882,6 +3003,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         val size = dp(44f).toInt()
         edgeArrow = ImageView(this).apply {
             setBackgroundResource(R.drawable.bg_ptr)
+            Palette.paint(this)
             elevation = dp(4f)
             val pad = dp(10f).toInt()
             setPadding(pad, pad, pad, pad)
@@ -2943,7 +3065,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         imm.hideSoftInputFromWindow(root.windowToken, 0)
     }
 
-    private fun color(res: Int) = ContextCompat.getColor(this, res)
+    private fun color(res: Int) = Palette.color(this, res)
 
     private fun dp(v: Float) = v * resources.displayMetrics.density
 
@@ -3020,6 +3142,15 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
         /** From Settings → Look & screen: open the menu ready to arrange (2.2). */
         const val EXTRA_ARRANGE_MENU = "arrange_menu"
+
+        /** App icon shortcuts (res/xml/shortcuts.xml, 2.3). */
+        const val ACTION_NEW_TAB = "com.swiftbrowser.action.NEW_TAB"
+        const val ACTION_INCOGNITO = "com.swiftbrowser.action.INCOGNITO"
+        const val ACTION_SCAN = "com.swiftbrowser.action.SCAN"
+
+        /** From the VPN quick settings tile, when a location or Android's permission is needed. */
+        const val ACTION_VPN = "com.swiftbrowser.action.VPN"
+        private val SHORTCUTS = setOf(ACTION_NEW_TAB, ACTION_INCOGNITO, ACTION_SCAN, ACTION_VPN)
 
         /** The square outline around the tab count, in [color]. */
         fun tabCountBackground(ctx: Context, color: Int) = android.graphics.drawable.GradientDrawable().apply {

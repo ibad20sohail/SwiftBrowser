@@ -38,6 +38,8 @@ class HomeView @JvmOverloads constructor(
         fun onStoryClicked(story: com.swiftbrowser.news.Story)
         fun onStoryLongClicked(story: com.swiftbrowser.news.Story)
         fun onNewsSettings()
+        fun onContinueClicked(item: com.swiftbrowser.media.Unfinished.Item)
+        fun onContinueLongClicked(item: com.swiftbrowser.media.Unfinished.Item)
     }
 
     var listener: Listener? = null
@@ -72,6 +74,9 @@ class HomeView @JvmOverloads constructor(
     private val tileViews = ArrayList<View>()
     private val scroll: android.widget.ScrollView
 
+    /** Videos and articles left half-way, under the shortcuts (2.3). */
+    private val continueRow: ContinueRow
+
     /** The news under the shortcuts (made when first shown; not in incognito). */
     private var news: NewsSection? = null
     private val newsOn: Boolean get() = !incognito && SwiftApp.prefs.newsEnabled
@@ -92,6 +97,7 @@ class HomeView @JvmOverloads constructor(
         LayoutInflater.from(context).inflate(R.layout.view_home, this, true)
         topSpace = findViewById(R.id.home_top_space)
         logo = findViewById(R.id.home_logo)
+        findViewById<ImageView>(R.id.home_logo_mark).setImageDrawable(Ui.logo(context))
         incognitoBox = findViewById(R.id.home_incognito)
         search = findViewById(R.id.home_search)
         hint = findViewById(R.id.home_search_hint)
@@ -113,7 +119,25 @@ class HomeView @JvmOverloads constructor(
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }
         addView(pullIndicator, LayoutParams(dp(40), dp(40), android.view.Gravity.TOP or android.view.Gravity.CENTER_HORIZONTAL))
+        continueRow = ContinueRow(context, { listener?.onContinueClicked(it) }, { listener?.onContinueLongClicked(it) })
+        val column = findViewById<LinearLayout>(R.id.home_column)
+        // The row reaches into the column's side padding (it would be cut off there otherwise).
+        column.clipToPadding = false
+        // From edge to edge (past the column's padding): the cards scroll sideways out of sight.
+        column.addView(continueRow, column.indexOfChild(tilesBox) + 1, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            topMargin = dp(24)
+            marginStart = -dp(16)
+            marginEnd = -dp(16)
+        })
     }
+
+    /** The home page went out of sight: news pictures are let go until it's back (2.3). */
+    fun releasePictures() {
+        news?.releasePictures()
+    }
+
+    /** Takes a card off "Continue". */
+    fun removeContinue(item: com.swiftbrowser.media.Unfinished.Item) = continueRow.remove(item)
 
     /** Shows or hides the news, as set; [refresh] also brings it up to date. */
     private fun updateNews() {
@@ -248,6 +272,7 @@ class HomeView @JvmOverloads constructor(
         incognitoBox.visibility = if (incognito) View.VISIBLE else View.GONE
         tilesBox.visibility = if (incognito) View.GONE else View.VISIBLE
         if (incognito) tilesTitle.visibility = View.GONE
+        if (incognito) continueRow.visibility = View.GONE else continueRow.refresh()
         updateNews()
         if (incognito) {
             search.background = GradientDrawable().apply {
@@ -257,6 +282,7 @@ class HomeView @JvmOverloads constructor(
             hint.setTextColor(color(R.color.incognito_hint))
         } else {
             search.setBackgroundResource(R.drawable.bg_home_search)
+            Palette.paint(search)
             hint.setTextColor(color(R.color.text_secondary))
             loadTiles()
         }
@@ -303,7 +329,7 @@ class HomeView @JvmOverloads constructor(
                     row.addView(addTile(inflater, row))
                     continue
                 }
-                val v = inflater.inflate(R.layout.item_tile, row, false)
+                val v = Palette.paint(inflater.inflate(R.layout.item_tile, row, false))
                 v.findViewById<TextView>(R.id.tile_label).text = t.label
                 val letter = v.findViewById<TextView>(R.id.tile_letter)
                 letter.text = t.label.take(1).uppercase()
@@ -447,7 +473,7 @@ class HomeView @JvmOverloads constructor(
     }
 
     private fun addTile(inflater: LayoutInflater, row: LinearLayout): View {
-        val v = inflater.inflate(R.layout.item_tile, row, false)
+        val v = Palette.paint(inflater.inflate(R.layout.item_tile, row, false))
         v.findViewById<TextView>(R.id.tile_label).text = "Add"
         v.findViewById<TextView>(R.id.tile_letter).apply {
             text = "+"
@@ -480,7 +506,7 @@ class HomeView @JvmOverloads constructor(
         return palette[(key.hashCode() and 0x7fffffff) % palette.size]
     }
 
-    private fun color(res: Int) = ContextCompat.getColor(context, res)
+    private fun color(res: Int) = Palette.color(context, res)
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 }

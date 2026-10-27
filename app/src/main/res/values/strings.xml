@@ -5,4 +5,9 @@
     <string name="find_hint">Find in page</string>
     <string name="incognito_title">You\'ve gone Incognito</string>
     <string name="incognito_body">Pages you view in incognito tabs won\'t stay in your history, and their cookies and site data are deleted when you close all incognito tabs. Downloads and bookmarks are kept.</string>
+    <string name="shortcut_new_tab">New tab</string>
+    <string name="shortcut_incognito">Incognito tab</string>
+    <string name="shortcut_scan">Scan QR code</string>
+    <string name="tile_vpn">Swift VPN</string>
+    <string name="tile_vpn_connecting">Connecting…</string>
 </resources>

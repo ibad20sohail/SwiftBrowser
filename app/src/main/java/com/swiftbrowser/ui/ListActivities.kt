@@ -64,6 +64,7 @@ abstract class ListActivity : AppCompatActivity() {
         Looks.apply(this)
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_list)
+        Palette.paint(findViewById<View>(android.R.id.content))
         toolbar = findViewById(R.id.list_toolbar)
         list = findViewById(R.id.list)
         empty = findViewById(R.id.list_empty)
@@ -72,10 +73,10 @@ abstract class ListActivity : AppCompatActivity() {
         toolbar.navigationContentDescription = "Back"
         toolbar.setNavigationOnClickListener { finish() }
         toolbar.setTitleTextAppearance(this, com.google.android.material.R.style.TextAppearance_Material3_TitleLarge)
-        toolbar.setTitleTextColor(ContextCompat.getColor(this, R.color.text_primary))
+        toolbar.setTitleTextColor(Palette.color(this, R.color.text_primary))
         toolbar.setSubtitleTextAppearance(this, com.google.android.material.R.style.TextAppearance_Material3_BodyMedium)
-        toolbar.setSubtitleTextColor(ContextCompat.getColor(this, R.color.text_secondary))
-        window.statusBarColor = ContextCompat.getColor(this, R.color.page_bg)
+        toolbar.setSubtitleTextColor(Palette.color(this, R.color.text_secondary))
+        window.statusBarColor = Palette.color(this, R.color.page_bg)
         list.layoutManager = LinearLayoutManager(this)
         // The list holds the focus, so the search box doesn't show a cursor until it is tapped.
         list.isFocusableInTouchMode = true
@@ -86,6 +87,11 @@ abstract class ListActivity : AppCompatActivity() {
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) SystemBars.apply(this)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        NightLight.attach(this)
     }
 
     override fun onPause() {
@@ -144,7 +150,7 @@ abstract class ListActivity : AppCompatActivity() {
                 if (state == ItemTouchHelper.ACTION_STATE_SWIPE && dX != 0f) {
                     // What is revealed behind the row: a soft red band with a bin on the near side.
                     val v = vh.itemView
-                    swipePaint.color = ContextCompat.getColor(this@ListActivity, R.color.danger_container)
+                    swipePaint.color = Palette.color(this@ListActivity, R.color.danger_container)
                     val left = if (dX > 0) v.left.toFloat() else v.right + dX
                     val right = if (dX > 0) v.left + dX else v.right.toFloat()
                     c.drawRect(left, v.top.toFloat(), right, v.bottom.toFloat(), swipePaint)
@@ -366,7 +372,7 @@ class HistoryActivity : ListActivity() {
         override fun getItemViewType(position: Int) = if (items[position] is Day) 1 else 0
 
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder {
-            if (viewType == 0) return RowHolder(LayoutInflater.from(parent.context).inflate(R.layout.item_row, parent, false))
+            if (viewType == 0) return RowHolder(Palette.paint(LayoutInflater.from(parent.context).inflate(R.layout.item_row, parent, false)))
             val ctx = parent.context
             val row = LinearLayout(ctx).apply {
                 orientation = LinearLayout.HORIZONTAL
@@ -609,7 +615,7 @@ class DownloadsActivity : ListActivity() {
         override fun getItemCount() = items.size
 
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int) =
-            DownloadHolder(LayoutInflater.from(parent.context).inflate(R.layout.item_download, parent, false))
+            DownloadHolder(Palette.paint(LayoutInflater.from(parent.context).inflate(R.layout.item_download, parent, false)))
 
         override fun onBindViewHolder(h: DownloadHolder, position: Int) {
             val d = items[position]

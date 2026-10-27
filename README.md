@@ -5,7 +5,7 @@ ad-heavy sites on an old phone (Moto E4, Android 7.1.2).
 
 ## Download
 
-**[Download Swift 2.2 (APK)](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v2.2/Swift-2.2.apk)**
+**[Download Swift 2.3 (APK)](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v2.3/Swift-2.3.apk)**
 for Android 7 and newer (32-bit ARM, about 150 MB). It installs over an earlier Swift and keeps
 tabs and settings. From 1.4 on, Swift can also update itself: Settings → Check for updates.
 
@@ -14,10 +14,21 @@ are attached to the releases because GitHub doesn't accept files over 100 MB in 
 
 ## Features
 
-Swift 2.0 redid every screen in one consistent look: a choice of accent colour (blue, green,
-purple, orange, red or teal) and a theme that can turn dark at night, the same rounded sheets,
-rows, buttons and short animations everywhere, plain words instead of technical ones, and a short
-welcome on the first start.
+Swift 2.0 redid every screen in one consistent look: the same rounded sheets, rows, buttons and
+short animations everywhere, a theme that can turn dark at night, plain words instead of technical
+ones, and a short welcome on the first start.
+
+- **Colours** (2.3, Settings → Look & screen → Colours, with a live preview of light and dark):
+  12 accent colours (blue, indigo, purple, pink, red, orange, amber, green, teal, cyan, brown,
+  graphite) or **your own** (a palette or a colour code), and the main colour of each mode: white,
+  warm paper, cool grey or your own for light mode; grey, pure black, navy, warm dark or your own
+  for dark mode. **Ready-made** mixes (Classic, Paper & teal, AMOLED, Midnight, Sunset, Forest,
+  Rose) set all three at once. Bars, cards, sheets, dialogs and Swift's logo follow it; a colour
+  too dark (or too light) for easy reading is adjusted. Colours are part of backups.
+- **Logo** (2.3): a bold S leaning forward with speed lines, on a rounded square; in the accent
+  colour inside the app, blue on the home screen.
+- **Night light** (2.3, Settings → Look & screen): a warm layer over Swift, pages and videos too,
+  from 7 pm to 7 am or always, in three strengths. Taps go through it.
 
 - **Firefox engine (GeckoView 143)**: the newest engine that still runs on Android 7.
 - **Free VPN for Swift only** (2.1, Settings → VPN, or VPN in the menu): change the country sites
@@ -46,6 +57,8 @@ welcome on the first start.
   "page blocked" screen with the list that caught it and a way to go on anyway.
   - Uses a bundled **uBlock Origin**, with the app switching its filter lists and rules.
   - Has its own **pop-up and redirect blocker**, which stops the "tap anywhere opens an ad" trick.
+  - **Blocked this week** (2.3, Settings → Ad blocking): how many ads and trackers were blocked on
+    each of the last 7 days (counts only, never which sites).
 - **Profiles**: each profile has its own Google login, cookies, history, bookmarks and tabs.
 - **Incognito tabs**: no history, and cookies and site data go away when the last one closes.
 - **Tabs** in a grid with page previews, like Chrome (two columns upright, three on a turned
@@ -57,25 +70,40 @@ welcome on the first start.
   - **Search** your tabs by title or address.
   - Tabs not opened for 14 days (a setting) wait under **Inactive tabs**, with Close all.
   - A closed tab (or group) can be brought back with Undo, and **Recent tabs** in the menu keeps
-    the last 50 closed tabs with their back history.
+    the last 50 closed tabs with their back history. **Close all tabs** in the menu can be undone
+    (2.3); closing all incognito tabs still asks first, as their data goes for good.
   - Swipe sideways on the toolbar to go to the next or previous tab. Hold the tab button for New
     tab, New incognito tab, Close this tab and Recent tabs.
   - How many tabs stay loaded is a setting (1 to 10, 2 by default); the others show their last
     picture straight away and reload their page when opened.
 - **Menu** (≡) that slides up from the bottom: the page with its site settings, copy and
-  Settings buttons, the page's main actions as a row of icons, then pages of buttons (3 rows of 4,
-  swipe sideways or tap the dots). **Arrange it yourself** (2.2): hold any button, then drag it to
-  another place or page, or onto the strip to hide it (tap a hidden one to bring it back). The
-  switches (Lite mode, dark mode, desktop site, full screen) are buttons there too and keep the menu
-  open. Among the others: **Tap to hide** (tap a leftover ad or banner and hide it on that site for
-  good, with uBlock Origin's element picker), the **Sleep timer** and **Scan QR**. Swipe it down,
-  tap outside it or press back to close it.
+  Settings buttons, the page's main actions as a row of icons, then pages of buttons (2 rows of 4,
+  swipe sideways or tap the dots). **Arrange it yourself** (2.3): hold any button a moment and it
+  lifts; drag it to another place, or to the edge to go to the next page, and let go: it stays
+  there. Drop it on the strip at the top to hide it (with Undo). Hidden buttons wait under
+  **Hidden** on the last page: tap one to put it back. Settings → Look & screen → Reset the menu
+  starts over (with Undo). The switches (Lite mode, dark mode, desktop site, full screen) are
+  buttons there too and keep the menu open. Among the others: **Tap to hide** (tap a leftover ad or
+  banner and hide it on that site for good, with uBlock Origin's element picker), the **Sleep
+  timer**, **Scan QR** and **Text size**. Swipe it down, tap outside it or press back to close it.
+- **Continue** (2.3) on the home page: long videos and reader view articles you left half-way,
+  newest first, with a picture (the video's, YouTube's own, or the article's first) and how far you
+  got. An article opens in reader view where you stopped. Hold a card to remove it. Only pages in
+  the profile's history show; Settings → Home & news turns it off.
+- **App icon shortcuts** (2.3): hold Swift's icon on the home screen for New tab, Incognito tab or
+  Scan QR code.
+- **Swift VPN tile** (2.3): add it to Android's quick settings to turn Swift's VPN on or off from
+  the notification shade. **Hold the VPN mark** in the address bar to switch country in one tap.
 - **Reader view**: a clean, light version of article pages (Mozilla's Readability), with text size
   buttons, in light or dark. It remembers where you stopped reading each article. **Listen** reads
   the article aloud with the phone's text-to-speech, from the paragraph on screen, marking the
   paragraph being read, with pause, previous and next paragraph and speed (0.75x to 2x). It goes on
   with Swift in the background or the screen off, with pause and stop in a notification. Serif or
   sans-serif text and the line spacing are set in Settings → Browsing.
+- **Battery saver** (2.3, on by default, Settings → Speed & memory): below 20% battery (or 15 or
+  30, as chosen), or while Android's battery saver is on, Swift uses Lite mode, keeps only the open
+  tab loaded and loads pages without pictures on mobile data. Everything is back when you charge;
+  if it changes while Swift is in the background, Swift says so when you come back.
 - **Lite mode**, one switch for all sites (menu or Settings): no animations, shadows or blur, so
   heavy sites scroll smoothly on the phone. It stays on until it is turned off; a site that looks
   broken with it can be left out (Site settings).
@@ -122,7 +150,9 @@ welcome on the first start.
   back in one go after a deliberate scroll). Pull down at the top of a page to reload.
 - **Site settings**: the settings button next to the site's name in the menu sets, for that site,
   desktop mode (remembered), sound that starts by itself, location (ask, allow or block), the
-  ad-blocking level, Lite mode, and clears its cookies and data. Settings → Privacy lists the sites.
+  ad-blocking level, Lite mode, its own **text size** (2.3, also Text size in the menu), **open
+  articles in reader view** (2.3; Swift also offers "Always" after you use reader view twice on a
+  site), and clears its cookies and data. Settings → Privacy lists the sites.
 - **Secure DNS** (2.2, on with Cloudflare; or Quad9, Google, off): the names of the sites you visit
   are looked up encrypted, so the network can't read them. Wi-Fi sign-in pages still work.
 - **Secure connections first**: every site's secure (https) version when it has one; a site

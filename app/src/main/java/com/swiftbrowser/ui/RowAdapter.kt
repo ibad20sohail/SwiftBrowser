@@ -20,7 +20,7 @@ class RowHolder(view: View) : RecyclerView.ViewHolder(view) {
     fun set(iconRes: Int, title: CharSequence, subtitle: CharSequence?) {
         icon.tag = null
         icon.setImageResource(iconRes)
-        icon.imageTintList = android.content.res.ColorStateList.valueOf(androidx.core.content.ContextCompat.getColor(icon.context, R.color.text_secondary))
+        icon.imageTintList = android.content.res.ColorStateList.valueOf(Palette.color(icon.context, R.color.text_secondary))
         this.title.text = title
         this.subtitle.text = subtitle ?: ""
         this.subtitle.visibility = if (subtitle.isNullOrEmpty()) View.GONE else View.VISIBLE
@@ -71,7 +71,7 @@ class RowAdapter<T>(
         }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RowHolder =
-        RowHolder(LayoutInflater.from(parent.context).inflate(R.layout.item_row, parent, false))
+        RowHolder(Palette.paint(LayoutInflater.from(parent.context).inflate(R.layout.item_row, parent, false)))
 
     override fun getItemCount() = items.size
 

@@ -28,7 +28,8 @@ object Messages {
     private const val ACTION_MS = 5000L
     private const val LONG_MS = 8000L
 
-    private val handler = Handler(Looper.getMainLooper())
+    /** The main thread's (a pill's own View.getHandler() is null once its screen is gone). */
+    private val mainHandler = Handler(Looper.getMainLooper())
     private var current: Pill? = null
 
     /** A message that stays until it is dismissed, and can change its text and progress. */
@@ -102,7 +103,7 @@ object Messages {
     private fun pillAccent(ctx: Context): Int {
         val config = Configuration(ctx.resources.configuration)
         config.uiMode = (config.uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or Configuration.UI_MODE_NIGHT_YES
-        return ctx.createConfigurationContext(config).getColor(Looks.accent.primary)
+        return Palette.color(ctx.createConfigurationContext(config), Looks.accent.primary)
     }
 
     @SuppressLint("ViewConstructor")
@@ -194,8 +195,8 @@ object Messages {
             if (duration <= 0) return
             timeLeft = ms
             startedAt = System.currentTimeMillis()
-            handler.removeCallbacks(timeout)
-            handler.postDelayed(timeout, ms)
+            mainHandler.removeCallbacks(timeout)
+            mainHandler.postDelayed(timeout, ms)
             if (line.visibility == View.VISIBLE) {
                 line.animate().scaleX(0f).setDuration(ms).setInterpolator(null).start()
             }
@@ -203,7 +204,7 @@ object Messages {
 
         private fun pauseTimer() {
             if (duration <= 0) return
-            handler.removeCallbacks(timeout)
+            mainHandler.removeCallbacks(timeout)
             line.animate().cancel()
             timeLeft = (timeLeft - (System.currentTimeMillis() - startedAt)).coerceAtLeast(1200)
         }
@@ -211,7 +212,7 @@ object Messages {
         fun dismiss(quick: Boolean = false, toSide: Float = 0f) {
             if (leaving) return
             leaving = true
-            handler.removeCallbacks(timeout)
+            mainHandler.removeCallbacks(timeout)
             if (current === this) current = null
             val a = animate().alpha(0f).setDuration(if (quick) 120 else Motion.NORMAL).setInterpolator(Motion.exit)
             if (toSide != 0f) a.translationX(toSide) else a.translationY(Ui.dpf(context, if (quick) 12f else 24f))
@@ -219,7 +220,7 @@ object Messages {
         }
 
         fun removeNow() {
-            handler.removeCallbacks(timeout)
+            mainHandler.removeCallbacks(timeout)
             if (current === this) current = null
             (parent as? ViewGroup)?.removeView(this)
         }

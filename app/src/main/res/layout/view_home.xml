@@ -31,7 +31,9 @@
                 android:gravity="center_vertical"
                 android:orientation="horizontal">
 
+                <!-- In the accent colour: HomeView sets it (Ui.logo). -->
                 <ImageView
+                    android:id="@+id/home_logo_mark"
                     android:layout_width="50dp"
                     android:layout_height="50dp"
                     android:importantForAccessibility="no"

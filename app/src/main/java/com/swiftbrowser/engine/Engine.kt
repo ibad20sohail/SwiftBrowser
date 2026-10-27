@@ -10,6 +10,7 @@ import com.swiftbrowser.adblock.AdBlock
 import com.swiftbrowser.core.Diagnostics
 import com.swiftbrowser.core.L
 import com.swiftbrowser.core.Prefs
+import com.swiftbrowser.core.SiteSettings
 import com.swiftbrowser.media.Helper
 import com.swiftbrowser.tabs.TabManager
 import org.mozilla.geckoview.ContentBlocking
@@ -83,6 +84,7 @@ object Engine {
             .forceUserScalableEnabled(prefs.forceZoom)
             .build()
         runtime = GeckoRuntime.create(app, settings)
+        shownTextScale = prefs.textScale
         // The builder's colour scheme doesn't reach pages after a restart: set it again (2.2).
         setDark(prefs.darkMode)
         applySecureDns()
@@ -178,6 +180,26 @@ object Engine {
 
     /** Text size on all sites, 1 = as designed. Pages pick it up when they (re)load. */
     fun setTextScale(scale: Float) {
+        shownTextScale = scale
+        shownTextSite = null
+        runtime.settings.setFontSizeFactor(scale)
+    }
+
+    private var shownTextScale = 0f
+
+    /** The site [shownTextScale] was worked out for: page updates of the same site cost nothing. */
+    private var shownTextSite: String? = null
+
+    /**
+     * The text size for the site on screen: its own (SiteSettings.textScale, 2.3) or the one for
+     * all sites. The engine has one size for every page, so it follows the page on screen.
+     */
+    fun showTextScaleFor(site: String?, force: Boolean = false) {
+        if (!force && site == shownTextSite && shownTextScale != 0f) return
+        shownTextSite = site
+        val scale = SiteSettings.textScale(site) ?: SwiftApp.prefs.textScale
+        if (scale == shownTextScale) return
+        shownTextScale = scale
         runtime.settings.setFontSizeFactor(scale)
     }
 

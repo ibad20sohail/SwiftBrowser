@@ -212,7 +212,7 @@ object Diagnostics {
         val prefs = SwiftApp.prefs
         val tabs = TabManager.tabs
         val extra = "Settings: tabs kept in memory ${prefs.maxLiveTabs}, pages drawn with ${if (prefs.softwareRendering) "CPU" else "GPU"}, " +
-            "ad blocking ${AdBlock.global.label}, Lite mode ${prefs.liteMode}, sites as designed ${prefs.sitesAsDesigned}, full screen ${prefs.fullScreen}, " +
+            "ad blocking ${AdBlock.global.label}, Lite mode ${prefs.liteMode}, saving battery ${com.swiftbrowser.engine.Power.saving}, sites as designed ${prefs.sitesAsDesigned}, full screen ${prefs.fullScreen}, " +
             "keep playing ${prefs.keepPlaying}, text size ${(prefs.textScale * 100).toInt()}%\n" +
             "Tabs: ${tabs.size} open, ${tabs.count { it.session != null }} loaded; current site: ${UrlUtils.siteName(TabManager.current?.url)}"
         share(activity, extra)

@@ -147,7 +147,8 @@ object Downloads {
     /** Coalesces progress updates to at most a few per second. */
     private fun changed(immediate: Boolean = false) {
         if (immediate) {
-            main.post { listeners.forEach { it() } }
+            // A copy: a listener may remove itself (a document opened once downloaded, 2.4).
+            main.post { listeners.toList().forEach { it() } }
             return
         }
         synchronized(this) {
@@ -156,7 +157,7 @@ object Downloads {
         }
         main.postDelayed({
             synchronized(this) { notifyPending = false }
-            listeners.forEach { it() }
+            listeners.toList().forEach { it() }
         }, 400)
     }
 

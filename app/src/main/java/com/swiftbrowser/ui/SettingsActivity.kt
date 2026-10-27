@@ -509,6 +509,11 @@ class SettingsActivity : AppCompatActivity() {
                 prefs.newsEnabled = it
             }
         }
+        def(Topic.NEWS, null, "Documents shortcut", "documents files pdf word excel powerpoint home shortcut") {
+            switch(R.drawable.ic_documents, "Documents shortcut", { "Your PDFs and Office files, among the home page's shortcuts" }, checked = { prefs.homeDocuments }) {
+                prefs.homeDocuments = it
+            }
+        }
         def(Topic.NEWS, null, "Continue watching and reading", "continue unfinished videos articles reading resume home") {
             switch(
                 R.drawable.ic_reopen, "Continue watching and reading",

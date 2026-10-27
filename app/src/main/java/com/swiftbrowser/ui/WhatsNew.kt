@@ -23,15 +23,12 @@ object WhatsNew {
     private class Item(val icon: Int, val title: String, val text: String)
 
     private val NEW = listOf(
-        Item(R.drawable.ic_palette, "Your colours", "A new logo, 12 accent colours or your own, ready-made mixes, and the main colour of light and dark mode, like warm paper or pure black: Settings → Look & screen → Colours."),
-        Item(R.drawable.ic_menu, "An easier menu", "Two rows a page. Hold a button and drag it: it stays where you drop it, or drop it on the top to hide it. Hidden ones wait under Hidden on the last page."),
-        Item(R.drawable.ic_reopen, "Continue where you left off", "Videos and articles you didn't finish are on the home page, with their pictures. An article opens in reader view where you stopped."),
-        Item(R.drawable.ic_battery, "Battery saver", "Below 20% battery (or 15 or 30, as you choose) Swift turns on Lite mode and keeps one tab loaded, until you charge."),
-        Item(R.drawable.ic_night_light, "Night light", "A warm screen at night, pages and videos too: Settings → Look & screen."),
-        Item(R.drawable.ic_reader, "Reader view by itself", "Open a site's articles in reader view every time: the site's settings, or Always after you use reader view there twice."),
-        Item(R.drawable.ic_text_size, "Text size for each site", "Bigger text on one site only: Text size in the menu, or the site's settings."),
-        Item(R.drawable.ic_shield, "Ads blocked this week", "See how many ads and trackers were blocked each day: Settings → Ad blocking."),
-        Item(R.drawable.ic_vpn, "Shortcuts and a quicker VPN", "Hold Swift's icon for New tab, Incognito or Scan QR. Hold the VPN mark to switch country, or use the Swift VPN tile in quick settings."),
+        Item(R.drawable.ic_documents, "Documents in Swift", "PDF, Word, Excel, PowerPoint, e-books and text files open right here, without internet. Nothing is uploaded."),
+        Item(R.drawable.ic_folder, "Your phone's documents", "Documents in the ≡ menu and on the home page lists the files on your phone, with previews, filters and search."),
+        Item(R.drawable.ic_open_new, "Open with Swift", "Open a PDF or Office file from WhatsApp, Gmail or your file manager with Swift."),
+        Item(R.drawable.ic_reopen, "Pick up where you stopped", "Documents you didn't finish are in Continue on the home page and reopen at the same place."),
+        Item(R.drawable.ic_volume, "Listen and dark pages", "Swift reads documents aloud, and in dark mode their pages turn dark too."),
+        Item(R.drawable.ic_globe, "Exact view online", "For Word, Excel and PowerPoint links on websites, Exact view shows the file exactly as made (with Microsoft's free viewer)."),
     )
 
     private class Card(val icon: Int, val title: String, val text: String)

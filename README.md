@@ -5,7 +5,7 @@ ad-heavy sites on an old phone (Moto E4, Android 7.1.2).
 
 ## Download
 
-**[Download Swift 2.3 (APK)](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v2.3/Swift-2.3.apk)**
+**[Download Swift 2.4 (APK)](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v2.4/Swift-2.4.apk)**
 for Android 7 and newer (32-bit ARM, about 150 MB). It installs over an earlier Swift and keeps
 tabs and settings. From 1.4 on, Swift can also update itself: Settings → Check for updates.
 
@@ -31,6 +31,19 @@ ones, and a short welcome on the first start.
   from 7 pm to 7 am or always, in three strengths. Taps go through it.
 
 - **Firefox engine (GeckoView 143)**: the newest engine that still runs on Android 7.
+- **Documents** (2.4): PDF, Word (.docx), Excel (.xlsx, .xls, .csv, .ods), PowerPoint (.pptx),
+  e-books (.epub) and text files open in Swift's own viewer, offline; nothing is uploaded. Old .doc
+  and .ppt files (and .odt, .odp, .rtf) show their text.
+  - **Documents** in the ≡ menu and on the home page: the documents opened in Swift, then every
+    document on the phone, newest first, with page previews, filters (PDF, Word, Excel,
+    PowerPoint, E-books, Text) and search. Without storage access, **Browse files** uses Android's
+    own file picker.
+  - **Open with Swift** from other apps (WhatsApp, Gmail, file managers), and downloaded documents
+    open in the viewer. A link to a document on a website offers Open, Download, and for Office
+    files **Exact view** (Microsoft's free online viewer, which gets the link).
+  - The viewer: find in the document, text size or zoom, **Listen** (read aloud), dark pages in
+    dark mode, Share and Open with another app. PDFs load only the parts on screen, so big ones
+    open quickly. Where you stopped is remembered; unfinished documents are in **Continue**.
 - **Free VPN for Swift only** (2.1, Settings → VPN, or VPN in the menu): change the country sites
   see you in, with free setup files from Proton VPN (WireGuard, one file per server; the how-to is
   in Settings). Only Swift's own traffic goes through it; other apps keep their connection.
@@ -274,6 +287,8 @@ signed with the same key.
 | `.../ui` | Activities, home page, tab grid, settings, bottom sheets and dialogs |
 | `app/src/main/assets/extensions/ublock` | uBlock Origin 1.75.0, patched by `tools/update_ublock.py` |
 | `app/src/main/assets/extensions/helper` | Small built-in extension used by the app |
+| `.../helper/docs` | The document viewer, with pdf.js, docx-preview, SheetJS, pptx-preview, epub.js and JSZip (`lib/LICENSES.txt`) |
+| `.../docs` (Kotlin) | Opening documents, the viewer's file channel, page previews |
 | `tools/` | uBlock Origin update and patch script |
 
 To update uBlock Origin, run `python tools/update_ublock.py --version X.Y.Z`. If

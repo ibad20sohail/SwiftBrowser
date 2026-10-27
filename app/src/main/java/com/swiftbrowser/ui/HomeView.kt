@@ -40,6 +40,7 @@ class HomeView @JvmOverloads constructor(
         fun onNewsSettings()
         fun onContinueClicked(item: com.swiftbrowser.media.Unfinished.Item)
         fun onContinueLongClicked(item: com.swiftbrowser.media.Unfinished.Item)
+        fun onDocumentsTile()
     }
 
     var listener: Listener? = null
@@ -320,8 +321,10 @@ class HomeView @JvmOverloads constructor(
         tileViews.clear()
         tilesTitle.visibility = if (incognito) View.GONE else View.VISIBLE
         val inflater = LayoutInflater.from(context)
-        // The last place is an "Add" button while there is room.
-        val cells: List<TopSites.Tile?> = if (tiles.size < TopSites.MAX) tiles + null else tiles
+        // The last place is an "Add" button while there is room; Documents (2.4) just before it.
+        val cells = ArrayList<Any?>(tiles)
+        if (SwiftApp.prefs.homeDocuments) cells += DOCUMENTS
+        if (tiles.size < TopSites.MAX) cells += null
         for (rowTiles in cells.chunked(4)) {
             val row = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
             for (t in rowTiles) {
@@ -329,6 +332,11 @@ class HomeView @JvmOverloads constructor(
                     row.addView(addTile(inflater, row))
                     continue
                 }
+                if (t === DOCUMENTS) {
+                    row.addView(documentsTile(inflater, row))
+                    continue
+                }
+                t as TopSites.Tile
                 val v = Palette.paint(inflater.inflate(R.layout.item_tile, row, false))
                 v.findViewById<TextView>(R.id.tile_label).text = t.label
                 val letter = v.findViewById<TextView>(R.id.tile_letter)
@@ -472,6 +480,39 @@ class HomeView @JvmOverloads constructor(
         refreshTiles()
     }
 
+    /** Documents (2.4): the phone's PDFs and Office files. Hold it to take it off the home page. */
+    private fun documentsTile(inflater: LayoutInflater, row: LinearLayout): View {
+        val v = Palette.paint(inflater.inflate(R.layout.item_tile, row, false))
+        v.findViewById<TextView>(R.id.tile_label).text = "Documents"
+        v.findViewById<View>(R.id.tile_letter).visibility = View.GONE
+        v.findViewById<ImageView>(R.id.tile_icon).apply {
+            visibility = View.VISIBLE
+            setImageDrawable(Ui.icon(context, R.drawable.ic_documents, Ui.onAccent(context)))
+            background = Ui.shape(context, Ui.accent(context), 18)
+            scaleType = ImageView.ScaleType.CENTER
+        }
+        v.contentDescription = "Documents"
+        v.setOnClickListener { listener?.onDocumentsTile() }
+        v.setOnLongClickListener {
+            Haptics.hold(v)
+            val a = context as? android.app.Activity ?: return@setOnLongClickListener true
+            Sheets.actions(a, "Documents", "Your PDFs, Word, Excel and PowerPoint files", listOf(
+                Sheets.Action(R.drawable.ic_open_new, "Open", primary = true) { listener?.onDocumentsTile() },
+                Sheets.Action(R.drawable.ic_close, "Take off the home page") {
+                    SwiftApp.prefs.homeDocuments = false
+                    refreshTiles()
+                    Messages.show(a, "Documents is still in the ≡ menu", "Undo") {
+                        SwiftApp.prefs.homeDocuments = true
+                        refreshTiles()
+                    }
+                },
+            ), iconRes = R.drawable.ic_documents)
+            true
+        }
+        Ui.pressable(v, 0.92f)
+        return v
+    }
+
     private fun addTile(inflater: LayoutInflater, row: LinearLayout): View {
         val v = Palette.paint(inflater.inflate(R.layout.item_tile, row, false))
         v.findViewById<TextView>(R.id.tile_label).text = "Add"
@@ -509,4 +550,9 @@ class HomeView @JvmOverloads constructor(
     private fun color(res: Int) = Palette.color(context, res)
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+
+    private companion object {
+        /** The Documents tile's place among the shortcuts. */
+        val DOCUMENTS = Any()
+    }
 }

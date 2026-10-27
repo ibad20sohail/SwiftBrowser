@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Document</title>
+<link rel="stylesheet" href="view.css">
+</head>
+<body>
+<!-- Swift's document viewer (2.4): PDF, Word, Excel, PowerPoint, e-books and text, on the phone only. -->
+<header id="bar">
+  <span id="badge"></span>
+  <span id="name"></span>
+  <button id="find" class="icon" title="Find" aria-label="Find in document" hidden>
+    <svg viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+  </button>
+  <button id="smaller" class="icon" title="Smaller" aria-label="Smaller" hidden>
+    <svg viewBox="0 0 24 24"><path d="M19 13H5v-2h14v2z"/></svg>
+  </button>
+  <button id="bigger" class="icon" title="Bigger" aria-label="Bigger" hidden>
+    <svg viewBox="0 0 24 24"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+  </button>
+  <button id="listen" class="icon" title="Listen" aria-label="Read aloud" hidden>
+    <svg viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0 0 14 7.97v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/></svg>
+  </button>
+  <button id="more" class="icon" title="More" aria-label="More">
+    <svg viewBox="0 0 24 24"><path d="M12 8a2 2 0 1 0 0-4 2 2 0 0 0 0 4zm0 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm0 6a2 2 0 1 0 0 4 2 2 0 0 0 0-4z"/></svg>
+  </button>
+</header>
+<div id="findbar" hidden>
+  <input id="findtext" type="search" placeholder="Find in document" autocomplete="off">
+  <span id="findcount"></span>
+  <button id="findprev" class="icon" aria-label="Previous">
+    <svg viewBox="0 0 24 24"><path d="M7.41 15.41 12 10.83l4.59 4.58L18 14l-6-6-6 6z"/></svg>
+  </button>
+  <button id="findnext" class="icon" aria-label="Next">
+    <svg viewBox="0 0 24 24"><path d="M7.41 8.59 12 13.17l4.59-4.58L18 10l-6 6-6-6z"/></svg>
+  </button>
+  <button id="findclose" class="icon" aria-label="Close">
+    <svg viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+  </button>
+</div>
+<div id="note" hidden></div>
+<main id="doc"></main>
+<div id="status">
+  <div class="spinner"></div>
+  <p id="statustext">Opening…</p>
+  <div id="statusactions"></div>
+</div>
+<div id="menu" hidden></div>
+<div id="tts" hidden>
+  <button id="ttstoggle" aria-label="Pause">Pause</button>
+  <button id="ttsstop" aria-label="Stop">Stop</button>
+</div>
+<nav id="sheets" hidden></nav>
+<script src="view.js"></script>
+</body>
+</html>

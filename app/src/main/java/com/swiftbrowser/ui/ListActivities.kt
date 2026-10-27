@@ -681,8 +681,8 @@ class DownloadsActivity : ListActivity() {
             VpnUi.addDownloaded(this, d)
             return
         }
-        if (PageActions.isSavedPage(d)) {
-            // PDFs (pages saved for offline reading among them) open in Swift's own viewer.
+        if (PageActions.isSavedPage(d) || com.swiftbrowser.docs.Docs.kindOf(d.fileName, d.mime) != null && File(d.filePath).exists()) {
+            // Documents (pages saved as PDF among them) open in Swift's own viewer (2.4).
             startActivity(
                 Intent(this, MainActivity::class.java).putExtra(MainActivity.EXTRA_OPEN_FILE, d.filePath)
                     .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP),

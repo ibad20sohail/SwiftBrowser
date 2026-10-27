@@ -13,7 +13,11 @@ import org.json.JSONObject
  */
 object Unfinished {
     /** [image]: a picture for the card (the video's poster, the article's first picture), if any. */
-    class Item(val url: String, val title: String, val progress: Float, val caption: String, val video: Boolean, val updated: Long, val image: String?)
+    class Item(
+        val url: String, val title: String, val progress: Float, val caption: String, val video: Boolean, val updated: Long, val image: String?,
+        /** A document left part-way (2.4), opened again in Swift's viewer. */
+        val doc: com.swiftbrowser.docs.Docs.Doc? = null,
+    )
 
     private const val MAX = 8
     private const val MAX_AGE_MS = 30L * 24 * 60 * 60 * 1000
@@ -48,7 +52,11 @@ object Unfinished {
             val share = (r[2] as Double).toFloat()
             Item(r[0] as String, (r[1] as String?).orEmpty(), share, "${(share * 100).toInt()}% read", false, r[3] as Long, r[4] as String?)
         }
-        return (videos + articles).sortedByDescending { it.updated }.take(MAX)
+        val docs = db.unfinishedDocuments(profileId, since, MAX).map { d ->
+            val caption = if (d.kind == com.swiftbrowser.docs.Docs.Kind.PDF && d.total > 0) "Page ${d.place} of ${d.total}" else "${(d.progress * 100).toInt()}% read"
+            Item(d.uri, d.name, d.progress, caption, false, d.updated, null, d)
+        }
+        return (videos + articles + docs).sortedByDescending { it.updated }.take(MAX)
     }
 
     private val YOUTUBE_ID = Regex("^https?://(?:www\\.|m\\.|music\\.)?(?:youtube\\.com/(?:watch\\?(?:.*&)?v=|shorts/|live/)|youtu\\.be/)([A-Za-z0-9_-]{11})")
@@ -60,7 +68,11 @@ object Unfinished {
     /** Takes [item] off the row. */
     fun remove(item: Item) {
         TabManager.io.execute {
-            if (item.video) SwiftApp.db.deleteVideoPosition(item.url) else SwiftApp.db.deleteReadingPosition(item.url)
+            when {
+                item.doc != null -> SwiftApp.db.setDocumentPlace(item.doc.id, "", 0f, 0)
+                item.video -> SwiftApp.db.deleteVideoPosition(item.url)
+                else -> SwiftApp.db.deleteReadingPosition(item.url)
+            }
         }
     }
 }

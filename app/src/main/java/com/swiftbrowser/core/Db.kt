@@ -58,7 +58,7 @@ data class DownloadRow(
  * Small hand-written SQLite layer: profiles, tabs (with their order and groups), recently closed
  * tabs, history, bookmarks, downloads, per-site ad levels and where videos were left off.
  */
-class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 4) {
+class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 5) {
 
     override fun onConfigure(db: SQLiteDatabase) {
         db.enableWriteAheadLogging()
@@ -94,6 +94,7 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 4) {
         addVersion2(db)
         addVersion3(db)
         addVersion4(db)
+        addVersion5(db)
 
         db.insert("profiles", null, ContentValues().apply {
             put("name", "Personal")
@@ -110,6 +111,16 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 4) {
         }
         if (oldVersion < 3) addVersion3(db)
         if (oldVersion < 4) addVersion4(db)
+        if (oldVersion < 5) addVersion5(db)
+    }
+
+    /** 2.4: documents opened in Swift's viewer, where each is, and where it was left. */
+    private fun addVersion5(db: SQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE documents(id TEXT PRIMARY KEY, uri TEXT NOT NULL, name TEXT NOT NULL, kind TEXT NOT NULL, " +
+                "size INTEGER NOT NULL DEFAULT -1, web TEXT, profile_id INTEGER NOT NULL, place TEXT, " +
+                "progress REAL NOT NULL DEFAULT 0, total INTEGER NOT NULL DEFAULT 0, opened INTEGER NOT NULL, updated INTEGER NOT NULL)",
+        )
     }
 
     /** 2.3: a picture for each video and article left half-way (the "Continue" cards). */
@@ -376,6 +387,75 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 4) {
     fun clearVideoPositions() {
         writableDatabase.delete("video_positions", null, null)
         writableDatabase.delete("reading_positions", null, null)
+        // Where documents were left (they stay in the recent list, from the start).
+        writableDatabase.execSQL("UPDATE documents SET place = NULL, progress = 0")
+    }
+
+    // ---------------------------------------------------------------- documents (2.4)
+
+    /** A document opened (again): its place is kept, what it is and when is brought up to date. */
+    fun saveDocument(id: String, uri: String, name: String, kind: String, size: Long, web: String?, profileId: Long) {
+        val db = writableDatabase
+        val now = System.currentTimeMillis()
+        val values = ContentValues().apply {
+            put("uri", uri)
+            put("name", name)
+            put("kind", kind)
+            put("size", size)
+            if (web != null) put("web", web)
+            put("profile_id", profileId)
+            put("opened", now)
+        }
+        if (db.update("documents", values, "id=?", arrayOf(id)) == 0) {
+            values.put("id", id)
+            values.put("updated", now)
+            db.insert("documents", null, values)
+        }
+        db.execSQL("DELETE FROM documents WHERE id NOT IN (SELECT id FROM documents ORDER BY opened DESC LIMIT 200)")
+    }
+
+    fun touchDocument(id: String) {
+        writableDatabase.execSQL("UPDATE documents SET opened = ? WHERE id = ?", arrayOf<Any>(System.currentTimeMillis(), id))
+    }
+
+    fun setDocumentPlace(id: String, place: String, progress: Float, total: Int) {
+        writableDatabase.update("documents", ContentValues().apply {
+            put("place", place)
+            put("progress", progress)
+            if (total > 0) put("total", total)
+            put("updated", System.currentTimeMillis())
+        }, "id=?", arrayOf(id))
+    }
+
+    private val documentColumns = "id, uri, name, kind, size, web, place, progress, total, opened, updated"
+
+    private fun readDocument(c: Cursor): com.swiftbrowser.docs.Docs.Doc? {
+        val kind = com.swiftbrowser.docs.Docs.Kind.ofKey(c.getString(3)) ?: return null
+        return com.swiftbrowser.docs.Docs.Doc(
+            c.getString(0), c.getString(1), c.getString(2), kind, c.getLong(4), c.getString(5),
+            c.getString(6), c.getFloat(7), c.getInt(8), c.getLong(9), c.getLong(10),
+        )
+    }
+
+    fun document(id: String): com.swiftbrowser.docs.Docs.Doc? =
+        query("SELECT $documentColumns FROM documents WHERE id = ?", arrayOf(id)) { readDocument(it) }.firstOrNull()
+
+    /** Documents opened in [profileId], latest first. */
+    fun recentDocuments(profileId: Long, limit: Int): List<com.swiftbrowser.docs.Docs.Doc> =
+        query("SELECT $documentColumns FROM documents WHERE profile_id = ? ORDER BY opened DESC LIMIT ?", arrayOf("$profileId", "$limit")) {
+            readDocument(it)
+        }.filterNotNull()
+
+    /** Documents left part-way since [since] (the home page's Continue). */
+    fun unfinishedDocuments(profileId: Long, since: Long, limit: Int): List<com.swiftbrowser.docs.Docs.Doc> =
+        query(
+            "SELECT $documentColumns FROM documents WHERE profile_id = ? AND updated >= ? AND place IS NOT NULL " +
+                "AND progress > 0.02 AND progress < 0.97 ORDER BY updated DESC LIMIT ?",
+            arrayOf("$profileId", "$since", "$limit"),
+        ) { readDocument(it) }.filterNotNull()
+
+    fun forgetDocument(id: String) {
+        writableDatabase.delete("documents", "id=?", arrayOf(id))
     }
 
     /** Long videos left off since [since] that are in the profile's history: page, title, position, length, when. */

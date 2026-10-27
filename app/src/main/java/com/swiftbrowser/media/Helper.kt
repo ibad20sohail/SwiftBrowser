@@ -45,6 +45,8 @@ object Helper {
 
     fun attach(ext: WebExtension) {
         extension = ext
+        // Documents asked for before the extension was ready (opened from another app at start-up).
+        com.swiftbrowser.docs.Docs.onViewerReady()
         ext.setMessageDelegate(object : WebExtension.MessageDelegate {
             override fun onConnect(port: WebExtension.Port) {
                 backgroundPort = port
@@ -122,6 +124,8 @@ object Helper {
             }
             "video-pos" -> WatchPositions.onPosition(tab, msg)
             "reader-place" -> Unfinished.onReaderPlace(tab, msg)
+            // Swift's document viewer (2.4).
+            "doc-hello", "doc-read", "doc-range", "doc-place", "doc-action" -> com.swiftbrowser.docs.Docs.onMessage(tab, msg, port)
             // Read aloud, from the reader view page in this tab: it hears back how far it got.
             "tts-start", "tts-pause", "tts-resume", "tts-stop", "tts-skip", "tts-rate" -> {
                 val ctx = SwiftApp.instance ?: return
@@ -218,6 +222,9 @@ object Helper {
             L.w("Couldn't send the look", e)
         }
     }
+
+    /** The accent colour as "#rrggbb" in light or dark mode, for Swift's own pages (the document viewer, 2.4). */
+    fun accentColor(night: Boolean) = accentHex(night)
 
     /** The accent colour as "#rrggbb", as it looks in light or dark mode (for reader view). */
     private fun accentHex(night: Boolean): String {

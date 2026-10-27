@@ -51,6 +51,7 @@ object MenuButtons {
         Button("bookmarks", R.drawable.ic_bookmarks, "Bookmarks"),
         Button("history", R.drawable.ic_history, "History"),
         Button("downloads", R.drawable.ic_download, "Downloads"),
+        Button("documents", R.drawable.ic_documents, "Documents"),
         Button("reader", R.drawable.ic_reader, "Reader view"),
         Button("save", R.drawable.ic_offline, "Save offline"),
         Button("lite", R.drawable.ic_lite, "Lite mode"),
@@ -359,6 +360,7 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
             "recent" -> Sheets.recentlyClosed(a)
             "vpn" -> a.showVpnSheet()
             "scan" -> a.scanQr()
+            "documents" -> a.openDocuments()
             "text_size" -> Sheets.textSize(a, tab)
             "home_screen" -> PageActions.addToHomeScreen(a, tab)
             "ad_blocker" -> Sheets.shield(a)
@@ -474,6 +476,7 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
         headerTitle.text = if (tab.isHome) (if (tab.incognito) "Incognito tab" else "New tab") else tab.displayTitle
         headerSite.text = when {
             inReader -> "Reader view"
+            com.swiftbrowser.docs.Docs.isViewerUrl(tab.url) -> "Document"
             http -> UrlUtils.host(tab.url)?.removePrefix("www.").orEmpty()
             tab.isHome -> "Swift"
             else -> UrlUtils.display(tab.url)

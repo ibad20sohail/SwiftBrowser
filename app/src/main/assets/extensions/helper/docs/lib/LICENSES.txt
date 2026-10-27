@@ -1,0 +1,14 @@
+Libraries used by Swift's document viewer (docs/view.html), unchanged from their published packages:
+
+pdf.js 6.4.299 (pdfjs-dist, legacy build, with cmaps and standard_fonts)
+  Mozilla Foundation - Apache License 2.0 - https://github.com/mozilla/pdf.js
+docx-preview 0.4.1
+  Volodymyr Baydalka - Apache License 2.0 - https://github.com/VolodymyrBaydalka/docxjs
+SheetJS Community Edition 0.20.3 (xlsx.full.min.js, includes CFB)
+  SheetJS LLC - Apache License 2.0 - https://sheetjs.com
+pptx-preview 1.0.7 (includes Apache ECharts)
+  ISC License (ECharts: Apache License 2.0) - https://www.npmjs.com/package/pptx-preview
+epub.js 0.3.93
+  FuturePress - BSD 2-Clause License - https://github.com/futurepress/epub.js
+JSZip 3.10.2
+  Stuart Knightley and contributors - MIT License (dual MIT / GPLv3, used under MIT) - https://github.com/Stuk/jszip

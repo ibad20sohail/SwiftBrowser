@@ -56,6 +56,7 @@ import com.swiftbrowser.SwiftApp
 import com.swiftbrowser.adblock.AdBlock
 import com.swiftbrowser.adblock.AdLevel
 import com.swiftbrowser.core.Crash
+import com.swiftbrowser.docs.Docs
 import com.swiftbrowser.core.Diagnostics
 import com.swiftbrowser.core.L
 import com.swiftbrowser.core.Prefs
@@ -822,7 +823,19 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         intent.getStringExtra(EXTRA_OPEN_FILE)?.let { path ->
             intent.removeExtra(EXTRA_OPEN_FILE)
             // Only Swift's own downloads (another app could otherwise make Swift show its private files).
-            if (Downloads.all().any { it.filePath == path }) openFileInTab(path)
+            val d = Downloads.all().firstOrNull { it.filePath == path } ?: return
+            stopEditing()
+            switcherView?.close()
+            if (!Docs.open(this, Uri.fromFile(java.io.File(path)), d.fileName, d.mime, d.url.takeIf { UrlUtils.isHttp(it) })) openFileInTab(path)
+            return
+        }
+        // 2.4: a document from another app ("Open with Swift"), shown in Swift's viewer.
+        val data = intent.data
+        if (intent.action == Intent.ACTION_VIEW && data != null && (data.scheme == "content" || data.scheme == "file")) {
+            stopEditing()
+            switcherView?.close()
+            quickMenu.close()
+            if (!Docs.open(this, data, null, intent.type)) snack("Swift can't show this kind of file")
             return
         }
         val url = when (intent.action) {
@@ -918,8 +931,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         } catch (_: Exception) {
             null
         }?.takeIf { it.isNotEmpty() && it.length < 2000 }
-        // Reader view's own address isn't one to copy or share.
-        val page = !tab.showsHome && !tab.isBlank && !Helper.isReaderUrl(tab.url)
+        // Reader view's and the document viewer's own addresses aren't ones to copy or share.
+        val page = !tab.showsHome && !tab.isBlank && !Helper.isReaderUrl(tab.url) && !Docs.isViewerUrl(tab.url)
         val actions = ArrayList<Sheets.Action>()
         if (clip != null) {
             val isAddress = UrlUtils.searchQuery(UrlUtils.toUrlOrSearch(clip)) == null
@@ -1181,11 +1194,13 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         val url = tab?.url
         val query = UrlUtils.searchQuery(url)
         val reader = Helper.isReaderUrl(url)
+        val document = Docs.isViewerUrl(url)
         val saved = url?.startsWith("file://") == true
         val blocked = AdBlock.isBlockedPage(url)
         val text = when {
             blocked -> "Page blocked · " + UrlUtils.siteName(AdBlock.blockedPageTarget(url))
             reader -> "Reader view · ${tab?.title.orEmpty()}"
+            document -> tab?.title?.takeIf { it.isNotBlank() && it != "Document" } ?: "Document"
             saved -> "Saved page · " + Uri.decode(url.orEmpty().substringAfterLast('/')).removeSuffix(".pdf")
             // While reading, just the site (the whole address shows when the bar is tapped).
             else -> query ?: UrlUtils.siteName(url)
@@ -1194,7 +1209,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             shownUrlText = text
             urlEdit.setText(text)
         }
-        val page = tab != null && !tab.isBlank && query == null && !reader && !saved && !blocked
+        val page = tab != null && !tab.isBlank && query == null && !reader && !saved && !blocked && !document
         // A secure site shows its own icon; only a site that isn't secure gets a warning.
         val favicon = if (page && tab!!.secure) com.swiftbrowser.core.Favicons.cached(url) else null
         if (favicon != null) {
@@ -1211,6 +1226,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         val icon = when {
             blocked -> R.drawable.ic_shield
             reader -> R.drawable.ic_reader
+            document -> R.drawable.ic_documents
             saved -> R.drawable.ic_offline
             !page -> com.swiftbrowser.core.SearchEngine.current.icon
             // Only a site opened over plain http gets the warning (an https page that failed to
@@ -1351,12 +1367,16 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             }
 
             override fun onContinueClicked(item: com.swiftbrowser.media.Unfinished.Item) {
+                // A document opens in Swift's viewer, where it was left (2.4).
+                item.doc?.let { Docs.reopen(it.id); return }
                 openInCurrent(item.url)
                 // An article opens in reader view again, where it was left.
                 if (!item.video) current?.readerOnLoad = item.url
             }
 
             override fun onContinueLongClicked(item: com.swiftbrowser.media.Unfinished.Item) = continueMenu(item)
+
+            override fun onDocumentsTile() = openDocuments()
         }
     }
 
@@ -1397,6 +1417,15 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
     /** Holding a card in the home page's "Continue" (2.3). */
     private fun continueMenu(item: com.swiftbrowser.media.Unfinished.Item) {
+        item.doc?.let { doc ->
+            val actions = listOf(
+                Sheets.Action(R.drawable.ic_open_new, "Open", primary = true) { Docs.reopen(doc.id) },
+                Sheets.Action(R.drawable.ic_share, "Share", primary = true) { Docs.handOver(this, doc, share = true) },
+                Sheets.Action(R.drawable.ic_close, "Remove from Continue", danger = true) { home.removeContinue(item) },
+            )
+            Sheets.actions(this, doc.name, item.caption, actions)
+            return
+        }
         val actions = listOf(
             Sheets.Action(R.drawable.ic_open_new, "New tab", primary = true) {
                 val tab = TabManager.newTab(item.url, incognito = false)
@@ -2310,6 +2339,12 @@ class MainActivity : AppCompatActivity(), BrowserUi {
                 snack("Downloading $name", "View") { openDownloads() }
             }
         }
+        // 2.4: documents can be opened in Swift's viewer (once downloaded), or online for an exact view.
+        val kind = Docs.kindOf(name, mime)
+        if (kind != null) {
+            documentPrompt(tab, response, name, mime, size, kind, start)
+            return
+        }
         if (!prefs.confirmDownloads) {
             start()
             closeIfOnlyDownload(tab, response.uri)
@@ -2334,6 +2369,56 @@ class MainActivity : AppCompatActivity(), BrowserUi {
                 closeIfOnlyDownload(tab, response.uri)
             }
             .showImmersive()
+    }
+
+    /** A document link: Open (downloaded, then shown in Swift), Download, or Exact view online for Office files. */
+    private fun documentPrompt(tab: Tab, response: WebResponse, name: String, mime: String?, size: Long, kind: Docs.Kind, download: () -> Unit) {
+        var chosen = false
+        val office = kind in setOf(Docs.Kind.WORD, Docs.Kind.SHEET, Docs.Kind.SLIDES, Docs.Kind.OLD_WORD, Docs.Kind.OLD_SLIDES)
+        val b = MaterialAlertDialogBuilder(this)
+            .setTitle("Open ${kind.label} file?")
+            .setMessage(name + (if (size > 0) "\n${UrlUtils.formatBytes(size)}" else "") + "\n\nSwift shows it here, without internet; a copy goes to Downloads.")
+            .setPositiveButton("Open") { _, _ ->
+                chosen = true
+                withStorage {
+                    val item = Downloads.startFromResponse(tab.profileId, response, name, mime, tab.url)
+                    openWhenDownloaded(item.id)
+                    snack("Opening $name…")
+                }
+            }
+            .setNegativeButton("Download") { _, _ ->
+                chosen = true
+                download()
+            }
+        if (office && UrlUtils.isHttp(response.uri)) {
+            // Microsoft's viewer shows the file exactly; it gets the link (only for files on the web).
+            b.setNeutralButton("Exact view") { _, _ -> TabManager.newTab(Docs.EXACT_VIEW + Uri.encode(response.uri), incognito = false) }
+        }
+        b.setOnDismissListener {
+            if (!chosen) {
+                try {
+                    response.body?.close()
+                } catch (_: Exception) {
+                }
+            }
+            closeIfOnlyDownload(tab, response.uri)
+        }.showImmersive()
+    }
+
+    /** Opens the download [id] in Swift's viewer once it has finished. */
+    private fun openWhenDownloaded(id: Long) {
+        lateinit var listener: () -> Unit
+        listener = {
+            val d = Downloads.all().firstOrNull { it.id == id }
+            when {
+                d == null || d.status == Downloads.FAILED -> Downloads.removeListener(listener)
+                d.status == Downloads.DONE -> {
+                    Downloads.removeListener(listener)
+                    if (!isFinishing) Docs.open(this, Uri.fromFile(java.io.File(d.filePath)), d.fileName, d.mime, d.url.takeIf { UrlUtils.isHttp(it) })
+                }
+            }
+        }
+        Downloads.addListener(listener)
     }
 
     /**
@@ -2383,6 +2468,12 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
     fun openDownloads() {
         startActivity(Intent(this, DownloadsActivity::class.java))
+    }
+
+    /** Documents (2.4): what was opened in Swift and the phone's documents. */
+    fun openDocuments() {
+        quickMenu.close()
+        startActivity(Intent(this, DocumentsActivity::class.java))
     }
 
     fun openList(cls: Class<out Activity>) {

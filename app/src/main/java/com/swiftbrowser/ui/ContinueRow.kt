@@ -103,12 +103,27 @@ class ContinueRow(context: Context, private val onOpen: (Unfinished.Item) -> Uni
         val site = UrlUtils.host(item.url)?.removePrefix("www.")?.removePrefix("m.").orEmpty()
         addView(FrameLayout(context).apply {
             setBackgroundColor(Ui.color(context, R.color.surface_alt))
+            val doc = item.doc
             val picture = ImageView(context).apply {
                 scaleType = ImageView.ScaleType.CENTER
-                setImageDrawable(Ui.icon(context, if (item.video) R.drawable.ic_movie else R.drawable.ic_reader, Ui.textSecondary(context)))
-                alpha = 0.6f
+                if (doc != null) {
+                    setImageDrawable(com.swiftbrowser.docs.DocIcon(doc.kind, dp(56)))
+                } else {
+                    setImageDrawable(Ui.icon(context, if (item.video) R.drawable.ic_movie else R.drawable.ic_reader, Ui.textSecondary(context)))
+                    alpha = 0.6f
+                }
             }
             addView(picture, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+            if (doc != null) {
+                // The document's first page (or its own picture), from the top.
+                com.swiftbrowser.docs.DocThumbs.load(context, doc.uri, doc.kind, dp(232)) { bmp ->
+                    val top = android.graphics.Bitmap.createBitmap(bmp, 0, 0, bmp.width, minOf(bmp.height, bmp.width * PICTURE_DP / 232))
+                    picture.scaleType = ImageView.ScaleType.CENTER_CROP
+                    picture.setImageBitmap(top)
+                    picture.alpha = 0f
+                    picture.animate().alpha(1f).setDuration(Motion.NORMAL).start()
+                }
+            }
             item.image?.let { url ->
                 // Small and kept in memory a while (PreviewLoader); none on mobile data with Data saver.
                 PreviewLoader.load(context as android.app.Activity, url, dp(PICTURE_DP)) { bmp ->
@@ -130,8 +145,9 @@ class ContinueRow(context: Context, private val onOpen: (Unfinished.Item) -> Uni
                     setImageDrawable(Ui.icon(context, if (item.video) R.drawable.ic_movie else R.drawable.ic_reader, Ui.accent(context)))
                 }
                 addView(icon, LayoutParams(dp(16), dp(16)))
-                Favicons.load(item.url) { bmp -> if (bmp != null) icon.setImageBitmap(bmp) }
-                addView(Ui.text(context, Ui.Type.CAPTION, site, lines = 1).apply { setPadding(dp(6), 0, 0, 0) },
+                val doc = item.doc
+                if (doc != null) icon.setImageDrawable(com.swiftbrowser.docs.DocIcon(doc.kind, dp(16))) else Favicons.load(item.url) { bmp -> if (bmp != null) icon.setImageBitmap(bmp) }
+                addView(Ui.text(context, Ui.Type.CAPTION, doc?.kind?.label ?: site, lines = 1).apply { setPadding(dp(6), 0, 0, 0) },
                     LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             })
             addView(Ui.text(context, Ui.Type.LABEL, item.title.ifBlank { site }, lines = 2).apply {

@@ -57,8 +57,11 @@ object ReadAloud : TextToSpeech.OnInitListener {
     var listener: ((JSONObject) -> Unit)? = null
     private val main = android.os.Handler(android.os.Looper.getMainLooper())
 
+    /** Reading reached the end by itself (not stopped): a document goes on with its next pages (2.5). */
+    @Volatile private var finished = false
+
     private fun state(): JSONObject = JSONObject().put("type", "tts-state").put("speaking", speaking).put("paused", paused)
-        .put("index", index).put("total", parts.size).also { o -> failed?.let { o.put("error", it) } }
+        .put("index", index).put("total", parts.size).put("finished", finished).also { o -> failed?.let { o.put("error", it) } }
 
     private fun report() {
         main.post {
@@ -88,6 +91,7 @@ object ReadAloud : TextToSpeech.OnInitListener {
 
     private fun start(ctx: Context, texts: List<String>, from: Int, language: String?) {
         parts = texts
+        finished = false
         lang = language?.takeIf { it.isNotBlank() }
         index = from.coerceIn(0, (texts.size - 1).coerceAtLeast(0))
         speaking = true
@@ -170,6 +174,7 @@ object ReadAloud : TextToSpeech.OnInitListener {
                 speaking = false
                 parts = emptyList()
                 index = 0
+                finished = true
                 report()
             }
         }
@@ -210,6 +215,7 @@ object ReadAloud : TextToSpeech.OnInitListener {
 
     fun stop() {
         speaking = false
+        finished = false
         run++
         parts = emptyList()
         index = 0

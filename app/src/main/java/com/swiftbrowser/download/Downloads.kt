@@ -462,6 +462,46 @@ object Downloads {
         main.post { DownloadService.notifyFinished(app, item) }
     }
 
+    /**
+     * Finished downloads still in Swift's own folders (from before storage access, or Swift's SD card
+     * folder) move to [dir], so they stay if Swift is uninstalled (2.5). Downloads in progress stay.
+     * [onDone] hears on the main thread how many moved and how many couldn't.
+     */
+    fun moveKeptTo(dir: File, onDone: (moved: Int, failed: Int) -> Unit) {
+        scope.launch {
+            var moved = 0
+            var failed = 0
+            val busy = synchronized(items) { items.values.filter { it.status != DONE }.map { it.filePath }.toSet() }
+            for (f in com.swiftbrowser.core.Storage.keptDownloads(app)) {
+                if (f.path in busy || f.path.startsWith(dir.path + "/")) continue
+                val to = uniqueFile(dir, f.name)
+                val ok = runCatching {
+                    dir.mkdirs()
+                    if (!f.renameTo(to)) {
+                        // Another storage (Swift's data → the phone's shared storage): copied, then removed.
+                        f.inputStream().use { i -> to.outputStream().use { o -> i.copyTo(o) } }
+                        if (to.length() != f.length()) throw IOException("short copy")
+                        f.delete()
+                    }
+                    true
+                }.getOrElse { to.delete(); false }
+                if (!ok) {
+                    failed++
+                    continue
+                }
+                moved++
+                synchronized(items) { items.values.filter { it.filePath == f.path } }.forEach {
+                    it.filePath = to.path
+                    it.fileName = to.name
+                    persist(it)
+                }
+                MediaScannerConnection.scanFile(app, arrayOf(to.path), null, null)
+            }
+            changed(immediate = true)
+            main.post { onDone(moved, failed) }
+        }
+    }
+
     private fun persist(item: Item) {
         val snapshot = arrayOf<Any?>(item.filePath, item.fileName, item.total, item.done, item.status, item.error, item.extra.toString())
         scope.launch {

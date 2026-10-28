@@ -170,6 +170,12 @@ object Palette {
             return listOf(m.getColor(accent.primaryRes), m.getColor(accent.onPrimaryRes), m.getColor(accent.containerRes), m.getColor(accent.onContainerRes))
         }
         val seed = accent.seedColor
+        if (accent == Accent.CUSTOM) {
+            // Your own colour stays as you made it (2.5); only nudged when text on it would be hard to read.
+            val (primary, on) = customAccent(seed, night)
+            return if (night) listOf(primary, on, Tones.tone(seed, 30.0), Tones.tone(seed, 90.0))
+            else listOf(primary, on, Tones.tone(seed, 90.0), Tones.tone(seed, 10.0))
+        }
         return if (night) {
             listOf(Tones.tone(seed, 80.0), Tones.tone(seed, 20.0), Tones.tone(seed, 30.0), Tones.tone(seed, 90.0))
         } else {
@@ -220,15 +226,38 @@ object Palette {
     fun limitLight(c: Int): Int {
         var v = c or 0xFF000000.toInt()
         var i = 0
-        while (Color.luminance(v) < 0.78f && i++ < 40) v = Tones.mix(v, Color.WHITE, 0.08)
+        while (Color.luminance(v) < 0.6f && i++ < 60) v = Tones.mix(v, Color.WHITE, 0.05)
         return v
+    }
+
+    private fun contrast(a: Int, b: Int): Double {
+        val la = Color.luminance(a) + 0.05
+        val lb = Color.luminance(b) + 0.05
+        return if (la > lb) la / lb else lb / la
+    }
+
+    /**
+     * Your own accent and the colour of text on it: the colour exactly as made, unless it would
+     * vanish on the page (light mode: darkened just enough; dark mode: lightened just enough).
+     */
+    fun customAccent(color: Int, night: Boolean): Pair<Int, Int> {
+        var c = color or 0xFF000000.toInt()
+        val page = if (night) 0xFF15171C.toInt() else Color.WHITE
+        var i = 0
+        while (contrast(c, page) < 3.0 && i++ < 40) c = Tones.mix(c, if (night) Color.WHITE else Color.BLACK, 0.05)
+        // Text on it: white in light mode (the 3:1 above is against white, so white reads on it too) and a
+        // deep shade of it in dark mode. Never another fixed colour: Palette.paint swaps colours by
+        // value, and the stock text-on-accent white is also the white of cards (2.5: a light accent
+        // with dark text turned every card black).
+        val on = if (night) Tones.tone(c, 10.0) else Color.WHITE
+        return c to on
     }
 
     /** A dark background stays dark enough for light text. */
     fun limitDark(c: Int): Int {
         var v = c or 0xFF000000.toInt()
         var i = 0
-        while (Color.luminance(v) > 0.022f && i++ < 60) v = Tones.mix(v, Color.BLACK, 0.08)
+        while (Color.luminance(v) > 0.07f && i++ < 60) v = Tones.mix(v, Color.BLACK, 0.05)
         return v
     }
 

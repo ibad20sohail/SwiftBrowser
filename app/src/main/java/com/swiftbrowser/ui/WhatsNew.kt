@@ -23,12 +23,13 @@ object WhatsNew {
     private class Item(val icon: Int, val title: String, val text: String)
 
     private val NEW = listOf(
-        Item(R.drawable.ic_documents, "Documents in Swift", "PDF, Word, Excel, PowerPoint, e-books and text files open right here, without internet. Nothing is uploaded."),
-        Item(R.drawable.ic_folder, "Your phone's documents", "Documents in the ≡ menu and on the home page lists the files on your phone, with previews, filters and search."),
-        Item(R.drawable.ic_open_new, "Open with Swift", "Open a PDF or Office file from WhatsApp, Gmail or your file manager with Swift."),
-        Item(R.drawable.ic_reopen, "Pick up where you stopped", "Documents you didn't finish are in Continue on the home page and reopen at the same place."),
-        Item(R.drawable.ic_volume, "Listen and dark pages", "Swift reads documents aloud, and in dark mode their pages turn dark too."),
-        Item(R.drawable.ic_globe, "Exact view online", "For Word, Excel and PowerPoint links on websites, Exact view shows the file exactly as made (with Microsoft's free viewer)."),
+        Item(R.drawable.ic_documents, "Reading mode", "In a document, the bars go away while you read; tap the page to bring them back. A page counter and a handle to scroll fast."),
+        Item(R.drawable.ic_bookmarks, "Find your way in PDFs", "Go to a page, the PDF's contents, page previews, and a double tap or two fingers to zoom with sharp text."),
+        Item(R.drawable.ic_edit, "Fill in and sign PDFs", "Fill in forms, highlight, draw your signature or add text, then save a copy to Downloads."),
+        Item(R.drawable.ic_play, "Books and slideshows", "E-books turn page by page with your choice of font and spacing. PowerPoint plays as a slideshow, with its speaker notes."),
+        Item(R.drawable.ic_download, "Save as PDF, print, ZIP files", "Save Word, Excel and PowerPoint files as PDF or print them. ZIP files show what is inside, and documents in them open."),
+        Item(R.drawable.ic_folder, "A tidier Documents screen", "Star documents, sort them, look through one folder, rename or delete files, and put a document on the home screen."),
+        Item(R.drawable.ic_palette, "Make any colour", "Your own colour is made with a colour maker, and Swift keeps it exactly as you made it."),
     )
 
     private class Card(val icon: Int, val title: String, val text: String)

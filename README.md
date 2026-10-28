@@ -5,7 +5,7 @@ ad-heavy sites on an old phone (Moto E4, Android 7.1.2).
 
 ## Download
 
-**[Download Swift 2.4 (APK)](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v2.4/Swift-2.4.apk)**
+**[Download Swift 2.5 (APK)](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v2.5/Swift-2.5.apk)**
 for Android 7 and newer (32-bit ARM, about 150 MB). It installs over an earlier Swift and keeps
 tabs and settings. From 1.4 on, Swift can also update itself: Settings → Check for updates.
 
@@ -20,7 +20,7 @@ ones, and a short welcome on the first start.
 
 - **Colours** (2.3, Settings → Look & screen → Colours, with a live preview of light and dark):
   12 accent colours (blue, indigo, purple, pink, red, orange, amber, green, teal, cyan, brown,
-  graphite) or **your own** (a palette or a colour code), and the main colour of each mode: white,
+  graphite) or **your own** (made with a colour maker, 2.5, and kept exactly as made), and the main colour of each mode: white,
   warm paper, cool grey or your own for light mode; grey, pure black, navy, warm dark or your own
   for dark mode. **Ready-made** mixes (Classic, Paper & teal, AMOLED, Midnight, Sunset, Forest,
   Rose) set all three at once. Bars, cards, sheets, dialogs and Swift's logo follow it; a colour
@@ -44,6 +44,27 @@ ones, and a short welcome on the first start.
   - The viewer: find in the document, text size or zoom, **Listen** (read aloud), dark pages in
     dark mode, Share and Open with another app. PDFs load only the parts on screen, so big ones
     open quickly. Where you stopped is remembered; unfinished documents are in **Continue**.
+- **Documents, better** (2.5):
+  - **Reading mode**: Swift's toolbar and the viewer's bar go away while reading (scroll down, or
+    tap the page); scrolling up or a tap brings them back. A page counter ("Page 3 of 20") and a
+    handle on the right edge to scroll through long documents quickly.
+  - **PDFs**: go to a page (tap the counter), the PDF's own contents, page previews, double tap or
+    two fingers to zoom, with the text drawn again sharp at every size. **Fill & sign**: fill in
+    forms, highlight, draw (a signature) or add text, and save a copy to Downloads.
+  - **E-books** turn page by page (tap the sides or swipe), with a choice of font, line spacing,
+    or scrolling instead, and how many pages are left in the chapter.
+  - **PowerPoint**: a full-screen slideshow (swipe or tap the sides) and the speaker notes.
+  - **Excel**: cell colours, bold and italic, merged cells, frozen rows and columns, the sheet's
+    own column widths, and find in the whole sheet. Big workbooks open faster: only the sheet on
+    screen is read.
+  - **Save as PDF** and **Print** for Word, Excel, PowerPoint and text files (PDFs print as
+    they are). **ZIP files** list what they hold; documents in them open in their own tab.
+  - **Listen** carries on through all the pages and chapters; in PDFs the part being read is marked.
+  - Documents on websites open **without a copy** in Downloads; **Save a copy** keeps one.
+  - **Documents screen**: star documents (they stay at the top), sort by date, name or size, look
+    through one folder, files on the memory card are marked "SD card", rename and delete (with
+    Undo), and **Add to home screen**. The last two documents are on Swift's icon (hold it).
+  - Each document keeps its own text size; password-protected Office files say so.
 - **Free VPN for Swift only** (2.1, Settings → VPN, or VPN in the menu): change the country sites
   see you in, with free setup files from Proton VPN (WireGuard, one file per server; the how-to is
   in Settings). Only Swift's own traffic goes through it; other apps keep their connection.

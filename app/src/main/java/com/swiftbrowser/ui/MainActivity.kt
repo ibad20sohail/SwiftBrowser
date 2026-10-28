@@ -820,6 +820,16 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             }
             return
         }
+        // 2.5: a document's home screen shortcut, or one of the last documents on Swift's icon.
+        if (intent.action == Docs.ACTION_OPEN_DOC) {
+            val docId = intent.getStringExtra(Docs.EXTRA_DOC_ID)
+            intent.action = Intent.ACTION_MAIN
+            stopEditing()
+            switcherView?.close()
+            quickMenu.close()
+            if (docId == null || SwiftApp.db.document(docId) == null) snack("Swift doesn't have this document any more") else Docs.reopen(docId)
+            return
+        }
         intent.getStringExtra(EXTRA_OPEN_FILE)?.let { path ->
             intent.removeExtra(EXTRA_OPEN_FILE)
             // Only Swift's own downloads (another app could otherwise make Swift show its private files).
@@ -2016,6 +2026,14 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
     private fun showToolbar() = setToolbarWanted(true)
 
+    /** The document viewer's reading mode (2.5): Swift's toolbar goes with the viewer's own bar. */
+    fun setDocumentReading(tab: Tab, on: Boolean, byScrolling: Boolean) {
+        if (tab !== current || isFinishing || editing) return
+        // Scrolling hides it only for those who let the toolbar hide on scroll; a tap always does.
+        if (on && byScrolling && !prefs.hideToolbarOnScroll) return
+        if (on) hideToolbar() else showToolbar()
+    }
+
     private fun hideToolbar() = setToolbarWanted(false)
 
     /**
@@ -2377,14 +2395,12 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         val office = kind in setOf(Docs.Kind.WORD, Docs.Kind.SHEET, Docs.Kind.SLIDES, Docs.Kind.OLD_WORD, Docs.Kind.OLD_SLIDES)
         val b = MaterialAlertDialogBuilder(this)
             .setTitle("Open ${kind.label} file?")
-            .setMessage(name + (if (size > 0) "\n${UrlUtils.formatBytes(size)}" else "") + "\n\nSwift shows it here, without internet; a copy goes to Downloads.")
+            .setMessage(name + (if (size > 0) "\n${UrlUtils.formatBytes(size)}" else "") + "\n\nSwift shows it here. Nothing is kept unless you choose Save a copy or Download.")
             .setPositiveButton("Open") { _, _ ->
                 chosen = true
-                withStorage {
-                    val item = Downloads.startFromResponse(tab.profileId, response, name, mime, tab.url)
-                    openWhenDownloaded(item.id)
-                    snack("Opening $name…")
-                }
+                // 2.5: read into Swift's cache, not Downloads; the viewer's Save a copy keeps it.
+                snack("Opening $name…")
+                Docs.openFromWeb(this, response, name, mime) { ok -> if (!ok && !isFinishing) snack("Couldn't open $name") }
             }
             .setNegativeButton("Download") { _, _ ->
                 chosen = true
@@ -2403,22 +2419,6 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             }
             closeIfOnlyDownload(tab, response.uri)
         }.showImmersive()
-    }
-
-    /** Opens the download [id] in Swift's viewer once it has finished. */
-    private fun openWhenDownloaded(id: Long) {
-        lateinit var listener: () -> Unit
-        listener = {
-            val d = Downloads.all().firstOrNull { it.id == id }
-            when {
-                d == null || d.status == Downloads.FAILED -> Downloads.removeListener(listener)
-                d.status == Downloads.DONE -> {
-                    Downloads.removeListener(listener)
-                    if (!isFinishing) Docs.open(this, Uri.fromFile(java.io.File(d.filePath)), d.fileName, d.mime, d.url.takeIf { UrlUtils.isHttp(it) })
-                }
-            }
-        }
-        Downloads.addListener(listener)
     }
 
     /**

@@ -60,11 +60,14 @@ object Storage {
             sizeOf(File(ctx.applicationInfo.dataDir, "databases")) + sizeOf(File(ctx.applicationInfo.dataDir, "shared_prefs"))
         val cache = sizeOf(ctx.cacheDir)
         val internalDownloads = sizeOf(File(ctx.filesDir, "downloads"))
-        // Swift's own folders on the phone storage and SD card (Android/data/<package>).
-        val kept = internalDownloads + ownExternalDirs(ctx).sumOf { sizeOf(it) }
+        // Downloads in Swift's own folders (inside its data and Android/data/<package>); the rest of
+        // Android/data (its cache there) counts as other (2.5), so "kept" means downloads only.
+        val kept = keptDownloads(ctx).sumOf { it.length() }
+        val external = ownExternalDirs(ctx).sumOf { sizeOf(it) }
         // The whole data folder (not "lib", a link to the installed app), less what is counted above.
         val dataTotal = File(ctx.applicationInfo.dataDir).listFiles()?.filter { it.name != "lib" }?.sumOf { sizeOf(it) } ?: 0L
-        val other = (dataTotal - profiles - cache - swift - internalDownloads).coerceAtLeast(0)
+        val other = (dataTotal - profiles - cache - swift - internalDownloads).coerceAtLeast(0) +
+            (external - (kept - internalDownloads)).coerceAtLeast(0)
         return Usage(app, adBlock, sites, cache, (profiles - adBlock - sites).coerceAtLeast(0), swift, kept, other)
     }
 

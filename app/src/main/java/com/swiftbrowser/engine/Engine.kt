@@ -133,6 +133,11 @@ object Engine {
             // Phones like this have no AV1 video hardware, and decoding AV1 with the CPU makes
             // videos stutter. Without it YouTube and others send H.264, which the hardware plays.
             SetGeckoPreference.setBoolPref("media.av1.enabled", false, BRANCH),
+            // Streaming players (hls.js, dash) keep up to 150 MB of video in memory; on a 2 GB phone
+            // that, with a movie site's ads, pushes Android to swap and the page freezes on taps
+            // (2.5). Played video is let go sooner; players simply fetch a little more often.
+            SetGeckoPreference.setIntPref("media.mediasource.eviction_threshold.video", 40 * 1024 * 1024, BRANCH),
+            SetGeckoPreference.setIntPref("media.mediasource.eviction_threshold.audio", 10 * 1024 * 1024, BRANCH),
             // The numbers shown by the drawing-speed meter (Settings → Performance).
             SetGeckoPreference.setStringPref("gfx.webrender.debug.profiler-ui", DRAW_SPEED_UI, BRANCH),
             SetGeckoPreference.setBoolPref("gfx.webrender.debug.profiler", prefs.showDrawSpeed, BRANCH),

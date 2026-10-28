@@ -1,32 +1,55 @@
 package com.swiftbrowser.docs
 
+import android.app.Activity
 import android.content.ContentResolver
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Paint
 import android.net.Uri
+import android.os.Bundle
+import android.os.CancellationSignal
 import android.os.Handler
 import android.os.Looper
+import android.os.ParcelFileDescriptor
+import android.print.PageRange
+import android.print.PrintAttributes
+import android.print.PrintDocumentAdapter
+import android.print.PrintDocumentInfo
+import android.print.PrintManager
 import android.provider.OpenableColumns
 import android.util.Base64
 import androidx.core.content.FileProvider
+import androidx.core.content.pm.ShortcutInfoCompat
+import androidx.core.content.pm.ShortcutManagerCompat
+import androidx.core.graphics.drawable.IconCompat
 import com.swiftbrowser.SwiftApp
 import com.swiftbrowser.core.L
 import com.swiftbrowser.core.Profiles
 import com.swiftbrowser.core.UrlUtils
+import com.swiftbrowser.download.Downloads
 import com.swiftbrowser.media.Helper
 import com.swiftbrowser.tabs.Tab
 import com.swiftbrowser.tabs.TabManager
+import com.swiftbrowser.ui.MainActivity
 import org.json.JSONArray
 import org.json.JSONObject
+import org.mozilla.geckoview.GeckoPreferenceController
+import org.mozilla.geckoview.GeckoPreferenceController.SetGeckoPreference
 import org.mozilla.geckoview.WebExtension
+import org.mozilla.geckoview.WebResponse
 import java.io.File
 import java.io.FileInputStream
+import java.io.FileOutputStream
 import java.io.InputStream
 import java.nio.ByteBuffer
+import java.nio.charset.Charset
 import java.security.MessageDigest
 import java.util.Locale
 import java.util.concurrent.Executors
 import java.util.concurrent.Semaphore
+import java.util.zip.ZipInputStream
 
 /**
  * Documents (2.4): PDF, Word, Excel, PowerPoint, e-books and text files open in Swift's own viewer
@@ -34,6 +57,9 @@ import java.util.concurrent.Semaphore
  * file and hands it to the viewer over its private port: PDFs piece by piece as pdf.js asks, the
  * rest whole. Nothing is uploaded. Each document opened is remembered (the documents table) with
  * where it was left, for the home page's Continue and for reopening after Swift restarts.
+ *
+ * 2.5: ZIP files list what they hold; documents from the web open without a copy (Save a copy keeps
+ * one); Save as PDF, Print, filled-in PDFs saved to Downloads; home screen shortcuts; reading mode.
  */
 object Docs {
     enum class Kind(val key: String, val label: String, val color: Int, private val exts: String, private val mimes: String) {
@@ -50,7 +76,8 @@ object Docs {
         ODP("odp", "Presentation", 0xFFC43E1C.toInt(), "odp", "application/vnd.oasis.opendocument.presentation"),
         RTF("rtf", "Rich text", 0xFF2B579A.toInt(), "rtf", "application/rtf text/rtf"),
         TEXT("text", "Text", 0xFF5F6368.toInt(), "txt log md markdown json xml ini cfg conf yaml yml srt vtt sub",
-            "text/plain text/markdown application/json text/xml");
+            "text/plain text/markdown application/json text/xml"),
+        ZIP("zip", "ZIP", 0xFF8D6E00.toInt(), "zip", "application/zip application/x-zip-compressed");
 
         val extensions: List<String> = exts.split(' ')
         val mimeTypes: List<String> = mimes.split(' ')
@@ -65,6 +92,7 @@ object Docs {
             ODT, ODP -> "ODF"
             RTF -> "RTF"
             TEXT -> "TXT"
+            ZIP -> "ZIP"
         }
 
         companion object {
@@ -102,6 +130,12 @@ object Docs {
     /** The document a viewer tab shows. */
     fun docOf(url: String?): Doc? = if (isViewerUrl(url)) SwiftApp.db.document(url!!.substringAfter('#')) else null
 
+    /** Where documents opened without keeping a copy (from the web, out of a ZIP) wait, for a week at most. */
+    private fun tempDir(ctx: Context) = File(ctx.cacheDir, "docs")
+
+    private fun isTemp(ctx: Context, uri: Uri): Boolean =
+        uri.scheme == ContentResolver.SCHEME_FILE && uri.path.orEmpty().startsWith(tempDir(ctx).path + "/")
+
     /**
      * Opens [uri] in a new tab, in Swift's viewer. [web]: the page link it was downloaded from (for
      * "Exact view (online)"). Says so and returns false when Swift can't show it.
@@ -123,29 +157,76 @@ object Docs {
         val profile = Profiles.currentId
         io.execute { SwiftApp.db.saveDocument(id, key, name, kind.key, size, web, profile) }
         L.d("Opening document ${kind.key} ($size bytes)")
-        val url = viewerUrl(id)
-        if (url == null) {
+        if (viewerUrl(id) == null) {
             // Swift is still starting (opened from another app): the tab opens when the viewer can.
             waiting += id
             return true
         }
-        TabManager.newTab(url, incognito = false)
+        reopen(id)
         return true
     }
 
+    /**
+     * A document link on a website (2.5): read into Swift's cache and shown, without a copy in
+     * Downloads. The viewer's Save a copy keeps one.
+     */
+    fun openFromWeb(a: Activity, response: WebResponse, name: String, mime: String?, done: (Boolean) -> Unit) {
+        val body = response.body
+        if (body == null) {
+            done(false)
+            return
+        }
+        io.execute {
+            val dir = File(tempDir(a), "web/" + idFor(response.uri).take(12))
+            val file = File(dir, UrlUtils.sanitizeFileName(name).ifBlank { "document" })
+            val ok = try {
+                dir.mkdirs()
+                body.use { input -> FileOutputStream(file).use { input.copyTo(it, 65536) } }
+                true
+            } catch (e: Exception) {
+                L.w("Couldn't read the document from the web", e)
+                file.delete()
+                false
+            }
+            main.post {
+                done(ok && !a.isFinishing && open(a, Uri.fromFile(file), name, mime, response.uri.takeIf { UrlUtils.isHttp(it) }))
+            }
+        }
+    }
+
     private val waiting = ArrayList<String>()
+    private var trimmed = false
 
     /** The helper extension is ready: documents asked for meanwhile open now. */
     fun onViewerReady() {
         val ids = waiting.toList()
         waiting.clear()
         main.post { ids.forEach { reopen(it) } }
+        if (!trimmed) {
+            trimmed = true
+            val ctx = SwiftApp.instance ?: return
+            io.execute { trimTemp(ctx) }
+        }
     }
 
-    /** Opens a document Swift has seen before (Continue, Documents' recent list). */
+    /** Copies Swift no longer needs: documents from the web or out of ZIPs not opened for a week. */
+    private fun trimTemp(ctx: Context) {
+        val old = System.currentTimeMillis() - 7L * 24 * 3600 * 1000
+        tempDir(ctx).walkBottomUp().forEach { f ->
+            if (f.isFile && f.lastModified() < old) f.delete()
+            else if (f.isDirectory && f != tempDir(ctx) && f.list()?.isEmpty() == true) f.delete()
+        }
+    }
+
+    /** Opens a document Swift has seen before (Continue, Documents, a shortcut); its tab if it is open already. */
     fun reopen(id: String): Boolean {
-        val url = viewerUrl(id) ?: return false
-        TabManager.newTab(url, incognito = false)
+        val url = viewerUrl(id)
+        if (url == null) {
+            if (id !in waiting) waiting += id
+            return true
+        }
+        val open = TabManager.tabs.firstOrNull { it.url == url && !it.incognito }
+        if (open != null) TabManager.select(open) else TabManager.newTab(url, incognito = false)
         return true
     }
 
@@ -159,7 +240,8 @@ object Docs {
             }
             val own = File(ctx.applicationInfo.dataDir).canonicalPath
             val downloads = File(ctx.filesDir, "downloads").canonicalPath
-            if (path.startsWith(own) && !path.startsWith(downloads)) return false
+            val temp = tempDir(ctx).canonicalPath
+            if (path.startsWith(own) && !path.startsWith("$downloads/") && !path.startsWith("$temp/")) return false
             return File(path).canRead()
         }
         return uri.scheme == ContentResolver.SCHEME_CONTENT
@@ -185,9 +267,16 @@ object Docs {
         return (name ?: uri.lastPathSegment?.substringAfterLast('/') ?: "Document") to size
     }
 
-    private fun idFor(key: String): String {
+    fun idFor(key: String): String {
         val digest = MessageDigest.getInstance("SHA-1").digest(key.toByteArray())
         return digest.take(10).joinToString("") { String.format("%02x", it) }
+    }
+
+    /** A record for a document not opened yet (a shortcut, a star), so it can be opened by its id. */
+    fun remember(ctx: Context, uri: Uri, name: String, kind: Kind, size: Long): String {
+        val id = idFor(uri.toString())
+        if (SwiftApp.db.document(id) == null) SwiftApp.db.saveDocument(id, uri.toString(), name, kind.key, size, null, Profiles.currentId)
+        return id
     }
 
     // ------------------------------------------------------------------ the viewer's messages
@@ -211,7 +300,13 @@ object Docs {
                 val total = msg.optInt("total", 0)
                 io.execute { SwiftApp.db.setDocumentPlace(id, place, progress, total) }
             }
-            "doc-action" -> main.post { act(id, msg.optString("action")) }
+            "doc-reading" -> (TabManager.ui as? MainActivity)?.setDocumentReading(tab, msg.optBoolean("on"), msg.optBoolean("auto"))
+            "doc-zip" -> if (port != null) io.execute { listZip(id, port) }
+            "doc-save" -> {
+                val part = Saving(id, msg.optString("name"), msg.optString("mime"), msg.optInt("seq"), msg.optString("data"), msg.optBoolean("last"))
+                io.execute { savePart(tab.profileId, part) }
+            }
+            "doc-action" -> main.post { act(tab, id, msg.optString("action"), msg) }
         }
     }
 
@@ -239,15 +334,20 @@ object Docs {
             return
         }
         SwiftApp.db.touchDocument(id)
+        // Not on the phone as a file of its own (from the web, a ZIP or another app): it can be kept.
+        val copy = isTemp(ctx, uri) || uri.scheme == ContentResolver.SCHEME_CONTENT
         post(port, JSONObject().put("type", "doc-info").put("id", id).put("name", doc.name).put("kind", doc.kind.key)
             .put("size", doc.size).put("ranges", seekable && doc.size > 0).put("place", doc.place ?: "")
-            .put("progress", doc.progress.toDouble()).put("web", doc.web != null).put("where", where(doc))
-            .put("accentLight", Helper.accentColor(false)).put("accentDark", Helper.accentColor(true)))
+            .put("progress", doc.progress.toDouble()).put("web", doc.web != null).put("where", where(ctx, doc))
+            .put("copy", copy).put("accentLight", Helper.accentColor(false)).put("accentDark", Helper.accentColor(true)))
+        updateShortcuts(ctx)
     }
 
-    private fun where(doc: Doc): String {
+    private fun where(ctx: Context, doc: Doc): String {
         val uri = Uri.parse(doc.uri)
         return when {
+            isTemp(ctx, uri) && doc.web != null -> "From " + (UrlUtils.host(doc.web) ?: "the web") + " (not kept: Save a copy keeps one)"
+            isTemp(ctx, uri) -> "From a ZIP file (not kept: Save a copy keeps one)"
             uri.scheme == ContentResolver.SCHEME_FILE -> File(uri.path.orEmpty()).parent.orEmpty()
             doc.web != null -> "From " + (UrlUtils.host(doc.web) ?: "the web")
             else -> "Shared by " + (uri.authority?.substringBefore(".provider")?.substringAfterLast('.') ?: "another app")
@@ -335,10 +435,251 @@ object Docs {
         }
     }
 
+    // ------------------------------------------------------------------ ZIP files (2.5)
+
+    /** What a ZIP file holds (names and sizes), read by Swift: the file itself can be large. */
+    private fun listZip(id: String, port: WebExtension.Port) {
+        val ctx = SwiftApp.instance ?: return
+        val doc = SwiftApp.db.document(id) ?: return
+        val reply = JSONObject().put("type", "doc-zip-list")
+        val entries = JSONArray()
+        // Most ZIPs name their files in UTF-8; older Windows ones in the DOS code page.
+        for (charset in listOf(Charsets.UTF_8, Charset.forName("CP437"))) {
+            try {
+                ZipInputStream(stream(ctx, Uri.parse(doc.uri)), charset).use { zip ->
+                    while (true) {
+                        val e = zip.nextEntry ?: break
+                        if (entries.length() >= MAX_ZIP_ENTRIES) {
+                            reply.put("truncated", true)
+                            break
+                        }
+                        entries.put(JSONObject().put("name", e.name).put("size", e.size).put("kind", kindOf(e.name, null)?.key ?: JSONObject.NULL))
+                    }
+                }
+                break
+            } catch (e: IllegalArgumentException) {
+                // A name that isn't UTF-8: read the list again in the other code page.
+                while (entries.length() > 0) entries.remove(entries.length() - 1)
+            } catch (e: Exception) {
+                L.w("Couldn't read the ZIP file", e)
+                reply.put("error", "Swift couldn't read this ZIP file. It may be damaged, or not a ZIP file.")
+                break
+            }
+        }
+        post(port, reply.put("entries", entries))
+    }
+
+    /** A document inside a ZIP: taken out into Swift's cache and opened in its own tab. */
+    private fun openEntry(a: Activity, doc: Doc, entry: String) {
+        io.execute {
+            val dir = File(tempDir(a), "zip/" + doc.id)
+            val name = entry.substringAfterLast('/').ifBlank { "document" }
+            val file = File(dir, idFor(entry).take(6) + "-" + UrlUtils.sanitizeFileName(name))
+            var found = false
+            val ok = try {
+                dir.mkdirs()
+                ZipInputStream(stream(a, Uri.parse(doc.uri))).use { zip ->
+                    while (true) {
+                        val e = zip.nextEntry ?: break
+                        if (e.name != entry) continue
+                        found = true
+                        FileOutputStream(file).use { zip.copyTo(it, 65536) }
+                        break
+                    }
+                }
+                found
+            } catch (e: Exception) {
+                L.w("Couldn't take a file out of the ZIP", e)
+                file.delete()
+                false
+            }
+            main.post {
+                if (a.isFinishing) return@post
+                if (!ok || !open(a, Uri.fromFile(file), name, null)) {
+                    com.swiftbrowser.ui.Messages.show(a, "Swift couldn't open this file from the ZIP. It may be protected by a password.")
+                }
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------ saving (2.5)
+
+    private class Saving(val id: String, val name: String, val mime: String, val seq: Int, val data: String, val last: Boolean)
+
+    /** A file the viewer made (a filled-in PDF), arriving in pieces: put together, then saved to Downloads. */
+    private fun savePart(profileId: Long, part: Saving) {
+        val ctx = SwiftApp.instance ?: return
+        val dir = File(tempDir(ctx), "out").apply { mkdirs() }
+        val file = File(dir, part.id + ".part")
+        try {
+            FileOutputStream(file, part.seq > 0).use { it.write(Base64.decode(part.data, Base64.NO_WRAP)) }
+        } catch (e: Exception) {
+            L.w("Couldn't save the document", e)
+            file.delete()
+            main.post { (TabManager.ui as? MainActivity)?.snack("Couldn't save the file") }
+            return
+        }
+        if (!part.last) return
+        val name = UrlUtils.sanitizeFileName(part.name).ifBlank { "document.pdf" }
+        main.post { saveToDownloads(profileId, name, part.mime.ifBlank { "application/pdf" }, null, { out -> file.copyTo(out, true) }) { file.delete() } }
+    }
+
+    /** Puts a file in Downloads (asking for storage access once), then offers to open it. */
+    private fun saveToDownloads(profileId: Long, name: String, mime: String, web: String?, write: (File) -> Unit, after: () -> Unit = {}) {
+        val a = TabManager.ui as? MainActivity ?: return
+        a.withStorage {
+            Downloads.saveFile(profileId, name, mime, web, write = write) { item ->
+                after()
+                if (item == null) {
+                    a.snack("Couldn't save the file")
+                } else {
+                    a.snack("Saved to Downloads", "Open") {
+                        if (!open(a, Uri.fromFile(File(item.filePath)), item.fileName, item.mime)) a.openFileInTab(item.filePath)
+                    }
+                }
+            }
+        }
+    }
+
+    /** The document itself, kept in Downloads (it came from the web, a ZIP or another app). */
+    private fun saveCopy(tab: Tab, doc: Doc) {
+        val ctx = SwiftApp.instance ?: return
+        val uri = Uri.parse(doc.uri)
+        val mime = UrlUtils.mimeFromName(doc.name) ?: doc.kind.mimeTypes.first()
+        saveToDownloads(tab.profileId, doc.name, mime, doc.web, { out ->
+            stream(ctx, uri).use { input -> FileOutputStream(out).use { input.copyTo(it, 65536) } }
+            // The kept copy is the document from now on (the cached one goes after a week).
+            if (isTemp(ctx, uri)) SwiftApp.db.moveDocument(doc.id, Uri.fromFile(out).toString())
+        })
+    }
+
+    /** Word, Excel, PowerPoint and the rest as a PDF, or printed (the page as the viewer shows it). */
+    private fun printOrSave(a: MainActivity, tab: Tab, doc: Doc, print: Boolean) {
+        if (print && doc.kind == Kind.PDF) {
+            printFile(a, doc.name) { stream(a, Uri.parse(doc.uri)) }
+            return
+        }
+        val session = tab.session ?: return
+        val name = doc.name.substringBeforeLast('.', doc.name) + ".pdf"
+        // The page's corners would show the viewer's own address and the time: left empty for documents.
+        val blank = listOf("print.print_headerright", "print.print_footerright")
+        val restore = { blank.forEach { GeckoPreferenceController.clearGeckoUserPref(it) } }
+        GeckoPreferenceController.setGeckoPrefs(blank.map { SetGeckoPreference.setStringPref(it, "", GeckoPreferenceController.PREF_BRANCH_USER) })
+            .accept({ _ -> makePdf(a, tab, doc, session, name, print, restore) }, { _ -> makePdf(a, tab, doc, session, name, print, restore) })
+    }
+
+    private fun makePdf(a: MainActivity, tab: Tab, doc: Doc, session: org.mozilla.geckoview.GeckoSession, name: String, print: Boolean, restore: () -> Unit) {
+        session.saveAsPdf().accept({ stream ->
+            restore()
+            if (stream == null) {
+                a.snack("Couldn't make a PDF of this document")
+                return@accept
+            }
+            if (print) {
+                io.execute {
+                    val dir = File(tempDir(a), "print").apply { mkdirs() }
+                    val file = File(dir, "print.pdf")
+                    val ok = try {
+                        stream.use { input -> FileOutputStream(file).use { input.copyTo(it) } }
+                        true
+                    } catch (e: Exception) {
+                        false
+                    }
+                    main.post { if (ok) printFile(a, name) { FileInputStream(file) } else a.snack("Couldn't print this document") }
+                }
+            } else {
+                saveToDownloads(tab.profileId, name, "application/pdf", doc.web, { out -> stream.use { input -> out.outputStream().use { input.copyTo(it) } } })
+            }
+        }, { _ ->
+            restore()
+            a.snack("Couldn't make a PDF of this document")
+        })
+    }
+
+    /** Android's print screen for a PDF (a printer, or Save as PDF). */
+    private fun printFile(a: Activity, name: String, open: () -> InputStream) {
+        val pm = a.getSystemService(Context.PRINT_SERVICE) as? PrintManager ?: return
+        try {
+            pm.print(name, object : PrintDocumentAdapter() {
+                override fun onLayout(
+                    oldAttributes: PrintAttributes?, newAttributes: PrintAttributes?, cancel: CancellationSignal?,
+                    callback: LayoutResultCallback, extras: Bundle?,
+                ) {
+                    if (cancel?.isCanceled == true) {
+                        callback.onLayoutCancelled()
+                        return
+                    }
+                    callback.onLayoutFinished(PrintDocumentInfo.Builder(name).setContentType(PrintDocumentInfo.CONTENT_TYPE_DOCUMENT).build(), true)
+                }
+
+                override fun onWrite(pages: Array<out PageRange>?, destination: ParcelFileDescriptor, cancel: CancellationSignal?, callback: WriteResultCallback) {
+                    try {
+                        open().use { input -> FileOutputStream(destination.fileDescriptor).use { input.copyTo(it) } }
+                        callback.onWriteFinished(arrayOf(PageRange.ALL_PAGES))
+                    } catch (e: Exception) {
+                        callback.onWriteFailed(e.message)
+                    }
+                }
+            }, null)
+        } catch (e: Exception) {
+            L.w("Printing failed", e)
+            com.swiftbrowser.ui.Messages.show(a, "This phone can't print")
+        }
+    }
+
+    // ------------------------------------------------------------------ home screen shortcuts (2.5)
+
+    const val ACTION_OPEN_DOC = "com.swiftbrowser.action.OPEN_DOC"
+    const val EXTRA_DOC_ID = "doc_id"
+
+    private fun shortcutFor(ctx: Context, doc: Doc, shortId: String): ShortcutInfoCompat {
+        val intent = Intent(ACTION_OPEN_DOC).setClass(ctx, MainActivity::class.java).putExtra(EXTRA_DOC_ID, doc.id)
+        return ShortcutInfoCompat.Builder(ctx, shortId)
+            .setShortLabel(doc.name.take(24).ifBlank { doc.kind.label })
+            .setLongLabel(doc.name.take(60))
+            .setIcon(IconCompat.createWithBitmap(shortcutIcon(ctx, doc.kind)))
+            .setIntent(intent)
+            .build()
+    }
+
+    /** The document's mark (its kind's colour and badge) on a white circle. */
+    private fun shortcutIcon(ctx: Context, kind: Kind): Bitmap {
+        val size = (48 * ctx.resources.displayMetrics.density * 1.5f).toInt().coerceAtLeast(96)
+        val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        val c = Canvas(bmp)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFFFFFFF.toInt() }
+        c.drawCircle(size / 2f, size / 2f, size / 2f, paint)
+        val inner = (size * 0.6f).toInt()
+        val icon = DocIcon(kind, inner)
+        val left = (size - inner) / 2
+        icon.setBounds(left, left, left + inner, left + inner)
+        icon.draw(c)
+        return bmp
+    }
+
+    /** "Add to home screen" for a document: it opens straight in Swift's viewer. */
+    fun pinShortcut(a: Activity, doc: Doc) {
+        val ok = ShortcutManagerCompat.isRequestPinShortcutSupported(a) &&
+            ShortcutManagerCompat.requestPinShortcut(a, shortcutFor(a, doc, "doc-" + doc.id), null)
+        com.swiftbrowser.ui.Messages.show(a, if (ok) "Added to the home screen" else "This phone's home screen doesn't accept shortcuts")
+    }
+
+    /** The last documents read, among the shortcuts of Swift's icon (hold it on the home screen). */
+    private fun updateShortcuts(ctx: Context) {
+        try {
+            val room = (ShortcutManagerCompat.getMaxShortcutCountPerActivity(ctx) - STATIC_SHORTCUTS).coerceIn(0, 2)
+            val docs = SwiftApp.db.recentDocuments(Profiles.currentId, room)
+            val list = docs.mapIndexed { i, d -> shortcutFor(ctx, d, "recent-doc-$i") }
+            ShortcutManagerCompat.setDynamicShortcuts(ctx, list)
+        } catch (e: Exception) {
+            L.w("Couldn't update the shortcuts", e)
+        }
+    }
+
     // ------------------------------------------------------------------ the viewer's buttons
 
-    private fun act(id: String, action: String) {
-        val a = TabManager.ui as? com.swiftbrowser.ui.MainActivity ?: return
+    private fun act(tab: Tab, id: String, action: String, msg: JSONObject) {
+        val a = TabManager.ui as? MainActivity ?: return
         when (action) {
             "documents" -> a.openDocuments()
             "find" -> a.openFind()
@@ -347,15 +688,24 @@ object Docs {
                 val web = doc.web ?: return
                 TabManager.newTab(EXACT_VIEW + Uri.encode(web), incognito = false)
             }
-            "share", "open-with" -> io.execute {
+            "share", "open-with", "save-copy", "print", "save-pdf", "shortcut", "open-entry" -> io.execute {
                 val doc = SwiftApp.db.document(id) ?: return@execute
-                main.post { handOver(a, doc, share = action == "share") }
+                main.post {
+                    when (action) {
+                        "share", "open-with" -> handOver(a, doc, share = action == "share")
+                        "save-copy" -> saveCopy(tab, doc)
+                        "print" -> printOrSave(a, tab, doc, print = true)
+                        "save-pdf" -> printOrSave(a, tab, doc, print = false)
+                        "shortcut" -> pinShortcut(a, doc)
+                        "open-entry" -> openEntry(a, doc, msg.optString("entry"))
+                    }
+                }
             }
         }
     }
 
     /** Shares the file, or opens it in another app (Android's chooser). */
-    fun handOver(a: android.app.Activity, doc: Doc, share: Boolean) {
+    fun handOver(a: Activity, doc: Doc, share: Boolean) {
         val uri = Uri.parse(doc.uri).let { u ->
             if (u.scheme == ContentResolver.SCHEME_FILE) {
                 try {
@@ -376,7 +726,7 @@ object Docs {
         try {
             val chooser = Intent.createChooser(intent, if (share) "Share ${doc.name}" else "Open with")
             // Not Swift itself (it would just open the file here again).
-            if (!share) chooser.putExtra(Intent.EXTRA_EXCLUDE_COMPONENTS, arrayOf(android.content.ComponentName(a, com.swiftbrowser.ui.MainActivity::class.java)))
+            if (!share) chooser.putExtra(Intent.EXTRA_EXCLUDE_COMPONENTS, arrayOf(android.content.ComponentName(a, MainActivity::class.java)))
             a.startActivity(chooser)
         } catch (e: Exception) {
             com.swiftbrowser.ui.Messages.show(a, "No app on the phone can open this file")
@@ -386,6 +736,10 @@ object Docs {
     private const val CHUNK = 262_144
     private const val MAX_RANGE = 4 * 1_048_576
     private const val MAX_WHOLE = 60L * 1_048_576
+    private const val MAX_ZIP_ENTRIES = 2000
+
+    /** new_tab, incognito and scan in res/xml/shortcuts.xml. */
+    private const val STATIC_SHORTCUTS = 3
 
     /** Microsoft's free viewer for Office files on the web (the link is sent to Microsoft). */
     const val EXACT_VIEW = "https://view.officeapps.live.com/op/view.aspx?src="

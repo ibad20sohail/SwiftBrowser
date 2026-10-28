@@ -58,7 +58,7 @@ data class DownloadRow(
  * Small hand-written SQLite layer: profiles, tabs (with their order and groups), recently closed
  * tabs, history, bookmarks, downloads, per-site ad levels and where videos were left off.
  */
-class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 5) {
+class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 6) {
 
     override fun onConfigure(db: SQLiteDatabase) {
         db.enableWriteAheadLogging()
@@ -95,6 +95,7 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 5) {
         addVersion3(db)
         addVersion4(db)
         addVersion5(db)
+        addVersion6(db)
 
         db.insert("profiles", null, ContentValues().apply {
             put("name", "Personal")
@@ -112,6 +113,7 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 5) {
         if (oldVersion < 3) addVersion3(db)
         if (oldVersion < 4) addVersion4(db)
         if (oldVersion < 5) addVersion5(db)
+        if (oldVersion < 6) addVersion6(db)
     }
 
     /** 2.4: documents opened in Swift's viewer, where each is, and where it was left. */
@@ -391,6 +393,14 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 5) {
         writableDatabase.execSQL("UPDATE documents SET place = NULL, progress = 0")
     }
 
+    /** 2.5: starred documents (Documents' first section), whether opened in Swift or not. */
+    private fun addVersion6(db: SQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE starred_documents(uri TEXT NOT NULL, profile_id INTEGER NOT NULL, name TEXT NOT NULL, kind TEXT NOT NULL, " +
+                "size INTEGER NOT NULL DEFAULT -1, added INTEGER NOT NULL, PRIMARY KEY(uri, profile_id))",
+        )
+    }
+
     // ---------------------------------------------------------------- documents (2.4)
 
     /** A document opened (again): its place is kept, what it is and when is brought up to date. */
@@ -457,6 +467,54 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 5) {
     fun forgetDocument(id: String) {
         writableDatabase.delete("documents", "id=?", arrayOf(id))
     }
+
+    /** A document's file was renamed (2.5): its record and star follow it; [newId] is the id of its new place. */
+    fun renameDocument(oldUri: String, newUri: String, newName: String, newId: String) {
+        val db = writableDatabase
+        // A record already at the new place (opened before under that name) gives way.
+        db.updateWithOnConflict("documents", ContentValues().apply {
+            put("id", newId)
+            put("uri", newUri)
+            put("name", newName)
+        }, "uri=?", arrayOf(oldUri), SQLiteDatabase.CONFLICT_REPLACE)
+        db.updateWithOnConflict("starred_documents", ContentValues().apply {
+            put("uri", newUri)
+            put("name", newName)
+        }, "uri=?", arrayOf(oldUri), SQLiteDatabase.CONFLICT_REPLACE)
+    }
+
+    /** A document opened from Swift's cache was kept (Save a copy): the record follows the kept file. */
+    fun moveDocument(id: String, uri: String) {
+        writableDatabase.update("documents", ContentValues().apply { put("uri", uri) }, "id=?", arrayOf(id))
+    }
+
+    /** A document's file was deleted: Swift forgets it everywhere. */
+    fun forgetDocumentUri(uri: String) {
+        writableDatabase.delete("documents", "uri=?", arrayOf(uri))
+        writableDatabase.delete("starred_documents", "uri=?", arrayOf(uri))
+    }
+
+    class StarredDocument(val uri: String, val name: String, val kind: String, val size: Long, val added: Long)
+
+    fun starDocument(profileId: Long, uri: String, name: String, kind: String, size: Long) {
+        writableDatabase.insertWithOnConflict("starred_documents", null, ContentValues().apply {
+            put("uri", uri)
+            put("profile_id", profileId)
+            put("name", name)
+            put("kind", kind)
+            put("size", size)
+            put("added", System.currentTimeMillis())
+        }, SQLiteDatabase.CONFLICT_REPLACE)
+    }
+
+    fun unstarDocument(profileId: Long, uri: String) {
+        writableDatabase.delete("starred_documents", "uri=? AND profile_id=?", arrayOf(uri, "$profileId"))
+    }
+
+    fun starredDocuments(profileId: Long): List<StarredDocument> =
+        query("SELECT uri, name, kind, size, added FROM starred_documents WHERE profile_id = ? ORDER BY added DESC", arrayOf("$profileId")) {
+            StarredDocument(it.getString(0), it.getString(1), it.getString(2), it.getLong(3), it.getLong(4))
+        }
 
     /** Long videos left off since [since] that are in the profile's history: page, title, position, length, when. */
     fun unfinishedVideos(profileId: Long, since: Long, limit: Int): List<Array<Any?>> =

@@ -1,4 +1,4 @@
-/* Swift's document viewer (2.4). Light and dark follow Swift (prefers-color-scheme); the accent
+/* Swift's document viewer (2.4, 2.5). Light and dark follow Swift (prefers-color-scheme); the accent
    comes from the app (--accent, set by view.js). */
 :root {
   --bg: #f2f3f5;
@@ -36,6 +36,7 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
   display: flex; align-items: center; gap: 2px;
   height: var(--bar-h); padding: 0 4px 0 12px;
   background: var(--surface); border-bottom: 1px solid var(--line);
+  transition: transform 0.18s ease-out;
 }
 #badge {
   flex: none; min-width: 34px; height: 22px; padding: 0 6px; border-radius: 6px;
@@ -49,6 +50,12 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .icon svg { width: 22px; height: 22px; fill: currentColor; }
 .icon:active { background: var(--line); }
 #listen.on { color: var(--accent); }
+
+/* Reading mode (2.5): the bars go away while reading; a tap brings them back. */
+body.reading #bar { transform: translateY(-110%); }
+body.reading #sheets { transform: translateY(110%); }
+
+#sheets { transition: transform 0.18s ease-out; }
 
 #findbar {
   position: sticky; top: var(--bar-h); z-index: 19;
@@ -87,17 +94,59 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 3s; } }
 
-/* ------------------------------------------------------------------ the more menu */
+/* ------------------------------------------------------------------ the more menu and panels */
 
 #menu {
   position: fixed; top: calc(var(--bar-h) - 4px); right: 8px; z-index: 30;
-  min-width: 220px; max-width: calc(100vw - 16px); padding: 6px 0; border-radius: 14px;
+  min-width: 220px; max-width: calc(100vw - 16px); max-height: calc(100vh - 60px); overflow-y: auto;
+  padding: 6px 0; border-radius: 14px;
   background: var(--surface); box-shadow: 0 6px 24px rgba(0, 0, 0, 0.25);
   animation: drop 0.16s ease-out;
 }
 #menu button { display: block; width: 100%; text-align: left; padding: 12px 18px; }
 #menu button:active { background: var(--line); }
+#menu button.sub { color: var(--muted); font-size: 14px; }
+#menu .head { padding: 10px 18px 6px; color: var(--muted); font-size: 13px; font-weight: 600; }
 @keyframes drop { from { opacity: 0; transform: translateY(-6px); } }
+
+#panel {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 32;
+  max-height: 80vh; overflow-y: auto; padding: 8px 16px 20px;
+  background: var(--surface); border-radius: 18px 18px 0 0; box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.25);
+  animation: rise 0.18s ease-out;
+}
+@keyframes rise { from { transform: translateY(30px); opacity: 0; } }
+#panel h3 { margin: 10px 0 8px; font-size: 13px; color: var(--muted); font-weight: 600; }
+#panel .row { display: flex; gap: 8px; flex-wrap: wrap; }
+#panel .chip { padding: 9px 14px; border-radius: 18px; border: 1px solid var(--line); }
+#panel .chip.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+#panel .done { display: block; margin: 16px auto 0; padding: 10px 26px; border-radius: 20px; background: var(--accent); color: #fff; font-weight: 600; }
+
+#toast {
+  position: fixed; left: 50%; bottom: 76px; z-index: 40; transform: translateX(-50%);
+  max-width: calc(100vw - 32px); padding: 10px 16px; border-radius: 12px;
+  background: #2b2c31; color: #f1f1f3; font-size: 14px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+}
+
+/* ------------------------------------------------------------------ page counter and fast scrolling */
+
+#pagepill {
+  position: fixed; left: 50%; bottom: 18px; z-index: 22; transform: translateX(-50%);
+  padding: 7px 14px; border-radius: 16px; font-size: 13px; font-weight: 600;
+  background: rgba(32, 33, 36, 0.86); color: #fff; transition: opacity 0.25s;
+}
+#pagepill.fade { opacity: 0; pointer-events: none; }
+#fastscroll { position: fixed; right: 0; top: 0; bottom: 0; width: 34px; z-index: 21; pointer-events: none; }
+#fastthumb {
+  position: absolute; right: 4px; width: 26px; height: 48px; border-radius: 13px;
+  background: var(--accent); opacity: 0.85; pointer-events: auto; touch-action: none;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3); transition: opacity 0.25s;
+}
+#fastthumb::after {
+  content: ''; position: absolute; left: 8px; right: 8px; top: 18px; height: 12px;
+  border-top: 2px solid rgba(255, 255, 255, 0.85); border-bottom: 2px solid rgba(255, 255, 255, 0.85);
+}
+#fastscroll.fade #fastthumb { opacity: 0; pointer-events: none; }
 
 /* ------------------------------------------------------------------ read aloud */
 
@@ -109,10 +158,13 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 #tts button { padding: 10px 18px; border-radius: 20px; font-weight: 600; }
 #ttstoggle { background: var(--accent); color: #fff; }
 .speaking { background: var(--mark) !important; border-radius: 4px; }
+body.listening #pagepill { bottom: 76px; }
 
 /* ------------------------------------------------------------------ flowing documents (Word, text, old files) */
 
-#doc { padding-bottom: 40px; }
+/* Something wider than the screen (a table, a picture) scrolls inside the document instead of
+   widening the page, which pushed the menu off the screen. */
+#doc { padding-bottom: 40px; overflow-x: auto; }
 .flow { max-width: 760px; margin: 0 auto; padding: 16px 18px; overflow-wrap: break-word; }
 .flow p { margin: 0 0 0.8em; }
 .flow h2.slide-title { font-size: 1.1em; margin: 1.4em 0 0.5em; color: var(--accent); }
@@ -143,18 +195,59 @@ body.fit .docx-wrapper img { max-width: 100%; height: auto; }
 
 /* ------------------------------------------------------------------ boxes that scroll by themselves (PDF, sheets) */
 
-.pane { position: fixed; left: 0; right: 0; bottom: 0; top: var(--bar-h); overflow: auto; -webkit-overflow-scrolling: touch; }
-body.finding .pane { top: calc(var(--bar-h) + 45px); }
+.pane {
+  position: fixed; left: 0; right: 0; top: var(--bar-h); height: calc(100svh - var(--bar-h));
+  overflow: auto; -webkit-overflow-scrolling: touch;
+}
+body.finding .pane { top: calc(var(--bar-h) + 45px); height: calc(100svh - var(--bar-h) - 45px); }
+/* Swift's toolbar is away while reading: the page is the whole screen tall (100lvh), not the
+   height laid out with the toolbar (100svh). */
+body.reading .pane { top: 0; height: 100lvh; }
 
-/* PDF (pdf.js insists its scrolling box is absolutely positioned; the page itself doesn't scroll). */
-#pdfpane { position: absolute; background: var(--bg); }
+/* PDF (pdf.js insists its scrolling box is absolutely positioned; the page itself doesn't scroll).
+   When the bar hides the box grows upwards (view.js keeps the pages still); pinching is pdf.js's
+   own (sharp at every size), not the browser's. */
+#pdfpane { position: absolute; background: var(--bg); touch-action: pan-x pan-y; }
+
 #pdfpane .pdfViewer .page { margin: 8px auto; border: 0; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18); }
 @media (prefers-color-scheme: dark) {
   #pdfpane .pdfViewer .page { box-shadow: none; }
 }
+body.editing #pdfpane { padding-bottom: 64px; }
+
+/* Fill & sign (2.5) */
+#editbar {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 26;
+  display: flex; justify-content: space-between; gap: 2px; padding: 6px 4px; overflow-x: auto;
+  background: var(--surface); border-top: 1px solid var(--line);
+}
+#editbar button { flex: none; padding: 9px 9px; border-radius: 18px; font-size: 14px; font-weight: 600; }
+#editbar button.on { background: var(--accent); color: #fff; }
+#editbar button.main { color: var(--accent); }
+
+/* Page previews (2.5) */
+#pages {
+  position: fixed; inset: 0; z-index: 31; overflow-y: auto; background: var(--bg);
+  padding: calc(var(--bar-h) + 8px) 8px 24px;
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 12px 8px; align-content: start;
+}
+#pages .thumb { display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); }
+#pages .thumb canvas, #pages .thumb .blank { width: 100%; background: #fff; border-radius: 4px; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2); }
+#pages .thumb.on canvas, #pages .thumb.on .blank { outline: 3px solid var(--accent); }
+#pages .thumb.on { color: var(--accent); font-weight: 600; }
+#pageshead {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 32; height: var(--bar-h);
+  display: flex; align-items: center; padding: 0 4px 0 16px; gap: 8px;
+  background: var(--surface); border-bottom: 1px solid var(--line); font-weight: 600;
+}
+#pageshead span { flex: 1; }
 
 /* Spreadsheets */
-body.sheet .pane { bottom: 48px; }
+body.sheet .pane { height: calc(100svh - var(--bar-h) - 48px); }
+body.sheet.finding .pane { height: calc(100svh - var(--bar-h) - 93px); }
+body.sheet.onesheet .pane { height: calc(100svh - var(--bar-h)); }
+body.sheet.onesheet.finding .pane { height: calc(100svh - var(--bar-h) - 45px); }
+body.sheet.reading .pane { top: 0; height: 100lvh; }
 table.grid { border-collapse: separate; border-spacing: 0; font-size: 13px; }
 table.grid td, table.grid th {
   padding: 4px 8px; min-width: 64px; max-width: 320px; height: 28px;
@@ -164,8 +257,16 @@ table.grid td, table.grid th {
 table.grid th { position: sticky; z-index: 2; background: var(--bg); color: var(--muted); font-weight: 600; text-align: center; }
 table.grid thead th { top: 0; }
 table.grid th.row { left: 0; z-index: 1; min-width: 40px; }
-table.grid thead th.corner { left: 0; z-index: 3; }
+table.grid thead th.corner { left: 0; z-index: 4; }
 table.grid td.num { text-align: right; }
+table.grid td.frozen { position: sticky; z-index: 1; }
+table.grid thead td { position: sticky; z-index: 2; }
+table.grid thead td.frozen { z-index: 3; }
+table.grid thead th.row { z-index: 3; }
+table.grid thead th.frozen { z-index: 4; }
+table.grid td.hit { outline: 2px solid var(--accent); outline-offset: -2px; background: var(--mark) !important; }
+table.grid tr.split td, table.grid tr.split th { border-bottom: 2px solid var(--muted); }
+table.grid td.splitc { border-right: 2px solid var(--muted); }
 #sheets {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 10; height: 48px;
   display: flex; gap: 4px; padding: 6px 8px; overflow-x: auto; white-space: nowrap;
@@ -174,10 +275,66 @@ table.grid td.num { text-align: right; }
 #sheets button { padding: 0 14px; border-radius: 18px; color: var(--muted); font-weight: 600; flex: none; }
 #sheets button.on { background: var(--accent); color: #fff; }
 
-/* Slides (pptx-preview): slides one under another, fitted to the width. */
+/* Slides (pptx-preview): slides one under another, fitted to the width, with their speaker notes. */
 #slides { padding: 10px 0 24px; }
 #slides .pptx-preview-wrapper { background: transparent !important; height: auto !important; overflow: visible !important; }
 #slides .pptx-preview-slide-wrapper { margin: 0 auto 12px !important; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2); }
+.notes { max-width: 760px; margin: -4px auto 18px; padding: 0 14px; font-size: 14px; color: var(--muted); }
+.notes summary { color: var(--accent); font-weight: 600; padding: 4px 0; }
+.notes p { margin: 4px 0; color: var(--text); }
 
-/* E-books (epub.js) */
+/* The slideshow (2.5): one slide at a time on black, swipe or tap the sides. */
+#show { position: fixed; inset: 0; z-index: 50; background: #000; overflow: hidden; touch-action: none; user-select: none; -webkit-user-select: none; }
+#show .stage { position: absolute; left: 50%; top: 50%; transform-origin: 0 0; }
+#show .bar {
+  position: absolute; left: 0; right: 0; bottom: 0; display: flex; align-items: center; gap: 6px;
+  padding: 8px 10px; background: linear-gradient(transparent, rgba(0, 0, 0, 0.7)); color: #fff;
+  transition: opacity 0.25s;
+}
+#show .bar.fade { opacity: 0; pointer-events: none; }
+#show .bar span { flex: 1; text-align: center; font-weight: 600; }
+#show .bar button { color: #fff; padding: 8px 14px; border-radius: 18px; background: rgba(255, 255, 255, 0.14); font-weight: 600; }
+#show .shownotes {
+  position: absolute; left: 0; right: 0; bottom: 52px; max-height: 40vh; overflow-y: auto;
+  padding: 12px 16px; background: rgba(20, 20, 22, 0.92); color: #eee; font-size: 15px;
+}
+#show .shownotes p { margin: 0 0 6px; }
+
+/* E-books (epub.js): pages to swipe, or one long page. */
 #book { max-width: 760px; margin: 0 auto; }
+#book.paged, body.reading #book.paged { position: fixed; top: 0; left: 0; right: 0; height: calc(100lvh - 30px); max-width: none; overflow: hidden; }
+#book.scrolled, body.reading #book.scrolled { top: 0; padding-top: var(--bar-h); height: calc(100lvh - 30px); }
+#bookfoot {
+  position: fixed; left: 0; right: 0; bottom: 0; height: 30px; z-index: 12;
+  display: flex; align-items: center; padding: 0 14px; gap: 8px; font-size: 12px; color: var(--muted); background: var(--bg);
+}
+#bookfoot #bookleft { flex: 1; }
+#bookbar { position: absolute; left: 0; right: 0; top: 0; height: 2px; background: var(--line); }
+#bookdone { height: 100%; width: 0; background: var(--accent); }
+
+/* ZIP files (2.5) */
+.ziplist { max-width: 760px; margin: 0 auto; padding: 8px 0 24px; }
+.ziplist .folder { padding: 14px 18px 4px; color: var(--muted); font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+.ziplist button {
+  display: flex; align-items: center; gap: 12px; width: 100%; padding: 10px 16px; text-align: left;
+}
+.ziplist button:active { background: var(--line); }
+.ziplist button.off { opacity: 0.55; }
+.ziplist .zbadge { flex: none; width: 40px; height: 26px; border-radius: 6px; font: 600 10px/26px sans-serif; text-align: center; color: #fff; }
+.ziplist .zname { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.ziplist .zsize { flex: none; color: var(--muted); font-size: 13px; }
+
+/* ------------------------------------------------------------------ printing and saving as PDF (2.5) */
+
+@media print {
+  #bar, #findbar, #note, #status, #menu, #tts, #sheets, #pagepill, #fastscroll, #bookfoot, #editbar, #panel, #toast, .notes summary { display: none !important; }
+  html, body { background: #fff !important; color: #000 !important; }
+  #doc { padding: 0; }
+  .pane { position: static !important; overflow: visible !important; }
+  table.grid { zoom: 1 !important; }
+  table.grid th, table.grid td { position: static !important; }
+  .docx-wrapper > section.docx { box-shadow: none !important; margin: 0 !important; }
+  #slides .pptx-preview-slide-wrapper { box-shadow: none !important; break-inside: avoid; }
+  .notes { break-after: page; }
+  .notes details > * { display: block; }
+}

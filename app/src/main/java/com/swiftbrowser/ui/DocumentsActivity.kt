@@ -3,6 +3,7 @@ package com.swiftbrowser.ui
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.MediaScannerConnection
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -23,6 +24,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.RecyclerView
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.swiftbrowser.R
 import com.swiftbrowser.SwiftApp
 import com.swiftbrowser.core.Profiles
@@ -39,13 +41,19 @@ import java.io.File
  * Documents (2.4): the documents opened in Swift lately, then every PDF, Word, Excel, PowerPoint,
  * e-book and text file on the phone (Android's media index), newest first, with filters and search.
  * Without storage access, Android's own file picker still opens any of them.
+ *
+ * 2.5: starred documents first; sorting by date, name or size; one folder at a time; files on the
+ * memory card marked as such; rename, delete (with Undo) and home screen shortcuts.
  */
 class DocumentsActivity : ListActivity() {
     /** One document in the list: [uri] is where it is, [doc] its record when Swift opened it before. */
-    private class Entry(val uri: String, val name: String, val kind: Docs.Kind, val size: Long, val time: Long, val where: String, val doc: Docs.Doc?)
+    private class Entry(
+        val uri: String, val name: String, val kind: Docs.Kind, val size: Long, val time: Long, val where: String, val doc: Docs.Doc?,
+        val path: String? = null,
+    )
 
     private sealed class Row {
-        class Header(val text: String) : Row()
+        class Header(val text: String, val action: String? = null, val onAction: (() -> Unit)? = null) : Row()
         class Item(val e: Entry) : Row()
     }
 
@@ -57,15 +65,32 @@ class DocumentsActivity : ListActivity() {
         "PowerPoint" to setOf(Docs.Kind.SLIDES, Docs.Kind.OLD_SLIDES, Docs.Kind.ODP),
         "E-books" to setOf(Docs.Kind.EPUB),
         "Text" to setOf(Docs.Kind.TEXT),
+        "ZIP" to setOf(Docs.Kind.ZIP),
     )
     private var filter = 0
     private var recent: List<Entry> = emptyList()
     private var phone: List<Entry> = emptyList()
+    private var starred: List<Entry> = emptyList()
+    private var starredUris: Set<String> = emptySet()
+    private var hiddenUris: Set<String> = emptySet()
+    private var folder: String? = null
     private var loaded = false
     private val adapter = Adapter()
 
+    /** Card roots (other than the phone's own storage), for "SD card" in the list. */
+    private val cardRoots: List<String> by lazy {
+        getExternalFilesDirs(null).drop(1).filterNotNull().map { it.path.substringBefore("/Android/data") }
+    }
+
     private val askStorage = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) load() else render()
+    }
+
+    private var afterWriteAccess: (() -> Unit)? = null
+    private val askWrite = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        val run = afterWriteAccess
+        afterWriteAccess = null
+        if (granted) run?.invoke() else Messages.show(this, "Swift needs access to your files to change them")
     }
 
     private val pick = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
@@ -73,15 +98,27 @@ class DocumentsActivity : ListActivity() {
         open(uri, null)
     }
 
+    private val prefs get() = SwiftApp.prefs
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         toolbar.title = "Documents"
-        toolbar.menu.add(0, MENU_BROWSE, 0, "Browse files").apply {
-            setIcon(Ui.icon(this@DocumentsActivity, R.drawable.ic_folder, Palette.color(this@DocumentsActivity, R.color.text_primary)))
+        val iconColor = Palette.color(this, R.color.text_primary)
+        toolbar.menu.add(0, MENU_SORT, 0, "Sort").apply {
+            setIcon(Ui.icon(this@DocumentsActivity, R.drawable.ic_sort, iconColor))
             setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS)
         }
+        toolbar.menu.add(0, MENU_BROWSE, 1, "Browse files").apply {
+            setIcon(Ui.icon(this@DocumentsActivity, R.drawable.ic_folder, iconColor))
+            setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS)
+        }
+        toolbar.menu.add(0, MENU_FOLDERS, 2, "Folders").setShowAsAction(MenuItem.SHOW_AS_ACTION_NEVER)
         toolbar.setOnMenuItemClickListener {
-            if (it.itemId == MENU_BROWSE) browse()
+            when (it.itemId) {
+                MENU_BROWSE -> browse()
+                MENU_SORT -> chooseSort()
+                MENU_FOLDERS -> chooseFolder()
+            }
             true
         }
         search.visibility = View.VISIBLE
@@ -98,6 +135,18 @@ class DocumentsActivity : ListActivity() {
     }
 
     private fun hasAccess() = ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+
+    private fun canWrite() = ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+
+    /** Runs [action] once Swift may change files (asking Android first if needed). */
+    private fun withWriteAccess(action: () -> Unit) {
+        if (canWrite() || Build.VERSION.SDK_INT > 28) {
+            action()
+        } else {
+            afterWriteAccess = action
+            askWrite.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+        }
+    }
 
     private fun addFilterChips() {
         val box = list.parent as? ViewGroup ?: return
@@ -124,9 +173,11 @@ class DocumentsActivity : ListActivity() {
 
     private fun load() {
         lifecycleScope.launch {
-            val (r, p) = withContext(Dispatchers.IO) { loadRecent() to if (hasAccess()) loadPhone() else emptyList() }
-            recent = r
-            phone = p
+            val all = withContext(Dispatchers.IO) { Triple(loadRecent(), if (hasAccess()) loadPhone() else emptyList(), loadStarred()) }
+            recent = all.first
+            phone = all.second
+            starred = all.third
+            starredUris = starred.map { it.uri }.toSet()
             loaded = true
             render()
             Motion.fadeIn(list, fromDy = 8)
@@ -134,12 +185,26 @@ class DocumentsActivity : ListActivity() {
     }
 
     private fun loadRecent(): List<Entry> = SwiftApp.db.recentDocuments(Profiles.currentId, 6).map { d ->
-        Entry(d.uri, d.name, d.kind, d.size, d.opened, describeWhere(d.uri, d.web), d)
+        Entry(d.uri, d.name, d.kind, d.size, d.opened, describeWhere(d.uri, d.web), d, fileOf(d.uri))
     }
+
+    private fun loadStarred(): List<Entry> {
+        val known = SwiftApp.db.recentDocuments(Profiles.currentId, 200).associateBy { it.uri }
+        return SwiftApp.db.starredDocuments(Profiles.currentId).mapNotNull { s ->
+            val kind = Docs.Kind.ofKey(s.kind) ?: return@mapNotNull null
+            val path = fileOf(s.uri)
+            // A starred file that was deleted elsewhere drops out of the list.
+            if (path != null && !File(path).exists()) return@mapNotNull null
+            Entry(s.uri, s.name, kind, s.size, path?.let { File(it).lastModified() } ?: s.added, describeWhere(s.uri, known[s.uri]?.web), known[s.uri], path)
+        }
+    }
+
+    private fun fileOf(uri: String): String? = Uri.parse(uri).takeIf { it.scheme == "file" }?.path
 
     private fun describeWhere(uri: String, web: String?): String {
         val u = Uri.parse(uri)
         return when {
+            u.scheme == "file" && u.path.orEmpty().startsWith(cacheDir.path) -> web?.let { UrlUtils.host(it)?.removePrefix("www.") + " · not kept" } ?: "From a ZIP · not kept"
             u.scheme == "file" -> folderName(u.path.orEmpty())
             web != null -> UrlUtils.host(web)?.removePrefix("www.") ?: "Web"
             else -> "From another app"
@@ -148,6 +213,8 @@ class DocumentsActivity : ListActivity() {
 
     private fun folderName(path: String): String {
         val parent = File(path).parentFile ?: return ""
+        val card = cardRoots.firstOrNull { path.startsWith("$it/") }
+        if (card != null) return if (parent.path == card) "SD card" else "SD card › " + parent.name
         val root = android.os.Environment.getExternalStorageDirectory().path
         return if (parent.path == root) "Phone" else parent.name
     }
@@ -172,7 +239,7 @@ class DocumentsActivity : ListActivity() {
                     if (name.startsWith(".") || path.contains("/Android/data/")) continue
                     val kind = Docs.kindOf(name, null) ?: continue
                     val uri = Uri.fromFile(File(path)).toString()
-                    out += Entry(uri, name, kind, c.getLong(1), c.getLong(2) * 1000, folderName(path), known[uri])
+                    out += Entry(uri, name, kind, c.getLong(1), c.getLong(2) * 1000, folderName(path), known[uri], path)
                 }
             }
         } catch (e: Exception) {
@@ -181,24 +248,45 @@ class DocumentsActivity : ListActivity() {
         return out
     }
 
+    private fun sorted(list: List<Entry>): List<Entry> = when (prefs.sp.getInt(PREF_SORT, 0)) {
+        1 -> list.sortedBy { it.name.lowercase() }
+        2 -> list.sortedByDescending { it.size }
+        else -> list.sortedByDescending { it.time }
+    }
+
     private fun render() {
         val q = search.text?.toString()?.trim()?.lowercase().orEmpty()
         val kinds = filters[filter].second
-        val keep = { e: Entry -> (kinds == null || e.kind in kinds) && (q.isEmpty() || e.name.lowercase().contains(q)) }
+        val dir = folder
+        val keep = { e: Entry ->
+            e.uri !in hiddenUris && (kinds == null || e.kind in kinds) && (q.isEmpty() || e.name.lowercase().contains(q)) &&
+                (dir == null || e.path?.let { File(it).parent } == dir)
+        }
         val rows = ArrayList<Row>()
-        val r = recent.filter(keep)
+        val shown = HashSet<String>()
+        if (dir != null) {
+            rows += Row.Header("In " + folderName("$dir/x"), "Show all") {
+                folder = null
+                render()
+            }
+        }
+        val s = sorted(starred.filter(keep))
+        if (s.isNotEmpty()) {
+            rows += Row.Header("Starred")
+            s.forEach { rows += Row.Item(it); shown += it.uri }
+        }
+        val r = if (dir == null) recent.filter { keep(it) && it.uri !in shown } else emptyList()
         if (r.isNotEmpty()) {
             rows += Row.Header("Opened in Swift")
-            r.forEach { rows += Row.Item(it) }
+            r.forEach { rows += Row.Item(it); shown += it.uri }
         }
-        val recentUris = r.map { it.uri }.toSet()
-        val p = phone.filter { keep(it) && it.uri !in recentUris }
+        val p = sorted(phone.filter { keep(it) && it.uri !in shown })
         if (p.isNotEmpty()) {
-            rows += Row.Header("On this phone")
+            rows += Row.Header(if (dir == null) "On this phone" else "Files")
             p.forEach { rows += Row.Item(it) }
         }
         adapter.rows = rows
-        if (rows.isEmpty()) showNothing(q.isNotEmpty() || kinds != null) else empty.visibility = View.GONE
+        if (rows.none { it is Row.Item }) showNothing(q.isNotEmpty() || kinds != null || dir != null) else empty.visibility = View.GONE
     }
 
     /** Nothing to list: why, and what to do (allow access, or pick a file with Android's picker). */
@@ -215,7 +303,7 @@ class DocumentsActivity : ListActivity() {
             },
             when {
                 !loaded -> null
-                filtered -> "Try another word or filter."
+                filtered -> "Try another word, filter or folder."
                 noAccess -> "Allow Swift to see your files to list your PDFs, Word, Excel and PowerPoint files here. Or pick one with Browse files."
                 else -> "PDFs, Word, Excel and PowerPoint files you download or receive show here."
             },
@@ -268,6 +356,39 @@ class DocumentsActivity : ListActivity() {
         }
     }
 
+    private fun chooseSort() {
+        val options = arrayOf("Newest first", "Name", "Biggest first")
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Sort documents")
+            .setSingleChoiceItems(options, prefs.sp.getInt(PREF_SORT, 0)) { d, which ->
+                prefs.sp.edit().putInt(PREF_SORT, which).apply()
+                d.dismiss()
+                render()
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .showImmersive()
+    }
+
+    /** The folders that hold documents, most first: one is shown at a time. */
+    private fun chooseFolder() {
+        val counts = phone.mapNotNull { it.path?.let { p -> File(p).parent } }.groupingBy { it }.eachCount()
+        if (counts.isEmpty()) {
+            Messages.show(this, if (hasAccess()) "No folders with documents yet" else "Allow Swift to see your files first")
+            return
+        }
+        val dirs = counts.entries.sortedByDescending { it.value }.map { it.key }
+        val labels = dirs.map { d -> folderName("$d/x") + "  ·  " + counts[d] }.toTypedArray()
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Folders")
+            .setItems(labels) { _, which ->
+                folder = dirs[which]
+                render()
+                list.scrollToPosition(0)
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .showImmersive()
+    }
+
     private fun open(uri: Uri, name: String?) {
         if (Docs.open(this, uri, name)) {
             finish()
@@ -278,11 +399,19 @@ class DocumentsActivity : ListActivity() {
 
     private fun hold(e: Entry) {
         val doc = e.doc
+        val isStarred = e.uri in starredUris
+        val onPhone = e.path != null && !e.path.startsWith(cacheDir.path) && !e.path.startsWith(filesDir.path)
         val actions = arrayListOf(
             Sheets.Action(R.drawable.ic_open_new, "Open", primary = true) { open(Uri.parse(e.uri), e.name) },
             Sheets.Action(R.drawable.ic_share, "Share", primary = true) { Docs.handOver(this, asDoc(e), share = true) },
-            Sheets.Action(R.drawable.ic_reopen, "Open with another app", primary = true) { Docs.handOver(this, asDoc(e), share = false) },
+            Sheets.Action(if (isStarred) R.drawable.ic_star else R.drawable.ic_star_border, if (isStarred) "Starred" else "Star", primary = true) { toggleStar(e) },
+            Sheets.Action(R.drawable.ic_reopen, "Open with another app") { Docs.handOver(this, asDoc(e), share = false) },
+            Sheets.Action(R.drawable.ic_home_add, "Add to home screen") { addShortcut(e) },
         )
+        if (onPhone) {
+            actions += Sheets.Action(R.drawable.ic_edit, "Rename") { rename(e) }
+            actions += Sheets.Action(R.drawable.ic_delete, "Delete", danger = true) { delete(e) }
+        }
         if (doc != null) {
             actions += Sheets.Action(R.drawable.ic_close, "Remove from Opened in Swift") {
                 lifecycleScope.launch {
@@ -293,10 +422,124 @@ class DocumentsActivity : ListActivity() {
             }
         }
         val details = listOfNotNull(e.kind.label, e.size.takeIf { it > 0 }?.let { UrlUtils.formatBytes(it) }, e.where.ifBlank { null }).joinToString(" · ")
-        Sheets.actions(this, e.name, details, actions, null)
+        Sheets.actions(this, e.name, details, actions, docIcon(e.kind))
+    }
+
+    /** The document's mark (the kind's colour and badge) for the sheet's header. */
+    private fun docIcon(kind: Docs.Kind): android.graphics.Bitmap {
+        val size = Ui.dp(this, 40)
+        val bmp = android.graphics.Bitmap.createBitmap(size, size, android.graphics.Bitmap.Config.ARGB_8888)
+        DocIcon(kind, size).apply { setBounds(0, 0, size, size) }.draw(android.graphics.Canvas(bmp))
+        return bmp
     }
 
     private fun asDoc(e: Entry) = e.doc ?: Docs.Doc("", e.uri, e.name, e.kind, e.size, null, null, 0f, 0, 0, 0)
+
+    private fun toggleStar(e: Entry) {
+        val profile = Profiles.currentId
+        val on = e.uri !in starredUris
+        lifecycleScope.launch {
+            withContext(Dispatchers.IO) {
+                if (on) SwiftApp.db.starDocument(profile, e.uri, e.name, e.kind.key, e.size) else SwiftApp.db.unstarDocument(profile, e.uri)
+            }
+            starred = withContext(Dispatchers.IO) { loadStarred() }
+            starredUris = starred.map { it.uri }.toSet()
+            render()
+            Messages.show(this@DocumentsActivity, if (on) "Starred: it stays at the top" else "Star removed")
+        }
+    }
+
+    private fun addShortcut(e: Entry) {
+        lifecycleScope.launch {
+            val doc = withContext(Dispatchers.IO) {
+                val id = e.doc?.id ?: Docs.remember(this@DocumentsActivity, Uri.parse(e.uri), e.name, e.kind, e.size)
+                SwiftApp.db.document(id)
+            }
+            if (doc != null) Docs.pinShortcut(this@DocumentsActivity, doc)
+        }
+    }
+
+    /** A new name for a file on the phone (its type, the ending, stays). */
+    private fun rename(e: Entry) {
+        val path = e.path ?: return
+        val ext = e.name.substringAfterLast('.', "").let { if (it.isEmpty() || it == e.name) "" else ".$it" }
+        val base = e.name.removeSuffix(ext)
+        Sheets.askText(this, "Rename", "Name", base) { input ->
+            val name = UrlUtils.sanitizeFileName(input.trim()).ifBlank { return@askText }
+            if (name == base) return@askText
+            withWriteAccess {
+                lifecycleScope.launch {
+                    val from = File(path)
+                    val to = File(from.parentFile, name + ext)
+                    val ok = withContext(Dispatchers.IO) {
+                        if (to.exists() || !from.renameTo(to)) return@withContext false
+                        try {
+                            contentResolver.delete(MediaStore.Files.getContentUri("external"), MediaStore.Files.FileColumns.DATA + "=?", arrayOf(from.path))
+                        } catch (_: Exception) {
+                        }
+                        MediaScannerConnection.scanFile(this@DocumentsActivity, arrayOf(to.path), null, null)
+                        val newUri = Uri.fromFile(to).toString()
+                        SwiftApp.db.renameDocument(e.uri, newUri, to.name, Docs.idFor(newUri))
+                        true
+                    }
+                    if (!ok) {
+                        Messages.show(this@DocumentsActivity, if (to.exists()) "There's already a file called ${to.name}" else "Swift couldn't rename this file")
+                        return@launch
+                    }
+                    // Android's media index learns the new name a moment later: the list changes now.
+                    val newUri = Uri.fromFile(to).toString()
+                    phone = phone.map { if (it.uri == e.uri) Entry(newUri, to.name, it.kind, it.size, it.time, it.where, null, to.path) else it }
+                    reload(phoneToo = false)
+                    Messages.show(this@DocumentsActivity, "Renamed to ${to.name}")
+                }
+            }
+        }
+    }
+
+    /** Deletes a file from the phone, with a moment to change one's mind (Undo). */
+    private fun delete(e: Entry) {
+        val path = e.path ?: return
+        withWriteAccess {
+            removeLater(e.uri, "Deleted ${e.name}", hide = {
+                hiddenUris = hiddenUris + e.uri
+                render()
+            }, restore = {
+                hiddenUris = hiddenUris - e.uri
+                render()
+            }) {
+                val app = applicationContext
+                lifecycleScope.launch(Dispatchers.IO) {
+                    val f = File(path)
+                    if (f.delete() || !f.exists()) {
+                        try {
+                            app.contentResolver.delete(MediaStore.Files.getContentUri("external"), MediaStore.Files.FileColumns.DATA + "=?", arrayOf(path))
+                        } catch (_: Exception) {
+                        }
+                        SwiftApp.db.forgetDocumentUri(e.uri)
+                    } else {
+                        launch(Dispatchers.Main) {
+                            hiddenUris = hiddenUris - e.uri
+                            if (!isFinishing) {
+                                render()
+                                Messages.show(this@DocumentsActivity, "Swift couldn't delete ${e.name}")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun reload(phoneToo: Boolean = true) {
+        lifecycleScope.launch {
+            val all = withContext(Dispatchers.IO) { Triple(loadRecent(), if (phoneToo && hasAccess()) loadPhone() else phone, loadStarred()) }
+            recent = all.first
+            phone = all.second
+            starred = all.third
+            starredUris = starred.map { it.uri }.toSet()
+            render()
+        }
+    }
 
     // ------------------------------------------------------------------ the list
 
@@ -315,9 +558,20 @@ class DocumentsActivity : ListActivity() {
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Holder {
             val ctx = this@DocumentsActivity
             if (viewType == 0) {
-                return Holder(Ui.text(ctx, Ui.Type.SECTION, "").apply {
-                    setPadding(Ui.dp(ctx, 20), Ui.dp(ctx, 18), Ui.dp(ctx, 20), Ui.dp(ctx, 6))
+                val row = LinearLayout(ctx).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(Ui.dp(ctx, 20), Ui.dp(ctx, 18), Ui.dp(ctx, 12), Ui.dp(ctx, 6))
+                    layoutParams = RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                }
+                row.addView(Ui.text(ctx, Ui.Type.SECTION, "").apply { id = R.id.row_title }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                row.addView(Ui.text(ctx, Ui.Type.BODY, "").apply {
+                    id = R.id.row_subtitle
+                    setTextColor(Palette.color(ctx, R.color.accent))
+                    setPadding(Ui.dp(ctx, 8), Ui.dp(ctx, 4), Ui.dp(ctx, 8), Ui.dp(ctx, 4))
+                    setBackgroundResource(RowHolder.selectableBackground(ctx))
                 })
+                return Holder(row)
             }
             val row = LinearLayout(ctx).apply {
                 orientation = LinearLayout.HORIZONTAL
@@ -347,7 +601,13 @@ class DocumentsActivity : ListActivity() {
 
         override fun onBindViewHolder(h: Holder, position: Int) {
             when (val r = rows[position]) {
-                is Row.Header -> (h.itemView as TextView).text = r.text
+                is Row.Header -> {
+                    h.itemView.findViewById<TextView>(R.id.row_title).text = r.text
+                    val action = h.itemView.findViewById<TextView>(R.id.row_subtitle)
+                    action.text = r.action.orEmpty()
+                    action.visibility = if (r.action != null) View.VISIBLE else View.GONE
+                    action.setOnClickListener { r.onAction?.invoke() }
+                }
                 is Row.Item -> bind(h.itemView, r.e)
             }
         }
@@ -364,8 +624,9 @@ class DocumentsActivity : ListActivity() {
             else -> "${(doc.progress * 100).toInt()}% read"
         }
         val time = if (e.time > 0) DateUtils.getRelativeTimeSpanString(e.time, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS, DateUtils.FORMAT_ABBREV_RELATIVE).toString() else null
+        val star = if (e.uri in starredUris) "★" else null
         v.findViewById<TextView>(R.id.row_subtitle).text =
-            listOfNotNull(progress, e.where.ifBlank { null }, e.size.takeIf { it > 0 }?.let { UrlUtils.formatBytes(it) }, time).joinToString(" · ")
+            listOfNotNull(star, progress, e.where.ifBlank { null }, e.size.takeIf { it > 0 }?.let { UrlUtils.formatBytes(it) }, time).joinToString(" · ")
         val thumb = v.findViewById<ImageView>(R.id.row_icon)
         thumb.tag = e.uri
         thumb.scaleType = ImageView.ScaleType.CENTER
@@ -376,7 +637,7 @@ class DocumentsActivity : ListActivity() {
             thumb.scaleType = ImageView.ScaleType.CENTER_CROP
             thumb.setImageBitmap(bmp)
         }
-        v.contentDescription = "${e.name}, ${e.kind.label}"
+        v.contentDescription = "${e.name}, ${e.kind.label}" + if (star != null) ", starred" else ""
         v.setOnClickListener {
             if (doc != null && doc.uri == e.uri && Docs.reopen(doc.id)) finish() else open(Uri.parse(e.uri), e.name)
         }
@@ -388,5 +649,8 @@ class DocumentsActivity : ListActivity() {
 
     private companion object {
         const val MENU_BROWSE = 1
+        const val MENU_SORT = 2
+        const val MENU_FOLDERS = 3
+        const val PREF_SORT = "documents_sort"
     }
 }

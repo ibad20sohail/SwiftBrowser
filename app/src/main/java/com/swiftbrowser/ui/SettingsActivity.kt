@@ -842,9 +842,7 @@ class SettingsActivity : AppCompatActivity() {
             action(R.drawable.ic_globe, "Data sites stored", { usage?.let { "${UrlUtils.formatBytes(it.sites)} · see and clear each site" } }) { showSiteStorage() }
         }
         def(Topic.STORAGE, "Free up space", "Downloads kept inside Swift", "downloads inside app folder android data deleted uninstall") {
-            action(R.drawable.ic_download, "Downloads kept inside Swift", { keptText() }) {
-                startActivity(Intent(this@SettingsActivity, DownloadsActivity::class.java))
-            }
+            action(R.drawable.ic_download, "Downloads kept inside Swift", { keptText() }) { moveKeptDownloads() }
         }
         def(Topic.STORAGE, "Free up space", "Clear sites you don't visit", "old unused sites 30 days") {
             action(R.drawable.ic_history, "Clear sites you don't visit", { "Everything of sites not visited for 30 days" }) { clearUnusedSites() }
@@ -1225,8 +1223,31 @@ class SettingsActivity : AppCompatActivity() {
 
     private fun keptText(): String {
         val u = usage ?: return "Calculating…"
-        if (u.kept <= 0) return "None"
-        return UrlUtils.formatBytes(u.kept) + if (Downloads.hasStoragePermission(this)) " in Swift's folder" else " · deleted if Swift is uninstalled"
+        // Only files in Swift's own folders count here; the downloads in the chosen folder are not "kept inside" (2.5).
+        if (u.kept <= 0) return "None · your downloads are in ${Downloads.describe(Downloads.directory())}"
+        return UrlUtils.formatBytes(u.kept) + " · deleted if Swift is uninstalled. Tap to move them out"
+    }
+
+    /** Moves what is in Swift's own folders to the download folder, or says there is nothing there. */
+    private fun moveKeptDownloads() {
+        val u = usage ?: return
+        val dir = Downloads.directory()
+        when {
+            u.kept <= 0 -> snack("Nothing is kept inside Swift. Your downloads are in ${Downloads.describe(dir)}")
+            !Downloads.hasStoragePermission(this) -> askStorageAccess()
+            dir.path.contains("/Android/data/") -> snack("Your download folder is Swift's own folder. Choose another one first")
+            else -> Dialogs.confirm(
+                this, "Move them out of Swift?",
+                "${UrlUtils.formatBytes(u.kept)} of downloads are in Swift's own folder and would be deleted if Swift is uninstalled. Move them to ${Downloads.describe(dir)}?",
+                "Move",
+            ) {
+                snack("Moving…")
+                Downloads.moveKeptTo(dir) { moved, failed ->
+                    snack(if (failed > 0) "Moved $moved, $failed couldn't be moved" else "Moved $moved to ${Downloads.describe(dir)}")
+                    computeStorage()
+                }
+            }
+        }
     }
 
     private fun chooseDownloadFolder() {

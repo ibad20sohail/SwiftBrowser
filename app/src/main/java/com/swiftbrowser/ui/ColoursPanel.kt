@@ -4,13 +4,9 @@ import android.app.Activity
 import android.content.Context
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
-import android.text.Editable
-import android.text.InputType
-import android.text.TextWatcher
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
-import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -284,24 +280,11 @@ object ColoursPanel {
 }
 
 /**
- * Picking your own colour (2.3): a grid of colours made for what it's for (bright for an accent,
- * very light or very dark for a background), a box for a colour code, and a preview.
+ * Picking your own colour (2.3): a colour maker (2.5) for any colour, and a preview of it as Swift
+ * will use it (an accent as made; a background kept light or dark enough for text).
  */
 object ColorPicker {
     enum class Kind { ACCENT, LIGHT_BACKGROUND, DARK_BACKGROUND }
-
-    /** The colours offered: 14 hues in a few strengths, and greys. */
-    private fun choices(kind: Kind): List<Int> {
-        val hues = (0 until 14).map { Color.HSVToColor(floatArrayOf(it * 360f / 14, 0.85f, 0.9f)) }
-        return when (kind) {
-            Kind.ACCENT -> listOf(50.0, 38.0, 64.0).flatMap { t -> hues.map { Tones.tone(it, t) } } +
-                listOf(0xFF2B2F36, 0xFF4B515C, 0xFF6B7280, 0xFF8A6A50, 0xFF5A6B4E, 0xFF4E5D6B, 0xFF6B4E66).map { it.toInt() }
-            Kind.LIGHT_BACKGROUND -> listOf(0.95, 0.9).flatMap { t -> hues.map { Palette.limitLight(Tones.mix(it, Color.WHITE, t)) } } +
-                listOf(0xFFFFFFFF, 0xFFFAFAFA, 0xFFF5F5F5, 0xFFFDF8EE, 0xFFF6F4EF, 0xFFF2F5F8, 0xFFF4F1F8).map { it.toInt() }
-            Kind.DARK_BACKGROUND -> listOf(0.9, 0.83).flatMap { t -> hues.map { Palette.limitDark(Tones.mix(it, Color.BLACK, t)) } } +
-                listOf(0xFF000000, 0xFF0A0A0A, 0xFF121212, 0xFF15171C, 0xFF111418, 0xFF161311, 0xFF0F1115).map { it.toInt() }
-        }
-    }
 
     fun show(a: Activity, kind: Kind, initial: Int, onPick: (Int) -> Unit) {
         var picked = initial or 0xFF000000.toInt()
@@ -314,118 +297,46 @@ object ColorPicker {
         // The preview: the colour as it will look (an accent in light and dark, or a page).
         val previewBox = FrameLayout(a)
         val note = Ui.text(a, Ui.Type.CAPTION, "")
-        val hex = EditText(a).apply {
-            setSingleLine()
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS or InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS
-            textSize = 15f
-            hint = "#RRGGBB"
-            setTextColor(Ui.text(a))
-            setHintTextColor(Ui.textSecondary(a))
+        fun used(c: Int) = when (kind) {
+            Kind.ACCENT -> c
+            Kind.LIGHT_BACKGROUND -> Palette.limitLight(c)
+            Kind.DARK_BACKGROUND -> Palette.limitDark(c)
         }
-        val cells = ArrayList<Pair<ImageView, Int>>()
-        var updatingHex = false
-
         fun refresh() {
             previewBox.removeAllViews()
-            val (used, adjusted) = when (kind) {
-                Kind.ACCENT -> picked to false
-                Kind.LIGHT_BACKGROUND -> Palette.limitLight(picked).let { it to (it != picked) }
-                Kind.DARK_BACKGROUND -> Palette.limitDark(picked).let { it to (it != picked) }
+            val u = used(picked)
+            previewBox.addView(previewOf(a, kind, u))
+            val nudged = when (kind) {
+                Kind.ACCENT -> Palette.customAccent(picked, false).first != picked || Palette.customAccent(picked, true).first != picked
+                else -> u != picked
             }
-            previewBox.addView(previewOf(a, kind, used))
             note.text = when {
-                adjusted && kind == Kind.LIGHT_BACKGROUND -> "Made a little lighter, so text stays easy to read."
-                adjusted -> "Made a little darker, so text stays easy to read."
-                else -> " "
-            }
-            for ((cell, c) in cells) {
-                cell.setImageDrawable(if (c == picked) Ui.icon(a, R.drawable.ic_check, if (Color.luminance(c) > 0.45f) Color.BLACK else Color.WHITE) else null)
-            }
-            if (!updatingHex) {
-                updatingHex = true
-                hex.setText(String.format("#%06X", picked and 0xFFFFFF))
-                hex.setSelection(hex.text.length)
-                updatingHex = false
+                !nudged -> "Drag in the square and along the rainbow."
+                kind == Kind.LIGHT_BACKGROUND -> "Made a little lighter, so text stays easy to read."
+                kind == Kind.DARK_BACKGROUND -> "Made a little darker, so text stays easy to read."
+                else -> "Shown a little deeper or lighter where text would be hard to read."
             }
         }
-
         col.addView(previewBox, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-        col.addView(note.apply { setPadding(0, dp(6), 0, dp(6)) })
-        val grid = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
-        for (row in choices(kind).chunked(7)) {
-            grid.addView(LinearLayout(a).apply {
-                orientation = LinearLayout.HORIZONTAL
-                for (c in row) {
-                    val cell = ImageView(a).apply {
-                        background = GradientDrawable().apply {
-                            shape = if (kind == Kind.ACCENT) GradientDrawable.OVAL else GradientDrawable.RECTANGLE
-                            if (kind != Kind.ACCENT) cornerRadius = Ui.dpf(a, 8f)
-                            setColor(c)
-                            setStroke(dp(1), Palette.color(a, R.color.outline))
-                        }
-                        scaleType = ImageView.ScaleType.CENTER
-                        contentDescription = String.format("#%06X", c and 0xFFFFFF)
-                        setOnClickListener {
-                            picked = c
-                            Haptics.tick(this)
-                            refresh()
-                        }
-                    }
-                    cells += cell to c
-                    addView(FrameLayout(a).apply {
-                        addView(cell, FrameLayout.LayoutParams(dp(30), dp(30), Gravity.CENTER))
-                    }, LinearLayout.LayoutParams(0, dp(38), 1f))
-                }
-                repeat(7 - row.size) { addView(View(a), LinearLayout.LayoutParams(0, 1, 1f)) }
-            })
-        }
-        // Only the colours scroll: the preview stays in sight while choosing (2.3).
-        val body = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
-        body.addView(grid)
-        col.addView(android.widget.ScrollView(a).apply {
-            isVerticalFadingEdgeEnabled = true
-            setFadingEdgeLength(dp(16))
-            addView(body)
+        col.addView(note.apply { setPadding(0, dp(6), 0, dp(4)) })
+        // The colour maker (2.5): any colour, made with a finger. The preview follows at once.
+        col.addView(ColorMaker(a, picked) { c ->
+            picked = c
+            refresh()
         }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-        body.addView(LinearLayout(a).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, dp(10), 0, 0)
-            addView(Ui.text(a, Ui.Type.BODY_SECONDARY, "Colour code"), LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(12) })
-            addView(hex, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        })
-        hex.addTextChangedListener(object : TextWatcher {
-            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
-            override fun afterTextChanged(s: Editable?) {
-                if (updatingHex) return
-                val t = s?.toString()?.trim()?.removePrefix("#") ?: return
-                if (t.length != 6) return
-                val v = t.toLongOrNull(16) ?: return
-                picked = (0xFF000000 or v).toInt()
-                updatingHex = true
-                refresh()
-                updatingHex = false
-            }
-        })
         refresh()
         val title = when (kind) {
-            Kind.ACCENT -> "Your accent colour"
-            Kind.LIGHT_BACKGROUND -> "Light mode background"
-            Kind.DARK_BACKGROUND -> "Dark mode background"
+            Kind.ACCENT -> "Make your accent colour"
+            Kind.LIGHT_BACKGROUND -> "Make your light background"
+            Kind.DARK_BACKGROUND -> "Make your dark background"
         }
         MaterialAlertDialogBuilder(a)
+            // Room for the preview and the whole maker on a small screen (Material leaves 80 dp).
+            .setBackgroundInsetTop(dp(16))
+            .setBackgroundInsetBottom(dp(16))
             .setTitle(title)
-            .setView(col)
-            .setPositiveButton("Use this") { _, _ ->
-                onPick(
-                    when (kind) {
-                        Kind.ACCENT -> picked
-                        Kind.LIGHT_BACKGROUND -> Palette.limitLight(picked)
-                        Kind.DARK_BACKGROUND -> Palette.limitDark(picked)
-                    },
-                )
-            }
+            .setView(android.widget.ScrollView(a).apply { addView(col) })
+            .setPositiveButton("Use this") { _, _ -> onPick(used(picked)) }
             .setNegativeButton(android.R.string.cancel, null)
             .showImmersive()
     }
@@ -437,11 +348,8 @@ object ColorPicker {
             Kind.ACCENT -> LinearLayout(ctx).apply {
                 orientation = LinearLayout.HORIZONTAL
                 for (night in listOf(false, true)) {
-                    val tones = if (night) {
-                        listOf(Tones.tone(color, 80.0), Tones.tone(color, 20.0))
-                    } else {
-                        listOf(Tones.tone(color, 40.0), Color.WHITE)
-                    }
+                    // Exactly as Swift will use it (Palette.customAccent).
+                    val tones = Palette.customAccent(color, night).toList()
                     addView(ColoursPanel.mock(ctx, night, current = false, overrides = mapOf(R.color.accent to tones[0], R.color.on_accent to tones[1])),
                         LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { setMargins(Ui.dp(ctx, 3), 0, Ui.dp(ctx, 3), 0) })
                 }

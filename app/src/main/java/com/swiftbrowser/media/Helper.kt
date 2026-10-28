@@ -125,7 +125,8 @@ object Helper {
             "video-pos" -> WatchPositions.onPosition(tab, msg)
             "reader-place" -> Unfinished.onReaderPlace(tab, msg)
             // Swift's document viewer (2.4).
-            "doc-hello", "doc-read", "doc-range", "doc-place", "doc-action" -> com.swiftbrowser.docs.Docs.onMessage(tab, msg, port)
+            "doc-hello", "doc-read", "doc-range", "doc-place", "doc-action", "doc-reading", "doc-zip", "doc-save" ->
+                com.swiftbrowser.docs.Docs.onMessage(tab, msg, port)
             // Read aloud, from the reader view page in this tab: it hears back how far it got.
             "tts-start", "tts-pause", "tts-resume", "tts-stop", "tts-skip", "tts-rate" -> {
                 val ctx = SwiftApp.instance ?: return

@@ -17,6 +17,9 @@ class RowHolder(view: View) : RecyclerView.ViewHolder(view) {
     val subtitle: TextView = view.findViewById(R.id.row_subtitle)
     val action: ImageButton = view.findViewById(R.id.row_action)
 
+    /** The ripple this row was given, so it isn't made again on every bind (2.6). */
+    private var ripple: android.graphics.drawable.Drawable? = null
+
     fun set(iconRes: Int, title: CharSequence, subtitle: CharSequence?) {
         icon.tag = null
         icon.setImageResource(iconRes)
@@ -26,8 +29,11 @@ class RowHolder(view: View) : RecyclerView.ViewHolder(view) {
         this.subtitle.visibility = if (subtitle.isNullOrEmpty()) View.GONE else View.VISIBLE
         action.visibility = View.GONE
         action.setOnClickListener(null)
-        itemView.background = null
-        itemView.setBackgroundResource(selectableBackground(itemView.context))
+        // Some lists mark a row with another background (the current tab): back to the ripple then.
+        if (ripple == null || itemView.background !== ripple) {
+            itemView.setBackgroundResource(selectableBackground(itemView.context))
+            ripple = itemView.background
+        }
     }
 
     /** The site's own icon in place of the row's icon, when Swift has it (it may come a moment later). */
@@ -49,10 +55,15 @@ class RowHolder(view: View) : RecyclerView.ViewHolder(view) {
     }
 
     companion object {
+        private var selectable = 0
+
+        /** The theme's ripple for rows (the same resource in every screen of Swift, looked up once). */
         fun selectableBackground(ctx: Context): Int {
+            if (selectable != 0) return selectable
             val a = ctx.obtainStyledAttributes(intArrayOf(android.R.attr.selectableItemBackground))
             val res = a.getResourceId(0, 0)
             a.recycle()
+            selectable = res
             return res
         }
     }

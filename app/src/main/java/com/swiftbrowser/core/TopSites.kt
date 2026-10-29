@@ -17,6 +17,9 @@ object TopSites {
     /** Up to this many shortcuts on the home page. */
     const val MAX = 12
 
+    /** Counts history clearings, so the home page works its shortcuts out again (2.6). */
+    @Volatile var historyChanged = 0
+
     private fun pinnedKey(profileId: Long) = "pinned_tiles_$profileId"
 
     /** The shortcuts the user added, in their order. */
@@ -92,6 +95,20 @@ object TopSites {
     fun label(key: String): String =
         NAMES[key] ?: UrlUtils.siteOfHost(key).substringBefore('.').replaceFirstChar { it.titlecase(Locale.ROOT) }
 
+    /**
+     * "Cnn" → "CNN", "Ipinfo" → "IPinfo" (2.6): the name written the way the site's own page title
+     * writes it, when the title has it as a word.
+     */
+    private fun casedLike(key: String, label: String, title: String?): String {
+        if (title.isNullOrBlank() || key in NAMES) return label
+        val i = title.indexOf(label, ignoreCase = true)
+        if (i < 0) return label
+        val before = if (i > 0) title[i - 1] else ' '
+        val after = if (i + label.length < title.length) title[i + label.length] else ' '
+        if (before.isLetterOrDigit() || after.isLetterOrDigit()) return label
+        return title.substring(i, i + label.length)
+    }
+
     /** Blocking; reads history. The user's own shortcuts first, then the most visited sites. */
     fun load(db: Db, profileId: Long, hidden: Set<String>): List<Tile> {
         val pinned = pinned(profileId).take(MAX)
@@ -105,6 +122,7 @@ object TopSites {
         class Site(val scheme: String, val host: String) {
             var visits = 0
             var last = 0L
+            var title: String? = null
         }
         val sites = LinkedHashMap<String, Site>()
         for (r in db.recentVisits(profileId, 1500)) {
@@ -117,13 +135,14 @@ object TopSites {
             val key = key(host)
             if (key in SKIP || key in hidden) continue
             val site = sites.getOrPut(key) { Site(uri.scheme ?: "https", host) }
+            if (site.title == null && r.title.isNotBlank()) site.title = r.title
             site.visits += r.visits
             site.last = maxOf(site.last, r.lastVisit)
         }
         val tiles = sites.entries
             .sortedWith(compareByDescending<Map.Entry<String, Site>> { it.value.visits }.thenByDescending { it.value.last })
             .take(max)
-            .map { (key, s) -> Tile(key, "${s.scheme}://${s.host}/", label(key)) }
+            .map { (key, s) -> Tile(key, "${s.scheme}://${s.host}/", casedLike(key, label(key), s.title)) }
             .toMutableList()
         if (tiles.size < 4 && tiles.size < max) {
             for (d in DEFAULTS) {

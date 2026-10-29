@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The round app icon (Android 7.1 launchers that ask for one): Swift's comet on a blue circle. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="100"
+    android:viewportHeight="100">
+    <path android:pathData="M50,2 A48,48 0,1 1,50 98 A48,48 0,1 1,50 2 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:endX="100"
+                android:endY="100"
+                android:startX="0"
+                android:startY="0"
+                android:type="linear">
+                <item android:color="#FF5A97FF" android:offset="0" />
+                <item android:color="#FF1542C2" android:offset="1" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M52.08,30.41 A14,14 0 1,1 71.33,49.66 C54.94,59.68 41.41,62.82 28.2,76.02 A1.8,1.8 0 0,1 25.72,73.55 C38.92,60.34 42.07,46.8 52.08,30.41 Z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M36.31,30.24 A3.4,3.4 0 1,1 41.1,35.02 L24.27,49.04 A1.4,1.4 0 0,1 22.29,47.07 Z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M66.65,60.73 A3.4,3.4 0 1,1 71.42,65.5 L58.88,75.24 A1.4,1.4 0 0,1 56.91,73.27 Z" />
+</vector>

@@ -18,7 +18,8 @@ object Profiles {
 
     private lateinit var db: Db
     private lateinit var prefs: Prefs
-    private val list = ArrayList<ProfileRow>()
+    /** Replaced whole when it changes: other threads (backups, passwords) read it safely. */
+    @Volatile private var list: List<ProfileRow> = emptyList()
 
     fun init(db: Db, prefs: Prefs) {
         this.db = db
@@ -28,15 +29,15 @@ object Profiles {
     }
 
     private fun reload() {
-        list.clear()
-        list.addAll(db.profiles())
-        if (list.isEmpty()) {
+        var rows = db.profiles()
+        if (rows.isEmpty()) {
             db.addProfile("Personal", COLORS[0])
-            list.addAll(db.profiles())
+            rows = db.profiles()
         }
+        list = rows
     }
 
-    fun all(): List<ProfileRow> = list.toList()
+    fun all(): List<ProfileRow> = list
 
     fun get(id: Long): ProfileRow = list.firstOrNull { it.id == id } ?: list.first()
 
@@ -64,6 +65,7 @@ object Profiles {
     fun delete(id: Long) {
         if (list.size <= 1) return
         db.deleteProfile(id)
+        prefs.sp.edit().remove("pinned_tiles_$id").apply()
         reload()
         if (prefs.currentProfileId == id) prefs.currentProfileId = list.first().id
     }

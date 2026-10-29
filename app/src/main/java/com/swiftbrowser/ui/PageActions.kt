@@ -38,7 +38,9 @@ object PageActions {
             return
         }
         tab.autoReaderDone.add(tab.url.substringBefore('#'))
-        // The second time on a site: offer to always open its articles in reader view (2.3).
+        // The second time on a site: offer to always open its articles in reader view (2.3); not
+        // from incognito tabs, which leave nothing behind (2.6).
+        if (tab.incognito) return
         val site = UrlUtils.site(tab.url) ?: return
         if (SiteSettings.autoReader(site) || site in readerOffered) return
         val times = (readerUses[site] ?: 0) + 1
@@ -123,6 +125,74 @@ object PageActions {
     /** Pages saved as PDF open in Swift itself (the engine has a PDF viewer). */
     fun isSavedPage(d: Downloads.Item): Boolean =
         d.fileName.endsWith(".pdf", ignoreCase = true) && File(d.filePath).exists()
+
+    // ------------------------------------------------------------------ QR code (2.6)
+
+    /** The page's address as a QR code: another phone's camera opens it, or it's shared as a picture. */
+    fun showQr(a: MainActivity, tab: Tab) {
+        val url = tab.url
+        if (!UrlUtils.isHttp(url)) {
+            a.snack("Open a page to show its QR code")
+            return
+        }
+        val size = Ui.dp(a, 232)
+        val code = try {
+            com.journeyapps.barcodescanner.BarcodeEncoder().encodeBitmap(
+                url, com.google.zxing.BarcodeFormat.QR_CODE, size, size,
+                mapOf(com.google.zxing.EncodeHintType.MARGIN to 1, com.google.zxing.EncodeHintType.CHARACTER_SET to "UTF-8"),
+            )
+        } catch (e: Exception) {
+            a.snack("This address is too long for a QR code")
+            return
+        }
+        val col = android.widget.LinearLayout(a).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            gravity = android.view.Gravity.CENTER_HORIZONTAL
+            setPadding(Ui.dp(a, 24), Ui.dp(a, 20), Ui.dp(a, 24), Ui.dp(a, 4))
+            // Black on white in dark mode too: cameras read it best that way.
+            addView(android.widget.ImageView(a).apply {
+                setImageBitmap(code)
+                background = Ui.shape(a, android.graphics.Color.WHITE, Ui.R_MEDIUM)
+                setPadding(Ui.dp(a, 12), Ui.dp(a, 12), Ui.dp(a, 12), Ui.dp(a, 12))
+                contentDescription = "QR code of $url"
+            })
+            addView(Ui.text(a, Ui.Type.SUBTITLE, tab.title.ifBlank { UrlUtils.siteName(url) }, lines = 2).apply {
+                gravity = android.view.Gravity.CENTER
+                setPadding(0, Ui.dp(a, 14), 0, 0)
+            })
+            addView(Ui.text(a, Ui.Type.CAPTION, UrlUtils.display(url), lines = 2).apply {
+                gravity = android.view.Gravity.CENTER
+                setPadding(0, Ui.dp(a, 2), 0, 0)
+            })
+        }
+        com.google.android.material.dialog.MaterialAlertDialogBuilder(a)
+            .setView(col)
+            .setPositiveButton("Share picture") { _, _ -> shareQr(a, tab, url, size) }
+            .setNegativeButton("Close", null)
+            .showImmersive()
+    }
+
+    private fun shareQr(a: MainActivity, tab: Tab, url: String, size: Int) {
+        try {
+            val code = com.journeyapps.barcodescanner.BarcodeEncoder().encodeBitmap(
+                url, com.google.zxing.BarcodeFormat.QR_CODE, size, size, mapOf(com.google.zxing.EncodeHintType.MARGIN to 2),
+            )
+            val dir = File(a.cacheDir, "docs/share").apply { mkdirs() }
+            val file = File(dir, "QR code.png")
+            file.outputStream().use { code.compress(Bitmap.CompressFormat.PNG, 100, it) }
+            val uri = androidx.core.content.FileProvider.getUriForFile(a, a.packageName + ".files", file)
+            val send = Intent(Intent.ACTION_SEND).apply {
+                type = "image/png"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                putExtra(Intent.EXTRA_TEXT, url)
+                putExtra(Intent.EXTRA_SUBJECT, tab.title)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            a.startActivity(Intent.createChooser(send, "Share"))
+        } catch (e: Exception) {
+            a.snack("The picture couldn't be shared")
+        }
+    }
 
     // ------------------------------------------------------------------ home screen shortcut
 

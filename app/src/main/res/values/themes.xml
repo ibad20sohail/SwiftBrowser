@@ -123,9 +123,10 @@
         <item name="android:minHeight">48dp</item>
     </style>
 
+    <!-- 48 dp high to tap (2.6); 40 wide, so the address keeps its room. -->
     <style name="Swift.ToolbarButton" parent="">
         <item name="android:layout_width">40dp</item>
-        <item name="android:layout_height">40dp</item>
+        <item name="android:layout_height">48dp</item>
         <item name="android:background">?attr/selectableItemBackgroundBorderless</item>
         <item name="android:scaleType">center</item>
     </style>

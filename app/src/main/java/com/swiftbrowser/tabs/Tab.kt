@@ -25,6 +25,12 @@ class Tab(
     /** The tab group it is in, see [TabGroup]. A group's tabs are next to each other in the tab list. */
     var groupId: Long? = null
 
+    /**
+     * False while the tab's saved history is still only in the database (2.6: it's read when the tab
+     * opens, not at start). [state] is "" meanwhile when there is one.
+     */
+    var stateLoaded = true
+
     /** Live engine session, or null while the tab is suspended (or shows the home page). */
     var session: GeckoSession? = null
 
@@ -54,6 +60,13 @@ class Tab(
     /** The screen shows the home page for this tab. */
     val showsHome: Boolean get() = isHome || homeShown
 
+    /**
+     * Where Back goes when this tab can't go back any more and has no tab to return to (2.6): the
+     * Documents or Downloads screen it was opened from, or the app that asked Swift to open it
+     * (Docs.BACK_*). Not kept when Swift restarts.
+     */
+    var backTo: String? = null
+
     /** uBlock Origin's per-tab blocked-request count, as shown on its badge. */
     var badge: String? = null
     var uboAction: WebExtension.Action? = null
@@ -62,6 +75,9 @@ class Tab(
     val helperPorts = ArrayList<WebExtension.Port>()
     var speed = 1.0
     var lastClick: NavPolicy.Click? = null
+
+    /** What the engine knows of the page's language and translation (2.6, Translate). */
+    var translation: org.mozilla.geckoview.TranslationsController.SessionTranslation.TranslationState? = null
 
     /** When the user last navigated on purpose (typed URL, back/forward, reload). */
     var userNavAt = 0L

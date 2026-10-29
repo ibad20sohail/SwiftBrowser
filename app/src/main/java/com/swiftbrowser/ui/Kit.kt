@@ -297,7 +297,7 @@ object Ui {
         }
 
     /**
-     * Swift's logo in the accent colour (2.3): the white S on a rounded square with a soft diagonal
+     * Swift's logo in the accent colour (2.3): the white comet (2.6) on a rounded square with a soft diagonal
      * gradient. Blue (the default) is exactly the app icon's blue, so nothing changes colour when
      * Swift starts.
      */
@@ -306,7 +306,7 @@ object Ui {
         val colors = if (accent == Accent.BLUE) {
             intArrayOf(0xFF5A97FF.toInt(), 0xFF1542C2.toInt())
         } else {
-            // A very light colour of your own is deepened a little, so the white S stays clear.
+            // A very light colour of your own is deepened a little, so the white comet stays clear.
             var seed = accent.seedColor or 0xFF000000.toInt()
             var i = 0
             while (Color.luminance(seed) > 0.3f && i++ < 20) seed = Tones.mix(seed, Color.BLACK, 0.08)
@@ -684,14 +684,36 @@ class SkeletonView(context: Context, private val rows: Int = 4, private val pict
         }
     }
 
+    /** Pulses only while it can be seen (2.6): hidden, or with Swift in the background, it costs nothing. */
+    private fun syncPulse() {
+        val on = isAttachedToWindow && isShown && windowVisibility == VISIBLE
+        if (on && pulse == null) {
+            pulse = ObjectAnimator.ofFloat(this, View.ALPHA, 1f, 0.45f).apply {
+                duration = 800
+                repeatMode = ValueAnimator.REVERSE
+                repeatCount = ValueAnimator.INFINITE
+                start()
+            }
+        } else if (!on && pulse != null) {
+            pulse?.cancel()
+            pulse = null
+            alpha = 1f
+        }
+    }
+
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
-        pulse = ObjectAnimator.ofFloat(this, View.ALPHA, 1f, 0.45f).apply {
-            duration = 800
-            repeatMode = ValueAnimator.REVERSE
-            repeatCount = ValueAnimator.INFINITE
-            start()
-        }
+        syncPulse()
+    }
+
+    override fun onVisibilityChanged(changedView: View, visibility: Int) {
+        super.onVisibilityChanged(changedView, visibility)
+        syncPulse()
+    }
+
+    override fun onWindowVisibilityChanged(visibility: Int) {
+        super.onWindowVisibilityChanged(visibility)
+        syncPulse()
     }
 
     override fun onDetachedFromWindow() {

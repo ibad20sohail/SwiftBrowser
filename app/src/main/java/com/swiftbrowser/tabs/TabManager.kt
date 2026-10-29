@@ -19,7 +19,6 @@ import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.GeckoSessionSettings
 import org.mozilla.geckoview.WebExtension
 import java.util.concurrent.ExecutorService
-import java.util.concurrent.Executors
 
 /**
  * All tabs of all profiles plus the incognito tabs, in the order the tab grid shows them. Only a few
@@ -31,11 +30,14 @@ import java.util.concurrent.Executors
 object TabManager {
     private lateinit var db: Db
     private lateinit var prefs: Prefs
-    val io: ExecutorService = Executors.newSingleThreadExecutor()
+    val io: ExecutorService = com.swiftbrowser.core.Background.single("tabs")
     private val main = Handler(Looper.getMainLooper())
     private val dirty = LinkedHashSet<Tab>()
     private val saveRunnable = Runnable { flushSaves() }
     private var nextIncognitoId = -1L
+
+    /** New tabs' ids (2.6): given here, so the database is written off the main thread. */
+    private var nextTabId = 1L
     private var nextIncognitoGroupId = -1L
 
     /** How many recently closed tabs each profile keeps. */
@@ -82,12 +84,14 @@ object TabManager {
         for (g in db.tabGroups()) {
             if (g.profileId in validProfiles) groups.add(TabGroup(g.id, g.profileId, g.name, g.color)) else db.deleteTabGroup(g.id)
         }
-        for (r in db.tabs()) {
+        // Without their histories (2.6): each is read when its tab opens.
+        for (r in db.tabsWithoutState()) {
             if (r.profileId !in validProfiles) {
                 db.deleteTab(r.id)
                 continue
             }
             val tab = Tab(r.id, r.profileId, r.url, r.title, r.state, r.parentId, r.lastUsed, r.desktop)
+            tab.stateLoaded = r.state == null
             tab.groupId = r.groupId?.takeIf { id -> groups.any { it.id == id && it.profileId == r.profileId } }
             tabs.add(tab)
         }
@@ -96,6 +100,7 @@ object TabManager {
             db.deleteTabGroup(g.id)
         }
         keepGroupsTogether()
+        nextTabId = maxOf(db.lastTabId(), tabs.maxOfOrNull { it.id } ?: 0L) + 1
         L.d("Restored ${tabs.size} tabs, ${groups.size} groups")
     }
 
@@ -120,7 +125,11 @@ object TabManager {
 
     private fun createTab(url: String, profileId: Long, parent: Tab?, desktop: Boolean, incognito: Boolean): Tab {
         val now = System.currentTimeMillis()
-        val id = if (incognito) nextIncognitoId-- else db.insertTab(profileId, url, parent?.id, now, desktop)
+        val id = if (incognito) nextIncognitoId-- else nextTabId++
+        if (!incognito) {
+            val parentId = parent?.id
+            io.execute { db.insertTab(id, profileId, url, "", null, parentId, now, desktop) }
+        }
         val tab = Tab(id, profileId, url, "", null, parent?.id, now, desktop, incognito)
         val parentIndex = if (parent != null) tabs.indexOf(parent) else -1
         if (parent != null && parentIndex >= 0) {
@@ -169,7 +178,12 @@ object TabManager {
         if (tab.waitingForConnection && com.swiftbrowser.engine.DataSaver.online && tab.session != null) {
             ui?.activity?.window?.decorView?.post { if (current === tab) reload(tab) }
         }
-        scheduleSave(tab)
+        // Only when it was used (2.6): its history isn't written again for a switch.
+        if (!tab.incognito) {
+            val id = tab.id
+            val used = tab.lastUsed
+            io.execute { db.setTabLastUsed(id, used) }
+        }
         if (!tab.isHome) {
             tab.wokeUp = tab.session == null && (tab.sessionState != null || tab.state != null)
             val session = ensureLive(tab)
@@ -197,14 +211,41 @@ object TabManager {
         session.open(Engine.runtime)
         tab.crashed = false
         if (tab === current) activate(session)
-        val state = tab.sessionState ?: tab.state?.let { GeckoSession.SessionState.fromString(it) }
-        if (state != null || !tab.isBlank) {
+        val parsed = tab.sessionState
+        val text = if (parsed == null) tab.state else null
+        if (parsed != null || text != null || !tab.isBlank) {
             // Show progress right away, even while uBlock Origin is still starting.
             tab.loading = true
             tab.progress = 5
-            AdBlock.whenReady(adblockWait(tab)) {
-                if (tab.session !== session || !session.isOpen) return@whenReady
-                if (state != null) session.restoreState(state) else session.loadUri(tab.url)
+            val restore = { state: GeckoSession.SessionState? ->
+                AdBlock.whenReady(adblockWait(tab)) {
+                    if (tab.session !== session || !session.isOpen) return@whenReady
+                    if (state != null) session.restoreState(state) else session.loadUri(tab.url)
+                }
+            }
+            if (text == null) {
+                restore(parsed)
+            } else {
+                // A long history takes a moment to read and turn back into the engine's state: not on
+                // the main thread (2.6).
+                val loaded = tab.stateLoaded
+                val id = tab.id
+                io.execute {
+                    val stored = if (loaded) text else db.tabState(id)
+                    val state = try {
+                        stored?.takeIf { it.isNotEmpty() }?.let { GeckoSession.SessionState.fromString(it) }
+                    } catch (e: Exception) {
+                        L.w("Couldn't read a tab's history", e)
+                        null
+                    }
+                    main.post {
+                        if (!tab.stateLoaded) {
+                            tab.state = stored
+                            tab.stateLoaded = true
+                        }
+                        restore(state)
+                    }
+                }
             }
         }
         return session
@@ -287,6 +328,8 @@ object TabManager {
         val entries = closing.map { ClosedEntry(it, tabs.indexOf(it)) }.sortedBy { it.index }
         val cur = current
         val wasCurrent = cur != null && cur in closing
+        // First, while the tabs' rows (and histories not read yet) are still there.
+        rememberClosed(entries)
         for (t in closing) {
             tabs.remove(t)
             detachSession(t)
@@ -297,7 +340,6 @@ object TabManager {
                 io.execute { db.deleteTab(id) }
             }
         }
-        rememberClosed(entries)
         val goneGroups = closing.mapNotNull { group(it.groupId) }.distinct().filter { g -> tabs.none { it.groupId == g.id } }
         goneGroups.forEach { deleteGroup(it) }
         saveOrder()
@@ -315,14 +357,17 @@ object TabManager {
             lastClosed = Closed(entries, goneGroups, if (wasCurrent) cur else null, replacement)
             ui?.onTabsClosed(closing)
         }
+        // The last incognito tab closed (2.6): its documents and downloads are forgotten too.
+        if (closing.any { it.incognito } && tabs.none { it.incognito }) {
+            com.swiftbrowser.docs.Docs.onIncognitoEnded()
+            com.swiftbrowser.download.Downloads.onIncognitoEnded()
+        }
     }
 
     /** Brings back the tabs closed last from the tab grid, with their history and groups. */
     fun undoClose(): Tab? {
         val c = lastClosed ?: return null
         lastClosed = null
-        // They are open again, so they leave the recently closed list.
-        io.execute { for (e in c.entries) if (e.rowId >= 0) db.deleteClosedTab(e.rowId) }
         val profiles = Profiles.all().map { it.id }.toSet()
         val newGroupIds = HashMap<Long, Long>()
         for (g in c.groups) {
@@ -337,9 +382,19 @@ object TabManager {
         for (e in c.entries) {
             val old = e.tab
             if (!old.incognito && old.profileId !in profiles) continue
-            val id = if (old.incognito) nextIncognitoId-- else db.insertTab(old.profileId, old.url, old.parentId, now, old.desktop)
+            val id = if (old.incognito) nextIncognitoId-- else nextTabId++
+            if (!old.incognito) {
+                // A history that was never read comes back from the recently closed list (2.6).
+                val loaded = old.stateLoaded
+                val state = old.state
+                io.execute {
+                    val history = if (loaded) state else if (e.rowId >= 0) db.closedTabState(e.rowId) else null
+                    db.insertTab(id, old.profileId, old.url, old.title, history, old.parentId, old.lastUsed, old.desktop)
+                }
+            }
             // It keeps its last use, so an inactive tab stays inactive.
             val tab = Tab(id, old.profileId, old.url, old.title, old.state, old.parentId, old.lastUsed, old.desktop, old.incognito)
+            tab.stateLoaded = old.stateLoaded
             tab.sessionState = old.sessionState
             tab.speed = old.speed
             tab.groupId = old.groupId?.let { gid -> newGroupIds[gid] ?: gid.takeIf { group(it) != null } }
@@ -349,6 +404,8 @@ object TabManager {
             if (old === c.wasCurrent) restoredCurrent = tab
             if (first == null) first = tab
         }
+        // They are open again, so they leave the recently closed list.
+        io.execute { for (e in c.entries) if (e.rowId >= 0) db.deleteClosedTab(e.rowId) }
         keepGroupsTogether()
         saveOrder()
         if (restoredCurrent != null) select(restoredCurrent) else ui?.onTabsChanged()
@@ -372,8 +429,13 @@ object TabManager {
             val title = t.title
             val sessionState = t.sessionState
             val state = t.state
+            val loaded = t.stateLoaded
+            val id = t.id
             // Turning the engine's state into text can take a while; done off the main thread.
-            io.execute { e.rowId = db.addClosedTab(pid, url, title, sessionState?.toString() ?: state, CLOSED_KEEP) }
+            io.execute {
+                val saved = sessionState?.toString() ?: if (loaded) state else db.tabState(id)
+                e.rowId = db.addClosedTab(pid, url, title, saved, CLOSED_KEEP)
+            }
         }
     }
 
@@ -678,8 +740,9 @@ object TabManager {
     }
 
     fun setDesktop(tab: Tab, desktop: Boolean) {
-        // Remembered for the site, so its other pages and tabs get the same version.
-        UrlUtils.site(tab.url)?.let { if (UrlUtils.isHttp(tab.url)) com.swiftbrowser.core.SiteSettings.setDesktop(it, desktop) }
+        // Remembered for the site, so its other pages and tabs get the same version (not from an
+        // incognito tab, which leaves nothing behind, 2.6).
+        if (!tab.incognito) UrlUtils.site(tab.url)?.let { if (UrlUtils.isHttp(tab.url)) com.swiftbrowser.core.SiteSettings.setDesktop(it, desktop) }
         tab.desktop = desktop
         tab.session?.settings?.let { s ->
             s.setUserAgentMode(
@@ -783,32 +846,44 @@ object TabManager {
         ui?.onTabUpdated(tab)
     }
 
-    fun scheduleSave(tab: Tab) {
+    /** When the next save runs (uptime), 0 when none is waiting. */
+    private var saveAt = 0L
+
+    /**
+     * Writes the tab soon. [stateOnly]: only its scroll position or form state changed (that comes
+     * every couple of seconds while scrolling): within 12 s then, not 2 (2.6). Going to the
+     * background writes everything at once (flushSaves).
+     */
+    fun scheduleSave(tab: Tab, stateOnly: Boolean = false) {
         if (tab.incognito) return
         dirty.add(tab)
-        if (dirty.size == 1) {
+        val at = android.os.SystemClock.uptimeMillis() + if (stateOnly) 12_000L else 2000L
+        if (saveAt == 0L || at < saveAt) {
             main.removeCallbacks(saveRunnable)
-            main.postDelayed(saveRunnable, 2000)
+            main.postAtTime(saveRunnable, at)
+            saveAt = at
         }
     }
 
     private class SaveRow(
         val id: Long, val url: String, val title: String,
         val sessionState: GeckoSession.SessionState?, val state: String?, val lastUsed: Long, val desktop: Boolean,
+        val keepState: Boolean = false,
     )
 
     fun flushSaves() {
         main.removeCallbacks(saveRunnable)
+        saveAt = 0L
         if (dirty.isEmpty()) return
         val rows = dirty.filter { tabs.contains(it) && !it.incognito }.map { t ->
-            SaveRow(t.id, t.url, t.title, t.sessionState, t.state, t.lastUsed, t.desktop)
+            SaveRow(t.id, t.url, t.title, t.sessionState, t.state, t.lastUsed, t.desktop, keepState = !t.stateLoaded && t.sessionState == null)
         }
         dirty.clear()
         io.execute {
             for (r in rows) {
                 // Turning the engine's state into text can take a while for long histories.
                 val state = r.sessionState?.toString() ?: r.state
-                db.updateTab(r.id, r.url, r.title, state, r.lastUsed, r.desktop)
+                db.updateTab(r.id, r.url, r.title, state, r.lastUsed, r.desktop, r.keepState)
             }
         }
     }

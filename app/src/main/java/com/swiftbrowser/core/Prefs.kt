@@ -178,6 +178,15 @@ class Prefs(ctx: Context) {
         get() = sp.getString(SEARCH_ENGINE, "google") ?: "google"
         set(v) = sp.edit { putString(SEARCH_ENGINE, v) }
 
+    /** The user's own search engine (2.6): an address with %s, and its name. */
+    var customSearchUrl: String
+        get() = sp.getString("search_custom_url", "") ?: ""
+        set(v) = sp.edit { putString("search_custom_url", v) }
+
+    var customSearchName: String
+        get() = sp.getString("search_custom_name", "") ?: ""
+        set(v) = sp.edit { putString("search_custom_name", v) }
+
     var searchSuggestions: Boolean
         get() = sp.getBoolean(SEARCH_SUGGESTIONS, true)
         set(v) = sp.edit { putBoolean(SEARCH_SUGGESTIONS, v) }
@@ -323,6 +332,11 @@ class Prefs(ctx: Context) {
     var hideCookieNotices: Boolean
         get() = sp.getBoolean(HIDE_COOKIE_NOTICES, false)
         set(v) = sp.edit { putBoolean(HIDE_COOKIE_NOTICES, v) }
+
+    /** Offer to save passwords and fill them in (2.6). */
+    var offerPasswords: Boolean
+        get() = sp.getBoolean("login_offer", true)
+        set(v) = sp.edit { putBoolean("login_offer", v) }
 
     /** Folder for downloads (a full path); empty: Download/Swift. See Downloads.directory. */
     var downloadFolder: String

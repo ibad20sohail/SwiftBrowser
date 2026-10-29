@@ -56,7 +56,7 @@ object Unfinished {
             val caption = if (d.kind == com.swiftbrowser.docs.Docs.Kind.PDF && d.total > 0) "Page ${d.place} of ${d.total}" else "${(d.progress * 100).toInt()}% read"
             Item(d.uri, d.name, d.progress, caption, false, d.updated, null, d)
         }
-        return (videos + articles + docs).sortedByDescending { it.updated }.take(MAX)
+        return (videos + articles + docs).filter { it.url !in hidden }.sortedByDescending { it.updated }.take(MAX)
     }
 
     private val YOUTUBE_ID = Regex("^https?://(?:www\\.|m\\.|music\\.)?(?:youtube\\.com/(?:watch\\?(?:.*&)?v=|shorts/|live/)|youtu\\.be/)([A-Za-z0-9_-]{11})")
@@ -65,8 +65,20 @@ object Unfinished {
     fun youTubePicture(url: String): String? =
         YOUTUBE_ID.find(url)?.groupValues?.get(1)?.let { "https://i.ytimg.com/vi/$it/mqdefault.jpg" }
 
+    /** Taken off the row, waiting for their Undo to run out (2.6). */
+    private val hidden = java.util.Collections.synchronizedSet(HashSet<String>())
+
+    fun hide(item: Item) {
+        hidden += item.url
+    }
+
+    fun unhide(item: Item) {
+        hidden -= item.url
+    }
+
     /** Takes [item] off the row. */
     fun remove(item: Item) {
+        hidden -= item.url
         TabManager.io.execute {
             when {
                 item.doc != null -> SwiftApp.db.setDocumentPlace(item.doc.id, "", 0f, 0)

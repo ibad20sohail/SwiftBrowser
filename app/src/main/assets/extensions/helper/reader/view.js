@@ -14,8 +14,21 @@ function applySize() {
 const FONTS = { serif: 'Georgia, "Noto Serif", serif', sans: 'Roboto, "Noto Sans", sans-serif' };
 const LINES = ['1.45', '1.65', '1.9'];
 
+const darkQuery = matchMedia('(prefers-color-scheme: dark)');
+let lastLook = null;
+
 function applyStyle(look) {
+  lastLook = look;
   const root = document.documentElement.style;
+  // The page and its text in the app's own colours (2.6), light or dark as Swift is.
+  const c = look && (darkQuery.matches ? look.pageDark : look.pageLight);
+  if (c) {
+    if (c.bg) { root.setProperty('--bg', c.bg); }
+    if (c.text) { root.setProperty('--text', c.text); }
+    if (c.muted) { root.setProperty('--muted', c.muted); }
+    if (c.line) { root.setProperty('--rule', c.line); }
+    if (c.surface) { root.setProperty('--button', c.surface); }
+  }
   root.setProperty('--font', FONTS[look && look.readerFont] || FONTS.serif);
   root.setProperty('--line', LINES[look && Number.isInteger(look.readerSpacing) ? look.readerSpacing : 1] || LINES[1]);
   // Links and buttons in the app's accent colour (light and dark).
@@ -24,6 +37,7 @@ function applyStyle(look) {
 }
 
 browser.storage.local.get('look').then(r => applyStyle(r && r.look), () => { });
+darkQuery.addEventListener('change', () => applyStyle(lastLook));
 browser.storage.onChanged.addListener((changes, area) => {
   if (area === 'local' && changes.look) { applyStyle(changes.look.newValue); }
 });

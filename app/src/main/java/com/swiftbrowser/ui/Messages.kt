@@ -57,10 +57,12 @@ object Messages {
         bottomOffset: Int = 0,
         onAction: (() -> Unit)? = null,
     ) {
+        // Long texts stay longer (2.6): about as long as they take to read.
+        val reading = 1500L + text.length * 45L
         val duration = when {
             long -> LONG_MS
-            action != null -> ACTION_MS
-            else -> SHORT_MS
+            action != null -> maxOf(ACTION_MS, reading).coerceAtMost(LONG_MS)
+            else -> maxOf(SHORT_MS, reading).coerceAtMost(LONG_MS)
         }
         present(activity, text, action, icon, duration, bottomOffset, onAction)
     }

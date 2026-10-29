@@ -139,6 +139,10 @@ object Helper {
                         }
                     }
                 }
+                if (msg.optString("type") == "tts-start") {
+                    ReadAloud.tabId = tab.id
+                    ReadAloud.incognito = tab.incognito
+                }
                 ReadAloud.onMessage(ctx, msg)
             }
             "video-start" -> WatchPositions.onStart(tab, msg)
@@ -215,9 +219,11 @@ object Helper {
             port.postMessage(
                 JSONObject().put("type", "look").put("lite", prefs.liteMode || com.swiftbrowser.engine.Power.saving).put("fixes", !prefs.sitesAsDesigned)
                     .put("liteExcept", org.json.JSONArray(com.swiftbrowser.core.SiteSettings.liteExceptions()))
+                    .put("darkSites", org.json.JSONArray(com.swiftbrowser.core.SiteSettings.darkPages()))
                     .put("keepPlaying", prefs.keepPlaying)
                     .put("readerFont", prefs.readerFont).put("readerSpacing", prefs.readerSpacing)
-                    .put("accentLight", accentHex(night = false)).put("accentDark", accentHex(night = true)),
+                    .put("accentLight", accentHex(night = false)).put("accentDark", accentHex(night = true))
+                    .put("pageLight", pageColors(false)).put("pageDark", pageColors(true)),
             )
         } catch (e: Exception) {
             L.w("Couldn't send the look", e)
@@ -226,6 +232,23 @@ object Helper {
 
     /** The accent colour as "#rrggbb" in light or dark mode, for Swift's own pages (the document viewer, 2.4). */
     fun accentColor(night: Boolean) = accentHex(night)
+
+    /**
+     * Swift's own colours for its pages (reader view, the document viewer, 2.6): the page, cards, text,
+     * lines and the accent with the colour of text on it, as they look in light or dark mode.
+     */
+    fun pageColors(night: Boolean): org.json.JSONObject {
+        val app = SwiftApp.instance ?: return org.json.JSONObject()
+        fun hex(res: Int) = String.format("#%06x", com.swiftbrowser.ui.Palette.colorFor(app, night, res) and 0xFFFFFF)
+        return org.json.JSONObject()
+            .put("bg", hex(com.swiftbrowser.R.color.page_bg))
+            .put("surface", hex(com.swiftbrowser.R.color.card_bg))
+            .put("text", hex(com.swiftbrowser.R.color.text_primary))
+            .put("muted", hex(com.swiftbrowser.R.color.text_secondary))
+            .put("line", hex(com.swiftbrowser.R.color.divider))
+            .put("accent", accentHex(night))
+            .put("onAccent", hex(com.swiftbrowser.R.color.on_accent))
+    }
 
     /** The accent colour as "#rrggbb", as it looks in light or dark mode (for reader view). */
     private fun accentHex(night: Boolean): String {
@@ -318,6 +341,15 @@ object Helper {
     private val headerCallbacks = HashMap<Int, (Map<String, String>) -> Unit>()
 
     private val main = Handler(Looper.getMainLooper())
+
+    /** Clearing browsing data (2.6): the articles kept for reader view are deleted. */
+    fun clearArticles() {
+        try {
+            backgroundPort?.postMessage(JSONObject().put("type", "clear-articles"))
+        } catch (e: Exception) {
+            L.w("Couldn't clear reader articles", e)
+        }
+    }
 
     /** Request headers the page used for [url] (cookies, referer), if the extension saw it. */
     fun lookupHeaders(url: String, callback: (Map<String, String>) -> Unit) {

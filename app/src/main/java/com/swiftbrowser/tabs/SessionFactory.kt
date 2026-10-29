@@ -59,6 +59,7 @@ object SessionFactory {
         session.setMediaSessionDelegate(d)
         session.setCompositorScrollDelegate(d)
         session.setPromptDelegate(prompts)
+        session.translationsSessionDelegate = com.swiftbrowser.ui.Translate.delegate(tab)
         tab.session = session
         attachExtensions(tab, session)
         return session
@@ -217,7 +218,7 @@ class TabDelegates(private val tab: Tab) :
         return when (eval(false)) {
             NavPolicy.Decision.ALLOW -> null
             NavPolicy.Decision.BLOCK -> {
-                L.d("Blocked ${if (popup) "pop-up" else "redirect"}: $url")
+                if (!tab.incognito) L.d("Blocked ${if (popup) "pop-up" else "redirect"} to ${UrlUtils.host(url)}")
                 ui?.onBlocked(tab, url, popup)
                 GeckoResult.deny()
             }
@@ -228,7 +229,7 @@ class TabDelegates(private val tab: Tab) :
                     if (eval(true) == NavPolicy.Decision.ALLOW) {
                         result.complete(AllowOrDeny.ALLOW)
                     } else {
-                        L.d("Blocked ${if (popup) "pop-up" else "redirect"}: $url")
+                        if (!tab.incognito) L.d("Blocked ${if (popup) "pop-up" else "redirect"} to ${UrlUtils.host(url)}")
                         ui?.onBlocked(tab, url, popup)
                         result.complete(AllowOrDeny.DENY)
                     }
@@ -300,7 +301,7 @@ class TabDelegates(private val tab: Tab) :
     override fun onSessionStateChange(session: GeckoSession, sessionState: GeckoSession.SessionState) {
         // Called often (scrolling, typing); serialized later, off the main thread.
         tab.sessionState = sessionState
-        TabManager.scheduleSave(tab)
+        TabManager.scheduleSave(tab, stateOnly = true)
     }
 
     // ------------------------------------------------------------------ content

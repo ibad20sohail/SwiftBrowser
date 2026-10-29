@@ -33,7 +33,7 @@ import com.swiftbrowser.ui.MainActivity
  * site's picture, the title, previous / play-pause / next, the sleep timer) keeps Swift running in
  * the background or with the screen off, also on the lock screen. Android's media session makes
  * headset and Bluetooth buttons control it, and unplugging headphones pauses it. While something
- * plays, the processor and Wi-Fi stay awake so streams don't stall with the screen off.
+ * plays out of sight, the processor and Wi-Fi stay awake so streams don't stall with the screen off.
  */
 class PlaybackService : Service() {
 
@@ -41,6 +41,22 @@ class PlaybackService : Service() {
     private var wifiLock: android.net.wifi.WifiManager.WifiLock? = null
     private var session: MediaSession? = null
     private var noisyRegistered = false
+
+    /** What the media session and the notification show now: an update that changes neither sends neither again (2.6). */
+    private var shownMeta: Meta? = null
+    private var shownLook: Look? = null
+    private var foreground = false
+
+    /** The notification's buttons and its way back to the tab, made once rather than with every update (2.6). */
+    private val buttons = HashMap<String, PendingIntent>()
+    private var tabIntent: PendingIntent? = null
+    private var tabIntentFor: Long? = null
+
+    /** What the media session shows besides where the media is. */
+    private data class Meta(val title: String, val subtitle: String, val art: Bitmap?, val seconds: Long)
+
+    /** What the notification shows. */
+    private data class Look(val tab: Long, val title: String, val subtitle: String, val art: Bitmap?, val playing: Boolean, val timer: String?)
 
     /** Headphones unplugged (or a Bluetooth headset gone): pause, as music apps do. */
     private val noisy = object : BroadcastReceiver() {
@@ -53,6 +69,12 @@ class PlaybackService : Service() {
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onCreate() {
+        super.onCreate()
+        running = this
+        ensureChannel(this)
+    }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val tab = Playback.tab
@@ -73,18 +95,35 @@ class PlaybackService : Service() {
             stop()
             return START_NOT_STICKY
         }
-        updateSession(tab)
-        val n = notification(tab)
-        if (tab.playing) {
-            startForeground(NOTIFICATION_ID, n)
-            holdLocks(true)
-        } else {
-            // Paused: the notification stays (to go on), but Android may close the app again.
-            holdLocks(false)
-            ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_DETACH)
-            NotificationManagerCompat.from(this).notify(NOTIFICATION_ID, n)
-        }
+        refresh(tab)
         return START_NOT_STICKY
+    }
+
+    /**
+     * Brings the media session, the notification and the locks up to date with [tab]. Where the media
+     * is goes to the session every time; its title and picture, and the notification, only when they
+     * changed (2.6: both used to be made again, picture and all, with every position update).
+     */
+    private fun refresh(tab: Tab) {
+        val title = Playback.displayTitle(tab)
+        val subtitle = Playback.subtitle(tab)
+        val art = Playback.artwork(tab)
+        updateSession(tab, title, subtitle, art)
+        val look = Look(tab.id, title, subtitle, art, tab.playing, SleepTimer.label())
+        if (tab.playing) {
+            if (!foreground || look != shownLook) {
+                startForeground(NOTIFICATION_ID, notification(look))
+                foreground = true
+                shownLook = look
+            }
+        } else if (foreground || look != shownLook) {
+            // Paused: the notification stays (to go on), but Android may close the app again.
+            ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_DETACH)
+            foreground = false
+            NotificationManagerCompat.from(this).notify(NOTIFICATION_ID, notification(look))
+            shownLook = look
+        }
+        updateLocks()
     }
 
     // ------------------------------------------------------------------ Android's media session
@@ -121,11 +160,11 @@ class PlaybackService : Service() {
                 Playback.tab?.mediaSession?.seekTo(pos / 1000.0, false)
             }
         })
-        s.setSessionActivity(openIntent(Playback.tab))
+        s.setSessionActivity(openIntent(Playback.tab?.id))
         session = s
     }
 
-    private fun updateSession(tab: Tab) {
+    private fun updateSession(tab: Tab, title: String, subtitle: String, art: Bitmap?) {
         val s = mediaSession()
         val position = Playback.position
         val state = PlaybackState.Builder()
@@ -143,12 +182,18 @@ class PlaybackService : Service() {
             )
             .build()
         s.setPlaybackState(state)
-        val meta = MediaMetadata.Builder()
-            .putString(MediaMetadata.METADATA_KEY_TITLE, Playback.displayTitle(tab))
-            .putString(MediaMetadata.METADATA_KEY_ARTIST, Playback.subtitle(tab))
-        position?.duration?.takeIf { it > 0 }?.let { meta.putLong(MediaMetadata.METADATA_KEY_DURATION, (it * 1000).toLong()) }
-        Playback.artwork(tab)?.let { meta.putBitmap(MediaMetadata.METADATA_KEY_ART, it) }
-        s.setMetadata(meta.build())
+        // The picture travels to Android with the metadata: only sent again when something in it changed.
+        val duration = position?.duration?.takeIf { it > 0 }
+        val now = Meta(title, subtitle, art, duration?.toLong() ?: 0L)
+        if (now != shownMeta) {
+            val meta = MediaMetadata.Builder()
+                .putString(MediaMetadata.METADATA_KEY_TITLE, title)
+                .putString(MediaMetadata.METADATA_KEY_ARTIST, subtitle)
+            duration?.let { meta.putLong(MediaMetadata.METADATA_KEY_DURATION, (it * 1000).toLong()) }
+            art?.let { meta.putBitmap(MediaMetadata.METADATA_KEY_ART, it) }
+            s.setMetadata(meta.build())
+            shownMeta = now
+        }
         s.isActive = true
         setNoisyWatch(tab.playing)
     }
@@ -164,6 +209,12 @@ class PlaybackService : Service() {
     }
 
     // ------------------------------------------------------------------ keeping the phone awake
+
+    /**
+     * Held while something plays and Swift is out of sight (2.6): on screen, the phone is awake anyway,
+     * and the Wi-Fi lock would keep Wi-Fi from saving power for nothing.
+     */
+    private fun updateLocks() = holdLocks(session != null && Playback.tab?.playing == true && !onScreen)
 
     @Suppress("DEPRECATION")
     private fun holdLocks(on: Boolean) {
@@ -202,12 +253,16 @@ class PlaybackService : Service() {
             it.release()
         }
         session = null
+        shownMeta = null
+        shownLook = null
+        foreground = false
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         NotificationManagerCompat.from(this).cancel(NOTIFICATION_ID)
         stopSelf()
     }
 
     override fun onDestroy() {
+        if (running === this) running = null
         holdLocks(false)
         setNoisyWatch(false)
         session?.release()
@@ -219,23 +274,29 @@ class PlaybackService : Service() {
 
     // ------------------------------------------------------------------ the notification
 
-    private fun openIntent(tab: Tab?): PendingIntent = PendingIntent.getActivity(
-        this, 0,
-        Intent(this, MainActivity::class.java).also { i -> tab?.let { i.putExtra(MainActivity.EXTRA_TAB_ID, it.id) } }
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
-        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-    )
+    /** Opens Swift on the playing tab; made again only for another tab. */
+    private fun openIntent(tabId: Long?): PendingIntent {
+        tabIntent?.let { if (tabIntentFor == tabId) return it }
+        return PendingIntent.getActivity(
+            this, 0,
+            Intent(this, MainActivity::class.java).also { i -> tabId?.let { i.putExtra(MainActivity.EXTRA_TAB_ID, it) } }
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        ).also {
+            tabIntent = it
+            tabIntentFor = tabId
+        }
+    }
 
-    private fun notification(tab: Tab): Notification {
-        ensureChannel(this)
+    private fun notification(look: Look): Notification {
         @Suppress("DEPRECATION")
         val b = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) Notification.Builder(this, CHANNEL) else Notification.Builder(this)
-        val timer = SleepTimer.label()
+        val timer = look.timer
         b.setSmallIcon(R.drawable.ic_notify_logo)
-            .setContentTitle(Playback.displayTitle(tab))
-            .setContentText(listOfNotNull(Playback.subtitle(tab), timer?.let { "Sleep: $it" }).joinToString(" · "))
-            .setContentIntent(openIntent(tab))
-            .setOngoing(tab.playing)
+            .setContentTitle(look.title)
+            .setContentText(listOfNotNull(look.subtitle, timer?.let { "Sleep: $it" }).joinToString(" · "))
+            .setContentIntent(openIntent(look.tab))
+            .setOngoing(look.playing)
             .setShowWhen(false)
             .setOnlyAlertOnce(true)
             .setVisibility(Notification.VISIBILITY_PUBLIC)
@@ -243,24 +304,25 @@ class PlaybackService : Service() {
             .setDeleteIntent(action(ACTION_CLOSE, 9))
             .addAction(button(R.drawable.ic_fast_rewind, "Previous", ACTION_PREVIOUS, 4))
             .addAction(
-                if (tab.playing) button(R.drawable.ic_pause, "Pause", ACTION_PAUSE, 1) else button(R.drawable.ic_play, "Play", ACTION_PLAY, 1),
+                if (look.playing) button(R.drawable.ic_pause, "Pause", ACTION_PAUSE, 1) else button(R.drawable.ic_play, "Play", ACTION_PLAY, 1),
             )
             .addAction(button(R.drawable.ic_fast_forward, "Next", ACTION_NEXT, 5))
             .addAction(button(R.drawable.ic_timer, timer ?: "Sleep timer", ACTION_TIMER, 3))
             .addAction(button(R.drawable.ic_close, "Close", ACTION_CLOSE, 2))
             .setStyle(Notification.MediaStyle().setMediaSession(mediaSession().sessionToken).setShowActionsInCompactView(0, 1, 2))
-        Playback.artwork(tab)?.let { b.setLargeIcon(it) }
+        look.art?.let { b.setLargeIcon(it) }
         return b.build()
     }
 
     private fun button(icon: Int, title: String, name: String, code: Int): Notification.Action =
         Notification.Action.Builder(Icon.createWithResource(this, icon), title, action(name, code)).build()
 
-    private fun action(name: String, code: Int): PendingIntent =
+    private fun action(name: String, code: Int): PendingIntent = buttons.getOrPut("$name/$code") {
         PendingIntent.getService(
             this, code, Intent(this, PlaybackService::class.java).setAction(name),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
+    }
 
     companion object {
         private const val CHANNEL = "playback"
@@ -272,6 +334,12 @@ class PlaybackService : Service() {
         private const val ACTION_PREVIOUS = "previous"
         private const val ACTION_CLOSE = "close"
         private const val ACTION_TIMER = "timer"
+
+        /** The service while it runs. It, and everything that tells it about playback, runs on the main thread. */
+        private var running: PlaybackService? = null
+
+        /** Whether Swift is on screen; until MainActivity first says, taken as not (the locks are held as before 2.6). */
+        private var onScreen = false
 
         private fun ensureChannel(ctx: Context) {
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
@@ -288,6 +356,30 @@ class PlaybackService : Service() {
                 L.w("Playback notification failed", e)
             }
         }
+
+        /**
+         * Where the media is (or its speed) changed, which pages say often while they play (2.6): the
+         * running service hears it directly, without a round trip through Android, and only the
+         * media session is told unless something shown changed too.
+         */
+        fun positionChanged(ctx: Context) {
+            val service = running
+            val tab = Playback.tab
+            if (service != null && service.session != null && tab != null && tab.mediaSession != null && Playback.wanted()) {
+                service.refresh(tab)
+            } else {
+                sync(ctx)
+            }
+        }
+
+        /**
+         * Swift came on screen or went out of sight (MainActivity's onStart and onStop, 2.6): the
+         * processor and Wi-Fi are only kept awake for playback while it is out of sight.
+         */
+        fun setOnScreen(visible: Boolean) {
+            onScreen = visible
+            running?.updateLocks()
+        }
     }
 }
 
@@ -300,6 +392,12 @@ object Playback {
     var artist: String? = null
         private set
     private var art: Bitmap? = null
+
+    /**
+     * The tab's picture or site icon last used when the page has no artwork of its own (2.6): kept,
+     * as Swift lets go of the pictures in memory when it goes out of sight.
+     */
+    private var lastArt: Bitmap? = null
 
     /** What the page can do (MediaSession.Feature flags), e.g. go to the next track. */
     var features = 0L
@@ -323,10 +421,17 @@ object Playback {
     fun displayTitle(t: Tab): String = if (t.incognito) "Playing in an incognito tab" else title?.takeIf { it.isNotBlank() } ?: t.displayTitle
 
     fun subtitle(t: Tab): String = if (t.incognito) "Swift" else
-        listOfNotNull(artist?.takeIf { it.isNotBlank() }, UrlUtils.host(t.url)?.removePrefix("www.")).joinToString(" • ")
+        listOfNotNull(artist?.takeIf { it.isNotBlank() }, UrlUtils.host(t.url)?.removePrefix("www.")).joinToString(" · ")
 
     /** The page's own artwork, or else the tab's picture or the site's icon (none in incognito). */
-    fun artwork(t: Tab): Bitmap? = if (t.incognito) null else art ?: com.swiftbrowser.tabs.Thumbnails.cached(t) ?: Favicons.cached(t.url)
+    fun artwork(t: Tab): Bitmap? {
+        if (t.incognito) return null
+        art?.let { return it }
+        val found = com.swiftbrowser.tabs.Thumbnails.cached(t) ?: Favicons.cached(t.url)
+        if (t !== tab) return found
+        if (found != null) lastArt = found
+        return lastArt
+    }
 
     fun onPlayingChanged(ctx: Context, t: Tab) {
         if (t.playing) {
@@ -334,6 +439,7 @@ object Playback {
                 title = null
                 artist = null
                 art = null
+                lastArt = null
                 features = 0
                 position = null
             }
@@ -363,7 +469,7 @@ object Playback {
     fun onPosition(ctx: Context, t: Tab, p: org.mozilla.geckoview.MediaSession.PositionState) {
         if (tab !== t) return
         position = p
-        PlaybackService.sync(ctx)
+        PlaybackService.positionChanged(ctx)
     }
 
     /** The next track if the page has one (a playlist), otherwise 10 seconds on. */
@@ -386,6 +492,7 @@ object Playback {
         title = null
         artist = null
         art = null
+        lastArt = null
         features = 0
         position = null
         PlaybackService.sync(ctx)

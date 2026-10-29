@@ -7,7 +7,6 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Base64
 import com.swiftbrowser.engine.DataSaver
-import java.util.concurrent.Executors
 
 /**
  * Small pictures for sheets (the picture a long press was on) and news rows: loaded in the background, at most
@@ -16,7 +15,7 @@ import java.util.concurrent.Executors
  */
 object PreviewLoader {
     private const val MAX_BYTES = 1_500_000
-    private val io = Executors.newFixedThreadPool(2)
+    private val io = com.swiftbrowser.core.Background.pool("previews", 2)
     private val main = Handler(Looper.getMainLooper())
 
     /** Recent pictures (about 4 MB), so scrolling back or reopening doesn't load them again. */
@@ -64,6 +63,10 @@ object PreviewLoader {
         if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
         var sample = 1
         while (bounds.outWidth / (sample * 2) >= size && bounds.outHeight / (sample * 2) >= size) sample *= 2
-        return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample })
+        return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply {
+            inSampleSize = sample
+            // Photos have no see-through parts: half the memory (2.6).
+            if (bounds.outMimeType == "image/jpeg") inPreferredConfig = android.graphics.Bitmap.Config.RGB_565
+        })
     }
 }

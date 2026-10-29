@@ -58,6 +58,7 @@ class HomeView @JvmOverloads constructor(
 
     /** The shortcuts shown, in order (without the Add button). */
     private var shownTiles: List<TopSites.Tile> = emptyList()
+    private var tilesBuiltWithDocs = false
 
     // Dragging a shortcut to another place.
     private var dragged: View? = null
@@ -298,10 +299,21 @@ class HomeView @JvmOverloads constructor(
         findViewById<View>(R.id.home_scroll).scrollTo(0, 0)
     }
 
-    private fun loadTiles() {
-        val gen = ++generation
+    /** What the shortcuts shown were worked out for, and when (2.6). */
+    private var tilesFor = ""
+    private var tilesAt = 0L
+
+    private fun loadTiles(force: Boolean = false) {
         val profileId = Profiles.currentId
         val hidden = SwiftApp.prefs.hiddenTiles
+        // Shown again within half a minute (back from a page, a new tab): the same shortcuts, without
+        // reading the history again (2.6).
+        val key = "$profileId|${hidden.sorted()}|${SwiftApp.prefs.homeDocuments}|${TopSites.historyChanged}"
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (!force && key == tilesFor && now - tilesAt < 30_000 && tilesBox.childCount > 0) return
+        tilesFor = key
+        tilesAt = now
+        val gen = ++generation
         TabManager.io.execute {
             val tiles = TopSites.load(SwiftApp.db, profileId, hidden)
             post { if (gen == generation) bindTiles(tiles) }
@@ -312,10 +324,13 @@ class HomeView @JvmOverloads constructor(
     fun refreshTiles() {
         if (incognito) return
         animateTiles = true
-        loadTiles()
+        loadTiles(force = true)
     }
 
     private fun bindTiles(tiles: List<TopSites.Tile>) {
+        // The same shortcuts as on screen: nothing to build again (2.6).
+        if (tiles == shownTiles && tilesBox.childCount > 0 && !animateTiles && tilesBuiltWithDocs == SwiftApp.prefs.homeDocuments) return
+        tilesBuiltWithDocs = SwiftApp.prefs.homeDocuments
         shownTiles = tiles
         tilesBox.removeAllViews()
         tileViews.clear()
@@ -341,9 +356,12 @@ class HomeView @JvmOverloads constructor(
                 v.findViewById<TextView>(R.id.tile_label).text = t.label
                 val letter = v.findViewById<TextView>(R.id.tile_letter)
                 letter.text = t.label.take(1).uppercase()
+                // Soft, like the other tiles (2.6): a light tint of the colour, the letter in it.
+                val strong = letterColor(t.key)
+                letter.setTextColor(strong)
                 letter.background = GradientDrawable().apply {
                     cornerRadius = dp(18).toFloat()
-                    setColor(letterColor(t.key))
+                    setColor(androidx.core.graphics.ColorUtils.blendARGB(color(R.color.card_bg), strong, 0.2f))
                 }
                 v.setOnClickListener { listener?.onTileClicked(t.url) }
                 // Held: it can be dragged to another place; let go without moving and its menu opens.

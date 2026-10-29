@@ -16,8 +16,8 @@ import org.mozilla.geckoview.WebRequest
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
-import java.util.concurrent.Executors
 
 /**
  * Site icons for tabs, shortcuts and lists. A page reports its icon (helper extension); the icon is
@@ -28,13 +28,32 @@ object Favicons {
     private const val MAX_BYTES = 512 * 1024
     private const val REFRESH_MS = 7L * 24 * 3600 * 1000
 
+    /** A site that had no icon to give is asked again after a day (2.6). */
+    private const val RETRY_MS = 24L * 3600 * 1000
+
+    /** Icons kept in memory when Swift goes out of sight: the last ones used (about what one screen shows). */
+    private const val KEEP_ON_TRIM = 24
+
     private lateinit var dir: File
-    private val exec = Executors.newSingleThreadExecutor()
+    private val exec = Background.single("favicons")
     private val main = Handler(Looper.getMainLooper())
     private val cache = LruCache<String, Bitmap>(96)
     private val absent = HashSet<String>()
     private val fetching = HashSet<String>()
     private val listeners = CopyOnWriteArrayList<(String) -> Unit>()
+    private val unsafe = Regex("[^a-z0-9.-]")
+
+    /**
+     * Sites with no icon to be had lately (2.6), with when and which addresses were tried (as hash
+     * codes): not asked again on every visit, only after [RETRY_MS] or when a page names another
+     * icon. Also on disk, as "<site>.none" beside the icons, so it holds after Swift restarts.
+     */
+    private class Miss(val time: Long, val tried: Set<Int>) {
+        fun covers(addresses: Set<Int>) = System.currentTimeMillis() - time < RETRY_MS && tried.containsAll(addresses)
+    }
+
+    /** Used on the main thread, and cleared from the one clearing browsing data. */
+    private val missed = ConcurrentHashMap<String, Miss>()
 
     fun init(ctx: Context) {
         dir = File(ctx.filesDir, "favicons").apply { mkdirs() }
@@ -43,7 +62,15 @@ object Favicons {
     /** Icons are shared by all pages of a site, with or without "www." / "m.". */
     fun key(url: String?): String? = UrlUtils.host(url)?.removePrefix("www.")?.removePrefix("m.")
 
-    private fun file(key: String) = File(dir, key.replace(Regex("[^a-z0-9.-]"), "_") + ".png")
+    private fun file(key: String) = File(dir, key.replace(unsafe, "_") + ".png")
+
+    private fun missFile(key: String) = File(dir, key.replace(unsafe, "_") + ".none")
+
+    private fun readMiss(f: File): Miss? = try {
+        if (f.exists()) Miss(f.lastModified(), f.readLines().mapNotNull { it.trim().toIntOrNull() }.toSet()) else null
+    } catch (_: Exception) {
+        null
+    }
 
     fun addListener(l: (String) -> Unit) {
         listeners.add(l)
@@ -55,6 +82,13 @@ object Favicons {
 
     /** The icon if it is in memory. */
     fun cached(url: String?): Bitmap? = key(url)?.let { cache.get(it) }
+
+    /**
+     * Swift went out of sight or Android is short of memory (2.6): icons leave memory (they load again
+     * from disk), but for the last few used, as the address bar and suggestions only show icons that
+     * are in memory.
+     */
+    fun trim() = cache.trimToSize(KEEP_ON_TRIM)
 
     /** Calls [onLoaded] on the main thread with the site's icon, or null if there is none yet. */
     fun load(url: String?, onLoaded: (Bitmap?) -> Unit) {
@@ -85,32 +119,54 @@ object Favicons {
     fun onPageIcon(pageUrl: String, iconUrl: String?) {
         if (!UrlUtils.isHttp(pageUrl)) return
         val key = key(pageUrl) ?: return
-        if (!fetching.add(key)) return
         val origin = pageUrl.substringBefore("://") + "://" + (UrlUtils.host(pageUrl) ?: return)
         val candidates = listOfNotNull(
             iconUrl?.takeIf { UrlUtils.isHttp(it) || it.startsWith("data:image/") },
             "$origin/favicon.ico",
         ).distinct()
+        val addresses = candidates.map { it.hashCode() }.toSet()
+        if (missed[key]?.covers(addresses) == true) return
+        if (!fetching.add(key)) return
         exec.execute {
             var bmp: Bitmap? = null
+            var miss: Miss? = null
             try {
                 val f = file(key)
                 if (f.exists() && System.currentTimeMillis() - f.lastModified() < REFRESH_MS) return@execute
+                // Swift restarted since the site had none: its mark on disk says so.
+                val marked = missFile(key)
+                readMiss(marked)?.takeIf { it.covers(addresses) }?.let {
+                    miss = it
+                    return@execute
+                }
                 for (c in candidates) {
                     bmp = fetch(c)
                     if (bmp != null) break
                 }
-                bmp?.let { b -> FileOutputStream(f).use { b.compress(Bitmap.CompressFormat.PNG, 100, it) } }
+                val b = bmp
+                if (b != null) {
+                    FileOutputStream(f).use { b.compress(Bitmap.CompressFormat.PNG, 100, it) }
+                    marked.delete()
+                } else {
+                    // The site answered, with nothing usable. A network error or time-out (an
+                    // exception) isn't remembered: the next visit tries again.
+                    miss = Miss(System.currentTimeMillis(), addresses)
+                    marked.writeText(addresses.joinToString("\n"))
+                }
             } catch (e: Exception) {
                 L.d("No icon for $key: ${e.message}")
             } finally {
                 val result = bmp
+                val none = miss
                 main.post {
                     fetching.remove(key)
                     if (result != null) {
+                        missed.remove(key)
                         cache.put(key, result)
                         absent.remove(key)
                         listeners.forEach { it(key) }
+                    } else if (none != null) {
+                        missed[key] = none
                     }
                 }
             }
@@ -167,10 +223,26 @@ object Favicons {
         return out
     }
 
-    /** Removes all stored icons (when clearing browsing data). */
+    /**
+     * Removes the icons of [hosts] and those fetched since [since] (clearing browsing data for a
+     * time, 2.6): together they would still tell which sites were visited. The marks of sites
+     * without an icon go the same way.
+     */
+    fun clearSince(since: Long, hosts: Set<String>) {
+        cache.evictAll()
+        absent.clear()
+        missed.clear()
+        val keys = hosts.map { it.removePrefix("www.").removePrefix("m.") }.toSet()
+        exec.execute {
+            dir.listFiles()?.forEach { f -> if (f.lastModified() >= since || f.name.substringBeforeLast('.') in keys) f.delete() }
+        }
+    }
+
+    /** Removes all stored icons, and the marks of sites without one (when clearing browsing data). */
     fun clear() {
         cache.evictAll()
         absent.clear()
+        missed.clear()
         exec.execute { dir.listFiles()?.forEach { it.delete() } }
     }
 }

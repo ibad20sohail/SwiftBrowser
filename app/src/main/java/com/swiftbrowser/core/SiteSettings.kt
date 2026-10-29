@@ -18,10 +18,11 @@ object SiteSettings {
     private const val LOCATION_BLOCK = "site_location_block"
     private const val NO_LITE = "site_no_lite"
     private const val READER = "site_reader"
+    private const val DARK = "site_dark"
 
     /** "site=scale" entries: the site's own text size (2.3). */
     private const val TEXT_SCALE = "site_text_scale"
-    private val KEYS = listOf(DESKTOP, AUTOPLAY, LOCATION_ALLOW, LOCATION_BLOCK, NO_LITE, READER)
+    private val KEYS = listOf(DESKTOP, AUTOPLAY, LOCATION_ALLOW, LOCATION_BLOCK, NO_LITE, READER, DARK)
 
     private val sp get() = SwiftApp.prefs.sp
 
@@ -65,6 +66,16 @@ object SiteSettings {
 
     fun setAutoReader(site: String, on: Boolean) = put(READER, site, on)
 
+    /** Swift turns the site dark (2.6): for sites without a dark mode of their own. */
+    fun darkPage(site: String?): Boolean = site != null && site in set(DARK)
+
+    fun setDarkPage(site: String, on: Boolean) {
+        put(DARK, site, on)
+        com.swiftbrowser.media.Helper.sendLook()
+    }
+
+    fun darkPages(): List<String> = set(DARK).sorted()
+
     /** The site's own text size (1 = as designed); null: the size for all sites. */
     fun textScale(site: String?): Float? {
         site ?: return null
@@ -90,11 +101,23 @@ object SiteSettings {
     fun hasSettings(site: String) = site in sites()
 
     fun reset(site: String) {
-        val hadNoLite = noLite(site)
+        val look = noLite(site) || darkPage(site)
         for (key in KEYS) put(key, site, false)
         setTextScale(site, null)
         AdBlock.setOverride(site, null)
-        if (hadNoLite) com.swiftbrowser.media.Helper.sendLook()
+        if (look) com.swiftbrowser.media.Helper.sendLook()
+    }
+
+    /** What [site] has set, to put back with Undo (2.6). */
+    class Saved(val site: String, val keys: List<String>, val scale: Float?, val level: com.swiftbrowser.adblock.AdLevel?)
+
+    fun save(site: String) = Saved(site, KEYS.filter { site in set(it) }, textScale(site), AdBlock.overrideFor(site))
+
+    fun restore(s: Saved) {
+        for (key in s.keys) put(key, s.site, true)
+        setTextScale(s.site, s.scale)
+        AdBlock.setOverride(s.site, s.level)
+        com.swiftbrowser.media.Helper.sendLook()
     }
 
     /** For a backup: everything above, by kind. */

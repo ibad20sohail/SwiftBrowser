@@ -2,17 +2,31 @@
 
 // Detects video streams/files that pages load and reports them to the app.
 //
-// Kept deliberately cheap: one listener, only for request types that can carry
-// video (no images, scripts, styles or fonts), and no request-header capture.
+// Kept deliberately cheap: only request types that can carry video (no images,
+// scripts, styles or fonts), script requests only when their address looks like a
+// video (see XHR_URLS), and no request-header capture.
 // The page or player frame that loaded the video is used as the Referer when
 // downloading, which is what most video hosts check.
 
 const NATIVE_APP = 'swift';
-const TYPES = ['media', 'xmlhttprequest', 'other'];
 const FILE_EXT = /\.(mp4|m4v|webm|mkv|mov|avi|flv|3gp)(?:[?#]|$)/i;
 const SEGMENT_EXT = /\.(ts|m4s|m4a|aac|mp3|vtt|webvtt|srt|key|jpg|jpeg|png|gif|webp)(?:[?#]|$)/i;
 const HLS_EXT = /\.m3u8(?:[?#]|$)/i;
 const MIN_FILE_SIZE = 1024 * 1024;
+
+// Script requests (XHR / fetch) are most of what pages load, and each one woke this script with
+// its headers only to be ignored. From 2.6 only those whose address names a stream playlist or a
+// video file come here: the only script requests ever reported (pieces of streams, YouTube's
+// videoplayback, APIs and analytics never were). Addresses are matched as written, so upper case
+// is listed too. Movie sites often hand out playlists from addresses like /playlist.php or
+// /hls/master: those words count as well.
+const XHR_URLS = [];
+for (const s of ['m3u8', 'M3U8', 'mpegurl', 'mpegURL', 'playlist', 'Playlist', 'manifest', 'master', 'hls', 'HLS']) {
+  XHR_URLS.push('*://*/*' + s + '*');
+}
+for (const ext of ['mp4', 'm4v', 'webm', 'mkv', 'mov', 'avi', 'flv', '3gp']) {
+  XHR_URLS.push('*://*/*.' + ext + '*', '*://*/*.' + ext.toUpperCase() + '*');
+}
 
 let port = null;
 const seen = new Map();   // tabId -> Set(url)
@@ -49,13 +63,33 @@ function onNative(msg) {
       lite: msg.lite === true,
       fixes: msg.fixes !== false,
       liteExcept: Array.isArray(msg.liteExcept) ? msg.liteExcept : [],
+      darkSites: sites(msg.darkSites),
       keepPlaying: msg.keepPlaying === true,
       readerFont: msg.readerFont === 'sans' ? 'sans' : 'serif',
       readerSpacing: Number.isInteger(msg.readerSpacing) ? msg.readerSpacing : 1,
       accentLight: /^#[0-9a-f]{6}$/i.test(msg.accentLight || '') ? msg.accentLight : '#1b66e4',
       accentDark: /^#[0-9a-f]{6}$/i.test(msg.accentDark || '') ? msg.accentDark : '#8ab4ff',
+      pageLight: colours(msg.pageLight),
+      pageDark: colours(msg.pageDark),
     });
+  } else if (msg.type === 'clear-articles') {
+    // Clear browsing data (2.6): the articles kept for reader view go too.
+    articles.clear();
+    browser.storage.local.get(null).then(all => {
+      const keys = Object.keys(all || {}).filter(k => k === 'articleIds' || k.startsWith('article:'));
+      return keys.length ? browser.storage.local.remove(keys) : null;
+    }).catch(() => { });
   }
+}
+
+/** The app's page colours for reader view (2.6): only well-formed colours are kept. */
+function colours(c) {
+  if (!c || typeof c !== 'object') { return null; }
+  const out = {};
+  for (const k of ['bg', 'surface', 'text', 'muted', 'line', 'accent', 'onAccent']) {
+    if (/^#[0-9a-f]{6}$/i.test(c[k] || '')) { out[k] = c[k]; }
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------- how sites look
@@ -64,7 +98,8 @@ function onNative(msg) {
 //  - lite: Lite mode, every page without animations, shadows or blur (but the sites the user
 //    left out of it);
 //  - youtube, theflixer: lighter versions of these two sites (no big blurs), unless the app
-//    shows sites as designed.
+//    shows sites as designed;
+//  - dark: the sites the user turned dark (Site settings, 2.6).
 // The last choice is kept, so pages loading before the app has said it again look the same.
 // It also holds keepPlaying, which content scripts read (see content.js).
 const STYLES = {
@@ -75,15 +110,22 @@ const STYLES = {
     includeGlobs: ['*://theflixer.*', '*://*.theflixer.*'],
     css: [{ file: '/perf/theflixer.css' }],
   },
+  dark: { css: [{ file: '/perf/dark.css' }] },
 };
+
+/** Site names as the app sends them (example.com), nothing else. */
+function sites(list) {
+  return Array.isArray(list) ? list.filter(s => typeof s === 'string' && /^[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(s)) : [];
+}
 const registrations = new Map();
 let lookQueue = Promise.resolve();
 let lookFromApp = false;
 
 const registered = new Map(); // name -> what it was registered with
 
-function setStyle(name, on, exclude) {
-  const key = on ? JSON.stringify(exclude || []) : null;
+// [only]: just these sites (and their subdomains); [exclude]: all sites but these.
+function setStyle(name, on, exclude, only) {
+  const key = on ? JSON.stringify([exclude || [], only || []]) : null;
   lookQueue = lookQueue.then(async () => {
     if ((registered.get(name) || null) === key) { return; }
     const old = registrations.get(name);
@@ -94,6 +136,10 @@ function setStyle(name, on, exclude) {
     }
     if (!on) { return; }
     const options = Object.assign({ runAt: 'document_start' }, STYLES[name]);
+    if (only) {
+      options.matches = [];
+      for (const site of only) { options.matches.push('*://' + site + '/*', '*://*.' + site + '/*'); }
+    }
     if (exclude && exclude.length > 0) {
       options.excludeMatches = [];
       for (const site of exclude) { options.excludeMatches.push('*://' + site + '/*', '*://*.' + site + '/*'); }
@@ -109,6 +155,8 @@ function setLook(look) {
   setStyle('lite', look.lite, look.liteExcept);
   setStyle('youtube', look.fixes);
   setStyle('theflixer', look.fixes);
+  const dark = look.darkSites || [];
+  setStyle('dark', dark.length > 0, null, dark);
   browser.storage.local.set({ look }).catch(() => { });
 }
 
@@ -119,6 +167,7 @@ browser.storage.local.get('look').then(r => {
       lite: look.lite === true,
       fixes: look.fixes !== false,
       liteExcept: Array.isArray(look.liteExcept) ? look.liteExcept : [],
+      darkSites: sites(look.darkSites),
       keepPlaying: look.keepPlaying === true,
       readerFont: look.readerFont === 'sans' ? 'sans' : 'serif',
       readerSpacing: Number.isInteger(look.readerSpacing) ? look.readerSpacing : 1,
@@ -148,7 +197,7 @@ function keepArticle(id, article) {
   }).catch(() => { });
 }
 
-async function startReader(tabId) {
+async function startReader(tabId, incognito) {
   try {
     await browser.tabs.executeScript(tabId, { file: '/reader/Readability.js' });
     const results = await browser.tabs.executeScript(tabId, { file: '/reader/parse.js' });
@@ -160,7 +209,8 @@ async function startReader(tabId) {
     const id = Date.now().toString(36);
     articles.set(id, article);
     while (articles.size > 6) { articles.delete(articles.keys().next().value); }
-    keepArticle(id, article);
+    // An incognito tab's article is never written down (2.6): it lives only in memory.
+    if (!incognito) { keepArticle(id, article); }
     post({ type: 'reader-ready', tabId, url: browser.runtime.getURL('reader/view.html') + '#' + id });
   } catch (e) {
     post({ type: 'reader-failed', tabId });
@@ -183,7 +233,7 @@ function headerValue(list, name) {
   return '';
 }
 
-browser.webRequest.onHeadersReceived.addListener(details => {
+function onMediaHeaders(details) {
   if (details.tabId < 0 || details.statusCode >= 400) { return; }
   const url = details.url;
   const ct = contentType(details.responseHeaders);
@@ -233,7 +283,13 @@ browser.webRequest.onHeadersReceived.addListener(details => {
     frameUrl: details.documentUrl || '',
     originUrl: details.originUrl || '',
   });
-}, { urls: ['<all_urls>'], types: TYPES }, ['responseHeaders']);
+}
+
+// Two functions: the same one can't be added twice with different filters.
+browser.webRequest.onHeadersReceived.addListener(
+  d => onMediaHeaders(d), { urls: ['<all_urls>'], types: ['media', 'other'] }, ['responseHeaders']);
+browser.webRequest.onHeadersReceived.addListener(
+  d => onMediaHeaders(d), { urls: XHR_URLS, types: ['xmlhttprequest'] }, ['responseHeaders']);
 
 // A new page in the tab starts a new list of videos.
 browser.webNavigation.onCommitted.addListener(details => {
@@ -248,7 +304,7 @@ browser.runtime.onMessage.addListener((msg, sender) => {
     return Promise.resolve({ tabId: sender.tab ? sender.tab.id : -1 });
   }
   if (msg && msg.type === 'reader-start' && sender.tab) {
-    startReader(sender.tab.id);
+    startReader(sender.tab.id, sender.tab.incognito === true);
     return undefined;
   }
   if (msg && msg.type === 'reader-get') {

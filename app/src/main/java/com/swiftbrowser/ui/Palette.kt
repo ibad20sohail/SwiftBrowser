@@ -81,6 +81,7 @@ object Palette {
         get() = SwiftApp.prefs.let { listOf(it.accent, it.accentCustom, it.lightBg, it.lightBgCustom, it.darkBg, it.darkBgCustom).joinToString() }
 
     /** The choices changed: worked out again on the next colour asked for. */
+    @Synchronized
     fun invalidate() {
         built = false
     }
@@ -107,6 +108,7 @@ object Palette {
         return ctx.createConfigurationContext(config)
     }
 
+    @Synchronized
     private fun ensure(ctx: Context) {
         if (built) return
         built = true

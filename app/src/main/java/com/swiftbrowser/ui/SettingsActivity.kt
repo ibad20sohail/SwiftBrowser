@@ -31,6 +31,7 @@ import com.swiftbrowser.adblock.AdBlock
 import com.swiftbrowser.adblock.AdLevel
 import com.swiftbrowser.core.Backup
 import com.swiftbrowser.core.Diagnostics
+import com.swiftbrowser.core.Passwords
 import com.swiftbrowser.core.SearchEngine
 import com.swiftbrowser.core.SiteSettings
 import com.swiftbrowser.engine.DataSaver
@@ -134,7 +135,13 @@ class SettingsActivity : AppCompatActivity() {
         }
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                if (topic != null) show(null) else finish()
+                // A search is cleared first (2.6).
+                val box = settingsSearch
+                when {
+                    topic != null -> show(null)
+                    box != null && box.text.isNotEmpty() -> box.setText("")
+                    else -> finish()
+                }
             }
         })
     }
@@ -149,6 +156,7 @@ class SettingsActivity : AppCompatActivity() {
         super.onResume()
         NightLight.attach(this)
         computeStorage()
+        countPasswords()
         refreshAll()
         // Data saver says whether the phone is on mobile data right now.
         DataSaver.networkListeners += networkChanged
@@ -190,7 +198,8 @@ class SettingsActivity : AppCompatActivity() {
             setOnClickListener { onBackPressedDispatcher.onBackPressed() }
         }, LinearLayout.LayoutParams(dp(48), dp(48)))
         titleView = TextView(this@SettingsActivity).apply {
-            textSize = 20f
+            // The same size as the other screens' titles (2.6).
+            textSize = 22f
             setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL))
             setTextColor(color(R.color.text_primary))
             setPadding(dp(8), 0, 0, 0)
@@ -276,6 +285,7 @@ class SettingsActivity : AppCompatActivity() {
             hideKeyboard()
             true
         }
+        settingsSearch = search
         col.addView(search, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46)).apply {
             topMargin = dp(4)
             bottomMargin = dp(12)
@@ -555,6 +565,21 @@ class SettingsActivity : AppCompatActivity() {
                 prefs.searchSuggestions = it
             }
         }
+        def(Topic.BROWSING, "Search", "Search shortcuts", "keyword shortcut bang yt youtube wikipedia custom search") {
+            action(R.drawable.ic_search, "Search shortcuts", {
+                "Type \"yt cats\" to search YouTube, \"w comet\" for Wikipedia"
+            }) { showSearchShortcuts() }
+        }
+        def(Topic.BROWSING, "Translate", "Offer to translate pages", "translate translation language foreign") {
+            switch(R.drawable.ic_translate, "Offer to translate pages", { "Pages in another language offer to be translated, on this phone" }, checked = { Translate.offer }) {
+                Translate.offer = it
+            }
+        }
+        def(Topic.BROWSING, "Translate", "Translation languages", "translate languages downloaded delete space") {
+            action(R.drawable.ic_translate, "Translation languages", { "Downloaded for translating; tap to delete some" }) {
+                Translate.manage(this@SettingsActivity) { refreshAll() }
+            }
+        }
         def(Topic.BROWSING, "Pages", "Pull down to refresh", "reload swipe") {
             switch(R.drawable.ic_refresh, "Pull down to refresh", { "At the top of a page, drag down to reload it" }, checked = { prefs.pullToRefresh }) {
                 prefs.pullToRefresh = it
@@ -593,8 +618,8 @@ class SettingsActivity : AppCompatActivity() {
         def(Topic.ADBLOCK, "More", "Sites with their own level", "per site exceptions allow") {
             action(R.drawable.ic_shield, "Sites with their own level", { siteLevelsText() }) { showSiteLevels() }
         }
-        def(Topic.ADBLOCK, "For experts", "uBlock Origin dashboard", "filters lists rules ublock", advanced = true) {
-            action(R.drawable.ic_ublock, "uBlock Origin dashboard", { "The ad blocker's own settings: block lists and your own rules" }) {
+        def(Topic.ADBLOCK, "For experts", "uBlock Origin settings", "filters lists rules ublock dashboard", advanced = true) {
+            action(R.drawable.ic_ublock, "uBlock Origin settings", { "The ad blocker's own settings: block lists and your own rules" }) {
                 AdBlock.extension?.metaData?.optionsPageUrl?.let { openInBrowser(it) }
             }
         }
@@ -638,6 +663,13 @@ class SettingsActivity : AppCompatActivity() {
                 prefs.dataSaver = it
                 DataSaver.apply()
             }
+        }
+        def(Topic.SPEED, "Data", "Data used", "mobile data usage used megabytes per day month traffic") {
+            action(R.drawable.ic_data_usage, "Data used", {
+                val today = com.swiftbrowser.engine.DataUsage.mobileToday()
+                val month = com.swiftbrowser.engine.DataUsage.mobileThisMonth()
+                "On mobile data: ${UrlUtils.formatBytes(today)} today · ${UrlUtils.formatBytes(month)} this month"
+            }) { showDataUsage() }
         }
         def(Topic.SPEED, "Data", "Battery saver", "battery low power charge saver percent level") {
             action(R.drawable.ic_battery, "Battery saver", {
@@ -740,8 +772,11 @@ class SettingsActivity : AppCompatActivity() {
         }
 
         // Privacy & storage
-        def(Topic.PRIVACY, null, "Clear browsing data", "history cookies cache delete") {
-            action(R.drawable.ic_delete, "Clear browsing data", { "History, cookies and saved files of ${Profiles.current().name}" }) { clearData() }
+        def(Topic.PRIVACY, null, "Clear browsing data", "history cookies cache delete last hour day week time") {
+            action(R.drawable.ic_delete, "Clear browsing data", { "The last hour, day, week or all of it: history, cookies, saved files and more" }) { clearData() }
+        }
+        def(Topic.PRIVACY, null, "When you quit", "quit exit close clear on exit") {
+            action(R.drawable.ic_quit, "When you quit", { ClearData.quitSummary() }) { ClearData.chooseForQuit(this@SettingsActivity) { refreshAll() } }
         }
         def(Topic.PRIVACY, null, "Use secure connections", "secure https only encrypted insecure http") {
             switch(
@@ -770,6 +805,28 @@ class SettingsActivity : AppCompatActivity() {
                 prefs.rejectCookieBanners = it
                 Engine.applyPrivacyPrefs()
             }
+        }
+        def(Topic.PRIVACY, "Passwords", "Offer to save passwords", "password login sign in autofill fill in remember") {
+            switch(
+                R.drawable.ic_password, "Offer to save passwords",
+                { if (prefs.offerPasswords) "Swift asks after you sign in, and fills them in next time" else "Off: passwords aren't saved or filled in" },
+                details = "Passwords are kept on this phone only, locked with a key that never leaves Android's secure " +
+                    "storage. They aren't in backups, and incognito tabs never save one.",
+                checked = { prefs.offerPasswords },
+            ) {
+                prefs.offerPasswords = it
+                Engine.runtime.settings.setLoginAutofillEnabled(it)
+            }
+        }
+        def(Topic.PRIVACY, "Passwords", "Saved passwords", "password login sign in see show copy delete") {
+            action(R.drawable.ic_key, "Saved passwords", { passwordsText }) {
+                PasswordsUi.list(this@SettingsActivity, ::checkScreenLock) { countPasswords() }
+            }
+        }
+        def(Topic.PRIVACY, "Passwords", "Never saved for", "password never sites") {
+            action(R.drawable.ic_block, "Never saved for", {
+                Passwords.neverSites().size.let { if (it == 0) "No sites" else if (it == 1) "1 site" else "$it sites" }
+            }) { PasswordsUi.never(this@SettingsActivity) { refreshAll() } }
         }
         def(Topic.PRIVACY, "Sites", "Site settings", "desktop location sound permissions per site") {
             action(R.drawable.ic_tune, "Site settings", { siteSettingsText() }) { chooseSite() }
@@ -1174,15 +1231,79 @@ class SettingsActivity : AppCompatActivity() {
 
     private fun chooseSearchEngine() {
         val engines = SearchEngine.entries
+        val labels = engines.map {
+            if (it != SearchEngine.CUSTOM) it.label else if (prefs.customSearchUrl.isBlank()) "Your own…" else "${it.label} (your own)"
+        }
         MaterialAlertDialogBuilder(this)
             .setTitle("Search engine")
-            .setSingleChoiceItems(engines.map { it.label }.toTypedArray(), engines.indexOf(SearchEngine.current)) { d, which ->
-                prefs.searchEngine = engines[which].key
+            .setSingleChoiceItems(labels.toTypedArray(), engines.indexOf(SearchEngine.current)) { d, which ->
                 d.dismiss()
-                refreshAll()
+                if (engines[which] == SearchEngine.CUSTOM) {
+                    askCustomEngine()
+                } else {
+                    prefs.searchEngine = engines[which].key
+                    refreshAll()
+                }
             }
             .setNegativeButton(android.R.string.cancel, null)
             .showImmersive()
+    }
+
+    private val searchAddressHelp = "Search the site for any word, copy the address of its results page, and put %s where " +
+        "the word was. For example: https://search.example.com/?q=%s"
+
+    /** Your own search engine (2.6). */
+    private fun askCustomEngine() {
+        Sheets.askText(this, "Your search engine", "Address with %s for the words", prefs.customSearchUrl.ifBlank { "https://" }) { text ->
+            val url = text.trim()
+            if (!UrlUtils.isHttp(url) || "%s" !in url) {
+                Dialogs.info(this, "Your search engine", searchAddressHelp)
+                return@askText
+            }
+            prefs.customSearchUrl = url
+            prefs.customSearchName = UrlUtils.siteName(url)
+            prefs.searchEngine = SearchEngine.CUSTOM.key
+            refreshAll()
+        }
+    }
+
+    /** Settings → Search shortcuts (2.6). */
+    private fun showSearchShortcuts() {
+        val list = com.swiftbrowser.core.SearchShortcuts.all()
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Search shortcuts")
+            .setItems(list.map { "${it.keyword}  ·  ${it.name}" }.toTypedArray()) { _, which ->
+                val s = list[which]
+                Dialogs.confirm(this, "Remove \"${s.keyword}\"?", "\"${s.keyword} something\" searches ${s.name} now.", "Remove", danger = true) {
+                    com.swiftbrowser.core.SearchShortcuts.remove(s.keyword)
+                    refreshAll()
+                }
+            }
+            .setPositiveButton("Add") { _, _ -> addSearchShortcut() }
+            .setNeutralButton("Reset") { _, _ ->
+                com.swiftbrowser.core.SearchShortcuts.reset()
+                refreshAll()
+                snack("Search shortcuts reset")
+            }
+            .setNegativeButton("Close", null)
+            .showImmersive()
+    }
+
+    private fun addSearchShortcut() {
+        Sheets.askText(this, "New search shortcut", "A short word, like yt", "", words = false) { word ->
+            val keyword = word.trim().lowercase()
+            if (keyword.isEmpty() || ' ' in keyword) return@askText
+            Sheets.askText(this, "What \"$keyword\" searches", "Address with %s for the words", "https://") { text ->
+                val url = text.trim()
+                if (!UrlUtils.isHttp(url) || "%s" !in url) {
+                    Dialogs.info(this, "Search shortcuts", searchAddressHelp)
+                    return@askText
+                }
+                com.swiftbrowser.core.SearchShortcuts.add(keyword, UrlUtils.siteName(url), url)
+                refreshAll()
+                snack("\"$keyword something\" now searches ${UrlUtils.siteName(url)}")
+            }
+        }
     }
 
     /**
@@ -1205,9 +1326,11 @@ class SettingsActivity : AppCompatActivity() {
                 prefs.sp.edit().putBoolean("storage_asked", true).apply()
                 androidx.core.app.ActivityCompat.requestPermissions(this, arrayOf(android.Manifest.permission.WRITE_EXTERNAL_STORAGE), REQUEST_STORAGE)
             } else {
-                // Android won't ask again ("Don't ask again" was chosen): its settings page for Swift.
-                snack("Tap Permissions, then turn on Storage")
-                startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.fromParts("package", packageName, null)))
+                // Android won't ask again ("Don't ask again" was chosen): its settings page for Swift,
+                // with what to do there said first (2.6: a message hid behind that page).
+                Dialogs.confirm(this, "Allow storage in Android's settings", "Android's page for Swift opens: tap Permissions, then turn on Storage.", "Open") {
+                    startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.fromParts("package", packageName, null)))
+                }
             }
         }
     }
@@ -1368,7 +1491,11 @@ class SettingsActivity : AppCompatActivity() {
             setPadding(dp(16), dp(8), dp(16), 0)
             addView(com.google.android.material.button.MaterialButton(this@SettingsActivity, null, androidx.appcompat.R.attr.borderlessButtonStyle).apply {
                 text = "Reset"
-                setOnClickListener { editor.reset() }
+                setOnClickListener {
+                    Dialogs.confirm(this@SettingsActivity, "Reset the address bar buttons?", "They go back to Swift's own choice and order.", "Reset") {
+                        editor.reset()
+                    }
+                }
             })
             addView(com.google.android.material.button.MaterialButton(this@SettingsActivity).apply {
                 text = "Done"
@@ -1839,7 +1966,7 @@ class SettingsActivity : AppCompatActivity() {
 
     private fun siteSettingsText(): String {
         val n = SiteSettings.sites().size
-        return if (n == 0) "None yet. On a site, open ≡ and tap the settings button next to its name." else "$n ${if (n == 1) "site" else "sites"}"
+        return if (n == 0) "None yet. On a site, open ≡ and tap the sliders button next to the site's name." else "$n ${if (n == 1) "site" else "sites"}"
     }
 
     private fun chooseSite() {
@@ -1906,8 +2033,8 @@ class SettingsActivity : AppCompatActivity() {
             val d = MaterialAlertDialogBuilder(this@SettingsActivity)
                 .setTitle("Restore this backup?")
                 .setMessage(
-                    "Made on ${s.created}: ${s.profiles} ${if (s.profiles == 1) "profile" else "profiles"}, ${s.bookmarks} bookmarks, " +
-                        "${s.tabs} tabs and ${s.history} history entries.\n\nThey are added to what is on this phone, its settings " +
+                    "Made on ${s.created}: ${s.profiles} ${if (s.profiles == 1) "profile" else "profiles"}, ${s.bookmarks} ${if (s.bookmarks == 1) "bookmark" else "bookmarks"}, " +
+                        "${s.tabs} ${if (s.tabs == 1) "tab" else "tabs"} and ${s.history} ${if (s.history == 1) "history entry" else "history entries"}.\n\nThey are added to what is on this phone, its settings " +
                         "replace these, and Swift restarts.",
                 )
                 .setPositiveButton("Restore") { _, _ ->
@@ -2011,35 +2138,105 @@ class SettingsActivity : AppCompatActivity() {
             .showImmersive()
     }
 
-    private fun clearData() {
-        val profile = Profiles.current()
-        val labels = arrayOf(
-            "History and recently closed tabs", "Cookies and what sites stored (signs you out)", "Saved pictures and files (cache)",
-            "Where videos and articles were left off",
-        )
-        val checked = booleanArrayOf(true, false, true, false)
+    /** Data used per day (2.6), on mobile data and on Wi-Fi. */
+    private fun showDataUsage() {
+        val days = com.swiftbrowser.engine.DataUsage.recent().take(30)
+        if (days.isEmpty()) {
+            Dialogs.info(this, "Data used", "Nothing counted yet. Swift counts what it uses from now on.")
+            return
+        }
+        val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
+        val parse = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
+        val show = java.text.SimpleDateFormat("EEE d MMM", java.util.Locale.getDefault())
+        val text = days.joinToString("\n") { d ->
+            val name = if (d.day == today) "Today" else try { show.format(parse.parse(d.day)!!) } catch (e: Exception) { d.day }
+            "$name: ${UrlUtils.formatBytes(d.mobile)} mobile · ${UrlUtils.formatBytes(d.other)} Wi-Fi"
+        }
         val d = MaterialAlertDialogBuilder(this)
-            .setTitle("Clear browsing data")
-            .setMultiChoiceItems(labels, checked) { _, which, isChecked -> checked[which] = isChecked }
-            .setPositiveButton("Clear") { _, _ ->
-                if (checked[1]) Engine.runtime.storageController.clearDataForSessionContext(Profiles.contextId(profile.id))
-                if (checked[2]) Engine.runtime.storageController.clearData(StorageController.ClearFlags.ALL_CACHES)
-                lifecycleScope.launch {
-                    withContext(Dispatchers.IO) {
-                        if (checked[0]) {
-                            SwiftApp.db.clearHistory(profile.id)
-                            SwiftApp.db.clearClosedTabs(profile.id)
-                        }
-                        if (checked[3]) SwiftApp.db.clearVideoPositions()
-                    }
-                    snack("Cleared")
-                    delay(1500)
-                    computeStorage()
-                }
+            .setTitle("Data used")
+            .setMessage(text + "\n\nCounted by Swift while it runs, so your carrier's count may differ a little.")
+            .setPositiveButton("Close", null)
+            .setNeutralButton("Reset") { _, _ ->
+                com.swiftbrowser.engine.DataUsage.reset()
+                refreshAll()
             }
-            .setNegativeButton(android.R.string.cancel, null)
             .showImmersive()
-        Dialogs.markDanger(d)
+        d.getButton(android.content.DialogInterface.BUTTON_NEUTRAL)?.setTextColor(Ui.danger(this))
+    }
+
+    /** By time (2.6): the last hour, 24 hours, 7 days, 4 weeks or all time, and what to clear. */
+    private fun clearData() {
+        ClearData.show(this) {
+            countPasswords()
+            remeasureSoon()
+        }
+    }
+
+    private var passwordsText = "Sign-ins Swift fills in"
+
+    private fun countPasswords() {
+        lifecycleScope.launch {
+            val n = withContext(Dispatchers.IO) { try { SwiftApp.db.logins(Profiles.currentId).size } catch (e: Exception) { 0 } }
+            val text = when (n) {
+                0 -> "None yet"
+                1 -> "1 sign-in"
+                else -> "$n sign-ins"
+            }
+            if (text != passwordsText) {
+                passwordsText = text
+                refreshAll()
+            }
+        }
+    }
+
+    private var settingsSearch: EditText? = null
+
+    /** The screen lock check before saved passwords show (2.6); one check lasts a minute. */
+    private var afterUnlock: (() -> Unit)? = null
+    private var unlockedAt = 0L
+    private val unlock = registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()) { r ->
+        val then = afterUnlock
+        afterUnlock = null
+        if (r.resultCode == RESULT_OK) {
+            unlockedAt = android.os.SystemClock.elapsedRealtime()
+            then?.invoke()
+        }
+    }
+
+    private fun checkScreenLock(then: () -> Unit) {
+        if (unlockedAt > 0 && android.os.SystemClock.elapsedRealtime() - unlockedAt < 60_000) {
+            then()
+            return
+        }
+        val km = getSystemService(android.app.KeyguardManager::class.java)
+        val intent = if (km?.isKeyguardSecure == true) {
+            @Suppress("DEPRECATION")
+            km.createConfirmDeviceCredentialIntent("Saved passwords", "Enter your screen lock to see them")
+        } else {
+            null
+        }
+        if (intent == null) {
+            MaterialAlertDialogBuilder(this)
+                .setTitle("No screen lock")
+                .setMessage("Anyone holding this phone could see your passwords. A screen lock (PIN, pattern or password) keeps them for you only.")
+                .setPositiveButton("Show anyway") { _, _ -> then() }
+                .setNegativeButton("Set a screen lock") { _, _ ->
+                    try {
+                        startActivity(android.content.Intent(android.provider.Settings.ACTION_SECURITY_SETTINGS))
+                    } catch (e: Exception) {
+                        snack("Open Android's Settings → Security")
+                    }
+                }
+                .showImmersive()
+            return
+        }
+        afterUnlock = then
+        try {
+            unlock.launch(intent)
+        } catch (e: Exception) {
+            afterUnlock = null
+            then()
+        }
     }
 
     private fun clearCache() {
@@ -2188,7 +2385,8 @@ class SettingsActivity : AppCompatActivity() {
             "Clear", danger = true,
         ) {
             lifecycleScope.launch {
-                val n = withContext(Dispatchers.IO) { com.swiftbrowser.core.Storage.clearUnused(this@SettingsActivity, 30) }
+                val open = TabManager.tabs.mapNotNull { UrlUtils.site(it.url) }.toSet()
+                val n = withContext(Dispatchers.IO) { com.swiftbrowser.core.Storage.clearUnused(this@SettingsActivity, 30, open) }
                 snack(if (n == 0) "No unused sites found" else "Cleared $n ${if (n == 1) "site" else "sites"}")
                 remeasureSoon()
             }

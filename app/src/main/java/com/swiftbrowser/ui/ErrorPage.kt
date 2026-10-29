@@ -53,13 +53,17 @@ object ErrorPage {
             ""
         }
         val (light, dark) = accents()
+        // The page, text and chips in the app's own colours (2.6): it sits under Swift's toolbar.
+        val pl = com.swiftbrowser.media.Helper.pageColors(false)
+        val pd = com.swiftbrowser.media.Helper.pageColors(true)
+        fun c(o: org.json.JSONObject, k: String, d: String) = o.optString(k, d).ifBlank { d }
         val html = """
             <!DOCTYPE html><html><head><meta charset="utf-8">
             <meta name="viewport" content="width=device-width,initial-scale=1">
             <title>${TextUtils.htmlEncode(title)}</title>
             <style>
-            :root{color-scheme:light dark;--a:${light.first};--on:${light.second};--c:${light.third};--bg:#fff;--fg:#1a1c21;--sub:#5c6370;--chip:#eff2f7}
-            @media (prefers-color-scheme:dark){:root{--a:${dark.first};--on:${dark.second};--c:${dark.third};--bg:#15171c;--fg:#e6e8ec;--sub:#a3a9b4;--chip:#2a2d35}}
+            :root{color-scheme:light dark;--a:${light.first};--on:${light.second};--c:${light.third};--bg:${c(pl, "bg", "#fff")};--fg:${c(pl, "text", "#1a1c21")};--sub:${c(pl, "muted", "#5c6370")};--chip:${c(pl, "surface", "#eff2f7")}}
+            @media (prefers-color-scheme:dark){:root{--a:${dark.first};--on:${dark.second};--c:${dark.third};--bg:${c(pd, "bg", "#15171c")};--fg:${c(pd, "text", "#e6e8ec")};--sub:${c(pd, "muted", "#a3a9b4")};--chip:${c(pd, "surface", "#2a2d35")}}}
             html,body{background:var(--bg);color:var(--fg)}
             body{font-family:Roboto,sans-serif;margin:0;padding:12vh 28px 40px;max-width:520px;margin:0 auto;box-sizing:border-box}
             .icon{width:72px;height:72px;border-radius:50%;background:var(--c);display:flex;align-items:center;justify-content:center;margin-bottom:24px}
@@ -103,7 +107,14 @@ object ErrorPage {
         return of(false) to of(true)
     }
 
-    private fun describe(e: WebRequestError): Pair<String, String> = when (e.code) {
+    private fun describe(e: WebRequestError): Pair<String, String> = when {
+        // Offline, the engine can't look up any site's name: say what really happened (2.6).
+        e.code == WebRequestError.ERROR_UNKNOWN_HOST && !com.swiftbrowser.engine.DataSaver.online ->
+            "You're offline" to "Swift isn't connected to the internet. Check your Wi-Fi or mobile data."
+        else -> describeCode(e)
+    }
+
+    private fun describeCode(e: WebRequestError): Pair<String, String> = when (e.code) {
         WebRequestError.ERROR_UNKNOWN_HOST ->
             "Can't find this site" to "Check the address for typing mistakes, or check that you're connected to the internet."
         WebRequestError.ERROR_OFFLINE, WebRequestError.ERROR_NET_RESET, WebRequestError.ERROR_NET_INTERRUPT ->
@@ -113,7 +124,7 @@ object ErrorPage {
         WebRequestError.ERROR_CONNECTION_REFUSED ->
             "This site won't connect" to "It may be down right now. Try again later."
         WebRequestError.ERROR_REDIRECT_LOOP ->
-            "This page keeps sending you around in a loop" to "Clearing this site's cookies may fix it: tap the icon next to the address, then Clear this site's data."
+            "This page keeps sending you around in a loop" to "Clearing this site's cookies may fix it: tap the icon next to the address, then Clear cookies and data of this site."
         WebRequestError.ERROR_SECURITY_BAD_CERT, WebRequestError.ERROR_SECURITY_SSL, WebRequestError.ERROR_BAD_HSTS_CERT ->
             "This connection isn't private" to "The site's security certificate isn't valid, so someone could see or change what you send. It's safest to go back."
         WebRequestError.ERROR_SAFEBROWSING_MALWARE_URI, WebRequestError.ERROR_SAFEBROWSING_HARMFUL_URI,
@@ -126,7 +137,7 @@ object ErrorPage {
         WebRequestError.ERROR_UNKNOWN_PROTOCOL ->
             "Can't open this kind of link" to "Neither Swift nor another app on this phone can open it."
         WebRequestError.ERROR_HTTPS_ONLY ->
-            "This site has no secure version" to "Its pages can only be sent unprotected. To open it anyway, turn off \"Use secure connections\" in Settings → Privacy & security."
+            "This site has no secure version" to "Its pages can only be sent unprotected. To open it anyway, turn off \"Use secure connections\" in Settings → Privacy & backup."
         WebRequestError.ERROR_MALFORMED_URI ->
             "That address doesn't look right" to "Check it for typing mistakes."
         else -> "Couldn't load this page" to "Something went wrong (error ${e.code}). Try again."

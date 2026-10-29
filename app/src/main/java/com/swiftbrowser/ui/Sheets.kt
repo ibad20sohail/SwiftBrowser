@@ -156,6 +156,17 @@ object Sheets {
             }
         }
 
+    /** [chips] in one row that scrolls sideways when it doesn't fit (2.6: they wrapped onto two lines). */
+    fun chipRow(ctx: Context, labels: List<String>, selected: Int, onSelect: (Int) -> Unit): View =
+        android.widget.HorizontalScrollView(ctx).apply {
+            isHorizontalScrollBarEnabled = false
+            overScrollMode = View.OVER_SCROLL_NEVER
+            val group = chips(ctx, labels, selected, onSelect).apply { isSingleLine = true }
+            addView(group)
+            // The chosen one in sight from the start.
+            post { group.getChildAt(selected)?.let { scrollTo((it.left - ctx.dp(20)).coerceAtLeast(0), 0) } }
+        }
+
     /** Text sizes a site can have of its own (as in Settings → Text size). */
     private val TEXT_SCALES = floatArrayOf(0.8f, 0.9f, 1f, 1.1f, 1.25f, 1.5f)
 
@@ -323,6 +334,10 @@ object Sheets {
     /** The dark mode switch (menu, Settings tile): light or dark from now on, whatever the mode was. */
     fun setDarkMode(on: Boolean) {
         if (SwiftApp.prefs.darkMode == on && SwiftApp.prefs.themeMode != Looks.NIGHT) return
+        // Switching by hand ends "Dark at night" (2.6): said, not done silently.
+        if (SwiftApp.prefs.themeMode == Looks.NIGHT) {
+            SwiftApp.messageAfterThemeChange = "Dark at night is off now. Turn it on again in Settings → Look & screen → Theme."
+        }
         Looks.setMode(if (on) Looks.DARK else Looks.LIGHT)
     }
 
@@ -338,7 +353,7 @@ object Sheets {
         val week = com.swiftbrowser.adblock.AdStats.week()
         val sub = when {
             AdBlock.extension == null || !AdBlock.ready -> "uBlock Origin is getting ready…"
-            blocked != null -> "$blocked blocked on this page" + if (week > 0) " • ${java.text.NumberFormat.getIntegerInstance().format(week)} this week" else ""
+            blocked != null -> "$blocked blocked on this page" + if (week > 0) " · ${java.text.NumberFormat.getIntegerInstance().format(week)} this week" else ""
             week > 0 -> "${java.text.NumberFormat.getIntegerInstance().format(week)} ads and trackers blocked this week"
             else -> "uBlock Origin ${AdBlock.uboVersion}"
         }
@@ -347,7 +362,7 @@ object Sheets {
         val levels = AdLevel.entries
         col.addView(label(a, "All sites"))
         val globalDesc = note(a, AdBlock.global.summary)
-        col.addView(chips(a, levels.map { it.label }, levels.indexOf(AdBlock.global)) { i ->
+        col.addView(chipRow(a, levels.map { it.label }, levels.indexOf(AdBlock.global)) { i ->
             AdBlock.setGlobal(levels[i])
             globalDesc.text = levels[i].summary
         })
@@ -358,13 +373,13 @@ object Sheets {
             val override = AdBlock.overrideFor(site)
             val options = listOf("Same as all sites") + levels.map { it.label }
             val siteDesc = note(a, override?.summary ?: "Uses the level chosen for all sites.")
-            col.addView(chips(a, options, if (override == null) 0 else levels.indexOf(override) + 1) { i ->
+            col.addView(chipRow(a, options, if (override == null) 0 else levels.indexOf(override) + 1) { i ->
                 val level = if (i == 0) null else levels[i - 1]
                 AdBlock.setOverride(site, level)
                 siteDesc.text = level?.summary ?: "Uses the level chosen for all sites."
             })
             col.addView(siteDesc)
-            col.addView(note(a, "Changes apply when the page reloads. Filter lists always follow the all-sites level."))
+            col.addView(note(a, "Changes apply when the page reloads."))
         }
 
         val buttons = LinearLayout(a).apply {
@@ -382,9 +397,9 @@ object Sheets {
             })
         }
         if (!tab.isBlank) button("Reload page") { TabManager.reload(tab) }
-        tab.uboAction?.let { action -> button("uBlock Origin panel (element zapper, logger)") { action.click() } }
+        tab.uboAction?.let { action -> button("uBlock Origin's own panel") { action.click() } }
         AdBlock.extension?.metaData?.optionsPageUrl?.let { url -> button("uBlock Origin settings") { TabManager.newTab(url, incognito = false) } }
-        button("Update filter lists now") {
+        button("Update the block lists now") {
             AdBlock.updateFilterLists()
             a.snack("Updating the block lists…")
         }
@@ -407,9 +422,10 @@ object Sheets {
             bind = { h, p ->
                 val current = p.id == Profiles.currentId
                 val count = TabManager.profileTabs(p.id).size
-                h.set(R.drawable.ic_person, p.name, (if (current) "Current • " else "") + "$count ${if (count == 1) "tab" else "tabs"}")
+                h.set(R.drawable.ic_person, p.name, (if (current) "Current · " else "") + "$count ${if (count == 1) "tab" else "tabs"}")
                 h.icon.imageTintList = ColorStateList.valueOf(p.color)
-                if (current) h.itemView.setBackgroundResource(R.drawable.bg_current_tab)
+                // In the accent chosen (2.6), your own included.
+                if (current) h.itemView.background = Ui.shape(a, Ui.accentContainer(a), 14)
                 h.setAction(R.drawable.ic_edit, "Manage") {
                     dialog.dismiss()
                     manageProfile(a, p)
@@ -471,12 +487,21 @@ object Sheets {
         actions(a, p.name, "Profile", list)
     }
 
-    fun askText(ctx: Context, title: String, hint: String, initial: String, allowEmpty: Boolean = false, onOk: (String) -> Unit) {
+    /**
+     * Asks for one line of text. Addresses (the hint says so, or the text is one) are typed without
+     * capitals or corrections (2.6: "dawn.com" stayed "Dawn.com"); [words] false: a short word, as typed.
+     */
+    fun askText(ctx: Context, title: String, hint: String, initial: String, allowEmpty: Boolean = false, words: Boolean = true, onOk: (String) -> Unit) {
+        val address = hint.contains("address", ignoreCase = true) || initial.startsWith("http") || "%s" in hint
         val input = EditText(ctx).apply {
             setText(initial)
             this.hint = hint
             setSingleLine()
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_WORDS
+            inputType = when {
+                address -> InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+                !words -> InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+                else -> InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+            }
             selectAll()
         }
         val box = LinearLayout(ctx).apply {
@@ -514,11 +539,11 @@ object Sheets {
                 val name = m.url.substringBefore('?').substringAfterLast('/').ifBlank { UrlUtils.host(m.url) ?: "video" }
                 val host = UrlUtils.host(m.frameUrl.ifBlank { m.url }) ?: ""
                 val info = if (m.kind == MediaItem.Kind.HLS) {
-                    "Stream • " + (streamInfo[m.url]?.summary ?: "checking…")
+                    "Stream · " + (streamInfo[m.url]?.summary ?: "checking…")
                 } else {
-                    "File" + if (m.size > 0) " • ${UrlUtils.formatBytes(m.size)}" else ""
+                    "File" + if (m.size > 0) " · ${UrlUtils.formatBytes(m.size)}" else ""
                 }
-                h.set(R.drawable.ic_movie, if (m.kind == MediaItem.Kind.HLS) "Video stream ($name)" else name, "$info • $host")
+                h.set(R.drawable.ic_movie, if (m.kind == MediaItem.Kind.HLS) "Video stream ($name)" else name, "$info · $host")
                 h.setAction(R.drawable.ic_download, "Download") {
                     dialog.dismiss()
                     downloadMedia(a, tab, m)
@@ -599,7 +624,7 @@ object Sheets {
                 val base = tab.title.ifBlank { UrlUtils.host(tab.url) ?: "video" }
                 val ext = UrlUtils.fileName(m.url, null, m.mime).substringAfterLast('.', "mp4").take(5)
                 val name = UrlUtils.sanitizeFileName("$base.$ext")
-                Downloads.startUrl(tab.profileId, m.url, name, m.mime.ifBlank { null }, headers, tab.url)
+                Downloads.startUrl(tab.profileId, m.url, name, m.mime.ifBlank { null }, headers, tab.url, tab.incognito)
                 a.snack("Downloading $name", "View") { a.openDownloads() }
             }
         }
@@ -825,7 +850,7 @@ object Sheets {
                 }
             }
             dots += v
-            addView(v, LinearLayout.LayoutParams(a.dp(30), a.dp(30)).apply { marginEnd = a.dp(8) })
+            addView(v, LinearLayout.LayoutParams(a.dp(34), a.dp(34)).apply { marginEnd = a.dp(6) })
         }
     }
 
@@ -841,7 +866,7 @@ object Sheets {
             }
             val col = column(a)
             lateinit var dialog: BottomSheetDialog
-            col.addView(header(a, "Recently closed", "Tap one to open it again, with its back history."))
+            col.addView(header(a, "Recently closed tabs", "Tap one to open it again, with its back history."))
             val list = RecyclerView(a).apply {
                 layoutManager = LinearLayoutManager(a)
                 isNestedScrollingEnabled = false
@@ -871,8 +896,10 @@ object Sheets {
             col.addView(list)
             col.addView(row(a, R.drawable.ic_delete, "Clear this list") {
                 dialog.dismiss()
-                TabManager.clearRecentlyClosed(pid)
-                a.snack("Recently closed tabs cleared")
+                Dialogs.confirm(a, "Clear recently closed tabs?", "They can't be opened again from here.", "Clear", danger = true) {
+                    TabManager.clearRecentlyClosed(pid)
+                    a.snack("Recently closed tabs cleared")
+                }
             })
             dialog = sheet(a, col)
             dialog.showImmersive()
@@ -947,6 +974,12 @@ object Sheets {
             SiteSettings.setAutoReader(site, on)
             onChanged?.invoke()
         })
+        col.addView(switchRow(ctx, R.drawable.ic_dark, "Dark page", "Swift turns the site dark, for sites without a dark mode. Pictures stay as they are.", SiteSettings.darkPage(site)) { on ->
+            SiteSettings.setDarkPage(site, on)
+            // A moment for the page style to be in place.
+            if (onThisSite && tab != null) android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ TabManager.reload(tab) }, 400)
+            onChanged?.invoke()
+        })
         col.addView(label(ctx, "Text size", top = 12))
         col.addView(textSizeChips(ctx, site, tab, onChanged))
         col.addView(label(ctx, "Location", top = 16))
@@ -959,7 +992,7 @@ object Sheets {
         val levels = AdLevel.entries
         val override = AdBlock.overrideFor(site)
         val levelNote = note(ctx, override?.summary ?: "Uses the level chosen for all sites (${AdBlock.global.label}).")
-        col.addView(chips(ctx, listOf("Same as all sites") + levels.map { it.label }, if (override == null) 0 else levels.indexOf(override) + 1) { i ->
+        col.addView(chipRow(ctx, listOf("Same as all sites") + levels.map { it.label }, if (override == null) 0 else levels.indexOf(override) + 1) { i ->
             val level = if (i == 0) null else levels[i - 1]
             AdBlock.setOverride(site, level)
             levelNote.text = level?.summary ?: "Uses the level chosen for all sites (${AdBlock.global.label})."
@@ -996,9 +1029,17 @@ object Sheets {
         if (SiteSettings.hasSettings(site)) {
             button("Reset this site's settings") {
                 val wasDesktop = SiteSettings.desktop(site)
+                val saved = SiteSettings.save(site)
                 SiteSettings.reset(site)
                 if (onThisSite && tab != null && wasDesktop) TabManager.setDesktop(tab, false)
                 onChanged?.invoke()
+                (ctx as? android.app.Activity)?.let { a ->
+                    Messages.show(a, "$site's settings reset", "Undo") {
+                        SiteSettings.restore(saved)
+                        if (onThisSite && tab != null && wasDesktop) TabManager.setDesktop(tab, true)
+                        onChanged?.invoke()
+                    }
+                }
             }
         }
         col.addView(buttons)

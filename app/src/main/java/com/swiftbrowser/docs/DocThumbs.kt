@@ -22,7 +22,6 @@ import java.io.FileInputStream
 import java.io.InputStream
 import java.security.MessageDigest
 import java.util.Locale
-import java.util.concurrent.Executors
 import java.util.zip.ZipInputStream
 
 /**
@@ -31,7 +30,7 @@ import java.util.zip.ZipInputStream
  * and on disk, so each is made once.
  */
 object DocThumbs {
-    private val io = Executors.newSingleThreadExecutor()
+    private val io = com.swiftbrowser.core.Background.single("doc-thumbs")
     private val main = Handler(Looper.getMainLooper())
     private val memory = object : LruCache<String, Bitmap>(3 * 1024 * 1024) {
         override fun sizeOf(key: String, value: Bitmap) = value.byteCount
@@ -39,6 +38,16 @@ object DocThumbs {
 
     /** Documents known to have no picture (no need to look again this time). */
     private val none = HashSet<String>()
+
+    /** Clearing browsing data (2.6): the pictures of documents go, in memory and on disk. */
+    fun clear(ctx: Context) {
+        memory.evictAll()
+        none.clear()
+        io.execute { File(ctx.cacheDir, "doc_thumbs").deleteRecursively() }
+    }
+
+    /** Swift went out of sight or Android is short of memory: the pictures kept in memory go (they are on disk too). */
+    fun trim() = memory.evictAll()
 
     /** [onLoaded] runs on the main thread, only when there is a picture. */
     fun load(ctx: Context, uri: String, kind: Docs.Kind, width: Int, onLoaded: (Bitmap) -> Unit) {

@@ -23,7 +23,6 @@ import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
-import androidx.core.content.FileProvider
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -78,6 +77,20 @@ abstract class ListActivity : AppCompatActivity() {
         toolbar.setSubtitleTextColor(Palette.color(this, R.color.text_secondary))
         window.statusBarColor = Palette.color(this, R.color.page_bg)
         list.layoutManager = LinearLayoutManager(this)
+        // Back clears a search first (2.6), then leaves the screen.
+        val clearSearch = object : androidx.activity.OnBackPressedCallback(false) {
+            override fun handleOnBackPressed() {
+                search.setText("")
+            }
+        }
+        onBackPressedDispatcher.addCallback(this, clearSearch)
+        search.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: Editable?) {
+                clearSearch.isEnabled = !s.isNullOrEmpty()
+            }
+        })
         // The list holds the focus, so the search box doesn't show a cursor until it is tapped.
         list.isFocusableInTouchMode = true
         list.requestFocus()
@@ -215,23 +228,10 @@ class HistoryActivity : ListActivity() {
         super.onCreate(savedInstanceState)
         toolbar.title = "History"
         toolbar.subtitle = Profiles.current().name
-        // In red: it removes everything at once (after asking).
-        val clearAll = android.text.SpannableString("Clear all").apply {
-            setSpan(android.text.style.ForegroundColorSpan(Ui.danger(this@HistoryActivity)), 0, length, 0)
-        }
-        toolbar.menu.add(0, 1, 0, clearAll).setShowAsAction(android.view.MenuItem.SHOW_AS_ACTION_ALWAYS)
+        // The last hour, day, week or all of it (2.6), and what else to clear with the history.
+        toolbar.menu.add(0, 1, 0, "Clear").setShowAsAction(android.view.MenuItem.SHOW_AS_ACTION_ALWAYS)
         toolbar.setOnMenuItemClickListener {
-            Dialogs.confirm(
-                this, "Clear all history?",
-                "Every page in ${Profiles.current().name}'s history is removed. This can't be undone.",
-                "Clear all", danger = true,
-            ) {
-                lifecycleScope.launch {
-                    withContext(Dispatchers.IO) { SwiftApp.db.clearHistory(Profiles.currentId) }
-                    load()
-                    Messages.show(this@HistoryActivity, "History cleared")
-                }
-            }
+            ClearData.show(this, preset = setOf(com.swiftbrowser.core.Clearing.What.HISTORY)) { load() }
             true
         }
         search.visibility = View.VISIBLE
@@ -431,25 +431,97 @@ class HistoryActivity : ListActivity() {
 }
 
 class BookmarksActivity : ListActivity() {
+    /** A row: a folder, or a bookmark (2.6). */
+    private sealed class Item {
+        class Folder(val name: String, val count: Int) : Item()
+        class Mark(val row: BookmarkRow) : Item()
+    }
+
     private var rows: List<BookmarkRow> = emptyList()
     private val hiddenIds = HashSet<Long>()
 
-    private val adapter = RowAdapter<BookmarkRow>(
-        bind = { h, r ->
-            h.set(R.drawable.ic_star, UrlUtils.readableTitle(r.title, r.url), UrlUtils.siteName(r.url))
-            h.setFavicon(r.url)
-            h.setAction(R.drawable.ic_more, "More") { rowMenu(r) }
+    /** The folder open ("" is the top of the list). */
+    private var folder = ""
+    private var query = ""
+
+    private val adapter = RowAdapter<Item>(
+        bind = { h, item ->
+            when (item) {
+                is Item.Folder -> {
+                    h.set(R.drawable.ic_folder, item.name, if (item.count == 1) "1 bookmark" else "${item.count} bookmarks")
+                    h.setAction(R.drawable.ic_more, "More") { folderMenu(item.name) }
+                }
+                is Item.Mark -> {
+                    val r = item.row
+                    // Found by searching: which folder it's in.
+                    val where = if (query.isNotEmpty() && r.folder.isNotEmpty()) "${r.folder} · " else ""
+                    h.set(R.drawable.ic_star, UrlUtils.readableTitle(r.title, r.url), where + UrlUtils.siteName(r.url))
+                    h.setFavicon(r.url)
+                    h.setAction(R.drawable.ic_more, "More") { rowMenu(r) }
+                }
+            }
         },
-        onClick = { openUrl(it.url) },
-        onLongClick = { rowMenu(it) },
+        onClick = { item ->
+            when (item) {
+                is Item.Folder -> openFolder(item.name)
+                is Item.Mark -> openUrl(item.row.url)
+            }
+        },
+        onLongClick = { item ->
+            when (item) {
+                is Item.Folder -> folderMenu(item.name)
+                is Item.Mark -> rowMenu(item.row)
+            }
+        },
     )
+
+    /** Back leaves a search, then a folder, then the screen. */
+    private val back = object : androidx.activity.OnBackPressedCallback(false) {
+        override fun handleOnBackPressed() {
+            if (query.isNotEmpty()) search.setText("") else openFolder("")
+        }
+    }
+
+    private val importPicker = registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) importFrom(uri)
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         toolbar.title = "Bookmarks"
         toolbar.subtitle = Profiles.current().name
+        toolbar.setNavigationOnClickListener { onBackPressedDispatcher.onBackPressed() }
+        toolbar.menu.add(0, 1, 0, "Import").setShowAsAction(android.view.MenuItem.SHOW_AS_ACTION_ALWAYS)
+        toolbar.setOnMenuItemClickListener {
+            Dialogs.confirm(
+                this, "Import bookmarks",
+                "From a bookmarks file another browser saved: in Chrome on a computer, Bookmarks → Bookmark manager → ⋮ → Export bookmarks; " +
+                    "in Firefox, Bookmarks → Manage bookmarks → Import and Backup → Export. Copy the file to this phone, then choose it.",
+                "Choose file",
+            ) {
+                try {
+                    importPicker.launch(arrayOf("text/html", "application/xhtml+xml", "text/plain", "application/octet-stream"))
+                } catch (e: Exception) {
+                    Messages.show(this, "No app to choose a file with")
+                }
+            }
+            true
+        }
+        onBackPressedDispatcher.addCallback(this, back)
+        search.visibility = View.VISIBLE
+        search.hint = "Search your bookmarks"
+        search.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: Editable?) {
+                query = s?.toString()?.trim().orEmpty()
+                render()
+            }
+        })
         list.adapter = adapter
-        enableSwipe({ true }) { vh -> adapter.items.getOrNull(vh.bindingAdapterPosition)?.let { delete(it) } }
+        enableSwipe({ vh -> adapter.items.getOrNull(vh.bindingAdapterPosition) is Item.Mark }) { vh ->
+            (adapter.items.getOrNull(vh.bindingAdapterPosition) as? Item.Mark)?.let { delete(it.row) }
+        }
         load()
     }
 
@@ -460,10 +532,34 @@ class BookmarksActivity : ListActivity() {
         }
     }
 
+    private fun folders(): List<String> = rows.map { it.folder }.filter { it.isNotEmpty() }.distinct().sortedBy { it.lowercase() }
+
+    private fun openFolder(name: String) {
+        folder = name
+        toolbar.title = name.ifEmpty { "Bookmarks" }
+        list.scrollToPosition(0)
+        render()
+    }
+
     private fun render() {
-        val shown = rows.filter { it.id !in hiddenIds }
-        adapter.items = shown
-        showEmpty(shown.isEmpty(), "No bookmarks yet", "Tap the star in the ≡ menu to keep a page here.", R.drawable.ic_star_border)
+        val visible = rows.filter { it.id !in hiddenIds }
+        val items: List<Item> = if (query.isNotEmpty()) {
+            visible.filter { it.title.contains(query, ignoreCase = true) || it.url.contains(query, ignoreCase = true) }.map { Item.Mark(it) }
+        } else {
+            val inFolder = visible.filter { it.folder == folder }.map { Item.Mark(it) }
+            if (folder.isEmpty()) {
+                folders().map { name -> Item.Folder(name, visible.count { it.folder == name }) } + inFolder
+            } else {
+                inFolder
+            }
+        }
+        adapter.items = items
+        back.isEnabled = query.isNotEmpty() || folder.isNotEmpty()
+        when {
+            query.isNotEmpty() -> showEmpty(items.isEmpty(), "Nothing found", "No bookmark has \"$query\" in its name or address.", R.drawable.ic_search)
+            folder.isNotEmpty() -> showEmpty(items.isEmpty(), "This folder is empty", "Move bookmarks here with ⋮ → Move to folder.", R.drawable.ic_folder)
+            else -> showEmpty(items.isEmpty(), "No bookmarks yet", "Tap the star in the ≡ menu to keep a page here.", R.drawable.ic_star_border)
+        }
     }
 
     private fun delete(r: BookmarkRow) {
@@ -503,18 +599,81 @@ class BookmarksActivity : ListActivity() {
             addView(name)
             addView(address)
         }
-        MaterialAlertDialogBuilder(this)
+        val dialog = MaterialAlertDialogBuilder(this)
             .setTitle("Edit bookmark")
             .setView(box)
-            .setPositiveButton("Save") { _, _ ->
-                val url = UrlUtils.toUrlOrSearch(address.text.toString()).takeIf { UrlUtils.isHttp(it) } ?: r.url
-                lifecycleScope.launch {
-                    withContext(Dispatchers.IO) { SwiftApp.db.updateBookmark(r.id, name.text.toString().trim(), url) }
-                    load()
+            .setPositiveButton("Save", null)
+            .setNegativeButton(android.R.string.cancel, null)
+            .showImmersive()
+        // A wrong address keeps the dialog open with what was typed (2.6).
+        dialog.getButton(android.content.DialogInterface.BUTTON_POSITIVE)?.setOnClickListener {
+            val url = UrlUtils.toUrlOrSearch(address.text.toString())
+            if (!UrlUtils.isHttp(url) || UrlUtils.searchQuery(url) != null && !address.text.contains('.')) {
+                address.error = "That isn't a web address"
+                address.requestFocus()
+                return@setOnClickListener
+            }
+            dialog.dismiss()
+            lifecycleScope.launch {
+                withContext(Dispatchers.IO) { SwiftApp.db.updateBookmark(r.id, name.text.toString().trim(), url) }
+                load()
+            }
+        }
+    }
+
+    /** Into a folder, a new one, or back to the top of the list. */
+    private fun moveToFolder(r: BookmarkRow) {
+        val names = folders().filter { it != r.folder }
+        val choices = (if (r.folder.isNotEmpty()) listOf("Top of the list") else emptyList()) + names + "New folder…"
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Move to folder")
+            .setItems(choices.toTypedArray()) { _, which ->
+                val pick = choices[which]
+                when {
+                    which == choices.lastIndex -> Sheets.askText(this, "New folder", "Folder name", "") { name ->
+                        val n = name.trim().take(60)
+                        if (n.isNotEmpty()) setFolder(r, n)
+                    }
+                    pick == "Top of the list" && r.folder.isNotEmpty() && which == 0 -> setFolder(r, "")
+                    else -> setFolder(r, pick)
                 }
             }
             .setNegativeButton(android.R.string.cancel, null)
             .showImmersive()
+    }
+
+    private fun setFolder(r: BookmarkRow, name: String) {
+        lifecycleScope.launch {
+            withContext(Dispatchers.IO) { SwiftApp.db.setBookmarkFolder(r.id, name) }
+            load()
+            Messages.show(this@BookmarksActivity, if (name.isEmpty()) "Moved to the top of the list" else "Moved to $name")
+        }
+    }
+
+    private fun folderMenu(name: String) {
+        Sheets.actions(
+            this, name, null,
+            listOf(
+                Sheets.Action(R.drawable.ic_edit, "Rename", primary = true) {
+                    Sheets.askText(this, "Rename folder", "Folder name", name) { text ->
+                        val n = text.trim().take(60)
+                        if (n.isEmpty() || n == name) return@askText
+                        lifecycleScope.launch {
+                            withContext(Dispatchers.IO) { SwiftApp.db.renameBookmarkFolder(Profiles.currentId, name, n) }
+                            load()
+                        }
+                    }
+                },
+                // The bookmarks stay, at the top of the list.
+                Sheets.Action(R.drawable.ic_close, "Remove folder (keeps its bookmarks)") {
+                    lifecycleScope.launch {
+                        withContext(Dispatchers.IO) { SwiftApp.db.renameBookmarkFolder(Profiles.currentId, name, "") }
+                        load()
+                        Messages.show(this@BookmarksActivity, "Its bookmarks are at the top of the list")
+                    }
+                },
+            ),
+        )
     }
 
     private fun rowMenu(r: BookmarkRow) {
@@ -525,11 +684,88 @@ class BookmarksActivity : ListActivity() {
                 Sheets.Action(R.drawable.ic_edit, "Edit", primary = true) { editBookmark(r) },
                 Sheets.Action(R.drawable.ic_share, "Share", primary = true) { share(r.url) },
                 Sheets.Action(R.drawable.ic_copy, "Copy", primary = true) { copyText(this, r.url) },
-                Sheets.Action(R.drawable.ic_delete, "Delete bookmark", danger = true) { delete(r) },
+                Sheets.Action(R.drawable.ic_folder, "Move to folder") { moveToFolder(r) },
+                Sheets.Action(R.drawable.ic_delete, "Remove bookmark", danger = true) { delete(r) },
             ),
             com.swiftbrowser.core.Favicons.cached(r.url), fullAddress = r.url,
         )
     }
+
+    /** A bookmarks file saved by Chrome, Firefox or another browser (the "Netscape" format they share). */
+    private fun importFrom(uri: android.net.Uri) {
+        val pid = Profiles.currentId
+        lifecycleScope.launch {
+            val count = withContext(Dispatchers.IO) {
+                try {
+                    val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return@withContext -1
+                    if (bytes.size > 30_000_000) return@withContext -1
+                    val text = String(bytes, Charsets.UTF_8)
+                    val marks = BookmarkFile.parse(text)
+                    val db = SwiftApp.db
+                    val had = db.bookmarks(pid).map { it.url }.toHashSet()
+                    var added = 0
+                    for (m in marks) {
+                        if (m.url in had) continue
+                        db.importBookmark(pid, m.url, m.title, m.added, m.folder)
+                        had += m.url
+                        added++
+                    }
+                    added
+                } catch (e: Exception) {
+                    com.swiftbrowser.core.L.w("Couldn't import bookmarks", e)
+                    -1
+                }
+            }
+            load()
+            Messages.show(
+                this@BookmarksActivity,
+                when (count) {
+                    -1 -> "That file couldn't be read"
+                    0 -> "No new bookmarks in that file"
+                    1 -> "1 bookmark imported"
+                    else -> "$count bookmarks imported"
+                },
+            )
+        }
+    }
+}
+
+/** Reads a browser's bookmarks file: links in folders (<H3>), as Chrome and Firefox export them (2.6). */
+object BookmarkFile {
+    class Mark(val url: String, val title: String, val folder: String, val added: Long)
+
+    private val TOKEN = Regex("<(/?)(dl|h3|a)\\b([^>]*)>(?:([^<]*)</(?:h3|a)>)?", RegexOption.IGNORE_CASE)
+    private val HREF = Regex("href\\s*=\\s*\"([^\"]*)\"", RegexOption.IGNORE_CASE)
+    private val ADDED = Regex("add_date\\s*=\\s*\"(\\d+)\"", RegexOption.IGNORE_CASE)
+
+    fun parse(html: String): List<Mark> {
+        val out = ArrayList<Mark>()
+        val stack = ArrayList<String>()
+        var pending: String? = null
+        val now = System.currentTimeMillis()
+        for (m in TOKEN.findAll(html)) {
+            val closing = m.groupValues[1] == "/"
+            val tag = m.groupValues[2].lowercase()
+            when {
+                tag == "h3" && !closing -> pending = decode(m.groupValues[4]).trim()
+                tag == "dl" && !closing -> {
+                    stack += pending ?: (stack.lastOrNull() ?: "")
+                    pending = null
+                }
+                tag == "dl" && closing -> if (stack.isNotEmpty()) stack.removeAt(stack.lastIndex)
+                tag == "a" && !closing -> {
+                    val url = HREF.find(m.groupValues[3])?.groupValues?.get(1)?.let { decode(it) } ?: continue
+                    if (!UrlUtils.isHttp(url)) continue
+                    val added = ADDED.find(m.groupValues[3])?.groupValues?.get(1)?.toLongOrNull()?.let { it * 1000 } ?: now
+                    out += Mark(url, decode(m.groupValues[4]).trim(), stack.lastOrNull()?.take(60) ?: "", added.coerceAtMost(now))
+                }
+            }
+        }
+        return out
+    }
+
+    private fun decode(s: String): String =
+        s.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&#39;", "'").replace("&amp;", "&")
 }
 
 class DownloadsActivity : ListActivity() {
@@ -541,6 +777,17 @@ class DownloadsActivity : ListActivity() {
         super.onCreate(savedInstanceState)
         toolbar.title = "Downloads"
         toolbar.subtitle = Downloads.describe(Downloads.directory())
+        // Search by name (2.6), like History and Bookmarks.
+        search.visibility = View.VISIBLE
+        search.hint = "Search your downloads"
+        search.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: Editable?) {
+                query = s?.toString()?.trim().orEmpty()
+                refresh()
+            }
+        })
         list.adapter = adapter
         list.itemAnimator = null
         // Finished, failed and paused downloads can be swiped off the list (the file stays).
@@ -562,13 +809,29 @@ class DownloadsActivity : ListActivity() {
         super.onStop()
     }
 
+    private var query = ""
+
+    /** What each row showed, so a progress tick redraws only the rows that changed (2.6). */
+    private var drawn: List<String> = emptyList()
+
     private fun refresh() {
-        adapter.items = Downloads.all().filter { it.id !in hiddenIds }
-        showEmpty(
-            adapter.items.isEmpty(), "No downloads yet",
-            "Hold a link, picture or video and choose Download. On pages with videos, the download button appears next to the address.",
-            R.drawable.ic_download,
-        )
+        val items = Downloads.all().filter { it.id !in hiddenIds && (query.isEmpty() || it.fileName.contains(query, ignoreCase = true)) }
+        val now = items.map { "${it.status}|${it.done}|${it.total}|${it.fileName}|${it.error}|${it.bytesPerSecond}" }
+        if (items.size == adapter.items.size && items.indices.all { items[it] === adapter.items[it] }) {
+            for (i in now.indices) if (now[i] != drawn.getOrNull(i)) adapter.notifyItemChanged(i)
+        } else {
+            adapter.items = items
+        }
+        drawn = now
+        if (query.isNotEmpty()) {
+            showEmpty(items.isEmpty(), "Nothing found", "No download has \"$query\" in its name.", R.drawable.ic_search)
+        } else {
+            showEmpty(
+                items.isEmpty(), "No downloads yet",
+                "Hold a link, picture or video and choose Download. On pages with videos, the download button appears next to the address.",
+                R.drawable.ic_download,
+            )
+        }
     }
 
     /** Off the list (and with [deleteFile], the file too) once the Undo is gone. */
@@ -615,7 +878,10 @@ class DownloadsActivity : ListActivity() {
         override fun getItemCount() = items.size
 
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int) =
-            DownloadHolder(Palette.paint(LayoutInflater.from(parent.context).inflate(R.layout.item_download, parent, false)))
+            DownloadHolder(Palette.paint(LayoutInflater.from(parent.context).inflate(R.layout.item_download, parent, false))).also {
+                // The bar in the accent chosen (2.6), your own included.
+                it.progress.progressTintList = android.content.res.ColorStateList.valueOf(Ui.accent(parent.context))
+            }
 
         override fun onBindViewHolder(h: DownloadHolder, position: Int) {
             val d = items[position]
@@ -627,6 +893,10 @@ class DownloadsActivity : ListActivity() {
                     mime.startsWith("image") -> R.drawable.ic_image
                     mime.startsWith("audio") -> R.drawable.ic_headphones
                     PageActions.isSavedPage(d) -> R.drawable.ic_offline
+                    // What kind of file it is (2.6), not just "a download".
+                    com.swiftbrowser.docs.Docs.kindOf(d.fileName, d.mime) != null -> R.drawable.ic_documents
+                    d.fileName.endsWith(".zip", true) || d.fileName.endsWith(".rar", true) || d.fileName.endsWith(".7z", true) -> R.drawable.ic_folder
+                    d.fileName.endsWith(".apk", true) -> R.drawable.ic_update
                     else -> R.drawable.ic_download
                 },
             )
@@ -662,8 +932,24 @@ class DownloadsActivity : ListActivity() {
         }
     }
 
+    /** When it was downloaded: the time today, else the day (2.6). */
+    private fun dateText(time: Long): String {
+        val now = java.util.Calendar.getInstance()
+        val then = java.util.Calendar.getInstance().apply { timeInMillis = time }
+        return when {
+            now.get(java.util.Calendar.YEAR) == then.get(java.util.Calendar.YEAR) &&
+                now.get(java.util.Calendar.DAY_OF_YEAR) == then.get(java.util.Calendar.DAY_OF_YEAR) ->
+                android.text.format.DateFormat.getTimeFormat(this).format(java.util.Date(time))
+            now.get(java.util.Calendar.YEAR) == then.get(java.util.Calendar.YEAR) ->
+                java.text.SimpleDateFormat("d MMM", java.util.Locale.getDefault()).format(java.util.Date(time))
+            else -> java.text.SimpleDateFormat("d MMM yyyy", java.util.Locale.getDefault()).format(java.util.Date(time))
+        }
+    }
+
     private fun statusText(d: Downloads.Item): String = when (d.status) {
-        Downloads.DONE -> "${UrlUtils.formatBytes(d.done)} · Done"
+        Downloads.DONE -> listOfNotNull(
+            com.swiftbrowser.docs.Docs.kindOf(d.fileName, d.mime)?.label, UrlUtils.formatBytes(d.done), dateText(d.created),
+        ).joinToString(" · ")
         Downloads.QUEUED -> if (d.error == Downloads.WAITING_FOR_WIFI) "Waiting for Wi-Fi (it's a big file)" else "Waiting to start…"
         Downloads.PAUSED -> "Paused · ${UrlUtils.formatBytes(d.done)}${if (d.percent >= 0) " (${d.percent}%)" else ""}"
         Downloads.FAILED -> "Didn't finish: ${d.error ?: "something went wrong"}. Tap ↻ to try again."
@@ -769,11 +1055,8 @@ class DownloadsActivity : ListActivity() {
         fun openFileIntent(ctx: Context, d: Downloads.Item): Intent? {
             val file = File(d.filePath)
             if (!file.exists()) return null
-            val uri = try {
-                FileProvider.getUriForFile(ctx, ctx.packageName + ".files", file)
-            } catch (_: Exception) {
-                return null
-            }
+            // Never a file:// link (Android refuses them): Swift's shared folders, or a copy (2.6).
+            val uri = com.swiftbrowser.docs.Docs.shareUri(ctx, file) ?: return null
             val mime = UrlUtils.mimeFromName(d.fileName) ?: d.mime ?: "*/*"
             return Intent(Intent.ACTION_VIEW).apply {
                 setDataAndType(uri, mime)

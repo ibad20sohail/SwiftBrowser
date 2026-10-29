@@ -30,6 +30,9 @@ object Backup {
         Prefs.LAST_AUTO_BACKUP, Prefs.LAST_LOW_SPACE_CLEANUP, Prefs.SEEN_VERSION, Prefs.WELCOME_DONE,
     ) + com.swiftbrowser.vpn.Vpn.PREF_KEYS
 
+    /** Settings that belong to one profile, ending in its id. */
+    private val PER_PROFILE = listOf("pinned_tiles_")
+
     private const val AUTO_PREFIX = "Swift backup (automatic)"
     private const val WEEK = 7L * 24 * 3600 * 1000
 
@@ -45,7 +48,7 @@ object Backup {
     fun autoBackupIfDue(ctx: Context): File? {
         val prefs = SwiftApp.prefs
         if (!prefs.autoBackup || System.currentTimeMillis() - prefs.lastAutoBackup < WEEK) return null
-        if (TabManager.tabs.none { !it.incognito && !it.isBlank }) return null
+        if (SwiftApp.db.tabs().none { !UrlUtils.isBlank(it.url) }) return null
         val file = try {
             write(ctx, automatic = true)
         } catch (e: Exception) {
@@ -86,9 +89,13 @@ object Backup {
         for (p in Profiles.all()) {
             val bookmarks = JSONArray()
             for (b in db.bookmarks(p.id)) bookmarks.put(JSONObject().put("url", b.url).put("title", b.title).put("created", b.created))
+            // The automatic backup (a file in the Download folder, made by itself) leaves history out
+            // (2.6): only a backup made on purpose carries it.
             val history = JSONArray()
-            for (h in db.history(p.id, null, HISTORY_LIMIT)) {
-                history.put(JSONObject().put("url", h.url).put("title", h.title).put("last", h.lastVisit).put("visits", h.visits))
+            if (!automatic) {
+                for (h in db.history(p.id, null, HISTORY_LIMIT)) {
+                    history.put(JSONObject().put("url", h.url).put("title", h.title).put("last", h.lastVisit).put("visits", h.visits))
+                }
             }
             val groups = JSONArray()
             for (g in db.tabGroups().filter { it.profileId == p.id }) groups.put(JSONObject().put("id", g.id).put("name", g.name).put("color", g.color))
@@ -97,7 +104,7 @@ object Backup {
                 tabs.put(JSONObject().put("url", t.url).put("title", t.title).put("group", t.groupId ?: -1).put("used", t.lastUsed))
             }
             profiles.put(
-                JSONObject().put("name", p.name).put("color", p.color)
+                JSONObject().put("id", p.id).put("name", p.name).put("color", p.color)
                     .put("bookmarks", bookmarks).put("history", history).put("groups", groups).put("tabs", tabs),
             )
         }
@@ -161,11 +168,30 @@ object Backup {
     fun restore(root: JSONObject) {
         val db = SwiftApp.db
         val sp = SwiftApp.prefs.sp
+        val profiles = root.optJSONArray("profiles") ?: JSONArray()
+        // The backup's profile ids (backups since 2.6) and the ones they get here.
+        val ids = HashMap<Long, Long>()
+        for (i in 0 until profiles.length()) {
+            val p = profiles.getJSONObject(i)
+            if (!p.has("id")) continue
+            val name = p.optString("name").ifBlank { "Restored" }
+            ids[p.optLong("id")] = Profiles.all().firstOrNull { it.name.equals(name, ignoreCase = true) }?.id ?: Profiles.add(name).id
+        }
         root.optJSONObject("settings")?.let { settings ->
             val edit = sp.edit()
-            for (key in settings.keys()) {
-                if (key in SKIP_SETTINGS) continue
-                val o = settings.optJSONObject(key) ?: continue
+            for (backupKey in settings.keys()) {
+                if (backupKey in SKIP_SETTINGS) continue
+                val o = settings.optJSONObject(backupKey) ?: continue
+                // A setting of one profile goes to that profile's id here, or is left out if unknown.
+                val key = PER_PROFILE.firstOrNull { backupKey.startsWith(it) }?.let { prefix ->
+                    val old = backupKey.removePrefix(prefix).toLongOrNull()
+                    ids[old]?.let { "$prefix$it" }
+                } ?: if (PER_PROFILE.any { backupKey.startsWith(it) }) continue else backupKey
+                // Another phone's download folder may not exist here.
+                if (key == Prefs.DOWNLOAD_FOLDER) {
+                    val dir = java.io.File(o.optString("v"))
+                    if (o.optString("v").isNotBlank() && !(dir.isDirectory && dir.canWrite())) continue
+                }
                 when (o.optString("t")) {
                     "b" -> edit.putBoolean(key, o.optBoolean("v"))
                     "i" -> edit.putInt(key, o.optInt("v"))
@@ -183,7 +209,6 @@ object Backup {
             edit.commit()
         }
 
-        val profiles = root.optJSONArray("profiles") ?: JSONArray()
         val open = db.tabs().map { it.profileId to it.url }.toSet()
         for (i in 0 until profiles.length()) {
             val p = profiles.getJSONObject(i)
@@ -218,7 +243,8 @@ object Backup {
                 for (j in 0 until arr.length()) {
                     val t = arr.getJSONObject(j)
                     val url = t.optString("url")
-                    if (url.isBlank() || (pid to url) in open) continue
+                    // Only web pages: another phone's files and Swift's own pages don't exist here.
+                    if (url.isBlank() || (pid to url) in open || !UrlUtils.isHttp(url)) continue
                     db.importTab(pid, url, t.optString("title"), groupFor(t.optLong("group", -1)), t.optLong("used", System.currentTimeMillis()))
                 }
             }

@@ -14,8 +14,12 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.swiftbrowser.SwiftApp
+import com.swiftbrowser.core.Passwords
+import com.swiftbrowser.core.UrlUtils
 import com.swiftbrowser.tabs.TabManager
 import org.mozilla.geckoview.AllowOrDeny
+import org.mozilla.geckoview.Autocomplete
 import org.mozilla.geckoview.GeckoResult
 import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.GeckoSession.PermissionDelegate.ContentPermission
@@ -45,13 +49,54 @@ class Prompts : PromptDelegate {
 
     private val context: Context? get() = TabManager.ui?.activity
 
+    private class Waiting(val session: GeckoSession, val open: () -> Unit)
+
+    /** Dialogs of tabs that aren't on screen (2.6): they wait until their tab is chosen. */
+    private val waiting = ArrayList<Waiting>()
+
+    /** [session]'s tab is on screen now: what its page asked for meanwhile shows. */
+    fun showWaiting(session: GeckoSession) {
+        val now = waiting.filter { it.session === session }
+        waiting.removeAll(now)
+        now.forEach { it.open() }
+    }
+
+    /**
+     * Shows [prompt] for [session]'s page. A page in a tab that isn't on screen can't put a dialog
+     * over another site's page (it would look as if that site asked): it waits for its tab.
+     */
     private fun <T : BasePrompt> show(
+        session: GeckoSession,
         prompt: T,
         build: (Context, GeckoResult<PromptResponse>) -> AlertDialog?,
     ): GeckoResult<PromptResponse> {
-        val ctx = context ?: return GeckoResult.fromValue(prompt.dismiss())
         val result = GeckoResult<PromptResponse>()
-        val dialog = build(ctx, result) ?: return GeckoResult.fromValue(prompt.dismiss())
+        val tab = TabManager.bySession(session)
+        if (tab != null && tab !== TabManager.current) {
+            val w = Waiting(session) { open(prompt, result, build) }
+            waiting += w
+            prompt.setDelegate(object : PromptDelegate.PromptInstanceDelegate {
+                override fun onPromptDismiss(prompt: BasePrompt) {
+                    waiting.remove(w)
+                }
+            })
+            return result
+        }
+        open(prompt, result, build)
+        return result
+    }
+
+    private fun <T : BasePrompt> open(
+        prompt: T,
+        result: GeckoResult<PromptResponse>,
+        build: (Context, GeckoResult<PromptResponse>) -> AlertDialog?,
+    ) {
+        val ctx = context
+        val dialog = if (ctx != null) build(ctx, result) else null
+        if (dialog == null) {
+            result.complete(prompt.dismiss())
+            return
+        }
         prompt.setDelegate(object : PromptDelegate.PromptInstanceDelegate {
             override fun onPromptDismiss(prompt: BasePrompt) {
                 dialog.dismiss()
@@ -61,23 +106,30 @@ class Prompts : PromptDelegate {
             if (!prompt.isComplete) result.complete(prompt.dismiss())
         }
         dialog.showImmersive()
-        return result
     }
 
+    /** In the app's colours (2.6), like Swift's own dialogs. */
     private fun builder(ctx: Context, title: String?) =
-        MaterialAlertDialogBuilder(ctx).apply { if (!title.isNullOrBlank()) setTitle(title) }
+        MaterialAlertDialogBuilder(ctx).setBackground(Palette.dialogBackground(ctx)).apply { if (!title.isNullOrBlank()) setTitle(title) }
+
+    /** "example.com says": which site's page is asking (2.6). */
+    private fun says(session: GeckoSession, title: String?): String? {
+        if (!title.isNullOrBlank()) return title
+        val site = TabManager.bySession(session)?.url?.let { com.swiftbrowser.core.UrlUtils.siteName(it) }
+        return if (site.isNullOrBlank()) null else "$site says"
+    }
 
     override fun onAlertPrompt(session: GeckoSession, prompt: AlertPrompt): GeckoResult<PromptResponse> =
-        show(prompt) { ctx, result ->
-            builder(ctx, prompt.title)
+        show(session, prompt) { ctx, result ->
+            builder(ctx, says(session, prompt.title))
                 .setMessage(prompt.message ?: "")
                 .setPositiveButton(android.R.string.ok) { _, _ -> result.complete(prompt.dismiss()) }
                 .create()
         }
 
     override fun onButtonPrompt(session: GeckoSession, prompt: ButtonPrompt): GeckoResult<PromptResponse> =
-        show(prompt) { ctx, result ->
-            builder(ctx, prompt.title)
+        show(session, prompt) { ctx, result ->
+            builder(ctx, says(session, prompt.title))
                 .setMessage(prompt.message ?: "")
                 .setPositiveButton(android.R.string.ok) { _, _ ->
                     result.complete(prompt.confirm(ButtonPrompt.Type.POSITIVE))
@@ -89,13 +141,13 @@ class Prompts : PromptDelegate {
         }
 
     override fun onTextPrompt(session: GeckoSession, prompt: TextPrompt): GeckoResult<PromptResponse> =
-        show(prompt) { ctx, result ->
+        show(session, prompt) { ctx, result ->
             val input = EditText(ctx).apply {
                 setText(prompt.defaultValue ?: "")
                 setSingleLine()
                 selectAll()
             }
-            builder(ctx, prompt.title)
+            builder(ctx, says(session, prompt.title))
                 .setMessage(prompt.message)
                 .setView(padded(ctx, input))
                 .setPositiveButton(android.R.string.ok) { _, _ ->
@@ -106,7 +158,7 @@ class Prompts : PromptDelegate {
         }
 
     override fun onAuthPrompt(session: GeckoSession, prompt: AuthPrompt): GeckoResult<PromptResponse> =
-        show(prompt) { ctx, result ->
+        show(session, prompt) { ctx, result ->
             val onlyPassword = prompt.authOptions.flags and AuthPrompt.AuthOptions.Flags.ONLY_PASSWORD != 0
             val user = EditText(ctx).apply {
                 hint = "Username"
@@ -152,7 +204,7 @@ class Prompts : PromptDelegate {
     }
 
     override fun onChoicePrompt(session: GeckoSession, prompt: ChoicePrompt): GeckoResult<PromptResponse> =
-        show(prompt) { ctx, result ->
+        show(session, prompt) { ctx, result ->
             if (prompt.type == ChoicePrompt.Type.MULTIPLE) {
                 val rows = ArrayList<Row>().also { flatten(prompt.choices, it, "", headers = false) }
                 val checked = BooleanArray(rows.size) { rows[it].choice?.selected == true }
@@ -200,7 +252,7 @@ class Prompts : PromptDelegate {
         }
 
     override fun onColorPrompt(session: GeckoSession, prompt: ColorPrompt): GeckoResult<PromptResponse> =
-        show(prompt) { ctx, result ->
+        show(session, prompt) { ctx, result ->
             val colors = (prompt.predefinedValues?.toList() ?: emptyList()).ifEmpty {
                 listOf(
                     "#000000", "#ffffff", "#f44336", "#e91e63", "#9c27b0", "#3f51b5", "#2196f3", "#03a9f4",
@@ -321,6 +373,50 @@ class Prompts : PromptDelegate {
         return result
     }
 
+    /** A sign-in was sent: offer to save it (not from incognito tabs, nor for sites marked Never). */
+    override fun onLoginSave(
+        session: GeckoSession, request: PromptDelegate.AutocompleteRequest<Autocomplete.LoginSaveOption>,
+    ): GeckoResult<PromptResponse> {
+        val option = request.options.firstOrNull() ?: return GeckoResult.fromValue(request.dismiss())
+        val entry = option.value
+        val tab = TabManager.bySession(session)
+        if (tab == null || tab.incognito || !SwiftApp.prefs.offerPasswords || Passwords.never(entry.origin)) {
+            return GeckoResult.fromValue(request.dismiss())
+        }
+        return show(session, request) { ctx, result ->
+            val site = UrlUtils.siteName(entry.origin).ifBlank { entry.origin }
+            val update = entry.guid != null
+            builder(ctx, if (update) "Update your password for $site?" else "Save your password for $site?")
+                .setMessage(
+                    (entry.username?.ifBlank { null } ?: "(no user name)") +
+                        "\n\nSwift keeps it on this phone, locked by Android, and fills it in next time.",
+                )
+                .setPositiveButton(if (update) "Update" else "Save") { _, _ -> result.complete(request.confirm(option)) }
+                .setNegativeButton("Not now") { _, _ -> result.complete(request.dismiss()) }
+                .setNeutralButton("Never for this site") { _, _ ->
+                    Passwords.setNever(entry.origin, true)
+                    result.complete(request.dismiss())
+                }
+                .create()
+        }
+    }
+
+    /** Several sign-ins saved for the site: which one to fill in. */
+    override fun onLoginSelect(
+        session: GeckoSession, request: PromptDelegate.AutocompleteRequest<Autocomplete.LoginSelectOption>,
+    ): GeckoResult<PromptResponse> {
+        val options = request.options
+        if (options.isEmpty()) return GeckoResult.fromValue(request.dismiss())
+        return show(session, request) { ctx, result ->
+            builder(ctx, "Sign in as")
+                .setItems(options.map { it.value.username?.ifBlank { null } ?: "(no user name)" }.toTypedArray()) { _, which ->
+                    result.complete(request.confirm(options[which]))
+                }
+                .setNegativeButton(android.R.string.cancel, null)
+                .create()
+        }
+    }
+
     override fun onPopupPrompt(session: GeckoSession, prompt: PopupPrompt): GeckoResult<PromptResponse> {
         // Gecko's own pop-up blocker caught a pop-up opened without a tap. The app's NavPolicy
         // already handled taps; untapped pop-ups are blocked at every level except Off.
@@ -349,7 +445,7 @@ class Prompts : PromptDelegate {
     }
 
     override fun onRepostConfirmPrompt(session: GeckoSession, prompt: RepostConfirmPrompt): GeckoResult<PromptResponse> =
-        show(prompt) { ctx, result ->
+        show(session, prompt) { ctx, result ->
             builder(ctx, "Resend data?")
                 .setMessage("Showing this page again sends what you entered in its form again (for example an order or a payment).")
                 .setPositiveButton("Resend") { _, _ -> result.complete(prompt.confirm(AllowOrDeny.ALLOW)) }
@@ -358,7 +454,7 @@ class Prompts : PromptDelegate {
         }
 
     override fun onBeforeUnloadPrompt(session: GeckoSession, prompt: BeforeUnloadPrompt): GeckoResult<PromptResponse> =
-        show(prompt) { ctx, result ->
+        show(session, prompt) { ctx, result ->
             builder(ctx, "Leave this page?")
                 .setMessage("Changes you made may not be saved.")
                 .setPositiveButton("Leave") { _, _ -> result.complete(prompt.confirm(AllowOrDeny.ALLOW)) }

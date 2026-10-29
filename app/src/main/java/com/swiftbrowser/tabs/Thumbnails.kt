@@ -13,7 +13,6 @@ import com.swiftbrowser.core.L
 import org.mozilla.geckoview.GeckoView
 import java.io.File
 import java.io.FileOutputStream
-import java.util.concurrent.Executors
 
 /**
  * Small pictures of tabs for the tab switcher. Taken from the screen when the switcher opens and
@@ -25,7 +24,7 @@ object Thumbnails {
     const val ASPECT = 1.2f
 
     private lateinit var dir: File
-    private val exec = Executors.newSingleThreadExecutor()
+    private val exec = com.swiftbrowser.core.Background.single("thumbnails")
     private val main = Handler(Looper.getMainLooper())
     private val cache = object : LruCache<Long, Bitmap>(6 * 1024 * 1024) {
         override fun sizeOf(key: Long, value: Bitmap) = value.byteCount
@@ -50,6 +49,18 @@ object Thumbnails {
 
     /** The tab's picture if it is in memory. */
     fun cached(tab: Tab): Bitmap? = cache.get(tab.id)
+
+    /**
+     * Swift went out of sight or Android is short of memory (2.6): the pictures leave memory and load
+     * again from disk when the tab switcher shows them. Incognito tabs' pictures are only in memory,
+     * so they stay, as does the current tab's (the tab switcher opens from it).
+     */
+    fun trim() {
+        val current = TabManager.current
+        val keep = TabManager.tabs.filter { it.incognito || it === current }.mapNotNull { t -> cache.get(t.id)?.let { t.id to it } }
+        cache.evictAll()
+        for ((id, bmp) in keep) cache.put(id, bmp)
+    }
 
     /** Calls [onLoaded] on the main thread with the tab's picture, or null if there is none. */
     fun load(tab: Tab, onLoaded: (Bitmap?) -> Unit) {

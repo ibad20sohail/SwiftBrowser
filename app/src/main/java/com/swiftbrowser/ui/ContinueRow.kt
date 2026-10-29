@@ -78,7 +78,19 @@ class ContinueRow(context: Context, private val onOpen: (Unfinished.Item) -> Uni
 
     /** Takes [item]'s card away with a short fade, then the row closes up. */
     fun remove(item: Unfinished.Item) {
-        Unfinished.remove(item)
+        // Removed for good once the Undo is gone (2.6).
+        Unfinished.hide(item)
+        val main = android.os.Handler(android.os.Looper.getMainLooper())
+        val commit = Runnable { Unfinished.remove(item) }
+        main.postDelayed(commit, 5600)
+        (context as? android.app.Activity)?.let { a ->
+            Messages.show(a, "Removed from Continue", "Undo") {
+                main.removeCallbacks(commit)
+                Unfinished.unhide(item)
+                shown = emptyList()
+                refresh()
+            }
+        }
         val card = (0 until cards.childCount).map { cards.getChildAt(it) }.firstOrNull { it.tag === item } ?: return
         card.animate().alpha(0f).scaleX(0.9f).scaleY(0.9f).setDuration(180).withEndAction {
             cards.removeView(card)
@@ -115,11 +127,12 @@ class ContinueRow(context: Context, private val onOpen: (Unfinished.Item) -> Uni
             }
             addView(picture, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
             if (doc != null) {
-                // The document's first page (or its own picture), from the top.
+                // The document's whole first page (or its own picture), small on the tinted band (2.6):
+                // the top of a white page filled the card with white, glaring in dark mode.
                 com.swiftbrowser.docs.DocThumbs.load(context, doc.uri, doc.kind, dp(232)) { bmp ->
-                    val top = android.graphics.Bitmap.createBitmap(bmp, 0, 0, bmp.width, minOf(bmp.height, bmp.width * PICTURE_DP / 232))
-                    picture.scaleType = ImageView.ScaleType.CENTER_CROP
-                    picture.setImageBitmap(top)
+                    picture.scaleType = ImageView.ScaleType.FIT_CENTER
+                    picture.setPadding(0, dp(8), 0, dp(10))
+                    picture.setImageBitmap(bmp)
                     picture.alpha = 0f
                     picture.animate().alpha(1f).setDuration(Motion.NORMAL).start()
                 }

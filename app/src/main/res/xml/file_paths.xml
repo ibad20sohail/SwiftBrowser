@@ -5,4 +5,8 @@
     <!-- 2.1: only the folders Swift shares from (not the engine's profile with its cookies). -->
     <files-path name="reports" path="reports/" />
     <files-path name="internal_downloads" path="downloads/" />
+    <!-- 2.6: documents opened from the web or a ZIP, shared or opened in another app. -->
+    <cache-path name="documents" path="docs/" />
+    <!-- 2.6: downloads and documents on a memory card (/storage/XXXX-XXXX/...). -->
+    <root-path name="cards" path="storage/" />
 </paths>

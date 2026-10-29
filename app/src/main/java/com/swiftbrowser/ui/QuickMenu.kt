@@ -58,17 +58,22 @@ object MenuButtons {
         Button("dark", R.drawable.ic_dark, "Dark mode"),
         Button("desktop", R.drawable.ic_desktop, "Desktop"),
         Button("fullscreen", R.drawable.ic_fullscreen, "Full screen"),
-        Button("recent", R.drawable.ic_reopen, "Recent tabs"),
+        Button("recent", R.drawable.ic_reopen, "Closed tabs"),
         Button("vpn", R.drawable.ic_vpn, "VPN"),
         Button("scan", R.drawable.ic_qr, "Scan QR"),
-        Button("home_screen", R.drawable.ic_home_add, "Add to Home"),
-        Button("ad_blocker", R.drawable.ic_shield, "Ad blocker"),
-        Button("speed", R.drawable.ic_speed, "Speed"),
+        Button("home_screen", R.drawable.ic_home_add, "Home screen"),
+        Button("ad_blocker", R.drawable.ic_shield, "Ad blocking"),
+        Button("speed", R.drawable.ic_speed, "Play speed"),
         Button("sleep", R.drawable.ic_timer, "Sleep timer"),
         Button("group", R.drawable.ic_layers, "Add to group"),
         Button("hide", R.drawable.ic_block, "Tap to hide"),
         Button("close_all", R.drawable.ic_close, "Close all tabs"),
         Button("text_size", R.drawable.ic_text_size, "Text size"),
+        // 2.6
+        Button("translate", R.drawable.ic_translate, "Translate"),
+        Button("page_qr", R.drawable.ic_qr_code, "QR code"),
+        Button("clear_data", R.drawable.ic_delete, "Clear data"),
+        Button("quit", R.drawable.ic_quit, "Quit"),
     )
 
     /** The switches (they were tiles above the buttons until 2.2): tapping one leaves the menu open. */
@@ -373,6 +378,10 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
                 a.snack("The ad blocker is still starting on this page. Try again in a moment.")
             }
             "close_all" -> confirmCloseAll(tab)
+            "translate" -> Translate.sheet(a, tab)
+            "page_qr" -> PageActions.showQr(a, tab)
+            "clear_data" -> ClearData.show(a)
+            "quit" -> ClearData.quit(a)
         }
         if (key in MenuButtons.switches && isOpen) update(tab)
     }
@@ -501,6 +510,7 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
         reload.set(if (tab.loading) R.drawable.ic_close else R.drawable.ic_refresh, enabled = !tab.isBlank)
         val bookmarked = http && SwiftApp.db.isBookmarked(tab.profileId, tab.url)
         bookmark.set(if (bookmarked) R.drawable.ic_star else R.drawable.ic_star_border, enabled = http, active = bookmarked)
+        bookmark.view.contentDescription = if (bookmarked) "Remove bookmark" else "Bookmark"
         share.set(R.drawable.ic_share, enabled = http)
         find.set(R.drawable.ic_find, enabled = page)
 
@@ -511,7 +521,7 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
         items["fullscreen"]?.set(R.drawable.ic_fullscreen, "Full screen", active = prefs.fullScreen)
         items["reader"]?.set(R.drawable.ic_reader, if (inReader) "Exit reader" else "Reader view", active = inReader, enabled = (http && page) || inReader)
         items["save"]?.set(R.drawable.ic_offline, "Save offline", enabled = http && page)
-        items["home_screen"]?.set(R.drawable.ic_home_add, "Add to Home", enabled = http)
+        items["home_screen"]?.set(R.drawable.ic_home_add, "Home screen", enabled = http)
         val level = AdBlock.levelFor(tab.url)
         val blocked = tab.badge?.takeIf { level != AdLevel.OFF && it.isNotBlank() && it != "0" }
         items["ad_blocker"]?.set(
@@ -534,7 +544,7 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
             TabManager.closeAll(false)
             return
         }
-        Dialogs.confirm(a, "Close all incognito tabs?", "Their history and cookies are deleted.", "Close all", danger = true) {
+        Dialogs.confirm(a, "Close all incognito tabs?", "Their cookies and site data are deleted.", "Close all", danger = true) {
             TabManager.closeAll(true)
         }
     }
@@ -863,6 +873,12 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
         }
         private var pressedKey: String? = null
 
+        override fun requestDisallowInterceptTouchEvent(disallow: Boolean) {
+            // The pages took the swipe (2.6): the finger moved on, so no button gets lifted.
+            if (disallow) this@QuickMenu.handler.removeCallbacks(lift)
+            super.requestDisallowInterceptTouchEvent(disallow)
+        }
+
         override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
             if (dragKey != null) {
                 arrangeTouch(ev)
@@ -1176,7 +1192,7 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
     }
 
     /** A button: a round icon with its name below, all in one view so the menu stays light. */
-    private inner class Item(val view: TextView, val action: (Tab) -> Unit) {
+    private inner class Item(val key: String, val view: TextView, val action: (Tab) -> Unit) {
         private var icon = 0
         private var active = false
         private var colors: android.animation.ValueAnimator? = null
@@ -1216,6 +1232,8 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
                 view.setCompoundDrawablesRelativeWithIntrinsicBounds(null, roundIcon(icon, active), null, null)
             }
             if (view.text.toString() != label) view.text = label
+            // Screen readers hear whether a switch is on (2.6): its colour alone doesn't say.
+            view.contentDescription = if (key in MenuButtons.switches) "$label, ${if (active) "on" else "off"}" else label
             if (view.isEnabled != enabled) {
                 view.isEnabled = enabled
                 // Fades rather than jumps (2.3).
@@ -1238,7 +1256,7 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
         // At least this tall, taller with large phone text (the name never gets cut).
         view.minHeight = dp(88)
         Ui.pressable(view, 0.92f)
-        val item = Item(view, action ?: { tab -> run(key, tab) })
+        val item = Item(key, view, action ?: { tab -> run(key, tab) })
         item.set(icon, label)
         view.setOnClickListener {
             val tab = TabManager.current ?: return@setOnClickListener

@@ -23,19 +23,18 @@ object WhatsNew {
     private class Item(val icon: Int, val title: String, val text: String)
 
     private val NEW = listOf(
-        Item(R.drawable.ic_documents, "Reading mode", "In a document, the bars go away while you read; tap the page to bring them back. A page counter and a handle to scroll fast."),
-        Item(R.drawable.ic_bookmarks, "Find your way in PDFs", "Go to a page, the PDF's contents, page previews, and a double tap or two fingers to zoom with sharp text."),
-        Item(R.drawable.ic_edit, "Fill in and sign PDFs", "Fill in forms, highlight, draw your signature or add text, then save a copy to Downloads."),
-        Item(R.drawable.ic_play, "Books and slideshows", "E-books turn page by page with your choice of font and spacing. PowerPoint plays as a slideshow, with its speaker notes."),
-        Item(R.drawable.ic_download, "Save as PDF, print, ZIP files", "Save Word, Excel and PowerPoint files as PDF or print them. ZIP files show what is inside, and documents in them open."),
-        Item(R.drawable.ic_folder, "A tidier Documents screen", "Star documents, sort them, look through one folder, rename or delete files, and put a document on the home screen."),
-        Item(R.drawable.ic_palette, "Make any colour", "Your own colour is made with a colour maker, and Swift keeps it exactly as you made it."),
+        Item(R.drawable.ic_delete, "Clear by time", "Clear what you did in the last hour, day, week or 4 weeks, or all of it, and choose what: history, cookies, downloads list and more. ≡ → Quit can clear it too."),
+        Item(R.drawable.ic_password, "Saved passwords", "Swift offers to keep your sign-ins, locked on this phone, and fills them in. See them in Settings → Privacy & backup."),
+        Item(R.drawable.ic_translate, "Translate pages", "≡ → Translate turns a page into your language, on the phone itself."),
+        Item(R.drawable.ic_search, "Quicker searching", "Select text to search, share or hear it. The address completes as you type, and \"yt cats\" searches YouTube."),
+        Item(R.drawable.ic_bookmarks, "Bookmark folders", "Put bookmarks in folders, search them, and bring yours over from Chrome or Firefox."),
+        Item(R.drawable.ic_dark, "And more", "Dark pages for sites without a dark mode, a home screen widget, a New tab tile, data used per day, a page's QR code, and a new logo."),
     )
 
     private class Card(val icon: Int, val title: String, val text: String)
 
     private val WELCOME = listOf(
-        Card(R.drawable.ic_shield, "Ads blocked on every site", "Swift's ad blocker stops ads, pop-ups and trackers. Choose how strict it is from ≡ → Ad blocker."),
+        Card(R.drawable.ic_shield, "Ads blocked on every site", "Swift's ad blocker stops ads, pop-ups and trackers. Choose how strict it is from ≡ → Ad blocking."),
         Card(R.drawable.ic_headphones, "Music and videos keep playing", "They go on when you switch tabs, open another app or turn the screen off. Set a sleep timer from the notification."),
         Card(R.drawable.ic_lite, "Smooth on your phone", "If a site feels slow, turn on Lite mode in the ≡ menu for the smoothest scrolling."),
     )

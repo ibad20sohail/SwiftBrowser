@@ -16,7 +16,6 @@ import java.io.InputStream
 import java.net.URL
 import java.text.SimpleDateFormat
 import java.util.Locale
-import java.util.concurrent.Executors
 
 /** One story: its headline, address, the site it is from, when, and a picture's address if any. */
 data class Story(
@@ -65,10 +64,11 @@ object News {
     private const val MAX_FEED_BYTES = 3_000_000
     private const val ACCEPT = "application/rss+xml, application/atom+xml, application/xml, text/xml, text/html;q=0.8, */*;q=0.5"
 
-    private val io = Executors.newSingleThreadExecutor()
+    private val io = com.swiftbrowser.core.Background.single("news")
     private val main = Handler(Looper.getMainLooper())
     private val memory = HashMap<String, Pair<Long, List<Story>>>()
     private val loading = HashSet<String>()
+    private val waiting = HashMap<String, ArrayList<(List<Story>?) -> Unit>>()
 
     /** The country of the news: chosen in Settings, or the phone's region when it has an English edition. */
     fun country(): String {
@@ -126,6 +126,9 @@ object News {
      */
     fun refresh(ctx: Context, topic: String, done: (List<Story>?) -> Unit) {
         val key = cacheKey(topic)
+        // Asked again while loading (2.6): told with the first caller, not forgotten (a pull-down
+        // spinner kept turning).
+        waiting.getOrPut(key) { ArrayList() } += done
         if (!loading.add(key)) return
         val app = ctx.applicationContext
         val t = topics.firstOrNull { it.key == topic }
@@ -151,7 +154,8 @@ object News {
             main.post {
                 loading.remove(key)
                 if (stories != null) memory[key] = System.currentTimeMillis() to stories
-                done(stories?.let { visible(it) })
+                val shown = stories?.let { visible(it) }
+                waiting.remove(key)?.forEach { it(shown) }
             }
         }
     }

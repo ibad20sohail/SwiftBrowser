@@ -4,9 +4,8 @@ import android.os.Handler
 import android.os.Looper
 import com.swiftbrowser.BuildConfig
 import org.json.JSONObject
-import java.net.HttpURLConnection
-import java.net.URL
-import java.util.concurrent.Executors
+import org.mozilla.geckoview.GeckoWebExecutor
+import org.mozilla.geckoview.WebRequest
 
 /**
  * New versions of Swift are published as GitHub releases with the APK attached; this asks GitHub
@@ -19,7 +18,7 @@ object Updates {
 
     class Release(val version: String, val apkUrl: String, val apkName: String, val size: Long, val notes: String)
 
-    private val io = Executors.newSingleThreadExecutor()
+    private val io = Background.single("updates")
     private val main = Handler(Looper.getMainLooper())
 
     /** The id of the update download, so the installer can open when it has finished. */
@@ -46,28 +45,31 @@ object Updates {
         latest { r -> if (r != null && isNewer(r.version, BuildConfig.VERSION_NAME)) callback(r) }
     }
 
+    /** Through the engine, like pages (2.6): with the VPN on, the check goes through it too. */
     private fun fetch(): Release? {
-        val conn = URL(LATEST).openConnection() as HttpURLConnection
-        conn.connectTimeout = 10_000
-        conn.readTimeout = 15_000
-        conn.setRequestProperty("Accept", "application/vnd.github+json")
-        conn.setRequestProperty("User-Agent", "Swift/${BuildConfig.VERSION_NAME}")
-        try {
-            if (conn.responseCode != 200) return null
-            val json = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
-            val version = json.optString("tag_name").removePrefix("v").trim()
-            val assets = json.optJSONArray("assets") ?: return null
-            for (i in 0 until assets.length()) {
-                val a = assets.getJSONObject(i)
-                val name = a.optString("name")
-                if (name.endsWith(".apk", ignoreCase = true)) {
-                    return Release(version, a.optString("browser_download_url"), name, a.optLong("size", -1), json.optString("body"))
-                }
-            }
+        val request = WebRequest.Builder(LATEST)
+            .method("GET")
+            .addHeader("Accept", "application/vnd.github+json")
+            .addHeader("User-Agent", "Swift/${BuildConfig.VERSION_NAME}")
+            .build()
+        val response = com.swiftbrowser.engine.Engine.executor.fetch(request, GeckoWebExecutor.FETCH_FLAGS_ANONYMOUS).poll(20_000)
+            ?: return null
+        val body = response.body
+        if (response.statusCode != 200 || body == null) {
+            body?.close()
             return null
-        } finally {
-            conn.disconnect()
         }
+        val json = JSONObject(body.use { String(it.readBytes(), Charsets.UTF_8) })
+        val version = json.optString("tag_name").removePrefix("v").trim()
+        val assets = json.optJSONArray("assets") ?: return null
+        for (i in 0 until assets.length()) {
+            val a = assets.getJSONObject(i)
+            val name = a.optString("name")
+            if (name.endsWith(".apk", ignoreCase = true)) {
+                return Release(version, a.optString("browser_download_url"), name, a.optLong("size", -1), json.optString("body"))
+            }
+        }
+        return null
     }
 
     private const val RELEASE_DOWNLOADS = "https://github.com/ibad20sohail/SwiftBrowser/releases/download/"

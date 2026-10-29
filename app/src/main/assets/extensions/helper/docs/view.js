@@ -114,6 +114,11 @@ const askedAt = new Map();
 function onRange(msg) {
   const begin = askedAt.get(msg.req);
   askedAt.delete(msg.req);
+  if (msg.error) {
+    problem("Swift couldn't read this PDF any more. It may have been moved, or the app it came from no longer shares it.",
+      [{ label: 'Open with another app', action: 'open-with' }]);
+    return;
+  }
   if (pdfRange && begin !== undefined && msg.data) { pdfRange.onDataRange(begin, b64(msg.data)); }
 }
 
@@ -166,6 +171,8 @@ function toast(text, ms) {
 
 function dark() { return matchMedia('(prefers-color-scheme: dark)').matches; }
 
+function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+
 function loadScript(src) {
   return new Promise((resolve, reject) => {
     if (document.querySelector('script[src="' + src + '"]')) { resolve(); return; }
@@ -202,7 +209,7 @@ function savePlace(place, progress, total) {
   }, 700);
 }
 
-const PROTECTED = 'This file is protected with a password. Swift can’t open protected Office files: open it with another app.';
+const PROTECTED = "This file is protected with a password. Swift can't open protected Office files: open it with another app.";
 
 /** Office 2007+ files that are encrypted are stored inside an old-style container instead of a ZIP. */
 function locked(buf) {
@@ -221,6 +228,12 @@ async function start(msg) {
   document.documentElement.style.setProperty('--kind', k[1]);
   const accent = dark() ? info.accentDark : info.accentLight;
   if (accent) { document.documentElement.style.setProperty('--accent', accent); }
+  // Swift's own colours (2.6), so the viewer looks like the rest of the app.
+  const colors = dark() ? info.colorsDark : info.colorsLight;
+  if (colors) {
+    const map = { bg: '--bg', surface: '--surface', text: '--text', muted: '--muted', line: '--line', accent: '--accent', onAccent: '--on-accent' };
+    for (const k in map) { if (colors[k]) { document.documentElement.style.setProperty(map[k], colors[k]); } }
+  }
   status('Opening…');
   try {
     if (info.kind === 'pdf') {
@@ -264,6 +277,64 @@ function restoreSize() {
   if (!viewer.size || info.kind === 'pdf' || !(s > 0) || s === 1) { return; }
   scale = s;
   viewer.size(scale);
+}
+
+// ------------------------------------------------------------------ Back closes what is open (2.6)
+
+// The menu, panels, page previews, the slideshow, find and Fill & sign each take one step of
+// Back: while any is open the page has one extra history entry, and Back closes the top one.
+const overlays = [];
+let pushed = false;
+let skipPop = false;
+function opened(close) {
+  if (!overlays.includes(close)) { overlays.push(close); }
+  if (!pushed) {
+    history.pushState({ swift: 1 }, '');
+    pushed = true;
+  }
+}
+function closed(close) {
+  const i = overlays.indexOf(close);
+  if (i >= 0) { overlays.splice(i, 1); }
+  if (!overlays.length && pushed) {
+    pushed = false;
+    skipPop = true;
+    history.back();
+  }
+}
+addEventListener('popstate', () => {
+  if (skipPop) { skipPop = false; return; }
+  pushed = false;
+  const close = overlays.pop();
+  if (close) { close(true); }
+  // Something else is still open (a menu over the page previews): the next Back closes it.
+  if (overlays.length) {
+    history.pushState({ swift: 1 }, '');
+    pushed = true;
+  }
+});
+
+/** A question inside the page, with its own buttons (Save / Discard), unlike the browser's OK/Cancel. */
+function ask(text, buttons) {
+  const box = document.createElement('div');
+  box.id = 'ask';
+  const card = document.createElement('div');
+  card.className = 'card';
+  const p = document.createElement('p');
+  p.textContent = text;
+  card.appendChild(p);
+  const row = document.createElement('div');
+  row.className = 'row';
+  for (const [label, run, main] of buttons) {
+    const b = document.createElement('button');
+    b.textContent = label;
+    if (main) { b.className = 'main'; }
+    b.addEventListener('click', () => { box.remove(); run(); });
+    row.appendChild(b);
+  }
+  card.appendChild(row);
+  box.appendChild(card);
+  document.body.appendChild(box);
 }
 
 // ------------------------------------------------------------------ reading mode (2.5)
@@ -354,11 +425,17 @@ function watchScroll(el) {
 }
 
 let pillTimer = 0;
+let pillQueued = false;
 function showPill() {
+  if (pillQueued) { return; }
+  pillQueued = true;
+  requestAnimationFrame(() => { pillQueued = false; drawPill(); });
+}
+function drawPill() {
   const label = viewer.pageLabel ? viewer.pageLabel() : null;
   const pill = $('#pagepill');
   if (label) {
-    pill.textContent = label;
+    if (pill.textContent !== label) { pill.textContent = label; }
     pill.hidden = false;
     pill.classList.remove('fade');
   }
@@ -779,7 +856,7 @@ RENDER.sheet = async buf => {
       p.className = 'flow';
       p.textContent = 'This sheet is empty.';
       pane.appendChild(p);
-      savePlace(i, names.length > 1 ? i / (names.length - 1) : 0.5, names.length);
+      savePlace(i, 0, names.length);
       return;
     }
     const table = document.createElement('table');
@@ -814,7 +891,8 @@ RENDER.sheet = async buf => {
     more();
     requestAnimationFrame(pin);
     pane.scrollTo(0, 0);
-    savePlace(i, names.length > 1 ? i / (names.length - 1) : 0.5, names.length);
+    // Which sheet was open, for reopening; a sheet's number isn't how far it was read (2.6).
+    savePlace(i, 0, names.length);
   }
 
   names.forEach((name, i) => {
@@ -1041,11 +1119,15 @@ function slideshow(slides, notes, at) {
     at = i;
     render();
   }
-  function close() {
+  function end() {
     removeEventListener('resize', render);
     show.remove();
     slides[at].scrollIntoView({ block: 'center' });
     setReading(false);
+  }
+  function close() {
+    end();
+    closed(end);
   }
   let t0 = null;
   show.addEventListener('touchstart', e => {
@@ -1068,6 +1150,7 @@ function slideshow(slides, notes, at) {
   }, { passive: true });
   addEventListener('resize', render);
   document.body.appendChild(show);
+  opened(end);
   setReading(true);
   render();
   wake();
@@ -1282,12 +1365,15 @@ function stylePanel(style, apply) {
   const done = document.createElement('button');
   done.className = 'done';
   done.textContent = 'Done';
+  const panelOverlay = () => { panel.hidden = true; };
   done.addEventListener('click', () => {
     panel.hidden = true;
+    closed(panelOverlay);
     if (JSON.stringify(st) !== JSON.stringify(style)) { apply(st); }
   });
   panel.appendChild(done);
   panel.hidden = false;
+  opened(panelOverlay);
 }
 
 // ------------------------------------------------------------------ text files
@@ -1566,7 +1652,7 @@ RENDER.zip = async () => {
     size.textContent = e.size >= 0 ? formatSize(e.size) : '';
     b.append(badge, name, size);
     b.addEventListener('click', () => {
-      if (!k) { toast('Swift can’t open this kind of file.'); return; }
+      if (!k) { toast("Swift can't show this kind of file."); return; }
       toast('Opening ' + name.textContent + '…');
       action('open-entry', { entry: e.name });
     });
@@ -1614,7 +1700,7 @@ async function openPdf() {
     // Pages drawn sharp up to about 6 megapixels each: enough when zoomed in, light on memory.
     maxCanvasPixels: 6 * 1024 * 1024,
     // Dark mode: the pages turn dark too, their pictures keep their colours.
-    pageColors: dark() ? { background: '#1d1e22', foreground: '#dcdce0' } : null,
+    pageColors: dark() ? { background: cssVar('--surface') || '#1d1e22', foreground: cssVar('--text') || '#dcdce0' } : null,
   });
   linkService.setViewer(pdfViewer);
   const params = {
@@ -1630,9 +1716,13 @@ async function openPdf() {
     // Only the pieces needed for the pages on screen: a big PDF opens quickly and stays light.
     pdfRange = new lib.PDFDataRangeTransport(info.size, null);
     pdfRange.requestDataRange = (begin, end) => {
-      const req = nextReq++;
-      askedAt.set(req, begin);
-      send({ type: 'doc-range', id, req, begin, end });
+      // pdf.js only accepts pieces that end on its own chunk size (or at the end of the file).
+      const piece = Math.floor(4194304 / params.rangeChunkSize) * params.rangeChunkSize;
+      for (let at = begin; at < end; at += piece) {
+        const req = nextReq++;
+        askedAt.set(req, at);
+        send({ type: 'doc-range', id, req, begin: at, end: Math.min(end, at + piece) });
+      }
     };
     params.range = pdfRange;
     params.length = info.size;
@@ -1732,7 +1822,7 @@ async function openPdf() {
       // Swift says when it is saved.
       $('#toast').hidden = true;
     } catch (e) {
-      toast('Swift couldn’t save this PDF.');
+      toast("Swift couldn't save this PDF.");
     }
   };
   viewer.saveCopy = () => { if (dirty) { saveFilled(); } else { action('save-copy'); } };
@@ -1769,14 +1859,29 @@ async function openPdf() {
     }
     add('Undo', () => eventBus.dispatch('editingaction', { source: null, name: 'undo' }));
     add('Save', saveFilled).className = 'main';
-    add('Done', () => {
+    const finish = () => {
       setMode(T.NONE);
       viewer.editing = false;
       viewer.drawing = false;
       bar.hidden = true;
       document.body.classList.remove('editing');
-      if (dirty && confirm('Save a copy with your changes in Downloads?')) { saveFilled(); }
-    });
+    };
+    // Leaving with changes not saved: say so instead of throwing them away (2.6).
+    const leave = byBack => {
+      if (!dirty) {
+        finish();
+        if (!byBack) { closed(leave); }
+        return;
+      }
+      if (byBack) { opened(leave); }
+      ask('Your changes to this PDF are not saved yet.', [
+        ['Keep editing', () => {}],
+        ['Discard', () => { dirty = false; finish(); closed(leave); }],
+        ['Save a copy', () => { saveFilled(); finish(); closed(leave); }, true],
+      ]);
+    };
+    add('Done', () => leave(false));
+    opened(leave);
     bar.hidden = false;
     toast('Tap a form field to fill it in. Sign draws with your finger; Save puts a copy in Downloads.', 5000);
   };
@@ -1831,7 +1936,8 @@ function pagePreviews(pdf, pdfViewer) {
   close.setAttribute('aria-label', 'Close');
   close.innerHTML = '<svg viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>';
   head.append(title, close);
-  const done = () => { io.disconnect(); wrap.remove(); head.remove(); };
+  const remove = () => { io.disconnect(); wrap.remove(); head.remove(); };
+  const done = () => { remove(); closed(remove); };
   close.addEventListener('click', done);
   const queue = [];
   let busy = false;
@@ -1878,6 +1984,7 @@ function pagePreviews(pdf, pdfViewer) {
     if (n === current) { currentEl = t; }
   }
   document.body.append(wrap, head);
+  opened(remove);
   if (currentEl) { currentEl.scrollIntoView({ block: 'center' }); }
 }
 
@@ -1895,8 +2002,15 @@ $('#find').addEventListener('click', () => {
   bar.hidden = false;
   setReading(false);
   document.body.classList.add('finding');
+  opened(endFind);
   $('#findtext').focus();
 });
+function endFind() {
+  $('#findbar').hidden = true;
+  document.body.classList.remove('finding');
+  setFindCount('');
+  if (viewer.closeFind) { viewer.closeFind(); }
+}
 let findTimer = 0;
 $('#findtext').addEventListener('input', e => {
   clearTimeout(findTimer);
@@ -1907,10 +2021,8 @@ $('#findtext').addEventListener('keydown', e => { if (e.key === 'Enter') { viewe
 $('#findnext').addEventListener('click', () => viewer.find($('#findtext').value, true, false));
 $('#findprev').addEventListener('click', () => viewer.find($('#findtext').value, true, true));
 $('#findclose').addEventListener('click', () => {
-  $('#findbar').hidden = true;
-  document.body.classList.remove('finding');
-  setFindCount('');
-  if (viewer.closeFind) { viewer.closeFind(); }
+  endFind();
+  closed(endFind);
 });
 
 function zoom(f) {
@@ -1926,13 +2038,20 @@ $('#play').addEventListener('click', () => { if (viewer.slideshow) { viewer.slid
 
 // ------------------------------------------------------------------ the more menu
 
+const menuOverlay = () => { $('#menu').hidden = true; };
+function hideMenu() {
+  if ($('#menu').hidden) { return; }
+  $('#menu').hidden = true;
+  closed(menuOverlay);
+}
+
 function openMenu() {
   const menu = $('#menu');
   menu.textContent = '';
   const item = (label, run) => {
     const b = document.createElement('button');
     b.textContent = label;
-    b.addEventListener('click', () => { menu.hidden = true; run(); });
+    b.addEventListener('click', () => { run(); hideMenu(); });
     menu.appendChild(b);
   };
   const shown = info && $('#status').hidden;
@@ -1959,6 +2078,7 @@ function openMenu() {
   }
   menu.style.maxHeight = '';
   menu.hidden = false;
+  opened(menuOverlay);
 }
 
 function showChapters() {
@@ -1971,11 +2091,12 @@ function showChapters() {
       b.className = 'sub';
       b.style.paddingLeft = (18 + ch.depth * 16) + 'px';
     }
-    b.addEventListener('click', () => { menu.hidden = true; ch.go(); });
+    b.addEventListener('click', () => { ch.go(); hideMenu(); });
     menu.appendChild(b);
   }
   menu.style.maxHeight = '70vh';
   menu.hidden = false;
+  opened(menuOverlay);
 }
 
 function formatSize(n) {
@@ -1986,10 +2107,10 @@ function formatSize(n) {
 
 $('#more').addEventListener('click', e => {
   e.stopPropagation();
-  if ($('#menu').hidden) { openMenu(); } else { $('#menu').hidden = true; }
+  if ($('#menu').hidden) { openMenu(); } else { hideMenu(); }
 });
 document.addEventListener('click', e => {
-  if (!$('#menu').hidden && !e.target.closest('#menu')) { $('#menu').hidden = true; }
+  if (!$('#menu').hidden && !e.target.closest('#menu')) { hideMenu(); }
 });
 
 /** Save as PDF or print (2.5): everything is drawn first (a long sheet's rows), then Swift takes over. */

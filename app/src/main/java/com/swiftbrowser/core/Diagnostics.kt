@@ -14,7 +14,6 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import java.util.concurrent.Executors
 
 /**
  * What the app knows about how its runs end, for a problem report the user can send:
@@ -41,7 +40,7 @@ object Diagnostics {
         private set
 
     private lateinit var app: Context
-    private val io = Executors.newSingleThreadExecutor()
+    private val io = Background.single("diagnostics")
     private var runStart = 0L
     private val time = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
 
@@ -120,6 +119,16 @@ object Diagnostics {
         ).also { cachedBootId = it }
 
     /** Keeps this run's log on disk, so a report after Android closed the app still has it. */
+    /** Clearing all history (2.6): the logs, which name the sites of blocked pop-ups, start over. */
+    fun clearLogs() {
+        if (!::app.isInitialized) return
+        L.clear()
+        io.execute {
+            File(app.filesDir, LOG).delete()
+            File(app.filesDir, PREVIOUS_LOG).delete()
+        }
+    }
+
     fun flushLog() {
         if (!::app.isInitialized) return
         io.execute { flushLogNow() }
@@ -214,7 +223,9 @@ object Diagnostics {
         val extra = "Settings: tabs kept in memory ${prefs.maxLiveTabs}, pages drawn with ${if (prefs.softwareRendering) "CPU" else "GPU"}, " +
             "ad blocking ${AdBlock.global.label}, Lite mode ${prefs.liteMode}, saving battery ${com.swiftbrowser.engine.Power.saving}, sites as designed ${prefs.sitesAsDesigned}, full screen ${prefs.fullScreen}, " +
             "keep playing ${prefs.keepPlaying}, text size ${(prefs.textScale * 100).toInt()}%\n" +
-            "Tabs: ${tabs.size} open, ${tabs.count { it.session != null }} loaded; current site: ${UrlUtils.siteName(TabManager.current?.url)}"
+            "Tabs: ${tabs.size} open, ${tabs.count { it.session != null }} loaded; current site: " +
+            // An incognito tab's site stays private, even in a problem report (2.6).
+            (TabManager.current?.let { if (it.incognito) "(incognito)" else UrlUtils.siteName(it.url) } ?: "")
         share(activity, extra)
     }
 

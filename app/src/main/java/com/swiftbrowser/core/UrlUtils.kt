@@ -32,6 +32,8 @@ object UrlUtils {
             // "example.com:8080/path" parses like a scheme; treat it as a host with a port.
             if (!looksLikeHost(t)) return t
         }
+        // "yt cats": a search shortcut (2.6).
+        SearchShortcuts.match(t)?.let { return it }
         if (!t.contains(' ') && looksLikeHost(t)) {
             // Routers and other local devices (192.168.x.x, localhost) rarely support HTTPS.
             val host = t.substringBefore('/').substringBefore('?').substringBefore(':')
@@ -111,7 +113,6 @@ object UrlUtils {
         }
     }
 
-    /** What the address bar shows when not editing. */
     /**
      * A page's name for lists (history, bookmarks): its title, except that a search results page
      * whose title is only its address reads "swift browser – DuckDuckGo" (2.2).
@@ -128,6 +129,7 @@ object UrlUtils {
         return t.ifEmpty { display(url) }
     }
 
+    /** What the address bar shows when not editing. */
     fun display(url: String?): String {
         if (url.isNullOrBlank() || url == "about:blank") return ""
         return try {
@@ -159,7 +161,11 @@ object UrlUtils {
 
     fun sanitizeFileName(name: String): String {
         val cleaned = name.replace(BAD_CHARS, "_").trim().trim('.')
-        return (if (cleaned.isEmpty()) "download" else cleaned).take(120)
+        if (cleaned.isEmpty()) return "download"
+        if (cleaned.length <= 120) return cleaned
+        // Too long: shortened before the extension, which stays (2.6).
+        val ext = cleaned.substringAfterLast('.', "").takeIf { it.length in 1..10 && ' ' !in it }
+        return if (ext == null) cleaned.take(120) else cleaned.take(119 - ext.length).trimEnd() + "." + ext
     }
 
     /** Picks a file name from Content-Disposition, the URL, or the MIME type. */

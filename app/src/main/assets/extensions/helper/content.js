@@ -139,6 +139,9 @@
 
   // Films and episodes, not clips or ads.
   const MIN_LENGTH = 120;
+  // How often a playing video's place is reported (2.6: was 5 seconds); each report is written to
+  // the phone's storage. Pausing and finishing still report at once.
+  const REPORT_EVERY = 20000;
   const started = new WeakSet();
   let lastReport = 0;
 
@@ -161,12 +164,12 @@
     send({ type: 'video-pos', t: ended ? v.duration : v.currentTime, d: v.duration, ended: ended === true, img: videoPicture(v) });
   }
 
-  // Every few seconds while playing, and when paused or finished.
+  // Every 20 seconds while playing, and when paused or finished.
   document.addEventListener('timeupdate', ev => {
     const v = ev.target;
     if (!longVideo(v) || v.paused) { return; }
     const now = Date.now();
-    if (now - lastReport < 5000) { return; }
+    if (now - lastReport < REPORT_EVERY) { return; }
     lastReport = now;
     reportPosition(v, false);
   }, true);
@@ -216,8 +219,11 @@
   // With "Keep playing in the background" on, a page that is playing a video or music is not told
   // that it went out of view (another tab, another app, the screen off): many players, YouTube's
   // among them, pause themselves when that happens. Other pages are told as usual.
+  // The setting is read and the document's visibility wrapped once something plays in this frame
+  // (2.6): most frames (ads, trackers, widgets) never play anything, so they do no work at start.
   let keepPlaying = false;
   let pretending = false;
+  let watching = false;
 
   function mediaPlaying() {
     for (const m of document.querySelectorAll('video, audio')) {
@@ -231,28 +237,43 @@
     if (!keepPlaying) { pretending = false; }
   }
 
-  try {
-    browser.storage.local.get('look').then(r => lookChanged(r && r.look), () => { });
-    browser.storage.onChanged.addListener((changes, area) => {
-      if (area === 'local' && changes.look) { lookChanged(changes.look.newValue); }
-    });
-  } catch (e) { }
+  function watchVisibility() {
+    watching = true;
+    window.removeEventListener('play', onFirstMedia, true);
+    window.removeEventListener('timeupdate', onFirstMedia, true);
+    try {
+      browser.storage.local.get('look').then(r => lookChanged(r && r.look), () => { });
+      browser.storage.onChanged.addListener((changes, area) => {
+        if (area === 'local' && changes.look) { lookChanged(changes.look.newValue); }
+      });
+    } catch (e) { }
 
-  try {
-    const page = document.wrappedJSObject;
-    Object.defineProperty(page, 'hidden', {
-      configurable: true,
-      enumerable: true,
-      get: exportFunction(function () { return pretending ? false : document.hidden; }, window),
-    });
-    Object.defineProperty(page, 'visibilityState', {
-      configurable: true,
-      enumerable: true,
-      get: exportFunction(function () { return pretending ? 'visible' : document.visibilityState; }, window),
-    });
-  } catch (e) { }
+    try {
+      const page = document.wrappedJSObject;
+      Object.defineProperty(page, 'hidden', {
+        configurable: true,
+        enumerable: true,
+        get: exportFunction(function () { return pretending ? false : document.hidden; }, window),
+      });
+      Object.defineProperty(page, 'visibilityState', {
+        configurable: true,
+        enumerable: true,
+        get: exportFunction(function () { return pretending ? 'visible' : document.visibilityState; }, window),
+      });
+    } catch (e) { }
+  }
 
-  // Capture phase on the window: before any of the page's own listeners.
+  // The first video or song that plays here sets it up; 'timeupdate' also catches one that was
+  // already playing when it was put in the page. On the window, before the page's own listeners.
+  function onFirstMedia(ev) {
+    const m = ev.target;
+    if (!watching && m && (m.tagName === 'VIDEO' || m.tagName === 'AUDIO')) { watchVisibility(); }
+  }
+  window.addEventListener('play', onFirstMedia, true);
+  window.addEventListener('timeupdate', onFirstMedia, true);
+
+  // Capture phase on the window: before any of the page's own listeners. So it is added in every
+  // frame from the start (it does nothing until the page is hidden while something plays).
   window.addEventListener('visibilitychange', ev => {
     if (ev.target !== document) { return; }
     if (document.hidden) {
@@ -269,6 +290,7 @@
 
   // The sleep timer can stop playback "at the end of this video"; any media that finishes says so.
   document.addEventListener('ended', ev => {
+    if (!ev.isTrusted) { return; }
     const m = ev.target;
     if (m && (m.tagName === 'VIDEO' || m.tagName === 'AUDIO') && Number.isFinite(m.duration) && m.duration > 20) {
       send({ type: 'media-ended' });

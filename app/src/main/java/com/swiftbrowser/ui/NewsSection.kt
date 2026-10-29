@@ -178,6 +178,7 @@ class NewsSection(context: Context, private val listener: Listener) : LinearLayo
         } else {
             stories = emptyList()
             body.removeAllViews()
+        lastScan = Int.MIN_VALUE
             message.visibility = View.GONE
             skeleton.visibility = View.VISIBLE
             refresh(force = false)
@@ -213,6 +214,7 @@ class NewsSection(context: Context, private val listener: Listener) : LinearLayo
     private fun showMessage(icon: Int, title: String, hint: String) {
         skeleton.visibility = View.GONE
         body.removeAllViews()
+        lastScan = Int.MIN_VALUE
         message.removeAllViews()
         message.addView(Ui.emptyState(context, icon, title, hint).apply { setPadding(0, 0, 0, 0) })
         Motion.fadeIn(message, fromDy = 8)
@@ -220,28 +222,60 @@ class NewsSection(context: Context, private val listener: Listener) : LinearLayo
 
     private fun setStories(list: List<Story>, animate: Boolean) {
         stories = list
+        ready.clear()
+        readyFrom = -1
+        lastScan = Int.MIN_VALUE
         builtCards = com.swiftbrowser.SwiftApp.prefs.newsCards
         skeleton.visibility = View.GONE
         message.visibility = View.GONE
         body.removeAllViews()
+        lastScan = Int.MIN_VALUE
         shown = 0
         showMore()
         if (animate) Motion.stagger(body, step = 30, max = 6)
         post { checkVisible() }
     }
 
+    private fun build(s: Story): View = if (builtCards) card(s) else row(s)
+
     private fun showMore() {
         val end = (shown + PAGE).coerceAtMost(stories.size)
+        val prebuilt = if (readyFrom == shown) ready.toList() else emptyList()
+        ready.clear()
+        readyFrom = -1
         for (i in shown until end) {
-            if (builtCards) {
-                body.addView(card(stories[i]))
-            } else {
-                if (body.childCount > 0) body.addView(Ui.divider(context, 16))
-                body.addView(row(stories[i]))
-            }
+            val view = prebuilt.getOrNull(i - shown) ?: build(stories[i])
+            if (!builtCards && body.childCount > 0) body.addView(Ui.divider(context, 16))
+            body.addView(view)
         }
         shown = end
+        prepareMore()
     }
+
+    /**
+     * The next rows, built ahead one at a time while the phone has nothing else to do (2.6), so
+     * reaching the end of the news doesn't stop the scroll to build 15 of them at once.
+     */
+    private val ready = ArrayList<View>()
+    private var readyFrom = -1
+
+    private fun prepareMore() {
+        if (shown >= stories.size) return
+        readyFrom = shown
+        ready.clear()
+        val list = stories
+        android.os.Looper.myQueue().addIdleHandler {
+            val next = readyFrom + ready.size
+            if (stories !== list || readyFrom != shown || !isAttachedToWindow || next >= (shown + PAGE).coerceAtMost(stories.size)) {
+                return@addIdleHandler false
+            }
+            ready += build(stories[next])
+            true
+        }
+    }
+
+    /** Where the last look at the rows was made from: small scrolls don't look again (2.6). */
+    private var lastScan = Int.MIN_VALUE
 
     private val visible = android.graphics.Rect()
 
@@ -253,6 +287,7 @@ class NewsSection(context: Context, private val listener: Listener) : LinearLayo
     /** The home page went out of sight: its pictures are let go (recent ones stay in PreviewLoader's small cache). */
     fun releasePictures() {
         for (i in 0 until body.childCount) release(body.getChildAt(i))
+        lastScan = Int.MIN_VALUE
     }
 
     private fun release(row: View) {
@@ -267,7 +302,13 @@ class NewsSection(context: Context, private val listener: Listener) : LinearLayo
      * its top). Pictures load for rows coming into view, and more rows are added near the end.
      */
     fun onScrolled(visibleBottom: Int, visibleTop: Int = 0) {
-        if (shown < stories.size && visibleBottom > body.top + body.height - Ui.dp(context, 600)) showMore()
+        if (shown < stories.size && visibleBottom > body.top + body.height - Ui.dp(context, 600)) {
+            showMore()
+            lastScan = Int.MIN_VALUE
+        }
+        // Every scroll frame comes here: the rows are looked at again only after 48 dp of scrolling.
+        if (lastScan != Int.MIN_VALUE && kotlin.math.abs(visibleBottom - lastScan) < Ui.dp(context, 48)) return
+        lastScan = visibleBottom
         val limit = visibleBottom + Ui.dp(context, 300)
         // Pictures far out of sight (2.3) are let go, so a long scroll down the news doesn't keep them all.
         val far = Ui.dp(context, 1600)

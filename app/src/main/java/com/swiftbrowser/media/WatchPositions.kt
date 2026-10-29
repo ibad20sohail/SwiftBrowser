@@ -23,9 +23,15 @@ object WatchPositions {
 
     private val main = Handler(Looper.getMainLooper())
 
+    /** Old videos are forgotten (all but the last 300) once per run, with the first save (2.6). Only used on TabManager.io. */
+    private var trimmed = false
+
     private fun pageKey(url: String) = url.substringBefore('#')
 
-    /** A content script reported where a long video is (every few seconds while it plays). */
+    /**
+     * A content script reported where a long video is: every 20 seconds while it plays (2.6: was 5,
+     * each one written to the phone's storage), and at once when it pauses or ends.
+     */
     fun onPosition(tab: Tab, msg: JSONObject) {
         if (!SwiftApp.prefs.continueWatching || tab.incognito) return
         val t = msg.optDouble("t", -1.0)
@@ -41,7 +47,12 @@ object WatchPositions {
         // Its picture, for the home page's "Continue" (2.3).
         val image = msg.optString("img").takeIf { it.startsWith("http") && it.length < 2000 }
         TabManager.io.execute {
-            if (finished) SwiftApp.db.deleteVideoPosition(page) else SwiftApp.db.setVideoPosition(page, t, d, image)
+            if (finished) {
+                SwiftApp.db.deleteVideoPosition(page)
+            } else {
+                SwiftApp.db.setVideoPosition(page, t, d, image, trim = !trimmed)
+                trimmed = true
+            }
         }
     }
 

@@ -144,10 +144,9 @@ object Storage {
         )
     }
 
-    /** Everything of sites not visited for [days] days (not those open in a tab); returns how many. */
-    fun clearUnused(ctx: Context, days: Int): Int {
+    /** Everything of sites not visited for [days] days (not the [open] ones, in a tab); returns how many. */
+    fun clearUnused(ctx: Context, days: Int, open: Set<String>): Int {
         val limit = System.currentTimeMillis() - days * 86_400_000L
-        val open = TabManager.tabs.mapNotNull { UrlUtils.site(it.url) }.toSet()
         val old = sites(ctx).filter { it.lastVisit < limit && it.site !in open }
         for (s in old) Engine.runtime.storageController.clearDataFromBaseDomain(s.site, StorageController.ClearFlags.ALL)
         return old.size

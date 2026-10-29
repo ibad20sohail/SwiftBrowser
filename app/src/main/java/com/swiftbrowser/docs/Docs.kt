@@ -75,7 +75,7 @@ object Docs {
         ODT("odt", "Text document", 0xFF2B579A.toInt(), "odt", "application/vnd.oasis.opendocument.text"),
         ODP("odp", "Presentation", 0xFFC43E1C.toInt(), "odp", "application/vnd.oasis.opendocument.presentation"),
         RTF("rtf", "Rich text", 0xFF2B579A.toInt(), "rtf", "application/rtf text/rtf"),
-        TEXT("text", "Text", 0xFF5F6368.toInt(), "txt log md markdown json xml ini cfg conf yaml yml srt vtt sub",
+        TEXT("text", "Text", 0xFF5F6368.toInt(), "txt log md markdown json xml ini cfg yaml yml srt vtt sub",
             "text/plain text/markdown application/json text/xml"),
         ZIP("zip", "ZIP", 0xFF8D6E00.toInt(), "zip", "application/zip application/x-zip-compressed");
 
@@ -115,10 +115,21 @@ object Docs {
     class Doc(
         val id: String, val uri: String, val name: String, val kind: Kind, val size: Long, val web: String?,
         val place: String?, val progress: Float, val total: Int, val opened: Long, val updated: Long,
+        /** Opened in an incognito tab (2.6): kept in memory only, never in the documents table. */
+        val incognito: Boolean = false,
     )
 
     private val io = Executors.newSingleThreadExecutor()
+
+    /** Documents being copied from the web (2.6): their own thread, so open viewers keep reading meanwhile. */
+    private val web = com.swiftbrowser.core.Background.single("docs-web")
     private val main = Handler(Looper.getMainLooper())
+
+    /** Documents opened in incognito tabs, gone when the last incognito tab closes. */
+    private val incognitoDocs = java.util.concurrent.ConcurrentHashMap<String, Doc>()
+
+    /** The document with [id]: an incognito one in memory, or one in the documents table. */
+    fun find(id: String): Doc? = incognitoDocs[id] ?: SwiftApp.db.document(id)
 
     /** The viewer page for [id] (null until the helper extension is ready). */
     fun viewerUrl(id: String): String? = Helper.extension?.metaData?.baseUrl?.let { base ->
@@ -128,7 +139,7 @@ object Docs {
     fun isViewerUrl(url: String?): Boolean = url != null && url.startsWith("moz-extension://") && url.contains("/docs/view.html")
 
     /** The document a viewer tab shows. */
-    fun docOf(url: String?): Doc? = if (isViewerUrl(url)) SwiftApp.db.document(url!!.substringAfter('#')) else null
+    fun docOf(url: String?): Doc? = if (isViewerUrl(url)) find(url!!.substringAfter('#')) else null
 
     /** Where documents opened without keeping a copy (from the web, out of a ZIP) wait, for a week at most. */
     private fun tempDir(ctx: Context) = File(ctx.cacheDir, "docs")
@@ -140,7 +151,10 @@ object Docs {
      * Opens [uri] in a new tab, in Swift's viewer. [web]: the page link it was downloaded from (for
      * "Exact view (online)"). Says so and returns false when Swift can't show it.
      */
-    fun open(ctx: Context, uri: Uri, nameHint: String? = null, mimeHint: String? = null, web: String? = null): Boolean {
+    fun open(
+        ctx: Context, uri: Uri, nameHint: String? = null, mimeHint: String? = null, web: String? = null,
+        from: Tab? = null, incognito: Boolean = from?.incognito ?: false, backTo: String? = null,
+    ): Boolean {
         if (!readable(ctx, uri)) return false
         val (name, size) = describe(ctx, uri, nameHint)
         val mime = mimeHint ?: if (uri.scheme == ContentResolver.SCHEME_CONTENT) ctx.contentResolver.getType(uri) else null
@@ -153,16 +167,19 @@ object Docs {
             }
         }
         val key = uri.toString()
-        val id = idFor(key)
         val profile = Profiles.currentId
-        io.execute { SwiftApp.db.saveDocument(id, key, name, kind.key, size, web, profile) }
-        L.d("Opening document ${kind.key} ($size bytes)")
-        if (viewerUrl(id) == null) {
-            // Swift is still starting (opened from another app): the tab opens when the viewer can.
-            waiting += id
-            return true
+        val id: String
+        if (incognito) {
+            // Nothing about it is written down: not in Documents, Continue or the app's shortcuts.
+            id = idFor("incognito|$key")
+            val now = System.currentTimeMillis()
+            incognitoDocs[id] = Doc(id, key, name, kind, size, web, null, 0f, 0, now, now, incognito = true)
+        } else {
+            id = idFor(key, profile)
+            io.execute { SwiftApp.db.saveDocument(id, key, name, kind.key, size, web, profile) }
         }
-        reopen(id)
+        L.d("Opening document ${kind.key} ($size bytes)")
+        reopen(id, from, incognito, backTo)
         return true
     }
 
@@ -170,14 +187,15 @@ object Docs {
      * A document link on a website (2.5): read into Swift's cache and shown, without a copy in
      * Downloads. The viewer's Save a copy keeps one.
      */
-    fun openFromWeb(a: Activity, response: WebResponse, name: String, mime: String?, done: (Boolean) -> Unit) {
+    fun openFromWeb(a: Activity, tab: Tab, response: WebResponse, name: String, mime: String?, done: (Boolean) -> Unit) {
         val body = response.body
         if (body == null) {
             done(false)
             return
         }
-        io.execute {
-            val dir = File(tempDir(a), "web/" + idFor(response.uri).take(12))
+        val incognito = tab.incognito
+        web.execute {
+            val dir = File(tempDir(a), (if (incognito) "private/" else "web/") + idFor(response.uri).take(12))
             val file = File(dir, UrlUtils.sanitizeFileName(name).ifBlank { "document" })
             val ok = try {
                 dir.mkdirs()
@@ -189,19 +207,21 @@ object Docs {
                 false
             }
             main.post {
-                done(ok && !a.isFinishing && open(a, Uri.fromFile(file), name, mime, response.uri.takeIf { UrlUtils.isHttp(it) }))
+                done(ok && !a.isFinishing && open(a, Uri.fromFile(file), name, mime, response.uri.takeIf { UrlUtils.isHttp(it) }, from = tab.takeIf { it in TabManager.tabs }, incognito = incognito))
             }
         }
     }
 
-    private val waiting = ArrayList<String>()
+    private class Waiting(val id: String, val incognito: Boolean, val backTo: String?)
+
+    private val waiting = ArrayList<Waiting>()
     private var trimmed = false
 
     /** The helper extension is ready: documents asked for meanwhile open now. */
     fun onViewerReady() {
-        val ids = waiting.toList()
+        val list = waiting.toList()
         waiting.clear()
-        main.post { ids.forEach { reopen(it) } }
+        main.post { list.forEach { reopen(it.id, null, it.incognito, it.backTo) } }
         if (!trimmed) {
             trimmed = true
             val ctx = SwiftApp.instance ?: return
@@ -209,26 +229,60 @@ object Docs {
         }
     }
 
-    /** Copies Swift no longer needs: documents from the web or out of ZIPs not opened for a week. */
+    /**
+     * Copies Swift no longer needs: documents from the web or out of ZIPs not opened for a week
+     * (opening one marks it as used, see hello). Incognito copies never outlive their tabs.
+     */
     private fun trimTemp(ctx: Context) {
         val old = System.currentTimeMillis() - 7L * 24 * 3600 * 1000
+        File(tempDir(ctx), "private").deleteRecursively()
         tempDir(ctx).walkBottomUp().forEach { f ->
             if (f.isFile && f.lastModified() < old) f.delete()
             else if (f.isDirectory && f != tempDir(ctx) && f.list()?.isEmpty() == true) f.delete()
         }
     }
 
-    /** Opens a document Swift has seen before (Continue, Documents, a shortcut); its tab if it is open already. */
-    fun reopen(id: String): Boolean {
+    /**
+     * Opens a document Swift has seen before (Continue, Documents, a shortcut); its tab if it is open
+     * already. [from]: the tab it was opened from (Back returns there); [backTo]: the screen Back
+     * returns to otherwise (BACK_DOCUMENTS, BACK_DOWNLOADS, BACK_APP).
+     */
+    fun reopen(id: String, from: Tab? = null, incognito: Boolean = from?.incognito ?: false, backTo: String? = null): Boolean {
         val url = viewerUrl(id)
         if (url == null) {
-            if (id !in waiting) waiting += id
+            // Swift is still starting (opened from another app): the tab opens when the viewer can.
+            if (waiting.none { it.id == id }) waiting += Waiting(id, incognito, backTo)
             return true
         }
-        val open = TabManager.tabs.firstOrNull { it.url == url && !it.incognito }
-        if (open != null) TabManager.select(open) else TabManager.newTab(url, incognito = false)
+        val open = TabManager.tabs.firstOrNull { it.url == url && it.incognito == incognito }
+        if (open != null) {
+            TabManager.select(open)
+        } else {
+            val tab = TabManager.newTab(url, parent = from?.takeIf { it.incognito == incognito }, incognito = incognito)
+            tab.backTo = backTo
+        }
         return true
     }
+
+    /**
+     * Clearing browsing data (2.6): the copies of documents from the web and ZIPs are deleted (open
+     * ones say they're gone) and the shortcuts on Swift's icon follow the list.
+     */
+    fun clearCache(ctx: Context) {
+        web.execute { tempDir(ctx).deleteRecursively() }
+        io.execute { updateShortcuts(ctx) }
+    }
+
+    /** The last incognito tab closed: its documents are forgotten and their copies deleted. */
+    fun onIncognitoEnded() {
+        incognitoDocs.clear()
+        val ctx = SwiftApp.instance ?: return
+        web.execute { File(tempDir(ctx), "private").deleteRecursively() }
+    }
+
+    const val BACK_DOCUMENTS = "documents"
+    const val BACK_DOWNLOADS = "downloads"
+    const val BACK_APP = "app"
 
     /** Files inside Swift's own folders (its engine profile, cookies) are never shown to another app's request. */
     private fun readable(ctx: Context, uri: Uri): Boolean {
@@ -272,10 +326,17 @@ object Docs {
         return digest.take(10).joinToString("") { String.format("%02x", it) }
     }
 
+    /**
+     * A document's id in [profileId] (2.6): the same file opened in two profiles has two records, each
+     * with its own place. The first profile keeps the ids of earlier versions (open tabs, shortcuts).
+     */
+    fun idFor(key: String, profileId: Long): String = if (profileId <= 1L) idFor(key) else idFor("$profileId|$key")
+
     /** A record for a document not opened yet (a shortcut, a star), so it can be opened by its id. */
     fun remember(ctx: Context, uri: Uri, name: String, kind: Kind, size: Long): String {
-        val id = idFor(uri.toString())
-        if (SwiftApp.db.document(id) == null) SwiftApp.db.saveDocument(id, uri.toString(), name, kind.key, size, null, Profiles.currentId)
+        val profile = Profiles.currentId
+        val id = idFor(uri.toString(), profile)
+        if (SwiftApp.db.document(id) == null) SwiftApp.db.saveDocument(id, uri.toString(), name, kind.key, size, null, profile)
         return id
     }
 
@@ -319,33 +380,41 @@ object Docs {
     }
 
     private fun hello(id: String, port: WebExtension.Port) {
-        val doc = SwiftApp.db.document(id)
+        val doc = find(id)
         if (doc == null) {
             problem(port, "Swift doesn't have this document any more. Open it again from Documents.")
             return
         }
         val ctx = SwiftApp.instance ?: return
         val uri = Uri.parse(doc.uri)
-        val seekable = try {
-            descriptor(ctx, uri).use { it.statSize > 0 }
+        // The file as it is now: another app may have changed it since it was last opened.
+        val size = try {
+            descriptor(ctx, uri).use { it.statSize }
         } catch (e: Exception) {
             L.w("Can't open the document", e)
             problem(port, "Swift can't open this file now. It may have been moved or deleted, or the app it came from no longer shares it.")
             return
         }
-        SwiftApp.db.touchDocument(id)
+        // A cached copy (from the web, a ZIP) counts as used now: it is kept a week from today.
+        if (isTemp(ctx, uri)) File(uri.path.orEmpty()).setLastModified(System.currentTimeMillis())
+        if (!doc.incognito) {
+            SwiftApp.db.touchDocument(id)
+            if (size > 0 && size != doc.size) SwiftApp.db.setDocumentSize(id, size)
+        }
         // Not on the phone as a file of its own (from the web, a ZIP or another app): it can be kept.
         val copy = isTemp(ctx, uri) || uri.scheme == ContentResolver.SCHEME_CONTENT
         post(port, JSONObject().put("type", "doc-info").put("id", id).put("name", doc.name).put("kind", doc.kind.key)
-            .put("size", doc.size).put("ranges", seekable && doc.size > 0).put("place", doc.place ?: "")
+            .put("size", if (size > 0) size else doc.size).put("ranges", size > 0).put("place", doc.place ?: "")
             .put("progress", doc.progress.toDouble()).put("web", doc.web != null).put("where", where(ctx, doc))
-            .put("copy", copy).put("accentLight", Helper.accentColor(false)).put("accentDark", Helper.accentColor(true)))
-        updateShortcuts(ctx)
+            .put("copy", copy).put("accentLight", Helper.accentColor(false)).put("accentDark", Helper.accentColor(true))
+            .put("colorsLight", Helper.pageColors(false)).put("colorsDark", Helper.pageColors(true)))
+        if (!doc.incognito) updateShortcuts(ctx)
     }
 
     private fun where(ctx: Context, doc: Doc): String {
         val uri = Uri.parse(doc.uri)
         return when {
+            doc.incognito -> "Opened in an incognito tab (not kept)"
             isTemp(ctx, uri) && doc.web != null -> "From " + (UrlUtils.host(doc.web) ?: "the web") + " (not kept: Save a copy keeps one)"
             isTemp(ctx, uri) -> "From a ZIP file (not kept: Save a copy keeps one)"
             uri.scheme == ContentResolver.SCHEME_FILE -> File(uri.path.orEmpty()).parent.orEmpty()
@@ -365,7 +434,7 @@ object Docs {
     /** The whole file, in pieces; at most a few pieces wait to be sent at a time. */
     private fun sendWhole(id: String, port: WebExtension.Port) {
         val ctx = SwiftApp.instance ?: return
-        val doc = SwiftApp.db.document(id) ?: return
+        val doc = find(id) ?: return
         val inFlight = Semaphore(3)
         try {
             stream(ctx, Uri.parse(doc.uri)).use { input ->
@@ -411,10 +480,10 @@ object Docs {
         if (uri.scheme == ContentResolver.SCHEME_FILE) FileInputStream(uri.path) else ctx.contentResolver.openInputStream(uri)
             ?: throw java.io.FileNotFoundException(uri.toString())
 
-    /** PDFs: the bytes [begin] to [end] pdf.js asked for. */
+    /** PDFs: the bytes [begin] to [end] pdf.js asked for (the viewer asks for 4 MB at most at a time). */
     private fun sendRange(id: String, req: Int, begin: Long, end: Long, port: WebExtension.Port) {
         val ctx = SwiftApp.instance ?: return
-        val doc = SwiftApp.db.document(id) ?: return
+        val doc = find(id) ?: return
         val length = (end - begin).coerceIn(0, MAX_RANGE.toLong()).toInt()
         try {
             descriptor(ctx, Uri.parse(doc.uri)).use { pfd ->
@@ -432,15 +501,20 @@ object Docs {
             }
         } catch (e: Exception) {
             L.w("Couldn't read part of the PDF", e)
+            // The page says so instead of waiting for ever.
+            post(port, JSONObject().put("type", "doc-range-data").put("req", req).put("error", true))
         }
     }
 
     // ------------------------------------------------------------------ ZIP files (2.5)
 
+    /** The code page each ZIP's names were read in (see listZip), for taking files out of it. */
+    private val zipCharsets = java.util.concurrent.ConcurrentHashMap<String, Charset>()
+
     /** What a ZIP file holds (names and sizes), read by Swift: the file itself can be large. */
     private fun listZip(id: String, port: WebExtension.Port) {
         val ctx = SwiftApp.instance ?: return
-        val doc = SwiftApp.db.document(id) ?: return
+        val doc = find(id) ?: return
         val reply = JSONObject().put("type", "doc-zip-list")
         val entries = JSONArray()
         // Most ZIPs name their files in UTF-8; older Windows ones in the DOS code page.
@@ -456,6 +530,7 @@ object Docs {
                         entries.put(JSONObject().put("name", e.name).put("size", e.size).put("kind", kindOf(e.name, null)?.key ?: JSONObject.NULL))
                     }
                 }
+                zipCharsets[id] = charset
                 break
             } catch (e: IllegalArgumentException) {
                 // A name that isn't UTF-8: read the list again in the other code page.
@@ -469,34 +544,52 @@ object Docs {
         post(port, reply.put("entries", entries))
     }
 
-    /** A document inside a ZIP: taken out into Swift's cache and opened in its own tab. */
-    private fun openEntry(a: Activity, doc: Doc, entry: String) {
+    /** A document inside a ZIP: taken out into Swift's cache and opened in its own tab (Back returns to the ZIP). */
+    private fun openEntry(a: Activity, tab: Tab, doc: Doc, entry: String) {
         io.execute {
-            val dir = File(tempDir(a), "zip/" + doc.id)
+            val dir = File(tempDir(a), (if (doc.incognito) "private/zip/" else "zip/") + doc.id)
             val name = entry.substringAfterLast('/').ifBlank { "document" }
             val file = File(dir, idFor(entry).take(6) + "-" + UrlUtils.sanitizeFileName(name))
             var found = false
+            var tooBig = false
             val ok = try {
                 dir.mkdirs()
-                ZipInputStream(stream(a, Uri.parse(doc.uri))).use { zip ->
+                ZipInputStream(stream(a, Uri.parse(doc.uri)), zipCharsets[doc.id] ?: Charsets.UTF_8).use { zip ->
                     while (true) {
                         val e = zip.nextEntry ?: break
                         if (e.name != entry) continue
                         found = true
-                        FileOutputStream(file).use { zip.copyTo(it, 65536) }
+                        // A file that would unpack into more than the room left (or 300 MB) is refused.
+                        val limit = minOf(MAX_ENTRY, a.cacheDir.usableSpace - 50L * 1_048_576)
+                        FileOutputStream(file).use { out ->
+                            val buf = ByteArray(65536)
+                            var total = 0L
+                            while (true) {
+                                val n = zip.read(buf)
+                                if (n < 0) break
+                                total += n
+                                if (total > limit) {
+                                    tooBig = true
+                                    break
+                                }
+                                out.write(buf, 0, n)
+                            }
+                        }
                         break
                     }
                 }
-                found
+                found && !tooBig
             } catch (e: Exception) {
                 L.w("Couldn't take a file out of the ZIP", e)
-                file.delete()
                 false
             }
+            if (!ok) file.delete()
             main.post {
                 if (a.isFinishing) return@post
-                if (!ok || !open(a, Uri.fromFile(file), name, null)) {
-                    com.swiftbrowser.ui.Messages.show(a, "Swift couldn't open this file from the ZIP. It may be protected by a password.")
+                when {
+                    tooBig -> com.swiftbrowser.ui.Messages.show(a, "This file is too big to take out of the ZIP here. Open the ZIP with another app.")
+                    !ok || !open(a, Uri.fromFile(file), name, null, from = tab.takeIf { it in TabManager.tabs }, incognito = doc.incognito) ->
+                        com.swiftbrowser.ui.Messages.show(a, "Swift couldn't open this file from the ZIP. It may be protected by a password.")
                 }
             }
         }
@@ -669,7 +762,8 @@ object Docs {
         try {
             val room = (ShortcutManagerCompat.getMaxShortcutCountPerActivity(ctx) - STATIC_SHORTCUTS).coerceIn(0, 2)
             val docs = SwiftApp.db.recentDocuments(Profiles.currentId, room)
-            val list = docs.mapIndexed { i, d -> shortcutFor(ctx, d, "recent-doc-$i") }
+            // Each document has its own id: one dragged to the home screen keeps opening that document.
+            val list = docs.map { d -> shortcutFor(ctx, d, "recent-doc-" + d.id) }
             ShortcutManagerCompat.setDynamicShortcuts(ctx, list)
         } catch (e: Exception) {
             L.w("Couldn't update the shortcuts", e)
@@ -684,20 +778,20 @@ object Docs {
             "documents" -> a.openDocuments()
             "find" -> a.openFind()
             "exact" -> {
-                val doc = SwiftApp.db.document(id) ?: return
+                val doc = find(id) ?: return
                 val web = doc.web ?: return
-                TabManager.newTab(EXACT_VIEW + Uri.encode(web), incognito = false)
+                TabManager.newTab(EXACT_VIEW + Uri.encode(web), parent = tab, incognito = tab.incognito)
             }
             "share", "open-with", "save-copy", "print", "save-pdf", "shortcut", "open-entry" -> io.execute {
-                val doc = SwiftApp.db.document(id) ?: return@execute
+                val doc = find(id) ?: return@execute
                 main.post {
                     when (action) {
                         "share", "open-with" -> handOver(a, doc, share = action == "share")
                         "save-copy" -> saveCopy(tab, doc)
                         "print" -> printOrSave(a, tab, doc, print = true)
                         "save-pdf" -> printOrSave(a, tab, doc, print = false)
-                        "shortcut" -> pinShortcut(a, doc)
-                        "open-entry" -> openEntry(a, doc, msg.optString("entry"))
+                        "shortcut" -> if (doc.incognito) a.snack("Incognito documents can't go on the home screen") else pinShortcut(a, doc)
+                        "open-entry" -> openEntry(a, tab, doc, msg.optString("entry"))
                     }
                 }
             }
@@ -707,15 +801,11 @@ object Docs {
     /** Shares the file, or opens it in another app (Android's chooser). */
     fun handOver(a: Activity, doc: Doc, share: Boolean) {
         val uri = Uri.parse(doc.uri).let { u ->
-            if (u.scheme == ContentResolver.SCHEME_FILE) {
-                try {
-                    FileProvider.getUriForFile(a, a.packageName + ".files", File(u.path.orEmpty()))
-                } catch (_: Exception) {
-                    u
-                }
-            } else {
-                u
-            }
+            if (u.scheme == ContentResolver.SCHEME_FILE) shareUri(a, File(u.path.orEmpty())) else u
+        }
+        if (uri == null) {
+            com.swiftbrowser.ui.Messages.show(a, "Swift couldn't hand this file to another app")
+            return
         }
         val mime = UrlUtils.mimeFromName(doc.name) ?: doc.kind.mimeTypes.first()
         val intent = if (share) {
@@ -729,7 +819,32 @@ object Docs {
             if (!share) chooser.putExtra(Intent.EXTRA_EXCLUDE_COMPONENTS, arrayOf(android.content.ComponentName(a, MainActivity::class.java)))
             a.startActivity(chooser)
         } catch (e: Exception) {
-            com.swiftbrowser.ui.Messages.show(a, "No app on the phone can open this file")
+            com.swiftbrowser.ui.Messages.show(a, "No app on this phone can open this file")
+        }
+    }
+
+    /**
+     * A content:// link another app may read, for one of Swift's files (2.6). Android refuses
+     * file:// links; a file in no folder Swift shares from (an SD card's other folders) is copied
+     * into the cache first. Null when even that fails.
+     */
+    fun shareUri(ctx: Context, file: File): Uri? {
+        val authority = ctx.packageName + ".files"
+        try {
+            return FileProvider.getUriForFile(ctx, authority, file)
+        } catch (_: Exception) {
+        }
+        // A copy only for files of a sensible size (a film on a memory card isn't copied).
+        if (file.length() > 100L * 1_048_576) return null
+        return try {
+            val dir = File(tempDir(ctx), "share").apply { mkdirs() }
+            dir.listFiles()?.forEach { it.delete() }
+            val copy = File(dir, file.name)
+            file.copyTo(copy, overwrite = true)
+            FileProvider.getUriForFile(ctx, authority, copy)
+        } catch (e: Exception) {
+            L.w("Couldn't share the file", e)
+            null
         }
     }
 
@@ -737,6 +852,7 @@ object Docs {
     private const val MAX_RANGE = 4 * 1_048_576
     private const val MAX_WHOLE = 60L * 1_048_576
     private const val MAX_ZIP_ENTRIES = 2000
+    private const val MAX_ENTRY = 300L * 1_048_576
 
     /** new_tab, incognito and scan in res/xml/shortcuts.xml. */
     private const val STATIC_SHORTCUTS = 3

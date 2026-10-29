@@ -39,6 +39,10 @@ object ReadAloud : TextToSpeech.OnInitListener {
     var title: String = ""
         private set
 
+    /** The tab being read (its notification opens it) and whether it is incognito (no title shown, 2.6). */
+    @Volatile var tabId: Long = Long.MIN_VALUE
+    @Volatile var incognito = false
+
     @Volatile private var index = 0
 
     /**
@@ -64,8 +68,10 @@ object ReadAloud : TextToSpeech.OnInitListener {
         .put("index", index).put("total", parts.size).put("finished", finished).also { o -> failed?.let { o.put("error", it) } }
 
     private fun report() {
+        // The state as it is now: an error is cleared right after being reported (2.6).
+        val s = state()
         main.post {
-            listener?.invoke(state())
+            listener?.invoke(s)
             SwiftApp.instance?.let { ReadAloudService.sync(it) }
         }
     }
@@ -87,6 +93,16 @@ object ReadAloud : TextToSpeech.OnInitListener {
         }
         report()
         return state()
+    }
+
+    /** Reads text selected on a page (2.6), with the notification's controls. */
+    fun speak(ctx: Context, text: String, title: String, tabId: Long, incognito: Boolean) {
+        this.title = title
+        this.tabId = tabId
+        this.incognito = incognito
+        // At the speed reader view last read at.
+        start(ctx, text.split('\n').map { it.trim() }.filter { it.isNotEmpty() }, 0, null)
+        report()
     }
 
     private fun start(ctx: Context, texts: List<String>, from: Int, language: String?) {
@@ -262,20 +278,22 @@ class ReadAloudService : Service() {
             getSystemService(NotificationManager::class.java)
                 .createNotificationChannel(NotificationChannel(CHANNEL, "Reading aloud", NotificationManager.IMPORTANCE_LOW))
         }
-        val open = PendingIntent.getActivity(
-            this, 0, Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
+        // Its own request code (the media notification has 0), so the two don't swap their tabs (2.6).
+        val intent = Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        if (ReadAloud.tabId != Long.MIN_VALUE) intent.putExtra(MainActivity.EXTRA_TAB_ID, ReadAloud.tabId)
+        val open = PendingIntent.getActivity(this, REQUEST_OPEN, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val speaking = ReadAloud.speaking
+        // An incognito article's title never shows, on the lock screen least of all.
+        val private = ReadAloud.incognito
         return NotificationCompat.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_notify_logo)
-            .setContentTitle(ReadAloud.title.ifBlank { "Reading aloud" })
+            .setContentTitle(if (private) "Incognito tab" else ReadAloud.title.ifBlank { "Reading aloud" })
             .setContentText(if (speaking) "Reading aloud" else "Paused")
             .setContentIntent(open)
             .setOngoing(speaking)
             .setShowWhen(false)
             .setOnlyAlertOnce(true)
-            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setVisibility(if (private) NotificationCompat.VISIBILITY_PRIVATE else NotificationCompat.VISIBILITY_PUBLIC)
             .addAction(
                 if (speaking) R.drawable.ic_pause else R.drawable.ic_play, if (speaking) "Pause" else "Go on",
                 action(if (speaking) ACTION_PAUSE else ACTION_RESUME, 1),
@@ -292,6 +310,7 @@ class ReadAloudService : Service() {
     companion object {
         private const val CHANNEL = "read_aloud"
         private const val NOTIFICATION_ID = 4200
+        private const val REQUEST_OPEN = 4201
         private const val ACTION_SYNC = "sync"
         private const val ACTION_PAUSE = "pause"
         private const val ACTION_RESUME = "resume"

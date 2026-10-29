@@ -33,6 +33,9 @@ class SuggestionAdapter(
     private var rows: List<Any> = emptyList()
     private var typed = ""
 
+    /** In an incognito tab, the rows take its dark colours (2.6). */
+    var incognito = false
+
     fun show(groups: List<Group>, typedText: String) {
         typed = typedText.trim()
         val out = ArrayList<Any>()
@@ -91,19 +94,26 @@ class SuggestionAdapter(
             Suggestion.Kind.TAB -> R.drawable.ic_tab
         }
         val subtitle = when (s.kind) {
-            Suggestion.Kind.SEARCH -> null
+            // "yt cats": which site the shortcut searches (2.6).
+            Suggestion.Kind.SEARCH -> com.swiftbrowser.core.SearchShortcuts.shortcutOf(s.title)
+                ?.takeIf { com.swiftbrowser.core.SearchShortcuts.match(s.title) == s.url }?.let { "Search ${it.name}" }
             Suggestion.Kind.GO -> s.url
             Suggestion.Kind.TAB -> "Switch to this tab · " + UrlUtils.siteName(s.url)
             else -> UrlUtils.siteName(s.url)
         }
         h.set(icon, bold(s.title), subtitle)
+        val ink = if (incognito) Ui.color(ctx, R.color.incognito_text) else Ui.text(ctx)
+        val soft = if (incognito) Ui.color(ctx, R.color.incognito_hint) else Ui.textSecondary(ctx)
+        h.title.setTextColor(ink)
+        h.subtitle.setTextColor(soft)
+        h.action.imageTintList = ColorStateList.valueOf(soft)
         // Sites show their own icon when Swift has it.
         val favicon = if (s.kind == Suggestion.Kind.BOOKMARK || s.kind == Suggestion.Kind.HISTORY || s.kind == Suggestion.Kind.TAB) Favicons.cached(s.url) else null
         if (favicon != null) {
             h.icon.imageTintList = null
             h.icon.setImageBitmap(favicon)
         } else {
-            h.icon.imageTintList = ColorStateList.valueOf(Ui.textSecondary(ctx))
+            h.icon.imageTintList = ColorStateList.valueOf(soft)
         }
         if (s.kind == Suggestion.Kind.TAB) {
             h.setAction(R.drawable.ic_open_new, "Switch to tab") { onPick(s) }

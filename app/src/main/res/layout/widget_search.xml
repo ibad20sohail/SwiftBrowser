@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The home screen widget (2.6): search, a new incognito tab, scan a QR code. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_bar"
+    android:layout_width="match_parent"
+    android:layout_height="56dp"
+    android:layout_gravity="center_vertical"
+    android:background="@drawable/bg_widget"
+    android:gravity="center_vertical"
+    android:orientation="horizontal"
+    android:paddingStart="16dp"
+    android:paddingEnd="6dp">
+
+    <ImageView
+        android:layout_width="24dp"
+        android:layout_height="24dp"
+        android:importantForAccessibility="no"
+        android:src="@drawable/ic_widget_search" />
+
+    <TextView
+        android:id="@+id/widget_text"
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_weight="1"
+        android:ellipsize="end"
+        android:gravity="center_vertical"
+        android:maxLines="1"
+        android:paddingStart="12dp"
+        android:paddingEnd="4dp"
+        android:text="@string/url_hint"
+        android:textColor="#FF5F6368"
+        android:textSize="15sp" />
+
+    <ImageView
+        android:id="@+id/widget_incognito"
+        android:layout_width="44dp"
+        android:layout_height="44dp"
+        android:contentDescription="@string/shortcut_incognito"
+        android:padding="10dp"
+        android:src="@drawable/ic_widget_incognito" />
+
+    <ImageView
+        android:id="@+id/widget_scan"
+        android:layout_width="44dp"
+        android:layout_height="44dp"
+        android:contentDescription="@string/shortcut_scan"
+        android:padding="10dp"
+        android:src="@drawable/ic_widget_qr" />
+</LinearLayout>

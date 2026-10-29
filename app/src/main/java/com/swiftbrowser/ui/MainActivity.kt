@@ -74,6 +74,7 @@ import com.swiftbrowser.tabs.TabGroup
 import com.swiftbrowser.tabs.TabManager
 import com.swiftbrowser.tabs.Thumbnails
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -93,6 +94,9 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     private lateinit var prefs: Prefs
     lateinit var gecko: SwiftGeckoView
         private set
+
+    /** The bar over selected text (2.6). */
+    private val selectionMenu by lazy { SelectionMenu(this) }
     private lateinit var root: FrameLayout
     private lateinit var appBar: View
     private lateinit var toolbar: LinearLayout
@@ -287,11 +291,17 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         })
 
         TabManager.tabs.forEach { seenTabs.add(it.id) }
+        val had = TabManager.current
         val tab = TabManager.ensureCurrent()
         seenTabs.add(tab.id)
-        onTabSelected(tab)
+        // When it had to choose the tab, ensureCurrent told this screen already (2.6: not twice).
+        if (had === tab) onTabSelected(tab)
         onTabsChanged()
         if (savedInstanceState == null) handleIntent(intent)
+        SwiftApp.messageAfterThemeChange?.let { m ->
+            SwiftApp.messageAfterThemeChange = null
+            root.post { if (!isFinishing) snack(m, long = true) }
+        }
         if (SwiftApp.reloadAfterThemeChange) {
             SwiftApp.reloadAfterThemeChange = false
             // Sites that pick their colours when the page loads follow on reload. Google notices the
@@ -315,6 +325,13 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         }
         Looper.myQueue().addIdleHandler {
             quickMenu
+            // The tab grid next, a few seconds on (2.6), so the first tap on the tabs button doesn't build it.
+            handler.postDelayed({
+                Looper.myQueue().addIdleHandler {
+                    if (!isFinishing && switcherView == null) switcher
+                    false
+                }
+            }, 3000)
             false
         }
         com.swiftbrowser.engine.DataSaver.listener = { active ->
@@ -362,10 +379,14 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             val oldApks = withContext(Dispatchers.IO) { com.swiftbrowser.core.Updates.deleteOldApks(this@MainActivity) }
             if (oldApks > 0) snack("Deleted the old update file (${UrlUtils.formatBytes(oldApks)})")
             // 2.2: Proton's free VPN files stop working after a year unless extended.
+            // A dialog (2.6): the reminder is too long for a message at the bottom.
             com.swiftbrowser.vpn.Vpn.expiringToRemind()?.let { loc ->
-                snack(VpnUi.expiryText(loc), "Open Proton", long = true) {
-                    TabManager.newTab(com.swiftbrowser.vpn.Vpn.PROTON_DOWNLOADS, incognito = false)
-                }
+                MaterialAlertDialogBuilder(this@MainActivity)
+                    .setTitle("Your VPN location needs renewing")
+                    .setMessage(VpnUi.expiryText(loc))
+                    .setPositiveButton("Open Proton") { _, _ -> TabManager.newTab(com.swiftbrowser.vpn.Vpn.PROTON_DOWNLOADS, incognito = false) }
+                    .setNegativeButton("Later", null)
+                    .showImmersive()
             }
         }
     }
@@ -459,7 +480,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
                 }
                 "vpn" -> if (com.swiftbrowser.vpn.Vpn.state == com.swiftbrowser.vpn.Vpn.State.ON) tint = color(Looks.accent.primary)
             }
-            b.imageTintList = ColorStateList.valueOf(tint)
+            // Only when it changed (2.6): this runs on every page update.
+            if (b.imageTintList?.defaultColor != tint) b.imageTintList = ColorStateList.valueOf(tint)
         }
     }
 
@@ -468,8 +490,19 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         val pid = tab.profileId
         val url = tab.url
         if (SwiftApp.db.isBookmarked(pid, url)) {
-            TabManager.io.execute { SwiftApp.db.removeBookmark(pid, url) }
-            snack("Bookmark removed")
+            TabManager.io.execute {
+                val row = SwiftApp.db.bookmark(pid, url)
+                SwiftApp.db.removeBookmark(pid, url)
+                // Undo (2.6) puts it back as it was: its name, folder and date.
+                if (row != null) runOnUiThread {
+                    snack("Bookmark removed", "Undo") {
+                        TabManager.io.execute { SwiftApp.db.importBookmark(pid, row.url, row.title, row.created, row.folder) }
+                        if (current?.url == url) extraButtons["bookmark"]?.tag = true
+                        bookmarkShownFor = null
+                        updateToolbarExtras()
+                    }
+                }
+            }
             extraButtons["bookmark"]?.tag = false
         } else {
             val title = tab.title
@@ -618,8 +651,11 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     }
 
     /** "VPN" at the end of the address while it is on (or should be); tapping it opens the VPN sheet. */
+    private val vpnBadge by lazy { findViewById<TextView>(R.id.vpn_badge) }
+    private var vpnBadgeShown: Any? = null
+
     private fun updateVpnBadge() {
-        val badge = findViewById<TextView>(R.id.vpn_badge)
+        val badge = vpnBadge
         val vpn = com.swiftbrowser.vpn.Vpn
         val (show, fill, ink, text) = when {
             editing -> Quad(false, 0, 0, "")
@@ -630,6 +666,10 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         }
         Motion.pop(badge, show)
         if (!show) return
+        // Asked on every key typed: only redone when it changed (2.6).
+        val key = listOf(fill, ink, text, Looks.accent, VpnUi.label())
+        if (key == vpnBadgeShown) return
+        vpnBadgeShown = key
         badge.text = text
         badge.setTextColor(color(ink))
         badge.background = Ui.shape(this, color(fill), 12)
@@ -668,6 +708,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         // Settings may have changed the text size for all sites; the site on screen may have its own.
         current?.let { Engine.showTextScaleFor(UrlUtils.site(it.url)) }
         Diagnostics.setOnScreen(true)
+        com.swiftbrowser.media.PlaybackService.setOnScreen(true)
         if (!switcherOpen) current?.session?.let { if (it.isOpen) it.setActive(true) }
     }
 
@@ -698,7 +739,10 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         super.onStop()
         Looks.watchClock(false)
         Diagnostics.setOnScreen(false)
+        com.swiftbrowser.media.PlaybackService.setOnScreen(false)
         TabManager.flushSaves()
+        com.swiftbrowser.engine.DataUsage.sample()
+        com.swiftbrowser.engine.DataUsage.save()
         if (!isChangingConfigurations) {
             // A playing page stays active so its video or music goes on (keep playing in the
             // background): an active page also keeps the engine's page process from being closed.
@@ -750,6 +794,16 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         urlBox = findViewById(R.id.url_box)
         urlEdit = findViewById(R.id.url_edit)
         urlIcon = findViewById(R.id.url_icon)
+        urlIcon.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
+        urlIcon.contentDescription = "Site settings"
+        // 18 dp to look at, 48 dp to tap (2.6).
+        (urlIcon.parent as View).post {
+            val r = android.graphics.Rect()
+            urlIcon.getHitRect(r)
+            val grow = Ui.dp(this, 15)
+            r.inset(-grow, -grow)
+            (urlIcon.parent as View).touchDelegate = android.view.TouchDelegate(r, urlIcon)
+        }
         // The site's icon (or the warning that it isn't secure) opens that site's settings.
         urlIcon.setOnClickListener {
             val tab = current
@@ -815,6 +869,12 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             when (action) {
                 ACTION_NEW_TAB -> TabManager.newTab(incognito = false)
                 ACTION_INCOGNITO -> TabManager.newTab(incognito = true)
+                // The widget's bar and the New tab tile (2.6): a new tab (or the empty one open), ready to type.
+                ACTION_SEARCH -> {
+                    val open = current
+                    if (open == null || open.incognito || !open.isBlank) TabManager.newTab(incognito = false)
+                    root.post { if (!isFinishing) startEditing() }
+                }
                 ACTION_SCAN -> root.post { if (!isFinishing) scanQr() }
                 ACTION_VPN -> root.post { if (!isFinishing) showVpnSheet() }
             }
@@ -827,7 +887,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             stopEditing()
             switcherView?.close()
             quickMenu.close()
-            if (docId == null || SwiftApp.db.document(docId) == null) snack("Swift doesn't have this document any more") else Docs.reopen(docId)
+            if (docId == null || SwiftApp.db.document(docId) == null) snack("Swift doesn't have this document any more") else Docs.reopen(docId, backTo = Docs.BACK_APP)
             return
         }
         intent.getStringExtra(EXTRA_OPEN_FILE)?.let { path ->
@@ -836,7 +896,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             val d = Downloads.all().firstOrNull { it.filePath == path } ?: return
             stopEditing()
             switcherView?.close()
-            if (!Docs.open(this, Uri.fromFile(java.io.File(path)), d.fileName, d.mime, d.url.takeIf { UrlUtils.isHttp(it) })) openFileInTab(path)
+            if (!Docs.open(this, Uri.fromFile(java.io.File(path)), d.fileName, d.mime, d.url.takeIf { UrlUtils.isHttp(it) }, backTo = Docs.BACK_DOWNLOADS)) openFileInTab(path)
             return
         }
         // 2.4: a document from another app ("Open with Swift"), shown in Swift's viewer.
@@ -845,7 +905,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             stopEditing()
             switcherView?.close()
             quickMenu.close()
-            if (!Docs.open(this, data, null, intent.type)) snack("Swift can't show this kind of file")
+            // Back closes it and returns to the app that asked (2.6).
+            if (!Docs.open(this, data, null, intent.type, backTo = Docs.BACK_APP)) snack("Swift can't show this kind of file")
             return
         }
         val url = when (intent.action) {
@@ -910,11 +971,20 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         }
         urlEdit.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                // Typed at the end, or typed over the part the completion added (it is selected).
+                typedAtEnd = !completing && s != null && count > 0 && start + count == s.length &&
+                    (count > before || start == completedAt)
+                if (!completing) completedAt = -1
+            }
+
             override fun afterTextChanged(s: Editable?) {
-                if (!editing) return
+                if (!editing || completing) return
                 updateUrlButtons()
-                refreshSuggestions(s?.toString() ?: "")
+                val typed = s?.toString() ?: ""
+                if (typedAtEnd && s != null) complete(s)
+                // The first row is what Go opens: the completed address when there is one.
+                refreshSuggestions(typed, s?.toString() ?: typed)
             }
         })
         urlClear.setOnClickListener { urlEdit.setText("") }
@@ -931,6 +1001,51 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
     /** The address bar was held: letting go doesn't start typing. */
     private var addressHeld = false
+
+    /** Sites the address completes to as it's typed (2.6), most visited first. */
+    private var completionHosts: List<String> = emptyList()
+    private var completing = false
+    private var typedAtEnd = false
+
+    /** Where the completion's added part starts, while it is there; -1 otherwise. */
+    private var completedAt = -1
+
+    private fun loadCompletions() {
+        val pid = Profiles.currentId
+        lifecycleScope.launch {
+            completionHosts = withContext(Dispatchers.IO) {
+                try {
+                    val db = SwiftApp.db
+                    (db.visitedUrls(pid, 400) + db.bookmarks(pid).map { it.url })
+                        .mapNotNull { UrlUtils.host(it)?.removePrefix("www.") }
+                        .distinct()
+                } catch (e: Exception) {
+                    emptyList()
+                }
+            }
+        }
+    }
+
+    /**
+     * Typing "you" completes it to "youtube.com" (2.6), the added part selected: Go opens the site,
+     * typing on replaces it, and backspace takes it away. Not while the keyboard is still composing a word.
+     */
+    private fun complete(s: Editable) {
+        val typed = s.toString()
+        if (typed.length < 2 || typed.any { it == ' ' || it == '/' || it == ':' || it == '?' }) return
+        if (android.view.inputmethod.BaseInputConnection.getComposingSpanStart(s) != -1) return
+        if (urlEdit.selectionStart != typed.length || urlEdit.selectionEnd != typed.length) return
+        val lower = typed.lowercase()
+        val host = completionHosts.firstOrNull { it.length > lower.length && it.startsWith(lower) } ?: return
+        completing = true
+        try {
+            s.append(host.substring(typed.length))
+            urlEdit.setSelection(typed.length, s.length)
+            completedAt = typed.length
+        } finally {
+            completing = false
+        }
+    }
 
     private fun addressMenu() {
         val tab = current ?: return
@@ -975,8 +1090,11 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             else -> UrlUtils.searchQuery(tab.url) ?: tab.url
         }
         urlBox.visibility = View.VISIBLE
+        completing = true
         urlEdit.setText(text)
+        completing = false
         urlEdit.selectAll()
+        if (!wasEditing) loadCompletions()
         setUrlIcon(com.swiftbrowser.core.SearchEngine.current.icon)
         if (!wasEditing) {
             suggestionsList.alpha = 0f
@@ -1113,23 +1231,25 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         }
     }
 
-    private fun refreshSuggestions(text: String) {
+    private fun refreshSuggestions(text: String, full: String = text) {
         suggestJob?.cancel()
         val pid = Profiles.currentId
         val google = prefs.searchSuggestions
         suggestJob = lifecycleScope.launch {
+            // A pause in typing first (2.6): fast typing doesn't look up every letter.
+            if (text.isNotBlank()) delay(70)
             val head = ArrayList<Suggestion>()
-            if (text.isNotBlank()) {
-                val target = UrlUtils.toUrlOrSearch(text)
-                head += if (UrlUtils.searchQuery(target) != null) {
-                    Suggestion(Suggestion.Kind.SEARCH, text, target)
+            if (full.isNotBlank()) {
+                val target = UrlUtils.toUrlOrSearch(full)
+                head += if (UrlUtils.searchQuery(target) != null || com.swiftbrowser.core.SearchShortcuts.match(full) == target) {
+                    Suggestion(Suggestion.Kind.SEARCH, full, target)
                 } else {
-                    Suggestion(Suggestion.Kind.GO, text, target)
+                    Suggestion(Suggestion.Kind.GO, full, target)
                 }
             }
             if (text.isBlank()) copiedLink()?.let { head += Suggestion(Suggestion.Kind.CLIPBOARD, "Link you copied", it) }
             val tabs = openTabMatches(text)
-            val local = withContext(Dispatchers.IO) { Suggestions.local(pid, text) }
+            val local = withContext(suggestThread) { Suggestions.local(pid, text) }
                 .filter { s -> tabs.none { it.url == s.url } }
             fun groups(fromEngine: List<Suggestion>) = listOf(
                 SuggestionAdapter.Group(null, head),
@@ -1141,7 +1261,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             suggestionAdapter.show(groups(emptyList()), text)
             if (google && text.isNotBlank()) {
                 delay(150)
-                val fromGoogle = withContext(Dispatchers.IO) { Suggestions.fromEngine(text) }
+                val fromGoogle = withContext(suggestThread) { Suggestions.fromEngine(text) }
                     .filter { !it.equals(text, ignoreCase = true) }
                     .take(5)
                     .map { Suggestion(Suggestion.Kind.SEARCH, it, UrlUtils.searchUrl(it)) }
@@ -1161,7 +1281,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         if (text.isEmpty() || text.length > 2000 || text.contains(' ') || text.contains('\n')) return null
         val url = when {
             UrlUtils.isHttp(text) -> text
-            Regex("^[a-z0-9-]+(\\.[a-z0-9-]+)*\\.[a-z]{2,}(/\\S*)?$", RegexOption.IGNORE_CASE).matches(text) -> "https://$text"
+            BARE_ADDRESS.matches(text) -> "https://$text"
             else -> return null
         }
         return url.takeIf { it != current?.url }
@@ -1298,6 +1418,12 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     private fun glideProgress(target: Int, ms: Long) {
         if (target <= progress.progress && target != 1000) return
         progressAnim?.cancel()
+        // While the page loads, the bar is set at once (2.6): gliding redrew the window every frame
+        // while the phone was busiest. Only its run to the end glides.
+        if (target < 1000) {
+            progress.progress = target
+            return
+        }
         progressAnim = android.animation.ObjectAnimator.ofInt(progress, "progress", progress.progress, target).apply {
             duration = ms
             interpolator = Motion.standard
@@ -1342,6 +1468,18 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         homeBtn.imageTintList = icons
         urlClear.imageTintList = icons
         urlScan.imageTintList = icons
+        // The find bar and the suggestions in the same colours (2.6).
+        findBar.setBackgroundColor(bg)
+        findEdit.background = ContextCompat.getDrawable(this, R.drawable.bg_url)?.mutate()?.also {
+            it.setTint(color(if (incognito) R.color.incognito_url else R.color.surface_alt))
+        }
+        findEdit.setTextColor(text)
+        findEdit.setHintTextColor(iconColor())
+        androidx.core.widget.TextViewCompat.setCompoundDrawableTintList(findEdit, icons)
+        findCount.setTextColor(iconColor())
+        for (id in intArrayOf(R.id.find_prev, R.id.find_next, R.id.find_close)) findViewById<ImageView>(id).imageTintList = icons
+        suggestionsList.setBackgroundColor(color(if (incognito) R.color.incognito_bg else R.color.toolbar_bg))
+        suggestionAdapter.incognito = incognito
         styledTabCount = null
         styleTabCount()
         profileChip.visibility = if (incognito) View.GONE else View.VISIBLE
@@ -1378,7 +1516,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
             override fun onContinueClicked(item: com.swiftbrowser.media.Unfinished.Item) {
                 // A document opens in Swift's viewer, where it was left (2.4).
-                item.doc?.let { Docs.reopen(it.id); return }
+                item.doc?.let { Docs.reopen(it.id, from = current); return }
                 openInCurrent(item.url)
                 // An article opens in reader view again, where it was left.
                 if (!item.video) current?.readerOnLoad = item.url
@@ -1429,7 +1567,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     private fun continueMenu(item: com.swiftbrowser.media.Unfinished.Item) {
         item.doc?.let { doc ->
             val actions = listOf(
-                Sheets.Action(R.drawable.ic_open_new, "Open", primary = true) { Docs.reopen(doc.id) },
+                Sheets.Action(R.drawable.ic_open_new, "Open", primary = true) { Docs.reopen(doc.id, from = current) },
                 Sheets.Action(R.drawable.ic_share, "Share", primary = true) { Docs.handOver(this, doc, share = true) },
                 Sheets.Action(R.drawable.ic_close, "Remove from Continue", danger = true) { home.removeContinue(item) },
             )
@@ -1516,26 +1654,30 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             addView(name)
             addView(address)
         }
-        MaterialAlertDialogBuilder(this)
+        val dialog = MaterialAlertDialogBuilder(this)
             .setTitle(if (old == null) "Add a shortcut" else "Edit shortcut")
             .setView(box)
-            .setPositiveButton(if (old == null) "Add" else "Save") { _, _ ->
-                val url = UrlUtils.toUrlOrSearch(address.text.toString())
-                if (!UrlUtils.isHttp(url) || UrlUtils.searchQuery(url) != null && !address.text.contains('.')) {
-                    snack("That isn't a web address")
-                    return@setPositiveButton
-                }
-                val pid = Profiles.currentId
-                if (old == null) TopSites.addPinned(pid, url, name.text.toString().trim())
-                else TopSites.editPinned(pid, old, url, name.text.toString().trim())
-                home.refreshTiles()
-                // Its real icon (the site's big app icon, else its favicon), not just a letter.
-                UrlUtils.host(url)?.let { host ->
-                    com.swiftbrowser.core.Favicons.onPageIcon(url, url.substringBefore("://") + "://" + host + "/apple-touch-icon.png")
-                }
-            }
+            .setPositiveButton(if (old == null) "Add" else "Save", null)
             .setNegativeButton(android.R.string.cancel, null)
             .showImmersive()
+        // A wrong address keeps the dialog open with what was typed (2.6), saying what's wrong.
+        dialog.getButton(android.content.DialogInterface.BUTTON_POSITIVE)?.setOnClickListener {
+            val url = UrlUtils.toUrlOrSearch(address.text.toString())
+            if (!UrlUtils.isHttp(url) || UrlUtils.searchQuery(url) != null && !address.text.contains('.')) {
+                address.error = "That isn't a web address"
+                address.requestFocus()
+                return@setOnClickListener
+            }
+            dialog.dismiss()
+            val pid = Profiles.currentId
+            if (old == null) TopSites.addPinned(pid, url, name.text.toString().trim())
+            else TopSites.editPinned(pid, old, url, name.text.toString().trim())
+            home.refreshTiles()
+            // Its real icon (the site's big app icon, else its favicon), not just a letter.
+            UrlUtils.host(url)?.let { host ->
+                com.swiftbrowser.core.Favicons.onPageIcon(url, url.substringBefore("://") + "://" + host + "/apple-touch-icon.png")
+            }
+        }
     }
 
     private fun updateHome(tab: Tab) {
@@ -1668,8 +1810,17 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     }
 
     /** Pictures for the tab grid are taken once a page has settled after loading. */
+    /** Each tab's last picture after a page load: which address, and when (2.6). */
+    private val thumbnailTaken = HashMap<Long, Pair<String, Long>>()
+
     private fun scheduleThumbnail(tab: Tab) {
         if (tab.isHome) return
+        // The same page again within a minute (a reload, a link to a part of it): the picture is
+        // recent enough, and taking one costs a full-screen copy (2.6).
+        val now = android.os.SystemClock.elapsedRealtime()
+        val last = thumbnailTaken[tab.id]
+        if (last != null && last.first == tab.url && now - last.second < 60_000) return
+        thumbnailTaken[tab.id] = tab.url to now
         thumbnailTries = 0
         handler.removeCallbacks(thumbnailRunnable)
         handler.postDelayed(thumbnailRunnable, 2000)
@@ -1764,7 +1915,10 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     }
 
     override fun onTabSelected(tab: Tab) {
+        selectionMenu.dismiss()
         if (resumeChipFor != null && resumeChipFor !== tab) hideResumeChip(null)
+        // What this tab's page asked while it wasn't on screen (an alert, a sign-in) shows now (2.6).
+        tab.session?.let { s -> root.post { if (current === tab) com.swiftbrowser.tabs.SessionFactory.prompts.showWaiting(s) } }
         Engine.showTextScaleFor(UrlUtils.site(tab.url))
         val isNew = seenTabs.add(tab.id)
         syncSession(tab)
@@ -1790,6 +1944,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     private fun syncSession(tab: Tab) {
         val session = tab.session
         if (session != null) {
+            if (session.selectionActionDelegate !== selectionMenu) session.selectionActionDelegate = selectionMenu
             if (gecko.session !== session) gecko.setSession(session)
         } else if (gecko.session != null) {
             gecko.releaseSession()
@@ -1800,6 +1955,9 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         val n = (if (current?.incognito == true) TabManager.incognitoTabs() else TabManager.profileTabs()).size
         tabsCount.text = if (n > 99) ":D" else n.toString()
         styleTabCount()
+        // How many, for screen readers too (2.6).
+        val group = current?.let { TabManager.groupOf(it) }
+        tabsBtn.contentDescription = "$n ${if (n == 1) "tab" else "tabs"}" + if (group != null) " (group ${TabManager.groupTitle(group)})" else ""
         updateProfileChip()
         if (switcherOpen) switcher.refresh()
     }
@@ -1821,7 +1979,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         }
         tabsCount.setTextColor(text)
         tabsCount.background = tabCountBackground(this, if (group != null || incognito) text else color(R.color.text_secondary))
-        tabsBtn.contentDescription = if (group != null) "Tabs (group ${TabManager.groupTitle(group)})" else "Tabs"
+        // Its spoken label (how many tabs) is set in onTabsChanged.
     }
 
     override fun onTabUpdated(tab: Tab) {
@@ -1829,6 +1987,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         syncSession(tab)
         val pageStarted = tab.loading && !shownLoading
         if (pageStarted) {
+            selectionMenu.dismiss()
             if (themeReloadTab === tab) themeReloadStarted = true
             // A new page: bring the toolbar back like Chrome does.
             lastScrollY = -1f
@@ -2353,7 +2512,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         val size = response.headers["Content-Length"]?.toLongOrNull() ?: -1
         val start = {
             withStorage {
-                Downloads.startFromResponse(tab.profileId, response, name, mime, tab.url)
+                Downloads.startFromResponse(tab.profileId, response, name, mime, tab.url, tab.incognito)
                 snack("Downloading $name", "View") { openDownloads() }
             }
         }
@@ -2394,13 +2553,14 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         var chosen = false
         val office = kind in setOf(Docs.Kind.WORD, Docs.Kind.SHEET, Docs.Kind.SLIDES, Docs.Kind.OLD_WORD, Docs.Kind.OLD_SLIDES)
         val b = MaterialAlertDialogBuilder(this)
-            .setTitle("Open ${kind.label} file?")
-            .setMessage(name + (if (size > 0) "\n${UrlUtils.formatBytes(size)}" else "") + "\n\nSwift shows it here. Nothing is kept unless you choose Save a copy or Download.")
+            .setTitle("Open this document?")
+            .setMessage(name + "\n" + listOfNotNull(kind.label, size.takeIf { it > 0 }?.let { UrlUtils.formatBytes(it) }).joinToString(" · ") +
+                "\n\nSwift shows it here. Nothing is kept unless you choose Save a copy or Download.")
             .setPositiveButton("Open") { _, _ ->
                 chosen = true
                 // 2.5: read into Swift's cache, not Downloads; the viewer's Save a copy keeps it.
                 snack("Opening $name…")
-                Docs.openFromWeb(this, response, name, mime) { ok -> if (!ok && !isFinishing) snack("Couldn't open $name") }
+                Docs.openFromWeb(this, tab, response, name, mime) { ok -> if (!ok && !isFinishing) snack("Couldn't open $name") }
             }
             .setNegativeButton("Download") { _, _ ->
                 chosen = true
@@ -2408,7 +2568,9 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             }
         if (office && UrlUtils.isHttp(response.uri)) {
             // Microsoft's viewer shows the file exactly; it gets the link (only for files on the web).
-            b.setNeutralButton("Exact view") { _, _ -> TabManager.newTab(Docs.EXACT_VIEW + Uri.encode(response.uri), incognito = false) }
+            b.setNeutralButton("Exact view") { _, _ ->
+                TabManager.newTab(Docs.EXACT_VIEW + Uri.encode(response.uri), parent = tab.takeIf { it in TabManager.tabs }, incognito = tab.incognito)
+            }
         }
         b.setOnDismissListener {
             if (!chosen) {
@@ -2460,7 +2622,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             }
             withStorage {
                 val name = nameHint ?: UrlUtils.fileName(url, null, null)
-                Downloads.startUrl(tab.profileId, url, name, UrlUtils.mimeFromName(name), headers, tab.url)
+                Downloads.startUrl(tab.profileId, url, name, UrlUtils.mimeFromName(name), headers, tab.url, tab.incognito)
                 snack("Downloading $name", "View") { openDownloads() }
             }
         }
@@ -2683,7 +2845,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     private var lastSkipAt = 0L
 
     fun formatSpeed(rate: Double): String =
-        (if (rate % 1.0 == 0.0) rate.toInt().toString() else rate.toString().trimEnd('0')) + "x"
+        (if (rate % 1.0 == 0.0) rate.toInt().toString() else rate.toString().trimEnd('0')) + "×"
 
     private fun tinted(res: Int) = ContextCompat.getDrawable(this, res)?.mutate()?.also { it.setTint(0xFFFFFFFF.toInt()) }
 
@@ -2744,6 +2906,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
     fun openFind() {
         if (current?.session == null) return
+        selectionMenu.dismiss()
         stopEditing()
         showToolbar()
         Motion.fadeIn(findBar, fromDy = 0, duration = Motion.SHORT)
@@ -2789,6 +2952,17 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             tab.canGoBack && tab.session != null -> TabManager.goBack(tab)
             tab.leftHome && !tab.isHome -> TabManager.returnHome(tab)
             tab.parentId != null && TabManager.tabs.any { it.id == tab.parentId } -> TabManager.close(tab)
+            // A document opened from Documents or Downloads returns there; one another app sent
+            // closes and Android goes back to that app (2.6).
+            tab.backTo != null -> {
+                val to = tab.backTo
+                TabManager.close(tab)
+                when (to) {
+                    Docs.BACK_DOCUMENTS -> openDocuments()
+                    Docs.BACK_DOWNLOADS -> openDownloads()
+                    else -> moveTaskToBack(true)
+                }
+            }
             else -> moveTaskToBack(true)
         }
     }
@@ -2809,6 +2983,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         val tab = current
         if (tab == null || tab.isHome || startupDone()) return
         startup.visibility = View.VISIBLE
+        // In the accent chosen (2.6), your own included.
+        findViewById<android.widget.ProgressBar>(R.id.startup_spinner)?.indeterminateTintList = ColorStateList.valueOf(Ui.accent(this))
         // The tab's last picture, if there is one, instead of the logo: the page seems to be back
         // at once, with a small note at the bottom until it really loads.
         Thumbnails.load(tab) { bmp ->
@@ -3213,13 +3389,24 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         withStorage {
             val base = tab.title.ifBlank { UrlUtils.host(tab.url) ?: "video" }
             val title = if (quality != null) "$base $quality" else base
-            Downloads.startHls(tab.profileId, playlistUrl, title, headers, tab.url)
+            Downloads.startHls(tab.profileId, playlistUrl, title, headers, tab.url, tab.incognito)
             snack("Downloading video", "View") { openDownloads() }
         }
     }
 
     companion object {
         private const val TOOLBAR_SETTLE_MS = 300L
+
+        /** "example.com/page": an address without its https:// (made once, 2.6). */
+        private val BARE_ADDRESS = Regex("^[a-z0-9-]+(\\.[a-z0-9-]+)*\\.[a-z]{2,}(/\\S*)?$", RegexOption.IGNORE_CASE)
+
+        /** Address bar look-ups, one at a time (2.6): what fast typing replaced is skipped, not piled up. */
+        private val suggestThread = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+            Thread({
+                android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
+                r.run()
+            }, "suggest")
+        }.asCoroutineDispatcher()
         private const val STATE_MENU_OPEN = "menu_open"
 
         const val EXTRA_URL = "url"
@@ -3239,9 +3426,12 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         const val ACTION_INCOGNITO = "com.swiftbrowser.action.INCOGNITO"
         const val ACTION_SCAN = "com.swiftbrowser.action.SCAN"
 
+        /** The home screen widget's search bar and the New tab tile (2.6). */
+        const val ACTION_SEARCH = "com.swiftbrowser.action.SEARCH"
+
         /** From the VPN quick settings tile, when a location or Android's permission is needed. */
         const val ACTION_VPN = "com.swiftbrowser.action.VPN"
-        private val SHORTCUTS = setOf(ACTION_NEW_TAB, ACTION_INCOGNITO, ACTION_SCAN, ACTION_VPN)
+        private val SHORTCUTS = setOf(ACTION_NEW_TAB, ACTION_INCOGNITO, ACTION_SCAN, ACTION_VPN, ACTION_SEARCH)
 
         /** The square outline around the tab count, in [color]. */
         fun tabCountBackground(ctx: Context, color: Int) = android.graphics.drawable.GradientDrawable().apply {

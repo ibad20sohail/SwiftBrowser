@@ -34,7 +34,13 @@ data class ClosedTabRow(
 
 data class HistoryRow(val id: Long, val url: String, val title: String, val lastVisit: Long, val visits: Int)
 
-data class BookmarkRow(val id: Long, val url: String, val title: String, val created: Long)
+data class BookmarkRow(val id: Long, val url: String, val title: String, val created: Long, val folder: String = "")
+
+/** A saved sign-in (2.6); [password] is encrypted (Passwords), never stored as typed. */
+class LoginRow(
+    val guid: String, val profileId: Long, val origin: String, val formAction: String?, val realm: String?,
+    val username: String, val password: String, val created: Long, val used: Long, val times: Int,
+)
 
 data class DownloadRow(
     val id: Long,
@@ -58,7 +64,7 @@ data class DownloadRow(
  * Small hand-written SQLite layer: profiles, tabs (with their order and groups), recently closed
  * tabs, history, bookmarks, downloads, per-site ad levels and where videos were left off.
  */
-class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 6) {
+class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 7) {
 
     override fun onConfigure(db: SQLiteDatabase) {
         db.enableWriteAheadLogging()
@@ -96,6 +102,7 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 6) {
         addVersion4(db)
         addVersion5(db)
         addVersion6(db)
+        addVersion7(db)
 
         db.insert("profiles", null, ContentValues().apply {
             put("name", "Personal")
@@ -114,6 +121,7 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 6) {
         if (oldVersion < 4) addVersion4(db)
         if (oldVersion < 5) addVersion5(db)
         if (oldVersion < 6) addVersion6(db)
+        if (oldVersion < 7) addVersion7(db)
     }
 
     /** 2.4: documents opened in Swift's viewer, where each is, and where it was left. */
@@ -196,6 +204,10 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 6) {
             db.delete("closed_tabs", "profile_id=?", a)
             db.delete("history", "profile_id=?", a)
             db.delete("bookmarks", "profile_id=?", a)
+            // 2.6: its documents and stars go with it.
+            db.delete("documents", "profile_id=?", a)
+            db.delete("starred_documents", "profile_id=?", a)
+            db.delete("logins", "profile_id=?", a)
             db.setTransactionSuccessful()
         } finally {
             db.endTransaction()
@@ -216,6 +228,52 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 6) {
             )
         }
 
+    /**
+     * The tabs without their saved history (2.6): what Swift reads at start. A tab's history is
+     * read with [tabState] when the tab is opened. [TabRow.state] is "" for a tab that has one.
+     */
+    fun tabsWithoutState(): List<TabRow> =
+        query(
+            "SELECT id, profile_id, url, title, state IS NOT NULL, parent_id, last_used, desktop, group_id FROM tabs ORDER BY position, id",
+            null,
+        ) {
+            TabRow(
+                it.getLong(0), it.getLong(1), it.str(2), it.str(3), if (it.getInt(4) != 0) "" else null,
+                if (it.isNull(5)) null else it.getLong(5), it.getLong(6), it.getInt(7) != 0,
+                if (it.isNull(8)) null else it.getLong(8),
+            )
+        }
+
+    fun tabState(id: Long): String? =
+        query("SELECT state FROM tabs WHERE id = ?", arrayOf("$id")) { it.strOrNull(0) }.firstOrNull()
+
+    /** The highest tab id handed out so far, deleted tabs included (new tabs get the next ones, 2.6). */
+    fun lastTabId(): Long = try {
+        readableDatabase.compileStatement("SELECT seq FROM sqlite_sequence WHERE name = 'tabs'").use { it.simpleQueryForLong() }
+    } catch (_: Exception) {
+        0L
+    }
+
+    /** A new tab with the id Swift gave it (written off the main thread, 2.6). */
+    fun insertTab(id: Long, profileId: Long, url: String, title: String, state: String?, parentId: Long?, lastUsed: Long, desktop: Boolean) {
+        val done = writableDatabase.insertWithOnConflict("tabs", null, ContentValues().apply {
+            put("id", id)
+            put("profile_id", profileId)
+            put("url", url)
+            put("title", title)
+            put("state", state)
+            if (parentId != null) put("parent_id", parentId) else putNull("parent_id")
+            put("last_used", lastUsed)
+            put("desktop", if (desktop) 1 else 0)
+        }, SQLiteDatabase.CONFLICT_IGNORE)
+        if (done < 0) L.w("Tab $id wasn't saved: the id is taken")
+    }
+
+    /** Only when the tab was last used (opening a tab, 2.6): nothing else is written. */
+    fun setTabLastUsed(id: Long, lastUsed: Long) {
+        writableDatabase.update("tabs", ContentValues().apply { put("last_used", lastUsed) }, "id=?", arrayOf("$id"))
+    }
+
     fun insertTab(profileId: Long, url: String, parentId: Long?, lastUsed: Long, desktop: Boolean): Long =
         writableDatabase.insert("tabs", null, ContentValues().apply {
             put("profile_id", profileId)
@@ -226,11 +284,12 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 6) {
             put("desktop", if (desktop) 1 else 0)
         })
 
-    fun updateTab(id: Long, url: String, title: String, state: String?, lastUsed: Long, desktop: Boolean) {
+    /** [keepState]: the tab's history wasn't read (it never opened since Swift started), so it stays as stored. */
+    fun updateTab(id: Long, url: String, title: String, state: String?, lastUsed: Long, desktop: Boolean, keepState: Boolean = false) {
         writableDatabase.update("tabs", ContentValues().apply {
             put("url", url)
             put("title", title)
-            put("state", state)
+            if (!keepState) put("state", state)
             put("last_used", lastUsed)
             put("desktop", if (desktop) 1 else 0)
         }, "id=?", arrayOf("$id"))
@@ -286,12 +345,13 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 6) {
         }, SQLiteDatabase.CONFLICT_IGNORE)
     }
 
-    fun importBookmark(profileId: Long, url: String, title: String, created: Long) {
+    fun importBookmark(profileId: Long, url: String, title: String, created: Long, folder: String = "") {
         writableDatabase.insertWithOnConflict("bookmarks", null, ContentValues().apply {
             put("profile_id", profileId)
             put("url", url)
             put("title", title)
             put("created", created)
+            put("folder", folder)
         }, SQLiteDatabase.CONFLICT_IGNORE)
     }
 
@@ -348,6 +408,9 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 6) {
         return id
     }
 
+    fun closedTabState(id: Long): String? =
+        query("SELECT state FROM closed_tabs WHERE id = ?", arrayOf("$id")) { it.strOrNull(0) }.firstOrNull()
+
     fun deleteClosedTab(id: Long) {
         writableDatabase.delete("closed_tabs", "id=?", arrayOf("$id"))
     }
@@ -364,8 +427,11 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 6) {
             it.getDouble(0) to it.getDouble(1)
         }.firstOrNull()
 
-    /** [image]: a picture of it, when the page has one (an earlier one is kept otherwise). */
-    fun setVideoPosition(page: String, position: Double, duration: Double, image: String? = null) {
+    /**
+     * [image]: a picture of it, when the page has one (an earlier one is kept otherwise). [trim]: also
+     * forget all but the last 300 videos; asked once per run rather than with every save (2.6).
+     */
+    fun setVideoPosition(page: String, position: Double, duration: Double, image: String? = null, trim: Boolean = false) {
         val db = writableDatabase
         val values = ContentValues().apply {
             put("position", position)
@@ -373,13 +439,22 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 6) {
             put("updated", System.currentTimeMillis())
             if (image != null) put("image", image)
         }
-        if (db.update("video_positions", values, "page=?", arrayOf(page)) == 0) {
-            values.put("page", page)
-            db.insert("video_positions", null, values)
+        // One transaction, so one write to the phone's storage (2.6).
+        db.beginTransaction()
+        try {
+            if (db.update("video_positions", values, "page=?", arrayOf(page)) == 0) {
+                values.put("page", page)
+                db.insert("video_positions", null, values)
+            }
+            if (trim) {
+                db.execSQL(
+                    "DELETE FROM video_positions WHERE page NOT IN (SELECT page FROM video_positions ORDER BY updated DESC LIMIT 300)",
+                )
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
         }
-        db.execSQL(
-            "DELETE FROM video_positions WHERE page NOT IN (SELECT page FROM video_positions ORDER BY updated DESC LIMIT 300)",
-        )
     }
 
     fun deleteVideoPosition(page: String) {
@@ -394,6 +469,16 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 6) {
     }
 
     /** 2.5: starred documents (Documents' first section), whether opened in Swift or not. */
+    /** 2.6: bookmark folders, and saved sign-ins. */
+    private fun addVersion7(db: SQLiteDatabase) {
+        db.execSQL("ALTER TABLE bookmarks ADD COLUMN folder TEXT NOT NULL DEFAULT ''")
+        db.execSQL(
+            "CREATE TABLE logins(guid TEXT PRIMARY KEY, profile_id INTEGER NOT NULL, origin TEXT NOT NULL, form_action TEXT, " +
+                "realm TEXT, username TEXT NOT NULL, password TEXT NOT NULL, created INTEGER NOT NULL, used INTEGER NOT NULL, " +
+                "times INTEGER NOT NULL DEFAULT 0)",
+        )
+    }
+
     private fun addVersion6(db: SQLiteDatabase) {
         db.execSQL(
             "CREATE TABLE starred_documents(uri TEXT NOT NULL, profile_id INTEGER NOT NULL, name TEXT NOT NULL, kind TEXT NOT NULL, " +
@@ -422,6 +507,11 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 6) {
             db.insert("documents", null, values)
         }
         db.execSQL("DELETE FROM documents WHERE id NOT IN (SELECT id FROM documents ORDER BY opened DESC LIMIT 200)")
+    }
+
+    /** The file of a document changed size (another app edited it): the viewer must ask for the new length. */
+    fun setDocumentSize(id: String, size: Long) {
+        writableDatabase.execSQL("UPDATE documents SET size = ? WHERE id = ?", arrayOf<Any>(size, id))
     }
 
     fun touchDocument(id: String) {
@@ -602,14 +692,23 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 6) {
     /** Best matches for the address bar: frequently and recently visited pages. */
     fun historyMatches(profileId: Long, text: String, limit: Int): List<HistoryRow> {
         val like = "%${text.trim()}%"
+        // Among the newest 5,000 pages (2.6, through the history_recent index): typing stays quick
+        // however long the history gets.
         return query(
-            "SELECT id, url, title, last_visit, visits FROM history WHERE profile_id = ? AND (url LIKE ? OR title LIKE ?) " +
+            "SELECT id, url, title, last_visit, visits FROM (SELECT id, url, title, last_visit, visits FROM history " +
+                "WHERE profile_id = ? ORDER BY last_visit DESC LIMIT 5000) WHERE url LIKE ? OR title LIKE ? " +
                 "ORDER BY visits DESC, last_visit DESC LIMIT $limit",
             arrayOf("$profileId", like, like),
         ) { rowToHistory(it) }
     }
 
-    /** The most recently visited pages, for the home page shortcuts. */
+    /** Pages visited most, for completing addresses as they're typed (2.6). */
+    fun visitedUrls(profileId: Long, limit: Int): List<String> =
+        query(
+            "SELECT url FROM history WHERE profile_id = ? ORDER BY visits DESC, last_visit DESC LIMIT $limit",
+            arrayOf("$profileId"),
+        ) { it.str(0) }
+
     /** When each address was last visited, in any profile (for clearing data of sites not visited for a while). */
     fun lastVisits(): List<Pair<String, Long>> =
         query("SELECT url, MAX(last_visit) FROM history GROUP BY url", null) { it.getString(0) to it.getLong(1) }
@@ -635,19 +734,105 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 6) {
         writableDatabase.delete("history", "profile_id=?", arrayOf("$profileId"))
     }
 
+    // ---------------------------------------------------------------- clearing by time (2.6)
+
+    /** The sites (hosts) of [profileId] visited since [since], for clearing their cookies and caches. */
+    fun historyHostsSince(profileId: Long, since: Long): Set<String> =
+        query("SELECT url FROM history WHERE profile_id = ? AND last_visit >= ?", arrayOf("$profileId", "$since")) { it.getString(0) }
+            .mapNotNull { com.swiftbrowser.core.UrlUtils.host(it) }.toSet()
+
+    fun deleteHistorySince(profileId: Long, since: Long) {
+        writableDatabase.delete("history", "profile_id=? AND last_visit>=?", arrayOf("$profileId", "$since"))
+    }
+
+    fun deleteClosedTabsSince(profileId: Long, since: Long) {
+        writableDatabase.delete("closed_tabs", "profile_id=? AND closed_at>=?", arrayOf("$profileId", "$since"))
+    }
+
+    /** Documents opened since [since] leave Documents' list (the files stay). */
+    fun deleteDocumentsSince(profileId: Long, since: Long) {
+        writableDatabase.delete("documents", "profile_id=? AND opened>=?", arrayOf("$profileId", "$since"))
+    }
+
+    /** Where videos, articles (any profile: they are kept by page) and [profileId]'s documents were left, since [since]. */
+    fun clearPositionsSince(profileId: Long, since: Long) {
+        val db = writableDatabase
+        db.delete("video_positions", "updated>=?", arrayOf("$since"))
+        db.delete("reading_positions", "updated>=?", arrayOf("$since"))
+        db.execSQL("UPDATE documents SET place = NULL, progress = 0 WHERE profile_id = ? AND updated >= ?", arrayOf<Any>(profileId, since))
+    }
+
     // ---------------------------------------------------------------- bookmarks
 
     fun bookmarks(profileId: Long): List<BookmarkRow> =
-        query("SELECT id, url, title, created FROM bookmarks WHERE profile_id = ? ORDER BY created DESC",
-            arrayOf("$profileId")) { BookmarkRow(it.getLong(0), it.str(1), it.str(2), it.getLong(3)) }
+        query("SELECT id, url, title, created, folder FROM bookmarks WHERE profile_id = ? ORDER BY created DESC",
+            arrayOf("$profileId")) { BookmarkRow(it.getLong(0), it.str(1), it.str(2), it.getLong(3), it.str(4)) }
 
     fun bookmarkMatches(profileId: Long, text: String, limit: Int): List<BookmarkRow> {
         val like = "%${text.trim()}%"
         return query(
-            "SELECT id, url, title, created FROM bookmarks WHERE profile_id = ? AND (url LIKE ? OR title LIKE ?) " +
+            "SELECT id, url, title, created, folder FROM bookmarks WHERE profile_id = ? AND (url LIKE ? OR title LIKE ?) " +
                 "ORDER BY created DESC LIMIT $limit",
             arrayOf("$profileId", like, like),
-        ) { BookmarkRow(it.getLong(0), it.str(1), it.str(2), it.getLong(3)) }
+        ) { BookmarkRow(it.getLong(0), it.str(1), it.str(2), it.getLong(3), it.str(4)) }
+    }
+
+    fun bookmark(profileId: Long, url: String): BookmarkRow? =
+        query("SELECT id, url, title, created, folder FROM bookmarks WHERE profile_id = ? AND url = ?",
+            arrayOf("$profileId", url)) { BookmarkRow(it.getLong(0), it.str(1), it.str(2), it.getLong(3), it.str(4)) }.firstOrNull()
+
+    /** The newest bookmarks, for the empty address bar. */
+    fun recentBookmarks(profileId: Long, limit: Int): List<BookmarkRow> =
+        query("SELECT id, url, title, created, folder FROM bookmarks WHERE profile_id = ? ORDER BY created DESC LIMIT $limit",
+            arrayOf("$profileId")) { BookmarkRow(it.getLong(0), it.str(1), it.str(2), it.getLong(3), it.str(4)) }
+
+    /** Moves a bookmark into [folder] ("" is the top of the list, 2.6). */
+    fun setBookmarkFolder(id: Long, folder: String) {
+        writableDatabase.update("bookmarks", ContentValues().apply { put("folder", folder) }, "id=?", arrayOf("$id"))
+    }
+
+    fun renameBookmarkFolder(profileId: Long, from: String, to: String) {
+        writableDatabase.update("bookmarks", ContentValues().apply { put("folder", to) }, "profile_id=? AND folder=?", arrayOf("$profileId", from))
+    }
+
+    // ---------------------------------------------------------------- saved sign-ins (2.6)
+
+    fun logins(profileId: Long): List<LoginRow> =
+        query(
+            "SELECT guid, profile_id, origin, form_action, realm, username, password, created, used, times FROM logins " +
+                "WHERE profile_id = ? ORDER BY origin, username", arrayOf("$profileId"),
+        ) {
+            LoginRow(
+                it.str(0), it.getLong(1), it.str(2), it.strOrNull(3), it.strOrNull(4), it.str(5), it.str(6),
+                it.getLong(7), it.getLong(8), it.getInt(9),
+            )
+        }
+
+    fun saveLogin(row: LoginRow) {
+        writableDatabase.insertWithOnConflict("logins", null, ContentValues().apply {
+            put("guid", row.guid)
+            put("profile_id", row.profileId)
+            put("origin", row.origin)
+            put("form_action", row.formAction)
+            put("realm", row.realm)
+            put("username", row.username)
+            put("password", row.password)
+            put("created", row.created)
+            put("used", row.used)
+            put("times", row.times)
+        }, SQLiteDatabase.CONFLICT_REPLACE)
+    }
+
+    fun loginUsed(guid: String, time: Long) {
+        writableDatabase.execSQL("UPDATE logins SET used = ?, times = times + 1 WHERE guid = ?", arrayOf<Any>(time, guid))
+    }
+
+    fun deleteLogin(guid: String) {
+        writableDatabase.delete("logins", "guid=?", arrayOf(guid))
+    }
+
+    fun deleteLoginsSince(profileId: Long, since: Long) {
+        writableDatabase.delete("logins", "profile_id=? AND created>=?", arrayOf("$profileId", "$since"))
     }
 
     fun isBookmarked(profileId: Long, url: String): Boolean =

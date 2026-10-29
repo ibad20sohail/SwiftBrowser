@@ -74,7 +74,7 @@ object Engine {
             .consoleOutput(BuildConfig.DEBUG)
             .remoteDebuggingEnabled(BuildConfig.DEBUG)
             .lowMemoryDetection(true)
-            .loginAutofillEnabled(false)
+            .loginAutofillEnabled(prefs.offerPasswords)
             .configFilePath(startupConfig)
             // Engine crashes are noted (in a process of their own) for the problem report.
             .crashHandler(CrashReportService::class.java)
@@ -93,12 +93,43 @@ object Engine {
             Diagnostics.markCleanExit()
             Process.killProcess(Process.myPid())
         }
+        // Saved passwords (2.6): the engine asks for a site's sign-ins and hands over new ones to keep.
+        runtime.autocompleteStorageDelegate = object : org.mozilla.geckoview.Autocomplete.StorageDelegate {
+            override fun onLoginFetch(domain: String): GeckoResult<Array<org.mozilla.geckoview.Autocomplete.LoginEntry>> = loginsFor(domain)
+
+            override fun onLoginFetch(): GeckoResult<Array<org.mozilla.geckoview.Autocomplete.LoginEntry>> = loginsFor(null)
+
+            override fun onLoginSave(login: org.mozilla.geckoview.Autocomplete.LoginEntry) {
+                loginIo.execute { com.swiftbrowser.core.Passwords.save(login) }
+            }
+
+            override fun onLoginUsed(login: org.mozilla.geckoview.Autocomplete.LoginEntry, usedFields: Int) {
+                loginIo.execute { com.swiftbrowser.core.Passwords.used(login) }
+            }
+        }
         runtime.activityDelegate = GeckoRuntime.ActivityDelegate { pending ->
             activityDelegate?.onStartActivityForResult(pending)
                 ?: GeckoResult.fromException(IllegalStateException("No activity"))
         }
         applyPerformancePrefs(prefs)
         installExtensions(app)
+    }
+
+    private val loginIo = java.util.concurrent.Executors.newSingleThreadExecutor()
+
+    /** A site's saved sign-ins, read off the main thread. */
+    private fun loginsFor(domain: String?): GeckoResult<Array<org.mozilla.geckoview.Autocomplete.LoginEntry>> {
+        val result = GeckoResult<Array<org.mozilla.geckoview.Autocomplete.LoginEntry>>()
+        loginIo.execute {
+            val entries = try {
+                com.swiftbrowser.core.Passwords.entries(domain)
+            } catch (e: Exception) {
+                L.w("Couldn't read saved passwords", e)
+                emptyArray()
+            }
+            result.complete(entries)
+        }
+        return result
     }
 
     /**
@@ -343,16 +374,29 @@ object Engine {
         )
     }
 
-    /** Lists downloaded before updates were turned off (e.g. by version 1.0). Runs before the engine starts. */
-    /** Files the engine left in its temporary folder (it can hold several MB); nothing uses them before it starts. */
+    /**
+     * Files the engine left in its temporary folder (it can hold several MB); nothing uses them before
+     * it starts. The folder is moved aside at once and deleted in the background (2.6), so start-up
+     * doesn't wait for it.
+     */
     private fun removeTempFiles(app: Application) {
         try {
-            File(app.cacheDir, "gecko_temp").listFiles()?.forEach { it.deleteRecursively() }
+            val temp = File(app.cacheDir, "gecko_temp")
+            if (!temp.isDirectory) return
+            val trash = File(app.cacheDir, "gecko_temp_old")
+            if (trash.exists() || !temp.renameTo(trash)) {
+                temp.listFiles()?.forEach { it.deleteRecursively() }
+            }
+            Thread({
+                android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
+                trash.deleteRecursively()
+            }, "temp-cleanup").start()
         } catch (e: Exception) {
             L.w("Could not remove temporary files", e)
         }
     }
 
+    /** Lists downloaded before updates were turned off (e.g. by version 1.0). Runs before the engine starts. */
     private fun removeSafeBrowsingData(app: Application) {
         try {
             File(app.filesDir, "mozilla").listFiles()?.forEach { profile ->

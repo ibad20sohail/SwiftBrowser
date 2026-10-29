@@ -53,6 +53,7 @@ class SwiftApp : Application() {
         prefs.autoSitesAsDesigned = !prefs.autoSoftwareRendering && totalMemory() >= 3_500_000_000L
         Engine.init(this, prefs)
         com.swiftbrowser.engine.DataSaver.init(this)
+        com.swiftbrowser.engine.DataUsage.init()
         com.swiftbrowser.engine.Power.init(this)
         com.swiftbrowser.vpn.Vpn.onAppStart(this)
         com.swiftbrowser.vpn.VpnTileService.watch(this)
@@ -79,6 +80,14 @@ class SwiftApp : Application() {
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
         if (instance == null) return
+        // Out of sight (2.6): the pictures kept in memory that load again from disk go (tabs,
+        // documents, most site icons), so a 2 GB phone is less likely to close Swift. While
+        // something plays or downloads in the background, Android only says so once that ends.
+        if (level >= ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) {
+            Thumbnails.trim()
+            com.swiftbrowser.docs.DocThumbs.trim()
+            Favicons.trim()
+        }
         // Android is about to start closing apps (while Swift runs, or while it is in the
         // background): Swift could be next, so it frees the pages of background tabs (they reload
         // when opened) and saves its log. Merely leaving the app (UI_HIDDEN) isn't a reason.
@@ -115,6 +124,9 @@ class SwiftApp : Application() {
 
         /** Set when the theme changes; the browser screen reloads the page once it is recreated. */
         var reloadAfterThemeChange = false
+
+        /** Said once the screen is back in its new theme (2.6). */
+        var messageAfterThemeChange: String? = null
 
         fun applyNightMode(dark: Boolean) {
             AppCompatDelegate.setDefaultNightMode(

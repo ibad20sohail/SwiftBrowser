@@ -8,7 +8,7 @@ import java.net.URLEncoder
 /** Where searches from the address bar and the home page go (Settings → Browsing & tabs). */
 enum class SearchEngine(
     val key: String,
-    val label: String,
+    private val title: String,
     private val search: String,
     private val suggest: String,
     val icon: Int,
@@ -22,15 +22,28 @@ enum class SearchEngine(
     STARTPAGE(
         "startpage", "Startpage", "https://www.startpage.com/sp/search?query=",
         "https://www.startpage.com/suggestions?format=opensearch&q=", R.drawable.ic_engine_startpage,
-    );
+    ),
+
+    /** One the user gave (2.6): an address with %s where the words go. No suggestions. */
+    CUSTOM("custom", "Your own", "", "", R.drawable.ic_search);
+
+    val label: String
+        get() = if (this == CUSTOM) SwiftApp.prefs.customSearchName.ifBlank { title } else title
 
     /** The empty search box's hint. */
     val hint: String get() = "Search or type web address"
 
-    fun searchUrl(query: String): String = search + URLEncoder.encode(query, "UTF-8")
+    fun searchUrl(query: String): String {
+        val words = URLEncoder.encode(query, "UTF-8")
+        if (this == CUSTOM) {
+            val template = SwiftApp.prefs.customSearchUrl
+            return if ("%s" in template) template.replace("%s", words) else GOOGLE.searchUrl(query)
+        }
+        return search + words
+    }
 
-    /** Suggestions in the OpenSearch format: ["typed", ["suggestion", ...]]. */
-    fun suggestUrl(query: String): String = suggest + URLEncoder.encode(query, "UTF-8")
+    /** Suggestions in the OpenSearch format: ["typed", ["suggestion", ...]]; null: the engine has none. */
+    fun suggestUrl(query: String): String? = if (suggest.isEmpty()) null else suggest + URLEncoder.encode(query, "UTF-8")
 
     companion object {
         /** Whether [icon] is one of the engines' logos (drawn in its own colours). */

@@ -9,3 +9,6 @@ keystore/
 
 # Private VPN setup files (contain private keys): never in Git.
 private/
+
+# Kotlin compiler caches.
+.kotlin/

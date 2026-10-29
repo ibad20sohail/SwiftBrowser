@@ -17,7 +17,7 @@ object Suggestions {
     /** Blocking; call from a background thread. */
     fun fromEngine(query: String): List<String> {
         if (query.isBlank()) return emptyList()
-        val url = com.swiftbrowser.core.SearchEngine.current.suggestUrl(query)
+        val url = com.swiftbrowser.core.SearchEngine.current.suggestUrl(query) ?: return emptyList()
         return try {
             val request = WebRequest.Builder(url).method("GET").build()
             val response = Engine.executor.fetch(request, GeckoWebExecutor.FETCH_FLAGS_ANONYMOUS).poll(5000)
@@ -36,7 +36,7 @@ object Suggestions {
         val db = SwiftApp.db
         val out = ArrayList<Suggestion>()
         if (text.isBlank()) {
-            db.bookmarks(profileId).take(12).forEach { out.add(Suggestion(Suggestion.Kind.BOOKMARK, it.title.ifBlank { it.url }, it.url)) }
+            db.recentBookmarks(profileId, 12).forEach { out.add(Suggestion(Suggestion.Kind.BOOKMARK, it.title.ifBlank { it.url }, it.url)) }
             db.history(profileId, null, 30).distinctBy { UrlUtils.host(it.url) }.take(8).forEach {
                 if (out.none { s -> s.url == it.url }) out.add(Suggestion(Suggestion.Kind.HISTORY, it.title.ifBlank { it.url }, it.url))
             }

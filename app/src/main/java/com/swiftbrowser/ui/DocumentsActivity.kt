@@ -69,11 +69,36 @@ class DocumentsActivity : ListActivity() {
     )
     private var filter = 0
     private var recent: List<Entry> = emptyList()
+
+    /** Documents taken off the list, forgotten when their Undo runs out (or the screen closes). */
+    private val pendingForget = LinkedHashMap<String, Runnable>()
+    private val undoHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
+    override fun onPause() {
+        for ((_, r) in pendingForget.toList()) {
+            undoHandler.removeCallbacks(r)
+            r.run()
+        }
+        pendingForget.clear()
+        super.onPause()
+    }
     private var phone: List<Entry> = emptyList()
     private var starred: List<Entry> = emptyList()
     private var starredUris: Set<String> = emptySet()
     private var hiddenUris: Set<String> = emptySet()
     private var folder: String? = null
+    private val renderSoon = Runnable { render() }
+
+    private val leaveFolder = object : androidx.activity.OnBackPressedCallback(false) {
+        override fun handleOnBackPressed() {
+            if (search.text.isNotEmpty()) {
+                search.setText("")
+            } else {
+                folder = null
+                render()
+            }
+        }
+    }
     private var loaded = false
     private val adapter = Adapter()
 
@@ -121,12 +146,18 @@ class DocumentsActivity : ListActivity() {
             }
             true
         }
+        // Back leaves a folder (after a search is cleared) before closing (2.6).
+        onBackPressedDispatcher.addCallback(this, leaveFolder)
         search.visibility = View.VISIBLE
         search.hint = "Search documents"
         search.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
-            override fun afterTextChanged(s: Editable?) = render()
+            override fun afterTextChanged(s: Editable?) {
+                // After a pause in typing (2.6): each render sorts every document.
+                list.removeCallbacks(renderSoon)
+                list.postDelayed(renderSoon, 150)
+            }
         })
         addFilterChips()
         list.adapter = adapter
@@ -255,6 +286,7 @@ class DocumentsActivity : ListActivity() {
     }
 
     private fun render() {
+        leaveFolder.isEnabled = folder != null
         val q = search.text?.toString()?.trim()?.lowercase().orEmpty()
         val kinds = filters[filter].second
         val dir = folder
@@ -390,7 +422,7 @@ class DocumentsActivity : ListActivity() {
     }
 
     private fun open(uri: Uri, name: String?) {
-        if (Docs.open(this, uri, name)) {
+        if (Docs.open(this, uri, name, backTo = Docs.BACK_DOCUMENTS)) {
             finish()
         } else {
             Messages.show(this, "Swift can't show this kind of file")
@@ -404,7 +436,7 @@ class DocumentsActivity : ListActivity() {
         val actions = arrayListOf(
             Sheets.Action(R.drawable.ic_open_new, "Open", primary = true) { open(Uri.parse(e.uri), e.name) },
             Sheets.Action(R.drawable.ic_share, "Share", primary = true) { Docs.handOver(this, asDoc(e), share = true) },
-            Sheets.Action(if (isStarred) R.drawable.ic_star else R.drawable.ic_star_border, if (isStarred) "Starred" else "Star", primary = true) { toggleStar(e) },
+            Sheets.Action(if (isStarred) R.drawable.ic_star else R.drawable.ic_star_border, if (isStarred) "Remove star" else "Star", primary = true) { toggleStar(e) },
             Sheets.Action(R.drawable.ic_reopen, "Open with another app") { Docs.handOver(this, asDoc(e), share = false) },
             Sheets.Action(R.drawable.ic_home_add, "Add to home screen") { addShortcut(e) },
         )
@@ -414,10 +446,22 @@ class DocumentsActivity : ListActivity() {
         }
         if (doc != null) {
             actions += Sheets.Action(R.drawable.ic_close, "Remove from Opened in Swift") {
-                lifecycleScope.launch {
-                    withContext(Dispatchers.IO) { SwiftApp.db.forgetDocument(doc.id) }
-                    recent = recent.filter { it.doc?.id != doc.id }
-                    render()
+                // Off the list at once, forgotten once the Undo is gone (2.6).
+                val before = recent
+                recent = recent.filter { it.doc?.id != doc.id }
+                render()
+                val commit = Runnable {
+                    pendingForget.remove(doc.id)
+                    lifecycleScope.launch(Dispatchers.IO) { SwiftApp.db.forgetDocument(doc.id) }
+                }
+                pendingForget[doc.id] = commit
+                undoHandler.postDelayed(commit, 5600)
+                Messages.show(this, "Removed from Opened in Swift", "Undo") {
+                    if (pendingForget.remove(doc.id) != null) {
+                        undoHandler.removeCallbacks(commit)
+                        recent = before
+                        render()
+                    }
                 }
             }
         }
@@ -479,7 +523,7 @@ class DocumentsActivity : ListActivity() {
                         }
                         MediaScannerConnection.scanFile(this@DocumentsActivity, arrayOf(to.path), null, null)
                         val newUri = Uri.fromFile(to).toString()
-                        SwiftApp.db.renameDocument(e.uri, newUri, to.name, Docs.idFor(newUri))
+                        SwiftApp.db.renameDocument(e.uri, newUri, to.name, Docs.idFor(newUri, Profiles.currentId))
                         true
                     }
                     if (!ok) {
@@ -596,6 +640,14 @@ class DocumentsActivity : ListActivity() {
                 addView(Ui.text(ctx, Ui.Type.BODY, "", lines = 2).apply { id = R.id.row_title })
                 addView(Ui.text(ctx, Ui.Type.CAPTION, "", lines = 1).apply { id = R.id.row_subtitle })
             }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            // ⋮ like the other lists (2.6), not only a long press.
+            row.addView(android.widget.ImageButton(ctx).apply {
+                id = R.id.row_action
+                setImageResource(R.drawable.ic_more)
+                contentDescription = "More"
+                imageTintList = android.content.res.ColorStateList.valueOf(Ui.textSecondary(ctx))
+                setBackgroundResource(RowHolder.selectableBackground(ctx))
+            }, LinearLayout.LayoutParams(Ui.dp(ctx, 48), Ui.dp(ctx, 48)).apply { marginEnd = -Ui.dp(ctx, 8) })
             return Holder(row)
         }
 
@@ -639,12 +691,13 @@ class DocumentsActivity : ListActivity() {
         }
         v.contentDescription = "${e.name}, ${e.kind.label}" + if (star != null) ", starred" else ""
         v.setOnClickListener {
-            if (doc != null && doc.uri == e.uri && Docs.reopen(doc.id)) finish() else open(Uri.parse(e.uri), e.name)
+            if (doc != null && doc.uri == e.uri && Docs.reopen(doc.id, backTo = Docs.BACK_DOCUMENTS)) finish() else open(Uri.parse(e.uri), e.name)
         }
         v.setOnLongClickListener {
             hold(e)
             true
         }
+        v.findViewById<View>(R.id.row_action)?.setOnClickListener { hold(e) }
     }
 
     private companion object {

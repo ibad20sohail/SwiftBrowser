@@ -41,6 +41,9 @@ object L {
 
     @Synchronized
     fun dump(): String = ring.joinToString("\n")
+
+    @Synchronized
+    fun clear() = ring.clear()
 }
 
 /** Writes uncaught exceptions to a file so the next launch can show them. */

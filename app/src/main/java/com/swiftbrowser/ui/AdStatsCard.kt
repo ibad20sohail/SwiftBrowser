@@ -77,7 +77,8 @@ object AdStatsCard {
             val width = minOf(slot * 0.46f, Ui.dpf(context, 26f))
             val minimum = Ui.dpf(context, 4f)
             val accent = Ui.accent(context)
-            val soft = Ui.accentContainer(context)
+            // Past days a lighter accent, still clearly seen (2.6: the accent container was ≈1.2:1 on the card).
+            val soft = androidx.core.graphics.ColorUtils.blendARGB(Ui.color(context, R.color.card_bg), accent, 0.55f)
             val empty = Ui.color(context, R.color.divider)
             for (i in days.indices) {
                 val cx = slot * (i + 0.5f)

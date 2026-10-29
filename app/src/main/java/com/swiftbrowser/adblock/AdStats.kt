@@ -14,7 +14,7 @@ object AdStats {
     private const val KEY = "ad_stats"
     const val DAYS = 7
     private const val DAY_MS = 24 * 60 * 60 * 1000L
-    private const val SAVE_DELAY_MS = 10_000L
+    private const val SAVE_DELAY_MS = 60_000L
 
     private val handler = Handler(Looper.getMainLooper())
     private var counts: MutableMap<Long, Int>? = null

@@ -463,7 +463,7 @@ class TabSwitcherView @JvmOverloads constructor(
         findViewById<TextView>(R.id.switcher_empty_text).apply {
             text = when {
                 searching -> if (query.isBlank()) "" else "No tab has \"${query.trim()}\" in its title or address."
-                incognito -> "Incognito tabs keep no history, and their cookies are deleted when you close them."
+                incognito -> "Incognito tabs keep no history. Their cookies and site data are deleted when the last one closes."
                 else -> ""
             }
             setTextColor(color(if (incognito) R.color.incognito_hint else R.color.text_secondary))
@@ -612,7 +612,7 @@ class TabSwitcherView @JvmOverloads constructor(
                 val group = item.group
                 title = item.title
                 actions += Sheets.Action(R.drawable.ic_edit, "Rename group") { Sheets.renameGroup(activity, group) }
-                actions += Sheets.Action(R.drawable.ic_layers, "Ungroup (keep the tabs)") { TabManager.ungroup(group) }
+                actions += Sheets.Action(R.drawable.ic_layers, "Ungroup (the tabs stay open)") { TabManager.ungroup(group) }
                 actions += Sheets.Action(R.drawable.ic_close, "Close group", danger = true) { TabManager.closeGroup(group) }
             }
             is Item.Banner -> return
@@ -929,6 +929,15 @@ class TabSwitcherView @JvmOverloads constructor(
             }
         }
 
+        /**
+         * The open tab's ring (2.6): in the accent chosen, your own included (a ring's colour in a
+         * drawable file stayed the preset one), with the card's own corners.
+         */
+        private fun ring() = GradientDrawable().apply {
+            cornerRadius = dp(18).toFloat()
+            setStroke((2.5f * resources.displayMetrics.density).toInt(), Ui.accent(context))
+        }
+
         private fun cardBackground(dark: Boolean) = GradientDrawable().apply {
             cornerRadius = dp(18).toFloat()
             setColor(color(if (dark) R.color.incognito_url else R.color.tab_card_bg))
@@ -949,10 +958,19 @@ class TabSwitcherView @JvmOverloads constructor(
             h.close.imageTintList = ColorStateList.valueOf(color(if (dark) R.color.incognito_hint else R.color.text_secondary))
             h.thumbBox.setBackgroundColor(color(if (dark) R.color.incognito_bg else R.color.tab_thumb_bg))
             h.selected.visibility = if (card.current) View.VISIBLE else View.GONE
+            if (card.current) h.selected.background = ring()
 
-            if (tab.isBlank) h.icon.setImageDrawable(Ui.logo(context)) else h.icon.setImageResource(R.drawable.ic_globe)
-            h.icon.imageTintList = if (tab.isBlank) null else ColorStateList.valueOf(color(R.color.text_secondary))
-            if (!tab.isBlank) {
+            // A document open in Swift's viewer shows its kind's mark (2.6), not a globe.
+            val viewer = com.swiftbrowser.docs.Docs.isViewerUrl(tab.url)
+            val kind = if (viewer) com.swiftbrowser.docs.Docs.kindOf(card.title, null) else null
+            when {
+                tab.isBlank -> h.icon.setImageDrawable(Ui.logo(context))
+                kind != null -> h.icon.setImageDrawable(com.swiftbrowser.docs.DocIcon(kind, dp(18)))
+                viewer -> h.icon.setImageResource(R.drawable.ic_documents)
+                else -> h.icon.setImageResource(R.drawable.ic_globe)
+            }
+            h.icon.imageTintList = if (tab.isBlank || kind != null) null else ColorStateList.valueOf(color(R.color.text_secondary))
+            if (!tab.isBlank && !viewer) {
                 Favicons.load(card.url) { bmp ->
                     if (bmp != null && h.tab === tab) {
                         h.icon.imageTintList = null
@@ -967,7 +985,7 @@ class TabSwitcherView @JvmOverloads constructor(
                 if (tab.incognito) h.placeholder.setImageResource(R.drawable.ic_incognito) else h.placeholder.setImageDrawable(Ui.logo(context))
                 h.placeholder.imageTintList = if (tab.incognito) ColorStateList.valueOf(color(R.color.incognito_hint)) else null
             } else {
-                h.placeholder.setImageResource(R.drawable.ic_globe)
+                h.placeholder.setImageResource(if (viewer) R.drawable.ic_documents else R.drawable.ic_globe)
                 h.placeholder.imageTintList = ColorStateList.valueOf(color(R.color.text_secondary))
                 Thumbnails.load(tab) { bmp ->
                     if (bmp != null && h.tab === tab) {
@@ -1004,6 +1022,7 @@ class TabSwitcherView @JvmOverloads constructor(
             h.close.imageTintList = ColorStateList.valueOf(color(if (dark) R.color.incognito_hint else R.color.text_secondary))
             h.mosaic.setBackgroundColor(color(if (dark) R.color.incognito_url else R.color.tab_card_bg))
             h.selected.visibility = if (card.current) View.VISIBLE else View.GONE
+            if (card.current) h.selected.background = ring()
             val radius = dp(10).toFloat()
             h.thumbs.forEachIndexed { i, view ->
                 view.setImageDrawable(null)
@@ -1025,7 +1044,7 @@ class TabSwitcherView @JvmOverloads constructor(
             }
             h.itemView.setOnClickListener { setMode(Mode.GROUP, group) }
             h.close.setOnClickListener { TabManager.closeGroup(group) }
-            h.itemView.contentDescription = "Group ${card.title}, ${card.count} tabs"
+            h.itemView.contentDescription = "Group ${card.title}, ${card.count} ${if (card.count == 1) "tab" else "tabs"}"
         }
 
         private fun bindBanner(h: BannerHolder, banner: Item.Banner) {
@@ -1040,7 +1059,7 @@ class TabSwitcherView @JvmOverloads constructor(
                 h.itemView.setOnClickListener { setMode(Mode.INACTIVE) }
             } else {
                 h.title.text = "Tabs you haven't opened for $days days"
-                h.text.text = "They wait here until you open or close them. Change this in Settings → Browsing."
+                h.text.text = "They wait here until you open or close them. Change this in Settings → Browsing & tabs."
                 h.chevron.visibility = View.GONE
                 h.itemView.setOnClickListener(null)
                 h.itemView.isClickable = false

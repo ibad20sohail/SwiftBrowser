@@ -27,6 +27,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import org.json.JSONObject
+import org.mozilla.geckoview.GeckoWebExecutor
 import org.mozilla.geckoview.WebRequest
 import org.mozilla.geckoview.WebResponse
 import java.io.ByteArrayOutputStream
@@ -80,6 +81,8 @@ object Downloads {
         val pageUrl: String?,
         @Volatile var extra: JSONObject,
         val created: Long,
+        /** Started in an incognito tab (2.6): only in memory, gone from the list when incognito ends. */
+        val incognito: Boolean = false,
     ) {
         @Volatile var segDone: Int = extra.optInt("seg", 0)
         @Volatile var segTotal: Int = extra.optInt("segTotal", 0)
@@ -118,8 +121,16 @@ object Downloads {
                 r.created,
             )
             // Anything interrupted by Swift or the phone closing goes on by itself (a download the
-            // user paused stays paused).
-            if (item.status == RUNNING || item.status == QUEUED || item.status == CONVERTING) item.status = QUEUED
+            // user paused stays paused). A file Swift was writing itself (Save offline) can't go on:
+            // fetching its address again would save the page's HTML instead (2.6).
+            if (item.status == RUNNING || item.status == QUEUED || item.status == CONVERTING) {
+                if (item.extra.optBoolean("local")) {
+                    item.status = FAILED
+                    item.error = "Swift was closed while saving it. Save it again."
+                } else {
+                    item.status = QUEUED
+                }
+            }
             items[item.id] = item
         }
         com.swiftbrowser.engine.DataSaver.networkListeners += { onNetworkChanged() }
@@ -129,6 +140,12 @@ object Downloads {
     }
 
     fun all(): List<Item> = synchronized(items) { items.values.reversed() }
+
+    /** Clearing browsing data (2.6): entries started since [since] leave the list; the files stay, running ones go on. */
+    fun removeEntriesSince(since: Long) {
+        val gone = synchronized(items) { items.values.filter { it.created >= since && it.status != RUNNING && it.status != QUEUED && it.status != CONVERTING } }
+        for (item in gone) remove(item.id, deleteFile = false)
+    }
 
     fun get(id: Long): Item? = synchronized(items) { items[id] }
 
@@ -215,28 +232,36 @@ object Downloads {
         return f
     }
 
-    private fun reserved(path: String) = synchronized(items) { items.values.any { it.filePath == path && it.status != DONE } }
+    /** A path another entry has, finished or not: deleting that entry's file must never hit a new download (2.6). */
+    private fun reserved(path: String) = synchronized(items) { items.values.any { it.filePath == path } }
+
+    private var nextPrivateId = -1L
 
     private fun create(
         profileId: Long, kind: String, url: String, fileName: String, mime: String?, total: Long,
-        headers: Map<String, String>, pageUrl: String?, extra: JSONObject,
+        headers: Map<String, String>, pageUrl: String?, extra: JSONObject, incognito: Boolean = false,
     ): Item {
-        val file = uniqueFile(directory(), UrlUtils.sanitizeFileName(fileName))
+        val file = synchronized(items) { uniqueFile(directory(), UrlUtils.sanitizeFileName(fileName)) }
         val now = System.currentTimeMillis()
-        val row = DownloadRow(
-            0, profileId, kind, url, file.path, file.name, mime, total, 0, QUEUED, null,
-            JSONObject(headers as Map<*, *>).toString(), pageUrl, extra.toString(), now,
-        )
-        val id = db.insertDownload(row)
-        val item = Item(id, profileId, kind, url, file.path, file.name, mime, total, 0, QUEUED, null, headers, pageUrl, extra, now)
+        val id = if (incognito) {
+            // Incognito downloads aren't written down (the file itself is kept, as in other browsers).
+            synchronized(items) { nextPrivateId-- }
+        } else {
+            val row = DownloadRow(
+                0, profileId, kind, url, file.path, file.name, mime, total, 0, QUEUED, null,
+                JSONObject(headers as Map<*, *>).toString(), pageUrl, extra.toString(), now,
+            )
+            db.insertDownload(row)
+        }
+        val item = Item(id, profileId, kind, url, file.path, file.name, mime, total, 0, QUEUED, null, headers, pageUrl, extra, now, incognito)
         synchronized(items) { items[id] = item }
         return item
     }
 
     /** A page response the engine couldn't display (an attachment, an APK, a video file...). */
-    fun startFromResponse(profileId: Long, response: WebResponse, fileName: String, mime: String?, pageUrl: String?): Item {
+    fun startFromResponse(profileId: Long, response: WebResponse, fileName: String, mime: String?, pageUrl: String?, incognito: Boolean = false): Item {
         val total = response.headers["Content-Length"]?.toLongOrNull() ?: -1
-        val item = create(profileId, KIND_FILE, response.uri, fileName, mime, total, emptyMap(), pageUrl, JSONObject())
+        val item = create(profileId, KIND_FILE, response.uri, fileName, mime, total, emptyMap(), pageUrl, JSONObject(), incognito)
         firstResponses[item.id] = response
         schedule()
         return item
@@ -244,8 +269,9 @@ object Downloads {
 
     fun startUrl(
         profileId: Long, url: String, fileName: String, mime: String?, headers: Map<String, String>, pageUrl: String?,
+        incognito: Boolean = false,
     ): Item {
-        val item = create(profileId, KIND_FILE, url, fileName, mime, -1, headers, pageUrl, JSONObject())
+        val item = create(profileId, KIND_FILE, url, fileName, mime, -1, headers, pageUrl, JSONObject(), incognito)
         schedule()
         return item
     }
@@ -257,7 +283,7 @@ object Downloads {
     fun saveFile(
         profileId: Long, fileName: String, mime: String, pageUrl: String?, write: (File) -> Unit, done: (Item?) -> Unit,
     ) {
-        val item = create(profileId, KIND_FILE, pageUrl ?: "", fileName, mime, -1, emptyMap(), pageUrl, JSONObject())
+        val item = create(profileId, KIND_FILE, pageUrl ?: "", fileName, mime, -1, emptyMap(), pageUrl, JSONObject().put("local", true))
         item.status = RUNNING
         changed(immediate = true)
         scope.launch {
@@ -286,9 +312,9 @@ object Downloads {
     }
 
     /** [playlistUrl] must be a media playlist (a chosen quality), not a master playlist. */
-    fun startHls(profileId: Long, playlistUrl: String, title: String, headers: Map<String, String>, pageUrl: String?): Item {
+    fun startHls(profileId: Long, playlistUrl: String, title: String, headers: Map<String, String>, pageUrl: String?, incognito: Boolean = false): Item {
         val name = UrlUtils.sanitizeFileName(title).removeSuffix(".mp4").removeSuffix(".ts") + ".ts"
-        val item = create(profileId, KIND_HLS, playlistUrl, name, "video/mp2t", -1, headers, pageUrl, JSONObject())
+        val item = create(profileId, KIND_HLS, playlistUrl, name, "video/mp2t", -1, headers, pageUrl, JSONObject(), incognito)
         schedule()
         return item
     }
@@ -321,7 +347,7 @@ object Downloads {
         firstResponses.remove(id)?.body?.let { runCatching { it.close() } }
         synchronized(items) { items.remove(id) }
         scope.launch {
-            db.deleteDownload(id)
+            if (!item.incognito) db.deleteDownload(id)
             if (deleteFile || item.status != DONE) File(item.filePath).delete()
         }
         changed(immediate = true)
@@ -502,7 +528,16 @@ object Downloads {
         }
     }
 
+    /** The last incognito tab closed (2.6): its finished downloads leave the list (their files stay). */
+    fun onIncognitoEnded() {
+        val gone = synchronized(items) { items.values.filter { it.incognito && it.status != RUNNING && it.status != QUEUED && it.status != CONVERTING } }
+        if (gone.isEmpty()) return
+        synchronized(items) { gone.forEach { items.remove(it.id) } }
+        changed(immediate = true)
+    }
+
     private fun persist(item: Item) {
+        if (item.incognito) return
         val snapshot = arrayOf<Any?>(item.filePath, item.fileName, item.total, item.done, item.status, item.error, item.extra.toString())
         scope.launch {
             db.updateDownload(
@@ -514,7 +549,7 @@ object Downloads {
 
     // ------------------------------------------------------------------ networking
 
-    fun request(url: String, headers: Map<String, String>, range: String? = null): WebResponse {
+    fun request(url: String, headers: Map<String, String>, range: String? = null, private: Boolean = false): WebResponse {
         val b = WebRequest.Builder(url).method("GET").cacheMode(WebRequest.CACHE_MODE_NO_STORE)
         headers["referer"]?.let { b.referrer(it) }
         headers["cookie"]?.let { b.addHeader("Cookie", it) }
@@ -522,7 +557,7 @@ object Downloads {
         headers["authorization"]?.let { b.addHeader("Authorization", it) }
         if (range != null) b.addHeader("Range", range)
         val response = try {
-            Engine.executor.fetch(b.build()).poll(45_000)
+            Engine.executor.fetch(b.build(), if (private) GeckoWebExecutor.FETCH_FLAGS_PRIVATE else GeckoWebExecutor.FETCH_FLAGS_NONE).poll(45_000)
         } catch (e: Throwable) {
             throw IOException("Network error: ${e.message ?: e.javaClass.simpleName}", e)
         }
@@ -545,8 +580,8 @@ object Downloads {
     }
 
     /** Fetches a playlist as text (blocking; call off the main thread). */
-    fun fetchText(url: String, headers: Map<String, String>): String {
-        val r = request(url, headers)
+    fun fetchText(url: String, headers: Map<String, String>, private: Boolean = false): String {
+        val r = request(url, headers, private = private)
         if (r.statusCode !in 200..299) {
             runCatching { r.body?.close() }
             throw IOException("Server error ${r.statusCode}")
@@ -566,7 +601,7 @@ object Downloads {
             response = first
         } else {
             first?.body?.let { runCatching { it.close() } }
-            response = request(item.url, item.headers, if (offset > 0) "bytes=$offset-" else null)
+            response = request(item.url, item.headers, if (offset > 0) "bytes=$offset-" else null, item.incognito)
             when {
                 response.statusCode == 206 -> Unit
                 response.statusCode in 200..299 -> offset = 0 // server ignored the range: start over
@@ -587,6 +622,9 @@ object Downloads {
                 }
             }
         }
+        // What is really in the file from here on (2.6): a server that ignored the range starts it
+        // over, and after Android closed Swift the saved count may lag behind the file.
+        item.done = offset
         val contentRangeTotal = response.headers["Content-Range"]?.substringAfterLast('/')?.trim()?.toLongOrNull()
         val length = response.headers["Content-Length"]?.toLongOrNull()
         item.total = contentRangeTotal ?: length?.let { it + offset } ?: item.total
@@ -633,13 +671,13 @@ object Downloads {
     // ------------------------------------------------------------------ HLS streams
 
     private suspend fun runHls(item: Item) = coroutineScope {
-        var text = fetchText(item.url, item.headers)
+        var text = fetchText(item.url, item.headers, item.incognito)
         var playlistUrl = item.url
         if (!Hls.isPlaylist(text)) throw IOException("Not a video playlist")
         if (Hls.isMaster(text)) {
             val best = Hls.parseMaster(text, item.url).firstOrNull() ?: throw IOException("No streams in playlist")
             playlistUrl = best.url
-            text = fetchText(playlistUrl, item.headers)
+            text = fetchText(playlistUrl, item.headers, item.incognito)
         }
         val media = Hls.parseMedia(text, playlistUrl)
         if (media.segments.isEmpty()) throw IOException("Empty playlist")
@@ -671,14 +709,14 @@ object Downloads {
             raf.setLength(if (startSeg == 0) 0 else startBytes)
             raf.seek(raf.length())
             if (startSeg == 0 && media.init != null) {
-                raf.write(fetchSegment(media.init, item.headers))
+                raf.write(fetchSegment(media.init, item.headers, item.incognito))
             }
             item.done = raf.length()
             val pending = ArrayDeque<Deferred<ByteArray>>()
             var next = startSeg
             fun enqueue() {
                 val seg = media.segments[next++]
-                pending.addLast(async { fetchSegment(seg, item.headers) })
+                pending.addLast(async { fetchSegment(seg, item.headers, item.incognito) })
             }
             while (pending.size < HLS_PARALLEL && next < media.segments.size) enqueue()
             var index = startSeg
@@ -712,12 +750,12 @@ object Downloads {
         persist(item)
     }
 
-    private suspend fun fetchSegment(seg: Hls.Segment, headers: Map<String, String>): ByteArray {
+    private suspend fun fetchSegment(seg: Hls.Segment, headers: Map<String, String>, private: Boolean = false): ByteArray {
         var attempt = 0
         while (true) {
             try {
                 val range = if (seg.rangeLength >= 0) "bytes=${seg.rangeStart}-${seg.rangeStart + seg.rangeLength - 1}" else null
-                val r = request(seg.url, headers, range)
+                val r = request(seg.url, headers, range, private)
                 if (r.statusCode !in 200..299) {
                     runCatching { r.body?.close() }
                     throw IOException("Segment error ${r.statusCode}")

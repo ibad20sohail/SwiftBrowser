@@ -138,11 +138,14 @@ class DocumentsActivity : ListActivity() {
             setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS)
         }
         toolbar.menu.add(0, MENU_FOLDERS, 2, "Folders").setShowAsAction(MenuItem.SHOW_AS_ACTION_NEVER)
+        // 2.7: all the phone's files, in Swift's file manager.
+        toolbar.menu.add(0, MENU_FILES, 3, "Files").setShowAsAction(MenuItem.SHOW_AS_ACTION_NEVER)
         toolbar.setOnMenuItemClickListener {
             when (it.itemId) {
                 MENU_BROWSE -> browse()
                 MENU_SORT -> chooseSort()
                 MENU_FOLDERS -> chooseFolder()
+                MENU_FILES -> FilesActivity.open(this)
             }
             true
         }
@@ -441,6 +444,7 @@ class DocumentsActivity : ListActivity() {
             Sheets.Action(R.drawable.ic_home_add, "Add to home screen") { addShortcut(e) },
         )
         if (onPhone) {
+            actions += Sheets.Action(R.drawable.ic_folder, "Show in Files") { FilesActivity.open(this, File(e.path!!).parentFile) }
             actions += Sheets.Action(R.drawable.ic_edit, "Rename") { rename(e) }
             actions += Sheets.Action(R.drawable.ic_delete, "Delete", danger = true) { delete(e) }
         }
@@ -643,6 +647,8 @@ class DocumentsActivity : ListActivity() {
             // ⋮ like the other lists (2.6), not only a long press.
             row.addView(android.widget.ImageButton(ctx).apply {
                 id = R.id.row_action
+                // Not a stop for the list's focus (it showed a grey box on the first row).
+                isFocusable = false
                 setImageResource(R.drawable.ic_more)
                 contentDescription = "More"
                 imageTintList = android.content.res.ColorStateList.valueOf(Ui.textSecondary(ctx))
@@ -704,6 +710,7 @@ class DocumentsActivity : ListActivity() {
         const val MENU_BROWSE = 1
         const val MENU_SORT = 2
         const val MENU_FOLDERS = 3
+        const val MENU_FILES = 4
         const val PREF_SORT = "documents_sort"
     }
 }

@@ -507,6 +507,13 @@ class SettingsActivity : AppCompatActivity() {
         def(Topic.LOOK, "Menu", "Reset the menu", "menu buttons default reset order") {
             action(R.drawable.ic_update, "Reset the menu", { "Every button back where it started" }) { resetMenu() }
         }
+        def(Topic.LOOK, "App icons", "Documents and Files in the app list", "icon launcher home screen app list documents files apps") {
+            switch(
+                R.drawable.ic_folder, "Documents and Files in the app list",
+                { "Their own icons next to Swift's, to open them straight away" },
+                checked = { AppIcons.shown(this@SettingsActivity) },
+            ) { AppIcons.show(this@SettingsActivity, it) }
+        }
         def(Topic.LOOK, "Feel", "Light vibration", "haptic vibrate feedback touch") {
             switch(R.drawable.ic_vibration, "Light vibration", { "A short buzz when you hold something or drag a tab" }, checked = { prefs.haptics }) {
                 prefs.haptics = it
@@ -564,11 +571,6 @@ class SettingsActivity : AppCompatActivity() {
             switch(R.drawable.ic_lightbulb, "Search suggestions", { "${SearchEngine.current.label} suggests searches as you type" }, checked = { prefs.searchSuggestions }) {
                 prefs.searchSuggestions = it
             }
-        }
-        def(Topic.BROWSING, "Search", "Search shortcuts", "keyword shortcut bang yt youtube wikipedia custom search") {
-            action(R.drawable.ic_search, "Search shortcuts", {
-                "Type \"yt cats\" to search YouTube, \"w comet\" for Wikipedia"
-            }) { showSearchShortcuts() }
         }
         def(Topic.BROWSING, "Translate", "Offer to translate pages", "translate translation language foreign") {
             switch(R.drawable.ic_translate, "Offer to translate pages", { "Pages in another language offer to be translated, on this phone" }, checked = { Translate.offer }) {
@@ -682,16 +684,6 @@ class SettingsActivity : AppCompatActivity() {
         }
         def(Topic.SPEED, "Memory", "Tabs kept loaded", "memory ram live tabs") {
             action(R.drawable.ic_memory, "Tabs kept loaded", { liveTabsText(prefs.maxLiveTabs) }) { chooseLiveTabs() }
-        }
-        def(Topic.SPEED, "Drawing", "Draw pages without the graphics chip", "gpu cpu rendering software webrender", advanced = true) {
-            val gpu = GpuInfo.renderer(this@SettingsActivity).ifBlank { "unknown chip" }
-            switch(
-                R.drawable.ic_layers, "Draw pages without the graphics chip",
-                { if (prefs.autoSoftwareRendering) "Chosen for this phone: its chip is slow with text" else "This phone's chip: $gpu" },
-                details = "This phone's graphics chip ($gpu) is slow at drawing pages with a lot of text, so Swift draws " +
-                    "them with the CPU by default on such chips. Turn it off to compare. Swift restarts to apply it.",
-                checked = { prefs.softwareRendering },
-            ) { confirmRenderingChange(it) }
         }
         def(Topic.SPEED, "Drawing", "Show drawing speed", "fps frames meter", advanced = true) {
             switch(R.drawable.ic_speed, "Show drawing speed", { "A meter on pages showing how smoothly they draw" }, checked = { prefs.showDrawSpeed }) {
@@ -1264,45 +1256,6 @@ class SettingsActivity : AppCompatActivity() {
             prefs.customSearchName = UrlUtils.siteName(url)
             prefs.searchEngine = SearchEngine.CUSTOM.key
             refreshAll()
-        }
-    }
-
-    /** Settings → Search shortcuts (2.6). */
-    private fun showSearchShortcuts() {
-        val list = com.swiftbrowser.core.SearchShortcuts.all()
-        MaterialAlertDialogBuilder(this)
-            .setTitle("Search shortcuts")
-            .setItems(list.map { "${it.keyword}  ·  ${it.name}" }.toTypedArray()) { _, which ->
-                val s = list[which]
-                Dialogs.confirm(this, "Remove \"${s.keyword}\"?", "\"${s.keyword} something\" searches ${s.name} now.", "Remove", danger = true) {
-                    com.swiftbrowser.core.SearchShortcuts.remove(s.keyword)
-                    refreshAll()
-                }
-            }
-            .setPositiveButton("Add") { _, _ -> addSearchShortcut() }
-            .setNeutralButton("Reset") { _, _ ->
-                com.swiftbrowser.core.SearchShortcuts.reset()
-                refreshAll()
-                snack("Search shortcuts reset")
-            }
-            .setNegativeButton("Close", null)
-            .showImmersive()
-    }
-
-    private fun addSearchShortcut() {
-        Sheets.askText(this, "New search shortcut", "A short word, like yt", "", words = false) { word ->
-            val keyword = word.trim().lowercase()
-            if (keyword.isEmpty() || ' ' in keyword) return@askText
-            Sheets.askText(this, "What \"$keyword\" searches", "Address with %s for the words", "https://") { text ->
-                val url = text.trim()
-                if (!UrlUtils.isHttp(url) || "%s" !in url) {
-                    Dialogs.info(this, "Search shortcuts", searchAddressHelp)
-                    return@askText
-                }
-                com.swiftbrowser.core.SearchShortcuts.add(keyword, UrlUtils.siteName(url), url)
-                refreshAll()
-                snack("\"$keyword something\" now searches ${UrlUtils.siteName(url)}")
-            }
         }
     }
 
@@ -2105,12 +2058,6 @@ class SettingsActivity : AppCompatActivity() {
             }
             .setNegativeButton(android.R.string.cancel, null)
             .showImmersive()
-    }
-
-    private fun confirmRenderingChange(on: Boolean) {
-        prefs.softwareRendering = on
-        Engine.applySoftwareRendering()
-        confirmRestart("The new drawing method is used after Swift restarts.")
     }
 
     private fun confirmRestart(text: String) {

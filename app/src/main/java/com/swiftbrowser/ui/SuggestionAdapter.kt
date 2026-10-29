@@ -94,9 +94,7 @@ class SuggestionAdapter(
             Suggestion.Kind.TAB -> R.drawable.ic_tab
         }
         val subtitle = when (s.kind) {
-            // "yt cats": which site the shortcut searches (2.6).
-            Suggestion.Kind.SEARCH -> com.swiftbrowser.core.SearchShortcuts.shortcutOf(s.title)
-                ?.takeIf { com.swiftbrowser.core.SearchShortcuts.match(s.title) == s.url }?.let { "Search ${it.name}" }
+            Suggestion.Kind.SEARCH -> null
             Suggestion.Kind.GO -> s.url
             Suggestion.Kind.TAB -> "Switch to this tab · " + UrlUtils.siteName(s.url)
             else -> UrlUtils.siteName(s.url)

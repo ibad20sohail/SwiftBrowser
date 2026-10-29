@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- The round app icon (Android 7.1 launchers that ask for one): Swift's comet on a blue circle. -->
+<!-- The round app icon (Android 7.1 launchers that ask for one): Swift's comet on a dark circle (2.7). -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:aapt="http://schemas.android.com/aapt"
     android:width="48dp"
@@ -14,8 +14,8 @@
                 android:startX="0"
                 android:startY="0"
                 android:type="linear">
-                <item android:color="#FF5A97FF" android:offset="0" />
-                <item android:color="#FF1542C2" android:offset="1" />
+                <item android:color="#FF3A3F47" android:offset="0" />
+                <item android:color="#FF101216" android:offset="1" />
             </gradient>
         </aapt:attr>
     </path>

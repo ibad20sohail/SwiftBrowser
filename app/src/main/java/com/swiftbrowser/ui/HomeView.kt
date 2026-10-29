@@ -41,12 +41,18 @@ class HomeView @JvmOverloads constructor(
         fun onContinueClicked(item: com.swiftbrowser.media.Unfinished.Item)
         fun onContinueLongClicked(item: com.swiftbrowser.media.Unfinished.Item)
         fun onDocumentsTile()
+
+        /** The profile pill under the logo (2.7): change profile. */
+        fun onProfileClicked()
     }
 
     var listener: Listener? = null
 
     private val topSpace: Space
     private val logo: View
+
+    /** The logo's picture, where the start screen's logo lands (2.7). */
+    val logoMark: View
     private val incognitoBox: View
     private val search: LinearLayout
 
@@ -60,12 +66,18 @@ class HomeView @JvmOverloads constructor(
     private var shownTiles: List<TopSites.Tile> = emptyList()
     private var tilesBuiltWithDocs = false
 
-    // Dragging a shortcut to another place.
+    // Dragging a shortcut to another place (2.7: the others make way while it is held, as in the menu).
     private var dragged: View? = null
     private var dragStartX = 0f
     private var dragStartY = 0f
     private var dragMoved = false
-    private var hovered: View? = null
+
+    /** Where the held shortcut was, and the place it would go now (in [tileViews]). */
+    private var dragFrom = -1
+    private var dragTo = -1
+
+    /** Each shortcut's place in the shortcuts box when the drag began. */
+    private var slots: List<android.graphics.Rect> = emptyList()
     private val touchSlop = android.view.ViewConfiguration.get(context).scaledTouchSlop
     private val hint: TextView
     private val searchIcon: ImageView
@@ -95,11 +107,22 @@ class HomeView @JvmOverloads constructor(
         tileViews.filter { (it.tag as? TopSites.Tile)?.let { t -> com.swiftbrowser.core.Favicons.key(t.url) } == key }.forEach { bindIcon(it) }
     }
 
+    /** Which profile is in use (its colour and name); a tap opens the profiles to change it (2.7). */
+    private val profilePill = TextView(context).apply {
+        Ui.style(this, Ui.Type.LABEL)
+        gravity = android.view.Gravity.CENTER_VERTICAL
+        minHeight = dp(40)
+        setPadding(dp(14), dp(6), dp(10), dp(6))
+        compoundDrawablePadding = dp(8)
+        background = Ui.ripple(context, Ui.shape(context, color(R.color.surface_alt), 20), 20)
+        setOnClickListener { listener?.onProfileClicked() }
+    }
+
     init {
         LayoutInflater.from(context).inflate(R.layout.view_home, this, true)
         topSpace = findViewById(R.id.home_top_space)
         logo = findViewById(R.id.home_logo)
-        findViewById<ImageView>(R.id.home_logo_mark).setImageDrawable(Ui.logo(context))
+        logoMark = findViewById<ImageView>(R.id.home_logo_mark).apply { setImageDrawable(Ui.logo(context)) }
         incognitoBox = findViewById(R.id.home_incognito)
         search = findViewById(R.id.home_search)
         hint = findViewById(R.id.home_search_hint)
@@ -131,6 +154,30 @@ class HomeView @JvmOverloads constructor(
             marginStart = -dp(16)
             marginEnd = -dp(16)
         })
+        // Under the logo: the profile in use, and a tap to change it (2.7).
+        (logo.parent as? ViewGroup)?.let { parent ->
+            parent.addView(profilePill, parent.indexOfChild(logo) + 1, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                gravity = android.view.Gravity.CENTER_HORIZONTAL
+                topMargin = dp(14)
+            })
+        }
+        updateProfile()
+    }
+
+    /** The profile changed (or was renamed or recoloured). */
+    fun updateProfile() {
+        val p = com.swiftbrowser.core.Profiles.current()
+        profilePill.text = p.name
+        val dot = android.graphics.drawable.GradientDrawable().apply {
+            shape = android.graphics.drawable.GradientDrawable.OVAL
+            setColor(p.color)
+            setSize(dp(12), dp(12))
+        }
+        val arrow = Ui.icon(context, R.drawable.ic_down, Ui.textSecondary(context))?.apply { setBounds(0, 0, dp(18), dp(18)) }
+        dot.setBounds(0, 0, dp(12), dp(12))
+        profilePill.setCompoundDrawablesRelative(dot, null, arrow, null)
+        profilePill.contentDescription = "Profile: ${p.name}. Change profile"
+        profilePill.visibility = if (incognito) View.GONE else View.VISIBLE
     }
 
     /** The home page went out of sight: news pictures are let go until it's back (2.3). */
@@ -271,6 +318,7 @@ class HomeView @JvmOverloads constructor(
         this.incognito = incognito
         setBackgroundColor(color(if (incognito) R.color.incognito_bg else R.color.home_bg))
         logo.visibility = if (incognito) View.GONE else View.VISIBLE
+        updateProfile()
         incognitoBox.visibility = if (incognito) View.VISIBLE else View.GONE
         tilesBox.visibility = if (incognito) View.GONE else View.VISIBLE
         if (incognito) tilesTitle.visibility = View.GONE
@@ -340,7 +388,7 @@ class HomeView @JvmOverloads constructor(
         val cells = ArrayList<Any?>(tiles)
         if (SwiftApp.prefs.homeDocuments) cells += DOCUMENTS
         if (tiles.size < TopSites.MAX) cells += null
-        for (rowTiles in cells.chunked(4)) {
+        for (rowTiles in cells.chunked(COLUMNS)) {
             val row = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
             for (t in rowTiles) {
                 if (t == null) {
@@ -360,7 +408,7 @@ class HomeView @JvmOverloads constructor(
                 val strong = letterColor(t.key)
                 letter.setTextColor(strong)
                 letter.background = GradientDrawable().apply {
-                    cornerRadius = dp(18).toFloat()
+                    cornerRadius = dp(15).toFloat()
                     setColor(androidx.core.graphics.ColorUtils.blendARGB(color(R.color.card_bg), strong, 0.2f))
                 }
                 v.setOnClickListener { listener?.onTileClicked(t.url) }
@@ -377,7 +425,7 @@ class HomeView @JvmOverloads constructor(
                 bindIcon(v)
                 row.addView(v)
             }
-            repeat(4 - rowTiles.size) { row.addView(Space(context), LinearLayout.LayoutParams(0, 1, 1f)) }
+            repeat(COLUMNS - rowTiles.size) { row.addView(Space(context), LinearLayout.LayoutParams(0, 1, 1f)) }
             tilesBox.addView(row)
         }
         if (animateTiles) {
@@ -402,6 +450,13 @@ class HomeView @JvmOverloads constructor(
         dragMoved = false
         dragStartX = lastRawX
         dragStartY = lastRawY
+        dragFrom = tileViews.indexOf(v)
+        dragTo = dragFrom
+        // Every shortcut's place, as laid out now: the others slide between these while it is held.
+        slots = tileViews.map { t ->
+            val row = t.parent as View
+            android.graphics.Rect(row.left + t.left, row.top + t.top, row.left + t.right, row.top + t.bottom)
+        }
         // The home page doesn't scroll while a shortcut is dragged.
         v.parent?.requestDisallowInterceptTouchEvent(true)
         // No touch highlight trailing behind it, and the press effect doesn't undo the lift.
@@ -410,11 +465,9 @@ class HomeView @JvmOverloads constructor(
         v.jumpDrawablesToCurrentState()
         v.animate().scaleX(1.12f).scaleY(1.12f).setDuration(120).start()
         v.elevation = dp(6).toFloat()
-        // It is drawn above the other rows as it leaves its own.
-        (v.parent as? ViewGroup)?.let { row ->
-            row.clipChildren = false
-            row.translationZ = dp(6).toFloat()
-        }
+        // Shortcuts move between rows, and the held one is drawn above the other rows.
+        for (r in 0 until tilesBox.childCount) (tilesBox.getChildAt(r) as? ViewGroup)?.clipChildren = false
+        (v.parent as? ViewGroup)?.translationZ = dp(6).toFloat()
         tilesBox.clipChildren = false
     }
 
@@ -433,19 +486,20 @@ class HomeView @JvmOverloads constructor(
                 if (dragMoved) {
                     v.translationX = dx
                     v.translationY = dy
-                    setHovered(tileAt(ev.rawX, ev.rawY, except = v))
+                    placeAt(ev.rawX, ev.rawY)
                 }
                 return true
             }
             android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> {
-                val target = if (ev.actionMasked == android.view.MotionEvent.ACTION_UP) hovered else null
                 val moved = dragMoved
-                endDrag(v)
+                val up = ev.actionMasked == android.view.MotionEvent.ACTION_UP
                 val tile = v.tag as? TopSites.Tile
-                when {
-                    tile == null -> Unit
-                    !moved && ev.actionMasked == android.view.MotionEvent.ACTION_UP -> listener?.onTileLongClicked(tile, v)
-                    target != null -> moveTile(tile, target.tag as? TopSites.Tile)
+                if (!moved && up && tile != null) {
+                    endDrag(v, dragFrom)
+                    listener?.onTileLongClicked(tile, v)
+                } else {
+                    // Cancelled: everything goes back; let go: it settles into the place made for it.
+                    endDrag(v, if (up) dragTo else dragFrom)
                 }
                 return true
             }
@@ -453,49 +507,80 @@ class HomeView @JvmOverloads constructor(
         return true
     }
 
-    private fun endDrag(v: View) {
+    /** The place under the finger: the shortcuts between there and the held one's place make way. */
+    private fun placeAt(rawX: Float, rawY: Float) {
+        val at = IntArray(2)
+        tilesBox.getLocationOnScreen(at)
+        val x = (rawX - at[0]).toInt()
+        val y = (rawY - at[1]).toInt()
+        val to = slots.indexOfFirst { it.contains(x, y) }
+        if (to < 0 || to == dragTo) return
+        dragTo = to
+        Haptics.tick(tilesBox)
+        for ((i, t) in tileViews.withIndex()) {
+            if (i == dragFrom) continue
+            val place = when {
+                dragFrom < to && i in dragFrom + 1..to -> i - 1
+                dragFrom > to && i in to until dragFrom -> i + 1
+                else -> i
+            }
+            t.animate().translationX((slots[place].left - slots[i].left).toFloat())
+                .translationY((slots[place].top - slots[i].top).toFloat())
+                .setDuration(Motion.SHORT).setInterpolator(Motion.standard).start()
+        }
+    }
+
+    /** The held shortcut settles into place [to] (its own, when nothing moved), and the order is kept. */
+    private fun endDrag(v: View, to: Int) {
         dragged = null
         v.isPressed = false
-        setHovered(null)
-        v.animate().translationX(0f).translationY(0f).scaleX(1f).scaleY(1f).setDuration(150).withEndAction { Ui.pressable(v, 0.92f) }.start()
-        v.elevation = 0f
-        (v.parent as? ViewGroup)?.translationZ = 0f
-    }
-
-    private fun setHovered(v: View?) {
-        if (v === hovered) return
-        hovered?.animate()?.scaleX(1f)?.scaleY(1f)?.setDuration(100)?.start()
-        hovered = v
-        v?.animate()?.scaleX(0.88f)?.scaleY(0.88f)?.setDuration(100)?.start()
-        if (v != null) Haptics.tick(v)
-    }
-
-    /** The shortcut under the finger (screen coordinates). */
-    private fun tileAt(rawX: Float, rawY: Float, except: View): View? {
-        val at = IntArray(2)
-        for (t in tileViews) {
-            if (t === except) continue
-            t.getLocationOnScreen(at)
-            if (rawX >= at[0] && rawX < at[0] + t.width && rawY >= at[1] && rawY < at[1] + t.height) return t
-        }
-        return null
+        val from = dragFrom
+        val place = slots.getOrNull(to)
+        val own = slots.getOrNull(from)
+        val tx = if (place != null && own != null) (place.left - own.left).toFloat() else 0f
+        val ty = if (place != null && own != null) (place.top - own.top).toFloat() else 0f
+        if (to == from) for ((i, t) in tileViews.withIndex()) if (i != from) t.animate().translationX(0f).translationY(0f).setDuration(Motion.SHORT).start()
+        v.animate().translationX(tx).translationY(ty).scaleX(1f).scaleY(1f).setDuration(150).withEndAction {
+            v.elevation = 0f
+            (v.parent as? ViewGroup)?.translationZ = 0f
+            Ui.pressable(v, 0.92f)
+            if (to != from && from >= 0 && to >= 0 && dragged == null) moveTile(from, to)
+        }.start()
     }
 
     /**
-     * [tile] goes where [target] is. It and the shortcuts before it become your own shortcuts, so
-     * they stay where they are (most visited sites after them still change by themselves).
+     * The shortcut at [from] goes to [to]. It and the shortcuts before it become your own shortcuts,
+     * so they stay where they are (most visited sites after them still change by themselves). The
+     * shortcuts already stand there: they are put in their new rows as they are, without a rebuild.
      */
-    private fun moveTile(tile: TopSites.Tile, target: TopSites.Tile?) {
-        if (target == null || target.key == tile.key) return
+    private fun moveTile(from: Int, to: Int) {
+        if (from !in shownTiles.indices || to !in shownTiles.indices) return
         val order = shownTiles.toMutableList()
-        val from = order.indexOfFirst { it.key == tile.key }
-        val to = order.indexOfFirst { it.key == target.key }
-        if (from < 0 || to < 0) return
+        val tile = order[from]
         order.add(to, order.removeAt(from))
         val pid = Profiles.currentId
         val keep = TopSites.pinned(pid).map { it.key }.toSet() + tile.key + order.take(to + 1).map { it.key }
         TopSites.setPinned(pid, order.filter { it.key in keep }.map { it.copy(pinned = true) })
-        refreshTiles()
+        // What the home page loads next time: the same, so it isn't built again.
+        shownTiles = order.map { if (it.key in keep) it.copy(pinned = true) else it }
+        val views = tileViews.toMutableList()
+        views.add(to, views.removeAt(from))
+        val rows = (0 until tilesBox.childCount).mapNotNull { tilesBox.getChildAt(it) as? LinearLayout }
+        val others = rows.flatMap { row -> (0 until row.childCount).map { row.getChildAt(it) } }
+            .filter { it !in tileViews && it !is Space }
+        rows.forEach { it.removeAllViews() }
+        for ((r, cells) in (views + others).chunked(COLUMNS).withIndex()) {
+            val row = rows.getOrNull(r) ?: break
+            for (c in cells) {
+                c.translationX = 0f
+                c.translationY = 0f
+                row.addView(c)
+            }
+            repeat(COLUMNS - cells.size) { row.addView(Space(context), LinearLayout.LayoutParams(0, 1, 1f)) }
+        }
+        tileViews.clear()
+        tileViews.addAll(views)
+        views.forEachIndexed { i, v -> v.tag = shownTiles[i] }
     }
 
     /** Documents (2.4): the phone's PDFs and Office files. Hold it to take it off the home page. */
@@ -506,7 +591,7 @@ class HomeView @JvmOverloads constructor(
         v.findViewById<ImageView>(R.id.tile_icon).apply {
             visibility = View.VISIBLE
             setImageDrawable(Ui.icon(context, R.drawable.ic_documents, Ui.onAccent(context)))
-            background = Ui.shape(context, Ui.accent(context), 18)
+            background = Ui.shape(context, Ui.accent(context), 15)
             scaleType = ImageView.ScaleType.CENTER
         }
         v.contentDescription = "Documents"
@@ -539,7 +624,7 @@ class HomeView @JvmOverloads constructor(
             setTextColor(color(R.color.text_secondary))
             textSize = 26f
             background = GradientDrawable().apply {
-                cornerRadius = dp(18).toFloat()
+                cornerRadius = dp(15).toFloat()
                 setStroke(dp(2), color(R.color.outline))
             }
         }
@@ -572,5 +657,8 @@ class HomeView @JvmOverloads constructor(
     private companion object {
         /** The Documents tile's place among the shortcuts. */
         val DOCUMENTS = Any()
+
+        /** Shortcuts to a row (2.7: five, smaller). */
+        const val COLUMNS = 5
     }
 }

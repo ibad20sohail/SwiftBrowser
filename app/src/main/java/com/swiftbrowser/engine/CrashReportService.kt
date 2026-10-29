@@ -45,15 +45,35 @@ class CrashReportService : Service() {
         val dump = intent.getStringExtra(GeckoRuntime.EXTRA_MINIDUMP_PATH)
         val extras = intent.getStringExtra(GeckoRuntime.EXTRA_EXTRAS_PATH)
         val notes = extras?.let { readAnnotations(File(it)) }.orEmpty()
+        // Where it crashed, from the crash file (2.7): what went wrong and in which library.
+        val where = dump?.let { com.swiftbrowser.core.Minidump.summary(File(it)) }
         val reason = listOfNotNull(
             notes["MozCrashReason"],
             notes["OOMAllocationSize"]?.let { "out of memory (wanted $it bytes)" },
+            notes["JSOutOfMemory"]?.takeIf { it.isNotBlank() }?.let { "page scripts ran out of memory ($it)" },
+            notes["JSLargeAllocationFailure"]?.takeIf { it.isNotBlank() }?.let { "a page script's big memory request failed" },
             notes["ipc_channel_error"]?.let { "IPC: $it" },
+            where,
         ).joinToString("; ").ifBlank { "no reason given" }
         val process = listOf(processType, remoteType).filter { it.isNotBlank() }.joinToString("/").ifBlank { visibility }
         Diagnostics.recordEngineCrash(this, visibility == GeckoRuntime.CRASHED_PROCESS_VISIBILITY_MAIN, process, reason)
+        // Everything the engine noted that helps, into the day's log (nothing that names pages).
+        val kept = notes.filterKeys { it in KEPT_NOTES }.entries.joinToString("; ") { "${it.key}=${it.value.take(300)}" }
+        com.swiftbrowser.core.L.appendFromOtherProcess(
+            this, "E Engine crash ($process, ${visibility.lowercase()}): $reason${if (kept.isNotEmpty()) " | $kept" else ""}",
+        )
         dump?.let { File(it).delete() }
         extras?.let { File(it).delete() }
+    }
+
+    private companion object {
+        /** The engine's crash notes worth keeping: memory, graphics and what kind of crash. */
+        val KEPT_NOTES = setOf(
+            "MozCrashReason", "OOMAllocationSize", "JSOutOfMemory", "JSLargeAllocationFailure", "ipc_channel_error",
+            "AvailablePhysicalMemory", "TotalPhysicalMemory", "AvailableVirtualMemory", "SystemMemoryUsePercentage",
+            "GraphicsCriticalError", "AdapterDescription", "AppNotes", "ProcessType", "RemoteType", "StartupCrash",
+            "UptimeTS", "LastInteractionDuration", "ShutdownProgress", "IPCMessageName", "IPCFatalErrorMsg",
+        )
     }
 
     /** The crash notes: JSON in current engines, "key=value" lines in older ones. */

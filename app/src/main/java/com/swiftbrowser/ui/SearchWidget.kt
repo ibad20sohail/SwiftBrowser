@@ -9,12 +9,14 @@ import android.service.quicksettings.TileService
 import android.widget.RemoteViews
 import com.swiftbrowser.R
 
-/** The home screen widget (2.6): the bar searches, then a new incognito tab and the QR scanner. */
+/** The home screen widget (2.6): the bar searches, then Documents and Files (2.7), a new incognito tab and the QR scanner. */
 class SearchWidget : AppWidgetProvider() {
     override fun onUpdate(ctx: Context, manager: AppWidgetManager, ids: IntArray) {
         val views = RemoteViews(ctx.packageName, R.layout.widget_search).apply {
             setOnClickPendingIntent(R.id.widget_bar, open(ctx, MainActivity.ACTION_SEARCH, 1))
             setOnClickPendingIntent(R.id.widget_text, open(ctx, MainActivity.ACTION_SEARCH, 1))
+            setOnClickPendingIntent(R.id.widget_documents, open(ctx, MainActivity.ACTION_DOCUMENTS, 4))
+            setOnClickPendingIntent(R.id.widget_files, open(ctx, MainActivity.ACTION_FILES, 5))
             setOnClickPendingIntent(R.id.widget_incognito, open(ctx, MainActivity.ACTION_INCOGNITO, 2))
             setOnClickPendingIntent(R.id.widget_scan, open(ctx, MainActivity.ACTION_SCAN, 3))
         }

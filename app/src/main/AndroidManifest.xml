@@ -18,6 +18,10 @@
     <uses-permission
         android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
+    <!-- 2.7: the Files screen on Android 11 and later ("Allow access to manage all files"). -->
+    <uses-permission
+        android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
+        tools:ignore="ScopedStorage" />
     <!-- Installing a downloaded update of Swift (Settings → Check for updates). -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- 2.2: scanning QR codes (asked the first time). -->
@@ -107,8 +111,52 @@
         <activity android:name=".ui.HistoryActivity" android:exported="false" android:windowSoftInputMode="stateAlwaysHidden" />
         <activity android:name=".ui.BookmarksActivity" android:exported="false" android:windowSoftInputMode="stateAlwaysHidden" />
         <activity android:name=".ui.DownloadsActivity" android:exported="false" android:windowSoftInputMode="stateAlwaysHidden" />
-        <activity android:name=".ui.DocumentsActivity" android:exported="false" android:windowSoftInputMode="stateAlwaysHidden" />
+        <!-- Its own task affinity (2.7): opened from its own icon, it is an app of its own in recent apps. -->
+        <activity
+            android:name=".ui.DocumentsActivity"
+            android:exported="false"
+            android:taskAffinity="${applicationId}.documents"
+            android:windowSoftInputMode="stateAlwaysHidden" />
+        <!-- 2.7: Documents as its own icon in the app list (Settings can hide it). -->
+        <activity-alias
+            android:name="com.swiftbrowser.ui.DocumentsApp"
+            android:exported="true"
+            android:icon="@drawable/ic_launcher_docs"
+            android:label="@string/app_documents"
+            android:roundIcon="@drawable/ic_launcher_docs"
+            android:targetActivity=".ui.DocumentsActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
         <activity android:name=".ui.SettingsActivity" android:exported="false" android:windowSoftInputMode="stateAlwaysHidden" />
+        <!-- 2.7: Files, a file manager with archives (ZIP, 7z, RAR…). Its own task affinity: opened
+             from its own icon it is an app of its own in recent apps, not stacked on the browser. -->
+        <activity
+            android:name=".ui.FilesActivity"
+            android:exported="false"
+            android:taskAffinity="${applicationId}.files"
+            android:windowSoftInputMode="stateAlwaysHidden" />
+        <!-- 2.7: Files as its own icon in the app list (Settings can hide it, with Documents). -->
+        <activity-alias
+            android:name="com.swiftbrowser.ui.FilesApp"
+            android:exported="true"
+            android:icon="@drawable/ic_launcher_files"
+            android:label="@string/app_files"
+            android:roundIcon="@drawable/ic_launcher_files"
+            android:targetActivity=".ui.FilesActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+        <!-- 2.7: copying, moving, extracting and compressing files go on with the screen left. -->
+        <service
+            android:name=".files.FileJobService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
 
         <service
             android:name=".download.DownloadService"

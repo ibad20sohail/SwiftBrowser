@@ -21,13 +21,25 @@
             android:targetClass="com.swiftbrowser.ui.MainActivity"
             android:targetPackage="com.swiftbrowser.app" />
     </shortcut>
+    <!-- 2.7: Files and Documents (Scan QR is on the widget and in the menu). Android 7 shows about
+         5 shortcuts: these 4 and the last document read (Docs.updateShortcuts). -->
     <shortcut
-        android:shortcutId="scan"
+        android:shortcutId="files"
         android:enabled="true"
-        android:icon="@drawable/ic_shortcut_scan"
-        android:shortcutShortLabel="@string/shortcut_scan">
+        android:icon="@drawable/ic_shortcut_files"
+        android:shortcutShortLabel="@string/shortcut_files">
         <intent
-            android:action="com.swiftbrowser.action.SCAN"
+            android:action="com.swiftbrowser.action.FILES"
+            android:targetClass="com.swiftbrowser.ui.MainActivity"
+            android:targetPackage="com.swiftbrowser.app" />
+    </shortcut>
+    <shortcut
+        android:shortcutId="documents"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_documents"
+        android:shortcutShortLabel="@string/shortcut_documents">
+        <intent
+            android:action="com.swiftbrowser.action.DOCUMENTS"
             android:targetClass="com.swiftbrowser.ui.MainActivity"
             android:targetPackage="com.swiftbrowser.app" />
     </shortcut>

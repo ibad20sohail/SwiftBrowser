@@ -32,8 +32,6 @@ object UrlUtils {
             // "example.com:8080/path" parses like a scheme; treat it as a host with a port.
             if (!looksLikeHost(t)) return t
         }
-        // "yt cats": a search shortcut (2.6).
-        SearchShortcuts.match(t)?.let { return it }
         if (!t.contains(' ') && looksLikeHost(t)) {
             // Routers and other local devices (192.168.x.x, localhost) rarely support HTTPS.
             val host = t.substringBefore('/').substringBefore('?').substringBefore(':')

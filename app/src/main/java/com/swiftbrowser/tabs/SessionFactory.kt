@@ -27,6 +27,8 @@ import org.mozilla.geckoview.WebExtension
 import org.mozilla.geckoview.WebRequestError
 import org.mozilla.geckoview.WebResponse
 
+private val mainHandler = Handler(Looper.getMainLooper())
+
 /** Sites already said to be insecure (secure connections first), for this run of Swift. */
 private val warnedInsecure = HashSet<String>()
 
@@ -257,7 +259,17 @@ class TabDelegates(private val tab: Tab) :
 
     // ------------------------------------------------------------------ progress
 
+    /** When the page on screen started loading, and which site it is, for the log (2.7). */
+    private var pageStartedAt = 0L
+    private var pageSite = ""
+
+    /** The site for the log: never the address, and nothing of incognito tabs. */
+    private fun logSite(url: String? = tab.url) = if (tab.incognito) "(incognito)" else UrlUtils.siteName(url)
+
     override fun onPageStart(session: GeckoSession, url: String) {
+        pageStartedAt = android.os.SystemClock.elapsedRealtime()
+        pageSite = logSite(url)
+        if (UrlUtils.isHttp(url)) L.d("Tab ${tab.id} loading $pageSite")
         tab.loading = true
         tab.progress = 5
         tab.media.clear()
@@ -270,6 +282,11 @@ class TabDelegates(private val tab: Tab) :
     }
 
     override fun onPageStop(session: GeckoSession, success: Boolean) {
+        if (pageStartedAt > 0 && pageSite.isNotEmpty()) {
+            val s = (android.os.SystemClock.elapsedRealtime() - pageStartedAt) / 100 / 10.0
+            L.d("Tab ${tab.id} ${if (success) "loaded" else "didn't load"} $pageSite in $s s")
+        }
+        pageStartedAt = 0L
         tab.loading = false
         tab.progress = 100
         changed()
@@ -369,12 +386,35 @@ class TabDelegates(private val tab: Tab) :
         if (tab.parentId != null && tab.session === session) TabManager.close(tab)
     }
 
+    /**
+     * A page's script has been busy for a long time (the page doesn't respond). On the tab on screen
+     * Swift offers to stop it (2.7); the script waits meanwhile, as in Firefox. Other tabs go on.
+     */
+    override fun onSlowScript(session: GeckoSession, scriptFileName: String): GeckoResult<org.mozilla.geckoview.SlowScriptResponse> {
+        val site = logSite()
+        L.w("Tab ${tab.id}: a script of $site isn't responding")
+        if (tab !== TabManager.current || ui == null) return GeckoResult.fromValue(org.mozilla.geckoview.SlowScriptResponse.CONTINUE)
+        val result = GeckoResult<org.mozilla.geckoview.SlowScriptResponse>()
+        val answered = java.util.concurrent.atomic.AtomicBoolean(false)
+        ui?.showMessage("${if (tab.incognito) "This page" else site} isn't responding", "Stop", long = true) {
+            if (answered.compareAndSet(false, true)) {
+                L.w("Tab ${tab.id}: the page's script was stopped")
+                result.complete(org.mozilla.geckoview.SlowScriptResponse.STOP)
+            }
+        }
+        // No answer while the message shows: the script carries on.
+        mainHandler.postDelayed({
+            if (answered.compareAndSet(false, true)) result.complete(org.mozilla.geckoview.SlowScriptResponse.CONTINUE)
+        }, 8500)
+        return result
+    }
+
     override fun onCrash(session: GeckoSession) = onDead(session, crashed = true)
 
     override fun onKill(session: GeckoSession) = onDead(session, crashed = false)
 
     private fun onDead(session: GeckoSession, crashed: Boolean) {
-        L.w("Tab ${tab.id} content process ${if (crashed) "crashed" else "was killed"}")
+        L.w("Tab ${tab.id} (${logSite()}): its page process ${if (crashed) "crashed" else "ended (Android closing it for memory, or a crash without notes)"}; ${com.swiftbrowser.core.Diagnostics.memoryText()}")
         if (tab.session !== session) return
         ui?.releaseSession(session)
         try {
@@ -386,10 +426,17 @@ class TabDelegates(private val tab: Tab) :
         tab.playing = false
         Helper.detachTab(tab)
         if (tab === TabManager.current) {
-            if (crashed) {
+            val now = android.os.SystemClock.elapsedRealtime()
+            if (crashed && now - tab.autoRevivedAt < 60_000) {
+                // It crashed again soon after reloading: the crash page, with its Reload button.
                 tab.crashed = true
                 ui?.onTabCrashed(tab)
             } else {
+                // Reloaded by itself once (2.7), instead of the crash page.
+                if (crashed) {
+                    tab.autoRevivedAt = now
+                    ui?.showMessage("The page stopped working, so Swift loaded it again")
+                }
                 TabManager.revive(tab)
             }
         }
@@ -495,7 +542,7 @@ class TabDelegates(private val tab: Tab) :
 
     private fun setPlaying(playing: Boolean) {
         if (tab.playing == playing) return
-        L.d("Tab ${tab.id} ${if (playing) "playing" else "stopped playing"}")
+        L.d("Tab ${tab.id} ${if (playing) "playing" else "stopped playing"} (${logSite()})")
         tab.playing = playing
         if (playing) {
             // One tab plays at a time: starting something pauses what another tab was playing.

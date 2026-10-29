@@ -14,3 +14,10 @@
 -keep interface org.mozilla.** { *; }
 -keep class org.webrtc.** { *; }
 -dontwarn org.mozilla.**
+
+# 2.7, the Files screen's archives. Commons Compress refers to Brotli and Zstandard decoders
+# Swift doesn't ship (it never reads those formats); junrar's logger (slf4j) looks for a logging
+# backend that isn't there and then logs nothing.
+-dontwarn org.brotli.dec.**
+-dontwarn com.github.luben.zstd.**
+-dontwarn org.slf4j.impl.**

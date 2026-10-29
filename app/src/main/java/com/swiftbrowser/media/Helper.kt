@@ -147,6 +147,15 @@ object Helper {
             }
             "video-start" -> WatchPositions.onStart(tab, msg)
             "media-ended" -> SleepTimer.onMediaEnded(tab)
+            // For the log (2.7): players failing or stopping to load.
+            "media-error" -> L.w(
+                "Tab ${tab.id} (${if (tab.incognito) "incognito" else com.swiftbrowser.core.UrlUtils.siteName(tab.url)}): a video failed, " +
+                    "code ${msg.optInt("code")} ${msg.optString("text").take(200)}",
+            )
+            "media-waiting" -> L.d(
+                "Tab ${tab.id}: the video stopped to load ${msg.optInt("count")} time(s) " +
+                    "(at ${msg.optInt("t")} s, ${msg.optInt("buffered")} s loaded ahead)",
+            )
         }
     }
 

@@ -5,7 +5,7 @@ ad-heavy sites on an old phone (Moto E4, Android 7.1.2).
 
 ## Download
 
-**[Download Swift 2.6 (APK)](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v2.6/Swift-2.6.apk)**
+**[Download Swift 2.7 (APK)](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v2.7/Swift-2.7.apk)**
 for Android 7 and newer (32-bit ARM, about 150 MB). It installs over an earlier Swift and keeps
 tabs and settings. From 1.4 on, Swift can also update itself: Settings → Check for updates.
 
@@ -25,11 +25,37 @@ ones, and a short welcome on the first start.
   for dark mode. **Ready-made** mixes (Classic, Paper & teal, AMOLED, Midnight, Sunset, Forest,
   Rose) set all three at once. Bars, cards, sheets, dialogs and Swift's logo follow it; a colour
   too dark (or too light) for easy reading is adjusted. Colours are part of backups.
-- **Logo** (2.6): a white comet (its tail curving in to a point, with two streaks), no letters, on a
-  rounded square; in the accent colour inside the app, blue on the home screen.
+- **Logo** (2.6): a white comet (its tail curving in to a point, with two streaks), no letters; in
+  the accent colour inside the app, and on a dark circle as the app icon (2.7).
 - **Night light** (2.3, Settings → Look & screen): a warm layer over Swift, pages and videos too,
   from 7 pm to 7 am or always, in three strengths. Taps go through it.
 
+- **New in 2.7**:
+  - **Files**, a file manager (≡ menu, its own icon, Swift's icon and the widget): phone storage, the
+    SD card, Downloads; copy, move, rename, delete, new folder, share, properties; archives (ZIP, 7z,
+    RAR, TAR, GZ, BZ2, XZ) open like folders, extract all or some, and ZIP or 7z can be made, with a
+    password for ZIP. RAR5 can't be opened, and RAR can't be made (closed format).
+  - **Round, dark app icon** (and the Documents and Files icons, and Swift's shortcuts).
+  - **Start screen in your colours**: Swift draws it itself (Android's own could only be white),
+    builds the browser behind it, and the logo glides into the home page's.
+  - **Home page**: smaller shortcuts, five to a row (up to 15); hold one and the others make room as
+    you move it. The profile in use shows under the logo; tap it to change profile.
+  - **Documents and Files as their own apps** in the app list (Settings → Look & screen can hide
+    them), and on Swift's icon: New tab, Incognito, Files, Documents and the last document read.
+  - **Pages always drawn with the graphics chip** (the CPU drawing option is gone: on the Moto E4 the
+    chip turned out faster on heavy sites).
+  - **Background tabs held back**: their scripts get much less of the shared engine process (timers
+    at most every 10 s), and tabs not opened for 30 minutes let go of their page, whatever the
+    number of tabs kept loaded.
+  - **Stuck and crashed pages**: a page whose script stops responding offers Stop; a crashed page
+    loads again by itself once.
+  - **Search shortcuts removed** ("yt cats" no longer searches YouTube; typing searches with your
+    search engine, as before 2.6).
+  - **Logs**: a file a day, the last 3 days kept, written as things happen; engine crashes with
+    their notes and where they crashed, freezes of Swift's screen, memory every minute, Android's
+    memory warnings, page loads, videos that fail or stall, and the engine's own warnings and
+    errors. Site names only, never addresses; nothing of the engine's while incognito is open.
+    Settings → About → Send a problem report attaches them.
 - **New in 2.6**:
   - **Clear browsing data by time** (Settings → Privacy & backup, or Clear data in the ≡ menu): the
     last hour, 24 hours, 7 days, 4 weeks or all time, and what: history, cookies and site data,
@@ -47,8 +73,7 @@ ones, and a short welcome on the first start.
   - **Selected text**: Search, Share and Listen next to Copy. The bar no longer stays on screen
     over other pages.
   - **Address bar**: completes the address as you type ("you" → youtube.com, from your history and
-    bookmarks); **search shortcuts** ("yt cats" searches YouTube, "w comet" Wikipedia, and your
-    own), and your own search engine.
+    bookmarks), and your own search engine. (Search shortcuts, "yt cats", were removed in 2.7.)
   - **Bookmarks**: folders, search, and **Import** from Chrome or Firefox (their bookmarks file).
   - **Dark page** per site (Site settings): turns a site without a dark mode dark; pictures and
     videos stay as they are. Off by default.

@@ -14,8 +14,8 @@ import java.util.Locale
 object TopSites {
     data class Tile(val key: String, val url: String, val label: String, val pinned: Boolean = false)
 
-    /** Up to this many shortcuts on the home page. */
-    const val MAX = 12
+    /** Up to this many shortcuts on the home page (2.7: 15, five to a row). */
+    const val MAX = 15
 
     /** Counts history clearings, so the home page works its shortcuts out again (2.6). */
     @Volatile var historyChanged = 0

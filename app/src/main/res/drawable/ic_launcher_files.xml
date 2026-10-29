@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The "Files" icon in the app list on Android 7 (2.7): Swift's dark circle with a files mark.
+     Android 8 and later use drawable-anydpi-v26/ic_launcher_files.xml. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="100"
+    android:viewportHeight="100">
+    <path android:pathData="M50,2 A48,48 0,1 1,50 98 A48,48 0,1 1,50 2 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:endX="100"
+                android:endY="100"
+                android:startX="0"
+                android:startY="0"
+                android:type="linear">
+                <item android:color="#FF3A3F47" android:offset="0" />
+                <item android:color="#FF101216" android:offset="1" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <group
+        android:scaleX="2.5"
+        android:scaleY="2.5"
+        android:translateX="20.0"
+        android:translateY="20.0">
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M10,4H4c-1.1,0 -1.99,0.9 -1.99,2L2,18c0,1.1 0.9,2 2,2h16c1.1,0 2,-0.9 2,-2V8c0,-1.1 -0.9,-2 -2,-2h-8l-2,-2z" />
+    </group>
+</vector>

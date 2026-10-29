@@ -178,8 +178,8 @@ object Engine {
             val failed = result?.filterValues { !it }?.keys.orEmpty()
             if (failed.isNotEmpty()) L.w("Engine prefs not set: $failed")
         }, { e -> L.w("Engine prefs failed", e) })
-        // The drawing method comes from the start-up config; a value saved by Swift 1.1 in the
-        // profile would override it.
+        // Pages are always drawn with the graphics chip (2.7); a CPU choice saved in the profile by
+        // an older Swift would override the start-up config.
         GeckoPreferenceController.clearGeckoUserPref(SOFTWARE_RENDERING_PREF)
     }
 
@@ -193,7 +193,8 @@ object Engine {
         val file = File(app.filesDir, "gecko-startup.yaml")
         val text = buildString {
             append("prefs:\n")
-            append("  $SOFTWARE_RENDERING_PREF: ${prefs.softwareRendering}\n")
+            // Always with the graphics chip (2.7): on the Moto E4 it was the faster one on heavy sites.
+            append("  $SOFTWARE_RENDERING_PREF: false\n")
             if (!prefs.sitesAsDesigned) {
                 // Frosted glass (backdrop-filter, e.g. YouTube's bottom bar and the badges on every
                 // thumbnail) blurs whatever scrolls under it on every frame: far too slow on this
@@ -205,6 +206,15 @@ object Engine {
             // All tabs share one engine process for web pages (Firefox allows 8). Each extra
             // process costs 60-100 MB, which a 2 GB phone doesn't have: Android then closes Swift.
             append("  dom.ipc.processCount: 1\n")
+            // Background tabs share that process with the page on screen, so their scripts are held
+            // back much more (2.7): timers at most every 10 s, and about half a percent of the CPU,
+            // from 10 s after they loaded. Tabs playing sound are left alone by the engine.
+            append("  dom.min_background_timeout_value: 10000\n")
+            append("  dom.timeout.enable_budget_timer_throttling: true\n")
+            append("  dom.timeout.throttling_delay: 10000\n")
+            append("  dom.timeout.background_throttling_max_budget: 20\n")
+            append("  dom.timeout.background_budget_regeneration_rate: 200\n")
+            append("  dom.timeout.budget_throttling_max_delay: 60000\n")
         }
         try {
             if (!file.exists() || file.readText() != text) file.writeText(text)
@@ -242,12 +252,6 @@ object Engine {
     /** Pinch-zooming even on sites that turn it off. */
     fun setForceZoom(on: Boolean) {
         runtime.settings.setForceUserScalableEnabled(on)
-    }
-
-    /** Draw pages with the CPU instead of the GPU (Prefs.softwareRendering). Takes effect after the app restarts. */
-    fun applySoftwareRendering() {
-        writeStartupConfig()
-        GeckoPreferenceController.clearGeckoUserPref(SOFTWARE_RENDERING_PREF)
     }
 
     private const val BACKDROP_FILTER_PREF = "layout.css.backdrop-filter.enabled"

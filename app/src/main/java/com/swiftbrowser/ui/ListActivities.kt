@@ -1032,17 +1032,10 @@ class DownloadsActivity : ListActivity() {
     /** Opens the phone's file manager at the download's folder, or says where it is. */
     private fun showInFolder(d: Downloads.Item) {
         val dir = File(d.filePath).parentFile ?: return
-        val storage = android.os.Environment.getExternalStorageDirectory().path
-        if (dir.path.startsWith(storage)) {
-            val docId = "primary:" + dir.path.removePrefix(storage).trimStart('/')
-            val uri = android.provider.DocumentsContract.buildDocumentUri("com.android.externalstorage.documents", docId)
-            val intent = Intent(Intent.ACTION_VIEW).setDataAndType(uri, android.provider.DocumentsContract.Document.MIME_TYPE_DIR)
-                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            try {
-                startActivity(intent)
-                return
-            } catch (_: Exception) {
-            }
+        // 2.7: in Swift's own Files screen.
+        if (dir.isDirectory) {
+            FilesActivity.open(this, dir)
+            return
         }
         MaterialAlertDialogBuilder(this)
             .setTitle(d.fileName)

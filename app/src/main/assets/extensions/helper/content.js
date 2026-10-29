@@ -297,6 +297,27 @@
     }
   }, true);
 
+  // For Swift's log (2.7): a video or song that fails, and one that stops to load more (once
+  // every 30 s at most, with how often it happened), which is how a lagging player looks.
+  let waits = 0;
+  let waitSent = 0;
+  window.addEventListener('error', ev => {
+    const m = ev.target;
+    if (!ev.isTrusted || !m || (m.tagName !== 'VIDEO' && m.tagName !== 'AUDIO')) { return; }
+    const e = m.error;
+    send({ type: 'media-error', code: e ? e.code : 0, text: e && e.message ? String(e.message).slice(0, 200) : '' });
+  }, true);
+  window.addEventListener('waiting', ev => {
+    const m = ev.target;
+    if (!ev.isTrusted || !m || m.tagName !== 'VIDEO' || m.currentTime < 1) { return; }
+    waits++;
+    const now = Date.now();
+    if (now - waitSent < 30000) { return; }
+    waitSent = now;
+    send({ type: 'media-waiting', count: waits, t: Math.round(m.currentTime), buffered: m.buffered.length ? Math.round(m.buffered.end(m.buffered.length - 1) - m.currentTime) : 0 });
+    waits = 0;
+  }, true);
+
   // Capture phase on window: runs before the page's own click handlers.
   window.addEventListener('click', ev => {
     if (!ev.isTrusted) { return; }

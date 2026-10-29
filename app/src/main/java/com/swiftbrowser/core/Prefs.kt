@@ -213,14 +213,6 @@ class Prefs(ctx: Context) {
         get() = sp.getBoolean(PULL_TO_REFRESH, true)
         set(v) = sp.edit { putBoolean(PULL_TO_REFRESH, v) }
 
-    /** Set at start-up: this phone's graphics chip draws pages slower than its CPU (see GpuInfo). */
-    var autoSoftwareRendering = false
-
-    /** Draw pages on the CPU instead of the GPU (applies after a restart). Automatic until changed. */
-    var softwareRendering: Boolean
-        get() = if (sp.contains(SOFTWARE_RENDERING)) sp.getBoolean(SOFTWARE_RENDERING, false) else autoSoftwareRendering
-        set(v) = sp.edit { putBoolean(SOFTWARE_RENDERING, v) }
-
     /** How many tabs keep their page loaded in memory; the others reload when opened. */
     var maxLiveTabs: Int
         get() = sp.getString(MAX_LIVE_TABS, "2")?.toIntOrNull()?.coerceIn(1, MAX_LIVE_TABS_LIMIT) ?: 2

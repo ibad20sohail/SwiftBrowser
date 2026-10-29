@@ -21,8 +21,8 @@ android {
         applicationId = "com.swiftbrowser.app"
         minSdk = 24
         targetSdk = 35
-        versionCode = 16
-        versionName = "2.6"
+        versionCode = 17
+        versionName = "2.7"
     }
 
     flavorDimensions += "abi"
@@ -123,6 +123,15 @@ dependencies {
     implementation("com.wireguard.android:tunnel:1.0.20260102")
     // 2.2: scanning QR codes with the camera (ZXing).
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")
+    // 2.7: the Files screen. Writing to a memory card through Android's document access, and
+    // archives in plain Java: ZIP with passwords (zip4j), 7z, tar, gz, bz2 and xz (Commons Compress
+    // with XZ for Java), RAR4 (junrar). Commons Compress 1.21+ and junrar 7.5+ need java.nio.file,
+    // which Android 7 lacks (they crash there), so these are the last versions without it.
+    implementation("androidx.documentfile:documentfile:1.1.0")
+    implementation("net.lingala.zip4j:zip4j:2.11.5")
+    implementation("org.apache.commons:commons-compress:1.20")
+    implementation("org.tukaani:xz:1.9")
+    implementation("com.github.junrar:junrar:7.4.1")
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
 
     // Reports leaked screens and objects in test builds on the PC emulator only.

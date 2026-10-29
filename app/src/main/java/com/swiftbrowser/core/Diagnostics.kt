@@ -72,13 +72,27 @@ object Diagnostics {
                     problem = Problem.CLOSED_BY_ANDROID
                 }
             }
-            val log = File(dir, LOG)
-            if (log.exists()) log.renameTo(File(dir, PREVIOUS_LOG))
+            // The run logs before 2.7; the day files (L) replace them.
+            File(dir, LOG).delete()
+            File(dir, PREVIOUS_LOG).delete()
         } catch (e: Exception) {
             L.w("Could not read the last run's state", e)
         }
         writeState(onScreen = false)
         if (problem != null) L.w("Previous run ended unexpectedly: $problem ${problemDetail.orEmpty()}")
+    }
+
+    /** What a crash's notes mean, in plain words (2.7); null when they don't say. */
+    fun plainReason(reason: String?): String? {
+        val r = reason?.lowercase() ?: return null
+        return when {
+            "out of memory" in r -> "It ran out of memory."
+            listOf("libgles", "libegl", "adreno", "libgsl", "graphics").any { it in r } -> "It crashed in the phone's graphics driver."
+            "ipc:" in r -> "Its page process stopped answering."
+            "libxul" in r -> "It crashed inside the engine."
+            "libc.so" in r || "libart" in r -> "It crashed in Android's own code."
+            else -> null
+        }
     }
 
     fun clearProblem() {
@@ -89,13 +103,15 @@ object Diagnostics {
     /** The browser screen is (no longer) on screen. */
     fun setOnScreen(onScreen: Boolean) {
         io.execute { writeState(onScreen) }
-        if (!onScreen) flushLog()
+        com.swiftbrowser.core.Health.onScreen(onScreen)
+        L.d(if (onScreen) "On screen" else "Out of sight")
     }
 
     /** Before the app closes itself (e.g. to restart): that isn't a problem. */
     fun markCleanExit() {
         writeState(onScreen = false)
-        flushLogNow()
+        L.d("Swift closes itself")
+        L.flushNow()
     }
 
     private fun writeState(onScreen: Boolean) {
@@ -118,27 +134,10 @@ object Diagnostics {
         } ?: ((System.currentTimeMillis() - android.os.SystemClock.elapsedRealtime()) / 600_000L).toString()
         ).also { cachedBootId = it }
 
-    /** Keeps this run's log on disk, so a report after Android closed the app still has it. */
     /** Clearing all history (2.6): the logs, which name the sites of blocked pop-ups, start over. */
     fun clearLogs() {
         if (!::app.isInitialized) return
         L.clear()
-        io.execute {
-            File(app.filesDir, LOG).delete()
-            File(app.filesDir, PREVIOUS_LOG).delete()
-        }
-    }
-
-    fun flushLog() {
-        if (!::app.isInitialized) return
-        io.execute { flushLogNow() }
-    }
-
-    private fun flushLogNow() {
-        try {
-            File(app.filesDir, LOG).writeText("Memory: ${memoryText()}\n${L.dump()}\n")
-        } catch (_: Exception) {
-        }
     }
 
     // ------------------------------------------------------------------ memory
@@ -208,19 +207,26 @@ object Diagnostics {
             appendLine("--- App crash ---")
             appendLine(it.readText().take(6000))
         }
-        appendLine()
-        appendLine("--- Log of the previous run ---")
-        appendLine(File(app.filesDir, PREVIOUS_LOG).takeIf { it.exists() }?.readText()?.takeLast(20000) ?: "none")
-        appendLine()
-        appendLine("--- Log of this run ---")
-        appendLine(L.dump().takeLast(20000))
+        // The last 3 days' logs (2.7), oldest first.
+        L.flushNow()
+        val days = L.files()
+        if (days.isEmpty()) {
+            appendLine()
+            appendLine("--- Log ---")
+            appendLine(L.dump())
+        }
+        for (f in days) {
+            appendLine()
+            appendLine("--- Log of ${f.name.removePrefix("swift-").removeSuffix(".txt")} ---")
+            appendLine(f.readText())
+        }
     }
 
     /** The report with the app's settings and tabs, for the share sheet. */
     fun shareReport(activity: Activity) {
         val prefs = SwiftApp.prefs
         val tabs = TabManager.tabs
-        val extra = "Settings: tabs kept in memory ${prefs.maxLiveTabs}, pages drawn with ${if (prefs.softwareRendering) "CPU" else "GPU"}, " +
+        val extra = "Settings: tabs kept in memory ${prefs.maxLiveTabs}, graphics chip ${com.swiftbrowser.engine.GpuInfo.renderer(activity).ifBlank { "unknown" }}, " +
             "ad blocking ${AdBlock.global.label}, Lite mode ${prefs.liteMode}, saving battery ${com.swiftbrowser.engine.Power.saving}, sites as designed ${prefs.sitesAsDesigned}, full screen ${prefs.fullScreen}, " +
             "keep playing ${prefs.keepPlaying}, text size ${(prefs.textScale * 100).toInt()}%\n" +
             "Tabs: ${tabs.size} open, ${tabs.count { it.session != null }} loaded; current site: " +

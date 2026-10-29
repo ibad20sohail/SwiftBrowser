@@ -23,12 +23,12 @@ object WhatsNew {
     private class Item(val icon: Int, val title: String, val text: String)
 
     private val NEW = listOf(
-        Item(R.drawable.ic_delete, "Clear by time", "Clear what you did in the last hour, day, week or 4 weeks, or all of it, and choose what: history, cookies, downloads list and more. ≡ → Quit can clear it too."),
-        Item(R.drawable.ic_password, "Saved passwords", "Swift offers to keep your sign-ins, locked on this phone, and fills them in. See them in Settings → Privacy & backup."),
-        Item(R.drawable.ic_translate, "Translate pages", "≡ → Translate turns a page into your language, on the phone itself."),
-        Item(R.drawable.ic_search, "Quicker searching", "Select text to search, share or hear it. The address completes as you type, and \"yt cats\" searches YouTube."),
-        Item(R.drawable.ic_bookmarks, "Bookmark folders", "Put bookmarks in folders, search them, and bring yours over from Chrome or Firefox."),
-        Item(R.drawable.ic_dark, "And more", "Dark pages for sites without a dark mode, a home screen widget, a New tab tile, data used per day, a page's QR code, and a new logo."),
+        Item(R.drawable.ic_folder, "Files", "A file manager: browse the phone and SD card, copy, move, rename and delete, and open ZIP, 7z, RAR and TAR files like folders, extract them or make your own."),
+        Item(R.drawable.ic_documents, "New icons", "Swift's icon is round and dark. Documents and Files have icons of their own in the app list, and are on Swift's icon (hold it) and the widget."),
+        Item(R.drawable.ic_home, "Home page", "Smaller shortcuts, five to a row: hold one and the others make room as you move it. Your profile shows under the logo (tap to change it), and the start screen is in your colours."),
+        Item(R.drawable.ic_speed, "Smoother with many tabs", "Tabs in the background slow the page you're on much less, tabs not opened for half an hour let go of their page, and pages always draw with the graphics chip."),
+        Item(R.drawable.ic_refresh, "Stuck pages", "A page that stops responding offers Stop, and a page that crashes loads again by itself."),
+        Item(R.drawable.ic_info, "Better problem reports", "Swift keeps a detailed log of the last 3 days (a file a day), including why the engine crashed. Send it from Settings → About."),
     )
 
     private class Card(val icon: Int, val title: String, val text: String)

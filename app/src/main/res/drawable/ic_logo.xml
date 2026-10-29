@@ -1,13 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Swift's logo (2.6): the comet on a rounded square. Inside the app it is drawn on the accent
-     colour instead (Ui.logo); this is the blue one (the screen shown while Swift starts). -->
+<!-- Swift's logo (2.6): the comet, here on a dark circle. Inside the app it is drawn on the accent
+     colour instead (Ui.logo); this is the dark round one of the app icon (2.7: the screen shown while Swift starts). -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:aapt="http://schemas.android.com/aapt"
     android:width="48dp"
     android:height="48dp"
     android:viewportWidth="100"
     android:viewportHeight="100">
-    <path android:pathData="M24,2 L76,2 A22,22 0,0 1,98 24 L98,76 A22,22 0,0 1,76 98 L24,98 A22,22 0,0 1,2 76 L2,24 A22,22 0,0 1,24 2 Z">
+    <path android:pathData="M50,2 A48,48 0,1 1,50 98 A48,48 0,1 1,50 2 Z">
         <aapt:attr name="android:fillColor">
             <gradient
                 android:endX="100"
@@ -15,8 +15,8 @@
                 android:startX="0"
                 android:startY="0"
                 android:type="linear">
-                <item android:color="#FF5A97FF" android:offset="0" />
-                <item android:color="#FF1542C2" android:offset="1" />
+                <item android:color="#FF3A3F47" android:offset="0" />
+                <item android:color="#FF101216" android:offset="1" />
             </gradient>
         </aapt:attr>
     </path>

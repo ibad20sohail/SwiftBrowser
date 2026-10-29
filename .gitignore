@@ -12,3 +12,6 @@ private/
 
 # Kotlin compiler caches.
 .kotlin/
+
+# Agent working copies.
+.claude/

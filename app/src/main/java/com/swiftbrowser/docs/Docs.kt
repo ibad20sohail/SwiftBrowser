@@ -281,6 +281,8 @@ object Docs {
     }
 
     const val BACK_DOCUMENTS = "documents"
+    /** 2.7: opened from the Files screen (FilesActivity), which Back returns to. */
+    const val BACK_FILES = "files"
     const val BACK_DOWNLOADS = "downloads"
     const val BACK_APP = "app"
 
@@ -760,7 +762,7 @@ object Docs {
     /** The last documents read, among the shortcuts of Swift's icon (hold it on the home screen). */
     private fun updateShortcuts(ctx: Context) {
         try {
-            val room = (ShortcutManagerCompat.getMaxShortcutCountPerActivity(ctx) - STATIC_SHORTCUTS).coerceIn(0, 2)
+            val room = (ShortcutManagerCompat.getMaxShortcutCountPerActivity(ctx) - STATIC_SHORTCUTS).coerceIn(0, 1)
             val docs = SwiftApp.db.recentDocuments(Profiles.currentId, room)
             // Each document has its own id: one dragged to the home screen keeps opening that document.
             val list = docs.map { d -> shortcutFor(ctx, d, "recent-doc-" + d.id) }
@@ -855,7 +857,7 @@ object Docs {
     private const val MAX_ENTRY = 300L * 1_048_576
 
     /** new_tab, incognito and scan in res/xml/shortcuts.xml. */
-    private const val STATIC_SHORTCUTS = 3
+    private const val STATIC_SHORTCUTS = 4
 
     /** Microsoft's free viewer for Office files on the web (the link is sent to Microsoft). */
     const val EXACT_VIEW = "https://view.officeapps.live.com/op/view.aspx?src="

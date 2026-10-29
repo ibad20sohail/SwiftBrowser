@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- The app icon on Android 7: Swift's comet on blue. Android 8 and later use drawable-anydpi-v26/ic_launcher.xml. -->
+<!-- The app icon on Android 7: Swift's comet on a dark circle (2.7). Android 8 and later use drawable-anydpi-v26/ic_launcher.xml. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:aapt="http://schemas.android.com/aapt"
     android:width="48dp"
     android:height="48dp"
     android:viewportWidth="100"
     android:viewportHeight="100">
-    <path android:pathData="M24,2 L76,2 A22,22 0,0 1,98 24 L98,76 A22,22 0,0 1,76 98 L24,98 A22,22 0,0 1,2 76 L2,24 A22,22 0,0 1,24 2 Z">
+    <path android:pathData="M50,2 A48,48 0,1 1,50 98 A48,48 0,1 1,50 2 Z">
         <aapt:attr name="android:fillColor">
             <gradient
                 android:endX="100"
@@ -14,8 +14,8 @@
                 android:startX="0"
                 android:startY="0"
                 android:type="linear">
-                <item android:color="#FF5A97FF" android:offset="0" />
-                <item android:color="#FF1542C2" android:offset="1" />
+                <item android:color="#FF3A3F47" android:offset="0" />
+                <item android:color="#FF101216" android:offset="1" />
             </gradient>
         </aapt:attr>
     </path>

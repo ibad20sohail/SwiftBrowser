@@ -76,6 +76,9 @@ class Tab(
     var speed = 1.0
     var lastClick: NavPolicy.Click? = null
 
+    /** When its page was last reloaded by itself after a crash (2.7): only once a minute. */
+    var autoRevivedAt = 0L
+
     /** What the engine knows of the page's language and translation (2.6, Translate). */
     var translation: org.mozilla.geckoview.TranslationsController.SessionTranslation.TranslationState? = null
 

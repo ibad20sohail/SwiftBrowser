@@ -35,6 +35,8 @@ class SwiftApp : Application() {
         // GeckoView runs page content in extra processes of this app; only the main one sets up the browser.
         if (!isMainProcess()) return
         instance = this
+        // Every line from here on also goes to the day's log file (2.7).
+        L.init(this)
         Crash.install(this)
         Diagnostics.onAppStart(this)
         prefs = Prefs(this)
@@ -48,44 +50,60 @@ class SwiftApp : Application() {
         Thumbnails.init(this)
         TabManager.init(db, prefs)
         Thumbnails.cleanup(TabManager.tabs.map { it.id }.toSet())
-        prefs.autoSoftwareRendering = GpuInfo.prefersSoftwareRendering(GpuInfo.renderer(this))
         // Phones with plenty of memory and a graphics chip that draws fast show sites as designed.
-        prefs.autoSitesAsDesigned = !prefs.autoSoftwareRendering && totalMemory() >= 3_500_000_000L
+        prefs.autoSitesAsDesigned = !GpuInfo.isSlowChip(GpuInfo.renderer(this)) && totalMemory() >= 3_500_000_000L
         Engine.init(this, prefs)
         com.swiftbrowser.engine.DataSaver.init(this)
         com.swiftbrowser.engine.DataUsage.init()
         com.swiftbrowser.engine.Power.init(this)
         com.swiftbrowser.vpn.Vpn.onAppStart(this)
         com.swiftbrowser.vpn.VpnTileService.watch(this)
-        L.d("Swift ${BuildConfig.VERSION_NAME} started")
+        com.swiftbrowser.core.Health.init(this)
+        L.d(
+            "Swift ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) started on ${android.os.Build.MANUFACTURER} " +
+                "${android.os.Build.MODEL}, Android ${android.os.Build.VERSION.RELEASE}, ${android.os.Build.SUPPORTED_ABIS.joinToString()}; " +
+                "graphics chip ${GpuInfo.renderer(this).ifBlank { "unknown" }}; ${Diagnostics.memoryText()}; " +
+                "tabs kept loaded ${prefs.maxLiveTabs}, ad blocking ${AdBlock.global.label}, Lite mode ${prefs.liteMode}, " +
+                "sites as designed ${prefs.sitesAsDesigned}, keep playing ${prefs.keepPlaying}, full screen ${prefs.fullScreen}, " +
+                "data saver ${prefs.dataSaver}, VPN ${com.swiftbrowser.vpn.Vpn.wanted}",
+        )
+        if (Diagnostics.problem != null) com.swiftbrowser.core.Health.logEndOfPreviousRun()
     }
 
     /** Settings whose defaults changed between versions. */
     private fun migratePrefs() {
         val sp = prefs.sp
         val version = sp.getInt("prefs_version", 1)
-        if (version >= 3) return
+        if (version >= 4) return
         sp.edit {
             // 1.0 kept 3 pages in memory; 2 suits a 2 GB phone better.
             if (version < 2) remove(Prefs.MAX_LIVE_TABS)
-            // From 1.2 the drawing method is chosen for the phone's graphics chip unless changed.
+            if (version < 3) {
+                // From 1.2 full-screen videos neither force landscape nor add swipe gestures by default.
+                remove(Prefs.AUTO_LANDSCAPE)
+                remove(Prefs.VIDEO_GESTURES)
+            }
+            // 2.7: no more choice of drawing method (always the graphics chip), no search shortcuts.
             remove(Prefs.SOFTWARE_RENDERING)
-            // From 1.2 full-screen videos neither force landscape nor add swipe gestures by default.
-            remove(Prefs.AUTO_LANDSCAPE)
-            remove(Prefs.VIDEO_GESTURES)
-            putInt("prefs_version", 3)
+            remove("search_shortcuts")
+            remove("search_shortcuts_removed")
+            putInt("prefs_version", 4)
         }
     }
 
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
         if (instance == null) return
+        // Android's memory warnings (2.7): 5/10/15 while Swift runs (moderate, low, critical), 20 out of
+        // sight, 40/60/80 in the background (the higher, the sooner Android closes it).
+        if (level != ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) L.w("Android's memory warning $level; ${Diagnostics.memoryText()}")
         // Out of sight (2.6): the pictures kept in memory that load again from disk go (tabs,
         // documents, most site icons), so a 2 GB phone is less likely to close Swift. While
         // something plays or downloads in the background, Android only says so once that ends.
         if (level >= ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) {
             Thumbnails.trim()
             com.swiftbrowser.docs.DocThumbs.trim()
+            com.swiftbrowser.files.FileThumbs.trim()
             Favicons.trim()
         }
         // Android is about to start closing apps (while Swift runs, or while it is in the
@@ -93,9 +111,9 @@ class SwiftApp : Application() {
         // when opened) and saves its log. Merely leaving the app (UI_HIDDEN) isn't a reason.
         val running = level in ComponentCallbacks2.TRIM_MEMORY_RUNNING_MODERATE..ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL
         if (running || level >= ComponentCallbacks2.TRIM_MEMORY_BACKGROUND) {
-            L.d("Memory getting low ($level), ${Diagnostics.memoryText()}: suspending background tabs")
+            L.d("Memory getting low: unloading background tabs")
             TabManager.suspendBackgroundTabs()
-            Diagnostics.flushLog()
+            L.flushNow()
         }
     }
 

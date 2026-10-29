@@ -40,6 +40,9 @@ object TabManager {
     private var nextTabId = 1L
     private var nextIncognitoGroupId = -1L
 
+    /** A tab not opened for this long lets go of its page (2.7). */
+    private const val IDLE_UNLOAD_MS = 30 * 60_000L
+
     /** How many recently closed tabs each profile keeps. */
     private const val CLOSED_KEEP = 50
     private const val DAY_MS = 24L * 3600 * 1000
@@ -101,6 +104,7 @@ object TabManager {
         }
         keepGroupsTogether()
         nextTabId = maxOf(db.lastTabId(), tabs.maxOfOrNull { it.id } ?: 0L) + 1
+        main.postDelayed(idleCheck, 5 * 60_000L)
         L.d("Restored ${tabs.size} tabs, ${groups.size} groups")
     }
 
@@ -276,11 +280,24 @@ object TabManager {
         val max = if (low || com.swiftbrowser.engine.Power.saving) 1 else prefs.maxLiveTabs
         val others = tabs.filter { it.session != null && it !== current }.sortedBy { it.lastUsed }
         var live = others.size + if (current?.session != null) 1 else 0
+        // Tabs not opened for half an hour let go of their page too (2.7), whatever the number:
+        // their scripts would otherwise keep sharing the engine with the page on screen.
+        val idleSince = System.currentTimeMillis() - IDLE_UNLOAD_MS
         for (t in others) {
-            if (live <= max) break
             if (t.playing) continue
+            val idle = t.lastUsed < idleSince
+            if (live <= max && !idle) continue
+            L.d("Unloading tab ${t.id} (${if (idle) "not opened for 30 minutes" else "$live loaded, the limit is $max"})")
             suspend(t)
             live--
+        }
+    }
+
+    /** Looks for tabs to unload every 5 minutes (2.7). */
+    private val idleCheck = object : Runnable {
+        override fun run() {
+            trimLiveSessions()
+            main.postDelayed(this, 5 * 60_000L)
         }
     }
 

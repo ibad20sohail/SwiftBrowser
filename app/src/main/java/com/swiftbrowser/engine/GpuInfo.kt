@@ -23,12 +23,10 @@ object GpuInfo {
     }
 
     /**
-     * Chips on which the engine's GPU drawing is slow: on Adreno 3xx Firefox turns off its shader
-     * cache and partial screen updates (and on the 308 a tiling optimisation), and Mozilla's open
-     * bug 1525242 measures about 20 frames per second while scrolling. Drawing with the CPU avoids
-     * all of that; videos are still put on screen by the GPU.
+     * Old, slow chips (Adreno 3xx): "Show sites as designed" stays off on them. Pages are drawn with
+     * the chip on every phone (2.7).
      */
-    fun prefersSoftwareRendering(renderer: String): Boolean = renderer.startsWith("Adreno (TM) 3")
+    fun isSlowChip(renderer: String): Boolean = renderer.startsWith("Adreno (TM) 3")
 
     /** Creates a throwaway OpenGL context to read the renderer name. */
     private fun query(): String? {

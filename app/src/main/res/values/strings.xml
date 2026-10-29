@@ -8,8 +8,13 @@
     <string name="shortcut_new_tab">New tab</string>
     <string name="shortcut_incognito">Incognito tab</string>
     <string name="shortcut_scan">Scan QR code</string>
+    <string name="shortcut_documents">Documents</string>
+    <string name="shortcut_files">Files</string>
+    <string name="app_documents">Documents</string>
+    <string name="app_files">Files</string>
     <string name="tile_vpn">Swift VPN</string>
     <string name="tile_vpn_connecting">Connecting…</string>
     <string name="tile_new_tab">New tab</string>
     <string name="widget_search">Swift search</string>
+    <string name="widget_hint">Search</string>
 </resources>

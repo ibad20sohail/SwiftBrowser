@@ -250,15 +250,65 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
     // ------------------------------------------------------------------ lifecycle
 
+    /** The browser on this screen is built (2.7: just after the start screen is shown, see [build]). */
+    private var built = false
+
+    /** Swift's start screen while the browser is built behind it (2.7). */
+    private var startScreen: StartScreen? = null
+
+    /** What waits for the start screen to have gone (2.7), so its glide stays smooth. */
+    private val afterStart = ArrayList<() -> Unit>()
+
     override fun onCreate(savedInstanceState: Bundle?) {
-        // The manifest gives this screen the logo as its window while the app starts.
         setTheme(R.style.Theme_Swift)
         Looks.apply(this)
         appliedColors = Palette.signature
         super.onCreate(savedInstanceState)
+        prefs = SwiftApp.prefs
+        // Rebuilt (a dark mode switch, a change of colours): at once, as before.
+        if (savedInstanceState != null) {
+            build(savedInstanceState)
+            return
+        }
+        // Android shows no screen of its own while Swift starts (2.7, Theme.Swift.Launch): Swift's
+        // start screen is drawn first, in your colours, and the browser is built right after it is
+        // on screen.
+        val start = StartScreen(this).also { startScreen = it }
+        setContentView(start.view)
+        // The status bar (until full screen hides it) in the same colour.
+        window.statusBarColor = Palette.color(this, R.color.page_bg)
+        WindowCompat.getInsetsController(window, window.decorView).isAppearanceLightStatusBars =
+            resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK != Configuration.UI_MODE_NIGHT_YES
+        applySystemBars()
+        val buildNow = Runnable { if (!isFinishing && !isDestroyed) build(null) }
+        afterNextFrame { buildNow.run() }
+        // Not drawn while the screen is off, say: built anyway.
+        handler.postDelayed(buildNow, 1500)
+    }
+
+    /**
+     * [action] once the next frame of this screen is on the display (2.7): the start screen before
+     * the browser is built, the browser's first frame before the glide (so it doesn't jump).
+     */
+    private fun afterNextFrame(action: () -> Unit) {
+        window.addOnFrameMetricsAvailableListener(object : android.view.Window.OnFrameMetricsAvailableListener {
+            private var done = false
+
+            override fun onFrameMetricsAvailable(w: android.view.Window, m: android.view.FrameMetrics, dropped: Int) {
+                if (done) return
+                done = true
+                handler.post {
+                    window.removeOnFrameMetricsAvailableListener(this)
+                    action()
+                }
+            }
+        }, handler)
+    }
+
+    private fun build(savedInstanceState: Bundle?) {
+        if (built) return
         setContentView(R.layout.activity_main)
         Palette.paint(findViewById<View>(android.R.id.content))
-        prefs = SwiftApp.prefs
         toolbarPx = resources.getDimensionPixelSize(R.dimen.toolbar_height)
         bindViews()
         applyToolbarPosition()
@@ -323,7 +373,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         if (savedInstanceState?.getBoolean(STATE_MENU_OPEN) == true) {
             root.post { if (!isFinishing) quickMenu.open(animate = false) }
         }
-        Looper.myQueue().addIdleHandler {
+        whenStarted { Looper.myQueue().addIdleHandler {
             quickMenu
             // The tab grid next, a few seconds on (2.6), so the first tap on the tabs button doesn't build it.
             handler.postDelayed({
@@ -333,7 +383,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
                 }
             }, 3000)
             false
-        }
+        } }
         com.swiftbrowser.engine.DataSaver.listener = { active ->
             if (active && prefs.dataSaver) snack("On mobile data: pages load without pictures (Data saver)")
         }
@@ -345,23 +395,46 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         handler.postDelayed({
             if (!isFinishing) Updates.checkNow(prefs, force = false) { r -> offerUpdate(r) }
         }, 15_000)
-        if (savedInstanceState == null) root.post { if (!isFinishing) WhatsNew.showOnStart(this) }
+        if (savedInstanceState == null) whenStarted { if (!isFinishing) WhatsNew.showOnStart(this) }
         // Housekeeping once the app has settled: the weekly backup, and the cache when the phone is
         // almost full.
         handler.postDelayed({ if (!isFinishing) startupChores() }, 20_000)
         Downloads.addListener(updateDownloadListener)
         Downloads.all().filter { VpnUi.isSetupFile(it) }.mapTo(setupFilesSeen) { it.id }
         Downloads.addListener(setupFileListener)
+        built = true
+        startScreen?.let { start ->
+            // Back on top of the browser just built, until that has been drawn once; then the logo
+            // glides into the home page's (or the start screen fades, when a site is open).
+            findViewById<android.view.ViewGroup>(android.R.id.content).addView(start.view)
+            afterNextFrame {
+                if (isDestroyed) return@afterNextFrame
+                start.finish(home.logoMark.takeIf { home.visibility == View.VISIBLE }) {
+                    startScreen = null
+                    afterStart.forEach { it() }
+                    afterStart.clear()
+                }
+            }
+        }
+        // Started (and resumed) while the start screen showed: what those do, now.
+        if (lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)) started()
+        if (lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) resumed()
+    }
+
+    /** [action] once the start screen has gone (at once without one). */
+    private fun whenStarted(action: () -> Unit) {
+        if (startScreen == null) action() else afterStart += action
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        handleIntent(intent)
+        // While the start screen shows, the browser handles it once built.
+        if (built) handleIntent(intent) else setIntent(intent)
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
-        outState.putBoolean(STATE_MENU_OPEN, quickMenu.isOpen)
+        outState.putBoolean(STATE_MENU_OPEN, built && quickMenu.isOpen)
     }
 
     /** Pages of other tabs are let go a while after Swift leaves the screen (see [onStop]). */
@@ -690,6 +763,10 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
     override fun onStart() {
         super.onStart()
+        if (built) started()
+    }
+
+    private fun started() {
         if (appliedColors != null && appliedColors != Palette.signature) {
             recreate()
             return
@@ -714,6 +791,10 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
     override fun onResume() {
         super.onResume()
+        if (built) resumed()
+    }
+
+    private fun resumed() {
         // The battery saver started (or ended) while Swift was away: said now (2.3).
         announceBattery()
         NightLight.attach(this)
@@ -724,6 +805,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
+        if (!built) return
         // Android is short of memory (2.3): pictures that can be loaded again go first.
         if (level >= TRIM_MEMORY_RUNNING_LOW && level != TRIM_MEMORY_UI_HIDDEN) home.releasePictures()
         if (level >= TRIM_MEMORY_RUNNING_CRITICAL && level != TRIM_MEMORY_UI_HIDDEN) PreviewLoader.trim()
@@ -731,12 +813,13 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
     override fun onPause() {
         // A fresh picture for the tab switcher, also kept for the next start.
-        current?.let { captureThumbnail(it, null) }
+        if (built) current?.let { captureThumbnail(it, null) }
         super.onPause()
     }
 
     override fun onStop() {
         super.onStop()
+        if (!built) return
         Looks.watchClock(false)
         Diagnostics.setOnScreen(false)
         com.swiftbrowser.media.PlaybackService.setOnScreen(false)
@@ -758,8 +841,12 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     }
 
     override fun onDestroy() {
-        com.swiftbrowser.vpn.Vpn.removeListener(vpnListener)
         handler.removeCallbacksAndMessages(null)
+        if (!built) {
+            super.onDestroy()
+            return
+        }
+        com.swiftbrowser.vpn.Vpn.removeListener(vpnListener)
         ptrSpin?.cancel()
         AdBlock.removeListener(adListener)
         Downloads.removeListener(updateDownloadListener)
@@ -869,6 +956,9 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             when (action) {
                 ACTION_NEW_TAB -> TabManager.newTab(incognito = false)
                 ACTION_INCOGNITO -> TabManager.newTab(incognito = true)
+                // Hold Swift's icon, or the widget (2.7).
+                ACTION_DOCUMENTS -> openDocuments()
+                ACTION_FILES -> FilesActivity.open(this)
                 // The widget's bar and the New tab tile (2.6): a new tab (or the empty one open), ready to type.
                 ACTION_SEARCH -> {
                     val open = current
@@ -1241,7 +1331,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             val head = ArrayList<Suggestion>()
             if (full.isNotBlank()) {
                 val target = UrlUtils.toUrlOrSearch(full)
-                head += if (UrlUtils.searchQuery(target) != null || com.swiftbrowser.core.SearchShortcuts.match(full) == target) {
+                head += if (UrlUtils.searchQuery(target) != null) {
                     Suggestion(Suggestion.Kind.SEARCH, full, target)
                 } else {
                     Suggestion(Suggestion.Kind.GO, full, target)
@@ -1331,7 +1421,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             blocked -> "Page blocked · " + UrlUtils.siteName(AdBlock.blockedPageTarget(url))
             reader -> "Reader view · ${tab?.title.orEmpty()}"
             document -> tab?.title?.takeIf { it.isNotBlank() && it != "Document" } ?: "Document"
-            saved -> "Saved page · " + Uri.decode(url.orEmpty().substringAfterLast('/')).removeSuffix(".pdf")
+            saved -> (if (tab?.backTo == Docs.BACK_FILES) "File · " else "Saved page · ") +
+                Uri.decode(url.orEmpty().substringAfterLast('/')).removeSuffix(".pdf")
             // While reading, just the site (the whole address shows when the bar is tapped).
             else -> query ?: UrlUtils.siteName(url)
         }
@@ -1441,6 +1532,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     }
 
     private fun updateProfileChip() {
+        home.updateProfile()
         val p = Profiles.current()
         profileChip.text = Profiles.initial(p)
         profileChip.backgroundTintList = ColorStateList.valueOf(p.color)
@@ -1525,6 +1617,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             override fun onContinueLongClicked(item: com.swiftbrowser.media.Unfinished.Item) = continueMenu(item)
 
             override fun onDocumentsTile() = openDocuments()
+
+            override fun onProfileClicked() = Sheets.profiles(this@MainActivity)
         }
     }
 
@@ -1952,6 +2046,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     }
 
     override fun onTabsChanged() {
+        // While an incognito tab is open, the engine's own messages aren't logged (2.7).
+        com.swiftbrowser.core.Health.quiet = TabManager.tabs.any { it.incognito }
         val n = (if (current?.incognito == true) TabManager.incognitoTabs() else TabManager.profileTabs()).size
         tabsCount.text = if (n > 99) ":D" else n.toString()
         styleTabCount()
@@ -2960,6 +3056,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
                 when (to) {
                     Docs.BACK_DOCUMENTS -> openDocuments()
                     Docs.BACK_DOWNLOADS -> openDownloads()
+                    // 2.7: back to the folder it was opened from.
+                    Docs.BACK_FILES -> FilesActivity.open(this)
                     else -> moveTaskToBack(true)
                 }
             }
@@ -2983,6 +3081,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         val tab = current
         if (tab == null || tab.isHome || startupDone()) return
         startup.visibility = View.VISIBLE
+        findViewById<android.widget.ImageView>(R.id.startup_logo)?.setImageDrawable(Ui.logo(this))
         // In the accent chosen (2.6), your own included.
         findViewById<android.widget.ProgressBar>(R.id.startup_spinner)?.indeterminateTintList = ColorStateList.valueOf(Ui.accent(this))
         // The tab's last picture, if there is one, instead of the logo: the page seems to be back
@@ -3067,6 +3166,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     }
 
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        if (!built) return super.dispatchTouchEvent(ev)
         // An address bar swipe takes the rest of its gesture.
         if (barSwipeTaken) {
             // Taken early on the bar (see barSwipe): it still hides the bar once long enough.
@@ -3370,8 +3470,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
                 "(very heavy pages such as Google's AI answers can do that).\n\nTo make it less likely: keep fewer tabs in memory " +
                 "(Settings → Speed & memory), close tabs you don't need, and close other apps.\n\nIf it keeps happening, send a report."
             Diagnostics.Problem.ENGINE_CRASH -> "Swift's engine crashed" to
-                "The Firefox engine inside Swift crashed last time" + (detail?.let { ":\n$it" } ?: ".") +
-                "\n\nSending a report helps find out why."
+                "The Firefox engine inside Swift crashed last time. " + (Diagnostics.plainReason(detail)?.let { "$it\n\n" } ?: "\n\n") +
+                (detail?.let { "Details: $it\n\n" } ?: "") + "Sending a report (with the last 3 days' logs) helps find out why."
         }
         MaterialAlertDialogBuilder(this)
             .setTitle(title)
@@ -3429,9 +3529,13 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         /** The home screen widget's search bar and the New tab tile (2.6). */
         const val ACTION_SEARCH = "com.swiftbrowser.action.SEARCH"
 
+        /** Hold Swift's icon, or the widget: Documents and Files (2.7). */
+        const val ACTION_DOCUMENTS = "com.swiftbrowser.action.DOCUMENTS"
+        const val ACTION_FILES = "com.swiftbrowser.action.FILES"
+
         /** From the VPN quick settings tile, when a location or Android's permission is needed. */
         const val ACTION_VPN = "com.swiftbrowser.action.VPN"
-        private val SHORTCUTS = setOf(ACTION_NEW_TAB, ACTION_INCOGNITO, ACTION_SCAN, ACTION_VPN, ACTION_SEARCH)
+        private val SHORTCUTS = setOf(ACTION_NEW_TAB, ACTION_INCOGNITO, ACTION_SCAN, ACTION_VPN, ACTION_SEARCH, ACTION_DOCUMENTS, ACTION_FILES)
 
         /** The square outline around the tab count, in [color]. */
         fun tabCountBackground(ctx: Context, color: Int) = android.graphics.drawable.GradientDrawable().apply {

@@ -145,6 +145,8 @@ object Sheets {
                     this.text = text
                     isCheckable = true
                     isCheckedIconVisible = true
+                    // 2.8: a plain tick (the default one showed as an empty circle in some colours).
+                    checkedIcon = androidx.core.content.ContextCompat.getDrawable(ctx, R.drawable.ic_check)
                     checkedIconTint = fg
                     chipBackgroundColor = bg
                     setTextColor(fg)

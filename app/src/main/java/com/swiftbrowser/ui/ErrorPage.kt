@@ -137,7 +137,7 @@ object ErrorPage {
         WebRequestError.ERROR_UNKNOWN_PROTOCOL ->
             "Can't open this kind of link" to "Neither Swift nor another app on this phone can open it."
         WebRequestError.ERROR_HTTPS_ONLY ->
-            "This site has no secure version" to "Its pages can only be sent unprotected. To open it anyway, turn off \"Use secure connections\" in Settings → Privacy & backup."
+            "This site has no secure version" to "Its pages can only be sent unprotected. To open it anyway, turn off \"Use secure connections\" in Settings → Privacy & security."
         WebRequestError.ERROR_MALFORMED_URI ->
             "That address doesn't look right" to "Check it for typing mistakes."
         else -> "Couldn't load this page" to "Something went wrong (error ${e.code}). Try again."

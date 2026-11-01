@@ -25,7 +25,9 @@ import kotlin.math.min
 object FileThumbs {
     private val pool = Background.pool("file-thumbs", 2)
     private val main = Handler(Looper.getMainLooper())
-    private val memory = object : LruCache<String, Bitmap>(4 * 1024 * 1024) {
+    // 2.8: the grid's bigger pictures need more room: a share of what Swift may use (about 8 MB on a
+    // 2 GB phone), so scrolling back up doesn't make them all again.
+    private val memory = object : LruCache<String, Bitmap>((Runtime.getRuntime().maxMemory() / 24).toInt().coerceIn(4 * 1024 * 1024, 12 * 1024 * 1024)) {
         override fun sizeOf(key: String, value: Bitmap) = value.byteCount
     }
 

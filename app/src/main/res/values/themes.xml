@@ -125,6 +125,15 @@
     </style>
 
     <!-- 48 dp high to tap (2.6); 40 wide, so the address keeps its room. -->
+    <!-- 2.8: the title of Documents, Files, History, Bookmarks and Downloads, a little smaller. -->
+    <style name="Swift.ListTitle" parent="TextAppearance.Material3.TitleLarge">
+        <item name="android:textSize">19sp</item>
+    </style>
+
+    <style name="Swift.ListSubtitle" parent="TextAppearance.Material3.BodySmall">
+        <item name="android:textSize">12sp</item>
+    </style>
+
     <style name="Swift.ToolbarButton" parent="">
         <item name="android:layout_width">40dp</item>
         <item name="android:layout_height">48dp</item>

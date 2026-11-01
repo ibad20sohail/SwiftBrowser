@@ -125,7 +125,7 @@ object Helper {
             "video-pos" -> WatchPositions.onPosition(tab, msg)
             "reader-place" -> Unfinished.onReaderPlace(tab, msg)
             // Swift's document viewer (2.4).
-            "doc-hello", "doc-read", "doc-range", "doc-place", "doc-action", "doc-reading", "doc-zip", "doc-save" ->
+            "doc-hello", "doc-read", "doc-range", "doc-place", "doc-action", "doc-reading", "doc-zip", "doc-save", "doc-convert" ->
                 com.swiftbrowser.docs.Docs.onMessage(tab, msg, port)
             // Read aloud, from the reader view page in this tab: it hears back how far it got.
             "tts-start", "tts-pause", "tts-resume", "tts-stop", "tts-skip", "tts-rate" -> {
@@ -351,10 +351,16 @@ object Helper {
 
     private val main = Handler(Looper.getMainLooper())
 
-    /** Clearing browsing data (2.6): the articles kept for reader view are deleted. */
-    fun clearArticles() {
+    /**
+     * Clearing browsing data (2.6): the articles kept for reader view are deleted. 2.8: for a time,
+     * only those made from [from] to [to] (an older helper ignores these and clears them all).
+     */
+    fun clearArticles(from: Long = 0L, to: Long = Long.MAX_VALUE) {
         try {
-            backgroundPort?.postMessage(JSONObject().put("type", "clear-articles"))
+            val message = JSONObject().put("type", "clear-articles")
+            if (from > 0L) message.put("from", from)
+            if (to != Long.MAX_VALUE) message.put("to", to)
+            backgroundPort?.postMessage(message)
         } catch (e: Exception) {
             L.w("Couldn't clear reader articles", e)
         }

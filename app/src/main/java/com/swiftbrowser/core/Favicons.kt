@@ -226,17 +226,29 @@ object Favicons {
     /**
      * Removes the icons of [hosts] and those fetched since [since] (clearing browsing data for a
      * time, 2.6): together they would still tell which sites were visited. The marks of sites
-     * without an icon go the same way.
+     * without an icon go the same way. 2.8: for chosen dates, those fetched until [until] too.
      */
-    fun clearSince(since: Long, hosts: Set<String>) {
+    fun clearSince(since: Long, hosts: Set<String>, until: Long = Long.MAX_VALUE) {
         cache.evictAll()
         absent.clear()
         missed.clear()
-        val keys = hosts.map { it.removePrefix("www.").removePrefix("m.") }.toSet()
+        val keys = fileKeys(hosts)
         exec.execute {
-            dir.listFiles()?.forEach { f -> if (f.lastModified() >= since || f.name.substringBeforeLast('.') in keys) f.delete() }
+            dir.listFiles()?.forEach { f -> if (f.lastModified() in since..until || f.name.substringBeforeLast('.') in keys) f.delete() }
         }
     }
+
+    /**
+     * 2.8: blocking. The bytes of the icons [clearSince] would remove, for Clear browsing data to
+     * show before it clears.
+     */
+    fun sizeSince(since: Long, hosts: Set<String>, until: Long = Long.MAX_VALUE): Long {
+        val keys = fileKeys(hosts)
+        return dir.listFiles()?.filter { f -> f.lastModified() in since..until || f.name.substringBeforeLast('.') in keys }?.sumOf { it.length() } ?: 0L
+    }
+
+    /** The names (without .png or .none) the icons of [hosts] are kept under. */
+    private fun fileKeys(hosts: Set<String>): Set<String> = hosts.map { it.removePrefix("www.").removePrefix("m.").replace(unsafe, "_") }.toSet()
 
     /** Removes all stored icons, and the marks of sites without one (when clearing browsing data). */
     fun clear() {

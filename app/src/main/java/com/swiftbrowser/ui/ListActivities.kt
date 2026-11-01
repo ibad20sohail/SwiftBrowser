@@ -71,9 +71,9 @@ abstract class ListActivity : AppCompatActivity() {
         toolbar.setNavigationIcon(R.drawable.ic_back)
         toolbar.navigationContentDescription = "Back"
         toolbar.setNavigationOnClickListener { finish() }
-        toolbar.setTitleTextAppearance(this, com.google.android.material.R.style.TextAppearance_Material3_TitleLarge)
+        toolbar.setTitleTextAppearance(this, R.style.Swift_ListTitle)
         toolbar.setTitleTextColor(Palette.color(this, R.color.text_primary))
-        toolbar.setSubtitleTextAppearance(this, com.google.android.material.R.style.TextAppearance_Material3_BodyMedium)
+        toolbar.setSubtitleTextAppearance(this, R.style.Swift_ListSubtitle)
         toolbar.setSubtitleTextColor(Palette.color(this, R.color.text_secondary))
         window.statusBarColor = Palette.color(this, R.color.page_bg)
         list.layoutManager = LinearLayoutManager(this)

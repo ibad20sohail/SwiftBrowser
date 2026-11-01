@@ -735,32 +735,80 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 7) {
     }
 
     // ---------------------------------------------------------------- clearing by time (2.6)
+    // 2.8: also for chosen dates, from [since] until [until] (both included); without [until], up to now.
 
     /** The sites (hosts) of [profileId] visited since [since], for clearing their cookies and caches. */
-    fun historyHostsSince(profileId: Long, since: Long): Set<String> =
-        query("SELECT url FROM history WHERE profile_id = ? AND last_visit >= ?", arrayOf("$profileId", "$since")) { it.getString(0) }
+    fun historyHostsSince(profileId: Long, since: Long, until: Long = Long.MAX_VALUE): Set<String> =
+        query("SELECT url FROM history WHERE profile_id = ? AND last_visit >= ? AND last_visit <= ?", arrayOf("$profileId", "$since", "$until")) { it.getString(0) }
             .mapNotNull { com.swiftbrowser.core.UrlUtils.host(it) }.toSet()
 
-    fun deleteHistorySince(profileId: Long, since: Long) {
-        writableDatabase.delete("history", "profile_id=? AND last_visit>=?", arrayOf("$profileId", "$since"))
+    fun deleteHistorySince(profileId: Long, since: Long, until: Long = Long.MAX_VALUE) {
+        writableDatabase.delete("history", "profile_id=? AND last_visit>=? AND last_visit<=?", arrayOf("$profileId", "$since", "$until"))
     }
 
-    fun deleteClosedTabsSince(profileId: Long, since: Long) {
-        writableDatabase.delete("closed_tabs", "profile_id=? AND closed_at>=?", arrayOf("$profileId", "$since"))
+    fun deleteClosedTabsSince(profileId: Long, since: Long, until: Long = Long.MAX_VALUE) {
+        writableDatabase.delete("closed_tabs", "profile_id=? AND closed_at>=? AND closed_at<=?", arrayOf("$profileId", "$since", "$until"))
     }
 
     /** Documents opened since [since] leave Documents' list (the files stay). */
-    fun deleteDocumentsSince(profileId: Long, since: Long) {
-        writableDatabase.delete("documents", "profile_id=? AND opened>=?", arrayOf("$profileId", "$since"))
+    fun deleteDocumentsSince(profileId: Long, since: Long, until: Long = Long.MAX_VALUE) {
+        writableDatabase.delete("documents", "profile_id=? AND opened>=? AND opened<=?", arrayOf("$profileId", "$since", "$until"))
     }
 
     /** Where videos, articles (any profile: they are kept by page) and [profileId]'s documents were left, since [since]. */
-    fun clearPositionsSince(profileId: Long, since: Long) {
+    fun clearPositionsSince(profileId: Long, since: Long, until: Long = Long.MAX_VALUE) {
         val db = writableDatabase
-        db.delete("video_positions", "updated>=?", arrayOf("$since"))
-        db.delete("reading_positions", "updated>=?", arrayOf("$since"))
-        db.execSQL("UPDATE documents SET place = NULL, progress = 0 WHERE profile_id = ? AND updated >= ?", arrayOf<Any>(profileId, since))
+        db.delete("video_positions", "updated>=? AND updated<=?", arrayOf("$since", "$until"))
+        db.delete("reading_positions", "updated>=? AND updated<=?", arrayOf("$since", "$until"))
+        db.execSQL(
+            "UPDATE documents SET place = NULL, progress = 0 WHERE profile_id = ? AND updated >= ? AND updated <= ?",
+            arrayOf<Any>(profileId, since, until),
+        )
     }
+
+    // ---------------------------------------------------------------- how much clearing takes away (2.8)
+
+    private fun count(sql: String, args: Array<String>): Int =
+        query(sql, args) { it.getInt(0) }.firstOrNull() ?: 0
+
+    /**
+     * Pages of [profileId] last visited from [from] to [to]: how many, and the bytes of their
+     * addresses and titles as stored (UTF-8). Clear browsing data works out from these how much of
+     * the database they take.
+     */
+    fun historyBytes(profileId: Long, from: Long, to: Long): LongArray =
+        query(
+            "SELECT COUNT(*), IFNULL(SUM(LENGTH(CAST(url AS BLOB))), 0), IFNULL(SUM(LENGTH(CAST(title AS BLOB))), 0) " +
+                "FROM history WHERE profile_id = ? AND last_visit >= ? AND last_visit <= ?",
+            arrayOf("$profileId", "$from", "$to"),
+        ) { longArrayOf(it.getLong(0), it.getLong(1), it.getLong(2)) }.firstOrNull() ?: LongArray(3)
+
+    /** Recently closed tabs of [profileId] closed from [from] to [to]: how many, and the bytes of what is kept of them (their back history most). */
+    fun closedTabsBytes(profileId: Long, from: Long, to: Long): LongArray =
+        query(
+            "SELECT COUNT(*), IFNULL(SUM(LENGTH(CAST(url AS BLOB)) + IFNULL(LENGTH(CAST(title AS BLOB)), 0) + " +
+                "IFNULL(LENGTH(CAST(state AS BLOB)), 0)), 0) FROM closed_tabs WHERE profile_id = ? AND closed_at >= ? AND closed_at <= ?",
+            arrayOf("$profileId", "$from", "$to"),
+        ) { longArrayOf(it.getLong(0), it.getLong(1)) }.firstOrNull() ?: LongArray(2)
+
+    /** Documents of [profileId] opened from [from] to [to] (what [deleteDocumentsSince] takes from the list). */
+    fun countDocuments(profileId: Long, from: Long, to: Long): Int =
+        count("SELECT COUNT(*) FROM documents WHERE profile_id = ? AND opened >= ? AND opened <= ?", arrayOf("$profileId", "$from", "$to"))
+
+    /** Videos, articles and [profileId]'s documents left part-way from [from] to [to] (what [clearPositionsSince] forgets). */
+    fun countPositions(profileId: Long, from: Long, to: Long): Int {
+        val range = arrayOf("$from", "$to")
+        return count("SELECT COUNT(*) FROM video_positions WHERE updated >= ? AND updated <= ?", range) +
+            count("SELECT COUNT(*) FROM reading_positions WHERE updated >= ? AND updated <= ?", range) +
+            count(
+                "SELECT COUNT(*) FROM documents WHERE profile_id = ? AND place IS NOT NULL AND updated >= ? AND updated <= ?",
+                arrayOf("$profileId", "$from", "$to"),
+            )
+    }
+
+    /** Sign-ins of [profileId] saved from [from] to [to]. */
+    fun countLogins(profileId: Long, from: Long, to: Long): Int =
+        count("SELECT COUNT(*) FROM logins WHERE profile_id = ? AND created >= ? AND created <= ?", arrayOf("$profileId", "$from", "$to"))
 
     // ---------------------------------------------------------------- bookmarks
 
@@ -831,8 +879,8 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 7) {
         writableDatabase.delete("logins", "guid=?", arrayOf(guid))
     }
 
-    fun deleteLoginsSince(profileId: Long, since: Long) {
-        writableDatabase.delete("logins", "profile_id=? AND created>=?", arrayOf("$profileId", "$since"))
+    fun deleteLoginsSince(profileId: Long, since: Long, until: Long = Long.MAX_VALUE) {
+        writableDatabase.delete("logins", "profile_id=? AND created>=? AND created<=?", arrayOf("$profileId", "$since", "$until"))
     }
 
     fun isBookmarked(profileId: Long, url: String): Boolean =

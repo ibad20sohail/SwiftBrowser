@@ -340,6 +340,12 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             override fun handleOnBackPressed() = handleBack()
         })
 
+        // 2.8: documents have a screen of their own; their tabs from before go once (the documents
+        // keep their place, in Documents and Continue).
+        if (!prefs.sp.getBoolean(PREF_DOC_TABS_MOVED, false)) {
+            prefs.sp.edit().putBoolean(PREF_DOC_TABS_MOVED, true).apply()
+            TabManager.tabs.filter { Docs.isViewerUrl(it.url) }.takeIf { it.isNotEmpty() }?.let { TabManager.closeTabs(it) }
+        }
         TabManager.tabs.forEach { seenTabs.add(it.id) }
         val had = TabManager.current
         val tab = TabManager.ensureCurrent()
@@ -977,7 +983,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             stopEditing()
             switcherView?.close()
             quickMenu.close()
-            if (docId == null || SwiftApp.db.document(docId) == null) snack("Swift doesn't have this document any more") else Docs.reopen(docId, backTo = Docs.BACK_APP)
+            // A shortcut made before 2.8 (newer ones open the viewer's screen directly): Back leaves Swift.
+            if (docId == null || SwiftApp.db.document(docId) == null) snack("Swift doesn't have this document any more") else Docs.reopen(this, docId, leaveSwift = true)
             return
         }
         intent.getStringExtra(EXTRA_OPEN_FILE)?.let { path ->
@@ -986,17 +993,18 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             val d = Downloads.all().firstOrNull { it.filePath == path } ?: return
             stopEditing()
             switcherView?.close()
-            if (!Docs.open(this, Uri.fromFile(java.io.File(path)), d.fileName, d.mime, d.url.takeIf { UrlUtils.isHttp(it) }, backTo = Docs.BACK_DOWNLOADS)) openFileInTab(path)
+            if (!Docs.open(this, Uri.fromFile(java.io.File(path)), d.fileName, d.mime, d.url.takeIf { UrlUtils.isHttp(it) })) openFileInTab(path)
             return
         }
-        // 2.4: a document from another app ("Open with Swift"), shown in Swift's viewer.
+        // 2.4: a document from another app sent here ("Open with Swift" goes to the viewer's own
+        // screen since 2.8, DocumentActivity): shown there, and Back leaves Swift.
         val data = intent.data
         if (intent.action == Intent.ACTION_VIEW && data != null && (data.scheme == "content" || data.scheme == "file")) {
             stopEditing()
             switcherView?.close()
             quickMenu.close()
-            // Back closes it and returns to the app that asked (2.6).
-            if (!Docs.open(this, data, null, intent.type, backTo = Docs.BACK_APP)) snack("Swift can't show this kind of file")
+            val id = Docs.register(this, data, null, intent.type)
+            if (id == null) snack("Swift can't show this kind of file") else Docs.reopen(this, id, leaveSwift = true)
             return
         }
         val url = when (intent.action) {
@@ -1608,7 +1616,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
             override fun onContinueClicked(item: com.swiftbrowser.media.Unfinished.Item) {
                 // A document opens in Swift's viewer, where it was left (2.4).
-                item.doc?.let { Docs.reopen(it.id, from = current); return }
+                item.doc?.let { Docs.reopen(this@MainActivity, it.id); return }
                 openInCurrent(item.url)
                 // An article opens in reader view again, where it was left.
                 if (!item.video) current?.readerOnLoad = item.url
@@ -1661,7 +1669,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     private fun continueMenu(item: com.swiftbrowser.media.Unfinished.Item) {
         item.doc?.let { doc ->
             val actions = listOf(
-                Sheets.Action(R.drawable.ic_open_new, "Open", primary = true) { Docs.reopen(doc.id, from = current) },
+                Sheets.Action(R.drawable.ic_open_new, "Open", primary = true) { Docs.reopen(this, doc.id) },
                 Sheets.Action(R.drawable.ic_share, "Share", primary = true) { Docs.handOver(this, doc, share = true) },
                 Sheets.Action(R.drawable.ic_close, "Remove from Continue", danger = true) { home.removeContinue(item) },
             )
@@ -3522,6 +3530,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         const val EXTRA_ARRANGE_MENU = "arrange_menu"
 
         /** App icon shortcuts (res/xml/shortcuts.xml, 2.3). */
+        private const val PREF_DOC_TABS_MOVED = "doc_tabs_moved"
         const val ACTION_NEW_TAB = "com.swiftbrowser.action.NEW_TAB"
         const val ACTION_INCOGNITO = "com.swiftbrowser.action.INCOGNITO"
         const val ACTION_SCAN = "com.swiftbrowser.action.SCAN"

@@ -60,8 +60,11 @@ object DocThumbs {
         val app = ctx.applicationContext
         io.execute {
             val file = File(File(app.cacheDir, "doc_thumbs").apply { mkdirs() }, hash(key) + ".jpg")
-            val bmp = (if (file.exists()) BitmapFactory.decodeFile(file.path) else null)
-                ?: make(app, Uri.parse(uri), kind, width)?.also { b ->
+            // 2.8: a preview with nothing on it (an empty picture some programs store, a page too
+            // pale to see) shows the kind's mark instead; one kept from before is dropped.
+            val kept = (if (file.exists()) BitmapFactory.decodeFile(file.path) else null)?.takeUnless { looksBlank(it).also { blank -> if (blank) file.delete() } }
+            val bmp = kept
+                ?: make(app, Uri.parse(uri), kind, width)?.takeUnless { looksBlank(it) }?.also { b ->
                     try {
                         file.outputStream().use { b.compress(Bitmap.CompressFormat.JPEG, 82, it) }
                     } catch (_: Exception) {
@@ -95,6 +98,22 @@ object DocThumbs {
         null
     }
 
+    /** Nearly one colour all over: under one sample in 200 differs from the corner's colour. */
+    private fun looksBlank(b: Bitmap): Boolean {
+        if (b.width < 4 || b.height < 4) return true
+        val first = b.getPixel(1, 1)
+        var differ = 0
+        var total = 0
+        for (y in 0 until 24) for (x in 0 until 24) {
+            val p = b.getPixel(x * (b.width - 1) / 23, y * (b.height - 1) / 23)
+            total++
+            if (Math.abs(Color.red(p) - Color.red(first)) > 24 || Math.abs(Color.green(p) - Color.green(first)) > 24 ||
+                Math.abs(Color.blue(p) - Color.blue(first)) > 24
+            ) differ++
+        }
+        return differ * 200 < total
+    }
+
     private fun pdfPage(ctx: Context, uri: Uri, width: Int): Bitmap? {
         val pfd = Docs.descriptor(ctx, uri)
         if (pfd.statSize <= 0) {
@@ -105,10 +124,13 @@ object DocThumbs {
         PdfRenderer(pfd).use { r ->
             if (r.pageCount == 0) return null
             r.openPage(0).use { page ->
+                // 2.8: drawn twice as big, then shrunk smoothly, so small text still shows as grey lines.
                 val h = (width.toFloat() * page.height / page.width).toInt().coerceIn(1, width * 2)
-                val bmp = Bitmap.createBitmap(width, h, Bitmap.Config.ARGB_8888)
-                bmp.eraseColor(Color.WHITE)
-                page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                val big = Bitmap.createBitmap(width * 2, h * 2, Bitmap.Config.ARGB_8888)
+                big.eraseColor(Color.WHITE)
+                page.render(big, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                val bmp = Bitmap.createScaledBitmap(big, width, h, true)
+                if (bmp !== big) big.recycle()
                 return bmp
             }
         }

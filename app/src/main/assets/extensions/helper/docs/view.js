@@ -6,6 +6,13 @@
 const id = decodeURIComponent(location.hash.slice(1));
 const $ = s => document.querySelector(s);
 const docEl = $('#doc');
+// 2.8: on Swift's document screen (not in a browser tab): the bar has a Back arrow of its own.
+const ownScreen = /[?&]screen\b/.test(location.search);
+if (ownScreen) {
+  document.body.classList.add('screen');
+  $('#back').hidden = false;
+  $('#back').addEventListener('click', () => action('close'));
+}
 
 const KINDS = {
   pdf: ['PDF', '#d93025'],
@@ -50,6 +57,7 @@ function onMessage(msg) {
   else if (msg.type === 'doc-range-data') { onRange(msg); }
   else if (msg.type === 'doc-problem') { problem(msg.text, msg.actions || []); }
   else if (msg.type === 'doc-zip-list') { if (zipWait) { zipWait(msg); zipWait = null; } }
+  else if (msg.type === 'doc-html') { onConverted(msg); }
   else if (msg.type === 'tts-state') { onTts(msg); }
 }
 
@@ -554,7 +562,7 @@ const RENDER = {};
 // ------------------------------------------------------------------ Word (.docx)
 
 let lastBuf = null;
-let pageLayout = false;
+let pageLayout = true;
 
 RENDER.word = async buf => {
   lastBuf = buf;
@@ -737,7 +745,7 @@ RENDER.sheet = async buf => {
     if (cell && (cell.t === 'n' || cell.t === 'd')) { td.className = 'num'; }
     let fill = cell && cell.s && cell.s.patternType === 'solid' && cell.s.fgColor && cell.s.fgColor.rgb;
     fill = fill ? String(fill).slice(-6) : null;
-    if (fill && /^[0-9A-Fa-f]{6}$/.test(fill) && !(dark() && fill.toUpperCase() === 'FFFFFF')) {
+    if (fill && /^[0-9A-Fa-f]{6}$/.test(fill)) {
       td.style.background = '#' + fill;
       td.style.color = lum(fill) > 0.55 ? '#1c1d21' : '#f4f4f6';
     } else {
@@ -749,7 +757,7 @@ RENDER.sheet = async buf => {
       if (font) {
         if (font.b) { td.style.fontWeight = '700'; }
         if (font.i) { td.style.fontStyle = 'italic'; }
-        if (font.color && !fill && /^[0-9A-Fa-f]{6}$/.test(font.color) && (dark() ? lum(font.color) > 0.4 : lum(font.color) < 0.8)) {
+        if (font.color && /^[0-9A-Fa-f]{6}$/.test(font.color)) {
           td.style.color = '#' + font.color;
         }
       }
@@ -1190,10 +1198,6 @@ RENDER.epub = async buf => {
     t.default(base);
     if (style.font !== 'original') { t.override('font-family', style.font === 'serif' ? 'serif' : 'sans-serif', true); }
     t.override('line-height', String(style.spacing), true);
-    if (dark()) {
-      t.override('color', '#e4e4e7', true);
-      t.override('background', 'transparent', true);
-    }
     t.fontSize(Math.round(scale * 100) + '%');
   }
 
@@ -1411,6 +1415,56 @@ RENDER.text = async buf => {
   };
 };
 
+// ------------------------------------------------------------------ old Office files, as made (2.8)
+
+// Swift turns an old Word file into its pages (fonts, colours, tables, pictures) and an old
+// PowerPoint file into its slides' text and pictures, on the phone. When that fails, the text alone
+// (below) is still shown.
+let convertWait = null;
+let convertParts = [];
+
+function onConverted(msg) {
+  const w = convertWait;
+  if (!w) { return; }
+  if (msg.error) {
+    convertWait = null;
+    w.reject(new Error(msg.error));
+    return;
+  }
+  convertParts.push(msg.data || '');
+  if (msg.last) {
+    convertWait = null;
+    const html = convertParts.join('');
+    convertParts = [];
+    w.resolve({ html, note: msg.note || null });
+  }
+}
+
+function converted() {
+  return new Promise((resolve, reject) => {
+    convertParts = [];
+    convertWait = { resolve, reject };
+    send({ type: 'doc-convert', id });
+  });
+}
+
+async function showConverted() {
+  const r = await converted();
+  docEl.textContent = '';
+  const box = document.createElement('div');
+  box.className = 'oo-wrap';
+  // Made by Swift's own converter, which escapes the file's text; pictures are data: links.
+  box.innerHTML = r.html;
+  docEl.appendChild(box);
+  if (r.note) { note(r.note, 'Open with another app', () => action('open-with')); }
+  flowDone(box);
+  // Pages and slides keep their size, shrunk to the screen's width (+ and − from there).
+  const widest = Math.max(0, ...Array.from(box.querySelectorAll('.oo-page, .oo-slide')).map(e => e.offsetWidth || 0));
+  const fit = widest > innerWidth ? (innerWidth - 8) / widest : 1;
+  box.style.zoom = fit.toFixed(3);
+  viewer.size = f => { box.style.zoom = (fit * f).toFixed(3); };
+}
+
 // ------------------------------------------------------------------ old Office files: their text
 
 function oldNote(what) {
@@ -1425,6 +1479,12 @@ RENDER.oldword = async buf => {
   const content = bytesOf(wd.content);
   // fEncrypted: the text can't be read without the password.
   if (u16(content, 0x0A) & 0x0100) { throw new Error('password'); }
+  try {
+    await showConverted();
+    return;
+  } catch (e) {
+    if (e && e.message === 'password') { throw e; }
+  }
   let text;
   try { text = wordText(cfb, content); } catch (e) { text = looseText(content); }
   oldNote('Word');
@@ -1486,6 +1546,12 @@ function wordParagraphs(text) {
 }
 
 RENDER.oldslides = async buf => {
+  try {
+    await showConverted();
+    return;
+  } catch (e) {
+    if (e && e.message === 'password') { throw e; }
+  }
   await loadScript('lib/xlsx.full.min.js');
   const cfb = XLSX.CFB.read(new Uint8Array(buf), { type: 'array' });
   const f = XLSX.CFB.find(cfb, 'PowerPoint Document');
@@ -1699,8 +1765,7 @@ async function openPdf() {
     annotationEditorMode: lib.AnnotationEditorType.NONE,
     // Pages drawn sharp up to about 6 megapixels each: enough when zoomed in, light on memory.
     maxCanvasPixels: 6 * 1024 * 1024,
-    // Dark mode: the pages turn dark too, their pictures keep their colours.
-    pageColors: dark() ? { background: cssVar('--surface') || '#1d1e22', foreground: cssVar('--text') || '#dcdce0' } : null,
+    // 2.8: the pages keep their own colours, in dark mode too.
   });
   linkService.setViewer(pdfViewer);
   const params = {
@@ -2055,6 +2120,21 @@ function openMenu() {
     menu.appendChild(b);
   };
   const shown = info && $('#status').hidden;
+  // 2.8: on a narrow screen of its own, zoom and Listen sit here (the bar keeps room for the name).
+  if (shown && ownScreen && innerWidth < 600) {
+    const row = document.createElement('div');
+    row.className = 'row';
+    for (const key of ['smaller', 'bigger', 'listen']) {
+      const src = $('#' + key);
+      if (src.hidden) { continue; }
+      const b = src.cloneNode(true);
+      b.removeAttribute('id');
+      // Zooming keeps the menu open (a few taps in a row); Listen closes it.
+      b.addEventListener('click', () => { src.click(); if (key === 'listen') { hideMenu(); } });
+      row.appendChild(b);
+    }
+    if (row.childNodes.length) { menu.appendChild(row); }
+  }
   if (shown && viewer.goTo) { item('Go to page…', viewer.goTo); }
   if (shown && viewer.chapters) { item(viewer.chaptersTitle || 'Chapters', showChapters); }
   if (shown && viewer.pages) { item('Pages', viewer.pages); }
@@ -2062,7 +2142,7 @@ function openMenu() {
   if (shown && viewer.style) { item('Text style', viewer.style); }
   if (shown && viewer.edit) { item('Fill & sign', viewer.edit); }
   if (info && info.kind === 'word' && lastBuf) {
-    item(pageLayout ? 'Fit to screen' : 'Page layout', () => { pageLayout = !pageLayout; renderWord(); });
+    item(pageLayout ? 'Reading view' : 'Page view', () => { pageLayout = !pageLayout; renderWord(); });
   }
   item('Share', () => action('share'));
   item('Open with another app', () => action('open-with'));

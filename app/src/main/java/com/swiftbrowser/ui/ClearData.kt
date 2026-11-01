@@ -7,15 +7,19 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.CheckBox
 import android.widget.LinearLayout
+import android.widget.TextView
 import com.swiftbrowser.SwiftApp
+import com.swiftbrowser.core.ClearSizes
 import com.swiftbrowser.core.Clearing
 import com.swiftbrowser.core.Profiles
+import com.swiftbrowser.core.UrlUtils
 import com.swiftbrowser.download.Downloads
 import com.swiftbrowser.tabs.TabManager
 
 /**
- * Clear browsing data (2.6): for the last hour, day, week, four weeks or all time, and what — each
- * with what it means. The same list sets what Quit clears.
+ * Clear browsing data (2.6): for the last hour, day, week, four weeks or all time (2.8: or chosen
+ * dates), and what — each with what it means and (2.8) how much it takes away. The same list sets
+ * what Quit clears.
  */
 object ClearData {
     private const val PREF_RANGE = "clear_range"
@@ -27,7 +31,7 @@ object ClearData {
 
     private fun saved(key: String, default: Set<String>): Set<String> = SwiftApp.prefs.sp.getStringSet(key, default) ?: default
 
-    /** What Quit clears (Settings → Privacy & backup → When you quit). */
+    /** What Quit clears (Settings → Storage & data → When you quit). */
     fun quitChoices(): Set<String> = saved(PREF_QUIT, emptySet())
 
     /** Settings' line under When you quit. */
@@ -38,42 +42,222 @@ object ClearData {
         return if (names.isEmpty()) "≡ → Quit closes Swift and clears nothing" else "≡ → Quit also clears: " + names.joinToString(", ").lowercase().replaceFirstChar { it.uppercase() }
     }
 
+    /** 2.8: the days chosen last ("20261012-20261020"), kept like the other choices. */
+    private const val PREF_DAYS = "clear_days"
+
+    /** 2.8: the chip after the times, "Choose dates…"; [PREF_RANGE] holds this number when it was the choice. */
+    private val CHOSEN_DAYS = Clearing.Range.entries.size
+
+    private fun savedDays(): IntArray? {
+        val parts = SwiftApp.prefs.sp.getString(PREF_DAYS, null)?.split('-') ?: return null
+        val first = parts.getOrNull(0)?.toIntOrNull() ?: return null
+        val last = parts.getOrNull(1)?.toIntOrNull() ?: return null
+        return if (first in 19000101..last) intArrayOf(first, last) else null
+    }
+
     /**
      * Asks for a time and what, then clears it. [preset] overrides what was ticked last time. A sheet
-     * the height of the screen, so every choice can be seen.
+     * the height of the screen, so every choice can be seen. 2.8: or chosen dates; each row shows
+     * how much it takes away (worked out off the main thread, again when the time changes), the
+     * Clear button their total, and the downloaded files of that time can go too.
      */
     fun show(a: Activity, preset: Set<Clearing.What>? = null, done: (() -> Unit)? = null) {
         val prefs = SwiftApp.prefs
-        var range = Clearing.Range.entries.getOrNull(prefs.sp.getInt(PREF_RANGE, Clearing.Range.ALL.ordinal)) ?: Clearing.Range.ALL
+        var days = savedDays()
+        var choice = prefs.sp.getInt(PREF_RANGE, Clearing.Range.ALL.ordinal).let {
+            if (it in Clearing.Range.entries.indices || (it == CHOSEN_DAYS && days != null)) it else Clearing.Range.ALL.ordinal
+        }
         val ticked = (preset?.map { it.name }?.toSet() ?: saved(PREF_WHAT, Clearing.DEFAULTS.map { it.name }.toSet())).toMutableSet()
         val profile = Profiles.current()
+        fun span(): Clearing.Span {
+            val d = days
+            return if (choice == CHOSEN_DAYS && d != null) Clearing.Span.days(d[0], d[1]) else Clearing.Span.of(Clearing.Range.entries[choice])
+        }
+
         val col = Sheets.column(a)
         col.addView(Sheets.header(a, "Clear browsing data", if (Profiles.all().size > 1) "Profile: ${profile.name}" else null))
-        col.addView(Sheets.label(a, "Time", top = 0))
-        col.addView(Sheets.chipRow(a, Clearing.Range.entries.map { it.label }, range.ordinal) { i -> range = Clearing.Range.entries[i] })
+        // A normal gap above the time (2.8: the chips looked cut off right under the header).
+        col.addView(Sheets.label(a, "Time"))
+        val chooseLabel = "Choose dates…"
+        val labels = Clearing.Range.entries.map { it.label } + (days?.let { ChooseDates.label(it[0], it[1]) } ?: chooseLabel)
+        lateinit var remeasure: () -> Unit
+        lateinit var chips: com.google.android.material.chip.ChipGroup
+        val chipRow = Sheets.chipRow(a, labels, choice) { i ->
+            if (i != CHOSEN_DAYS) {
+                choice = i
+                remeasure()
+                return@chipRow
+            }
+            // The calendar: chosen days, or back to the chip before when left without.
+            val before = choice
+            val d = days
+            ChooseDates.show(a, d?.get(0), d?.get(1), onChosen = { first, last ->
+                days = intArrayOf(first, last)
+                choice = CHOSEN_DAYS
+                (chips.getChildAt(CHOSEN_DAYS) as? TextView)?.text = ChooseDates.label(first, last)
+                remeasure()
+            }, onCancel = {
+                if (before != CHOSEN_DAYS) chips.getChildAt(before)?.let { chips.check(it.id) }
+            })
+        }
+        // Room above and below the chips, so their tops and shadows aren't cut off by the row (2.8).
+        (chipRow as ViewGroup).apply {
+            setPadding(0, Ui.dp(a, 4), 0, Ui.dp(a, 6))
+            clipToPadding = false
+        }
+        chips = chipRow.getChildAt(0) as com.google.android.material.chip.ChipGroup
+        col.addView(chipRow)
         col.addView(Sheets.label(a, "What"))
+
+        // Each row with what it takes away, worked out for the time chosen.
+        val sizes = HashMap<Clearing.What, ClearSizes.Measure>()
+        var files: ClearSizes.Files? = null
+        var deleteFiles = false
+        val rows = HashMap<Clearing.What, SizedRow>()
+        lateinit var clearButton: com.google.android.material.button.MaterialButton
+        lateinit var filesRow: SizedRow
+
+        fun showTotal() {
+            // The bytes of what is ticked; the lists add no bytes. Nothing yet while a ticked one is being worked out.
+            var total = 0L
+            var about = false
+            for (w in BYTES) {
+                if (w.name !in ticked) continue
+                val m = sizes[w]
+                if (m == null) {
+                    clearButton.text = "Clear"
+                    return
+                }
+                total += m.bytes
+                about = about || m.about
+            }
+            val f = files
+            if (deleteFiles && f != null) total += f.bytes
+            clearButton.text = if (total > 0) "Clear " + (if (about) "about " else "") + UrlUtils.formatBytes(total) else "Clear"
+        }
+
+        fun showSize(w: Clearing.What) {
+            rows[w]?.setSize(sizeText(w, sizes[w]))
+        }
+
         val list = column(a)
         for (w in Clearing.What.entries) {
-            list.addView(row(a, w.label, hint(w), w.name in ticked) { on -> if (on) ticked += w.name else ticked -= w.name })
+            val r = sizedRow(a, w.label, hint(w), w.name in ticked) { on ->
+                if (on) ticked += w.name else ticked -= w.name
+                // The files can only go with their entries.
+                if (w == Clearing.What.DOWNLOADS && !on && deleteFiles) filesRow.box.isChecked = false
+                showTotal()
+            }
+            rows[w] = r
+            list.addView(r.view)
+            if (w == Clearing.What.DOWNLOADS) {
+                // 2.8: under the downloads list, when that time has downloaded files still on the phone.
+                filesRow = sizedRow(a, "Delete the downloaded files too", "Only the files Swift downloaded then", false, indent = true) { on ->
+                    deleteFiles = on
+                    if (on && Clearing.What.DOWNLOADS.name !in ticked) rows[Clearing.What.DOWNLOADS]?.box?.isChecked = true
+                    rows[Clearing.What.DOWNLOADS]?.setHint(if (on) "The files are deleted too" else hint(Clearing.What.DOWNLOADS))
+                    showTotal()
+                }
+                filesRow.view.visibility = View.GONE
+                list.addView(filesRow.view)
+            }
         }
         col.addView(list)
+
+        remeasure = {
+            sizes.clear()
+            files = null
+            if (deleteFiles) filesRow.box.isChecked = false
+            filesRow.view.visibility = View.GONE
+            for (w in Clearing.What.entries) showSize(w)
+            showTotal()
+            ClearSizes.measure(a, profile.id, span(), onPart = { w, m ->
+                sizes[w] = m
+                showSize(w)
+                showTotal()
+            }, onFiles = { f ->
+                files = f
+                if (f.ids.isNotEmpty()) {
+                    val n = f.ids.size
+                    filesRow.setSize((if (n == 1) "1 file" else "${number(n)} files") + " · " + UrlUtils.formatBytes(f.bytes))
+                    filesRow.view.visibility = View.VISIBLE
+                }
+            })
+        }
+
         lateinit var sheet: com.google.android.material.bottomsheet.BottomSheetDialog
-        col.addView(button(a, "Clear", danger = true) {
+        clearButton = button(a, "Clear", danger = true) {
             val what = ticked.mapNotNull { n -> Clearing.What.entries.firstOrNull { it.name == n } }.toSet()
             if (what.isEmpty()) {
                 Messages.show(a, "Tick what to clear")
                 return@button
             }
-            sheet.dismiss()
-            // What was ticked is remembered for next time, unless the list came preset (History).
-            prefs.sp.edit().putInt(PREF_RANGE, range.ordinal).apply { if (preset == null) putStringSet(PREF_WHAT, ticked) }.apply()
-            Clearing.clear(a, profile.id, range, what) {
-                Messages.show(a, if (range == Clearing.Range.ALL) "Cleared" else "Cleared: ${range.label.lowercase()}")
-                done?.invoke()
+            val span = span()
+            val chosen = choice
+            val d = days
+            val f = files?.takeIf { deleteFiles && Clearing.What.DOWNLOADS in what }
+            val go = {
+                sheet.dismiss()
+                // What was ticked is remembered for next time, unless the list came preset (History).
+                prefs.sp.edit().putInt(PREF_RANGE, chosen).apply {
+                    if (chosen == CHOSEN_DAYS && d != null) putString(PREF_DAYS, "${d[0]}-${d[1]}")
+                    if (preset == null) putStringSet(PREF_WHAT, ticked)
+                }.apply()
+                Clearing.clear(a, profile.id, span, what, f?.ids.orEmpty()) {
+                    val time = when {
+                        chosen == CHOSEN_DAYS && d != null -> ": " + ChooseDates.label(d[0], d[1])
+                        chosen == Clearing.Range.ALL.ordinal -> ""
+                        else -> ": " + Clearing.Range.entries[chosen].label.lowercase()
+                    }
+                    val n = f?.ids?.size ?: 0
+                    Messages.show(a, "Cleared$time" + if (n == 1) ". 1 file deleted" else if (n > 1) ". ${number(n)} files deleted" else "")
+                    done?.invoke()
+                }
             }
-        })
+            if (f != null && f.ids.isNotEmpty()) {
+                // Files can't come back: asked first.
+                val n = f.ids.size
+                Dialogs.confirm(
+                    a, "Delete ${if (n == 1) "1 file" else "${number(n)} files"} (${UrlUtils.formatBytes(f.bytes)})?",
+                    "This can't be undone.", "Delete", danger = true,
+                ) { go() }
+            } else {
+                go()
+            }
+        }
+        col.addView(clearButton)
         sheet = Sheets.sheet(a, col)
+        // Closed: whatever is still being worked out stops.
+        sheet.setOnDismissListener { ClearSizes.cancel() }
         sheet.showImmersive()
+        remeasure()
+    }
+
+    /** The rows that take away bytes (the others are lists, shown by how many entries they lose). */
+    private val BYTES = listOf(Clearing.What.HISTORY, Clearing.What.COOKIES, Clearing.What.CACHE)
+
+    private fun number(n: Number): String = java.text.NumberFormat.getIntegerInstance().format(n)
+
+    /** What a row takes away: "3,410 pages · 1.2 MB", "45.3 MB", "about 12 MB", "12 entries", "None". */
+    private fun sizeText(w: Clearing.What, m: ClearSizes.Measure?): String {
+        if (m == null) return "Working out…"
+        if (!m.known) return "Not known"
+        if (w == Clearing.What.HISTORY) {
+            return when {
+                m.count > 0 -> (if (m.count == 1) "1 page" else "${number(m.count)} pages") + " · " + UrlUtils.formatBytes(m.bytes)
+                m.bytes > 0 -> UrlUtils.formatBytes(m.bytes)
+                else -> "None"
+            }
+        }
+        if (m.bytes >= 0) return if (m.bytes == 0L) "None" else (if (m.about) "about " else "") + UrlUtils.formatBytes(m.bytes)
+        if (m.count == 0) return "None"
+        val (one, many) = when (w) {
+            Clearing.What.PLACES -> "place" to "places"
+            Clearing.What.SITE_SETTINGS -> "site" to "sites"
+            Clearing.What.PASSWORDS -> "password" to "passwords"
+            else -> "entry" to "entries"
+        }
+        return if (m.count == 1) "1 $one" else "${number(m.count)} $many"
     }
 
     /** A wide button at the bottom of a sheet; [danger] in red, for what can't be undone. */
@@ -150,6 +334,54 @@ object ClearData {
     private fun column(a: Activity) = LinearLayout(a).apply {
         orientation = LinearLayout.VERTICAL
         setPadding(Ui.dp(a, 16), 0, Ui.dp(a, 24), 0)
+    }
+
+    /** 2.8: a row of Clear browsing data: its tick, its name with what it takes away on the right (in grey), and what it means. */
+    private class SizedRow(val view: View, val box: CheckBox, private val hint: TextView, private val size: TextView, private val title: String) {
+        fun setSize(text: String) {
+            size.text = text
+            view.contentDescription = "$title, $text, ${hint.text}"
+        }
+
+        fun setHint(text: String) {
+            hint.text = text
+            view.contentDescription = "$title, ${size.text}, $text"
+        }
+    }
+
+    /** [indent]: an option of the row above (the downloaded files, under the downloads list). */
+    private fun sizedRow(a: Activity, title: String, hint: String, on: Boolean, indent: Boolean = false, change: (Boolean) -> Unit): SizedRow {
+        val box = CheckBox(a).apply {
+            isChecked = on
+            setOnCheckedChangeListener { _, c -> change(c) }
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }
+        val size = Ui.text(a, Ui.Type.CAPTION, "", lines = 1).apply {
+            gravity = Gravity.END
+            setPadding(Ui.dp(a, 8), 0, 0, 0)
+        }
+        val hintView = Ui.text(a, Ui.Type.CAPTION, hint)
+        val view = LinearLayout(a).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            minimumHeight = Ui.dp(a, if (indent) 48 else 56)
+            if (indent) setPadding(Ui.dp(a, 32), 0, 0, 0)
+            setBackgroundResource(RowHolder.selectableBackground(a))
+            setOnClickListener { box.isChecked = !box.isChecked }
+            addView(box)
+            addView(LinearLayout(a).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(Ui.dp(a, 8), Ui.dp(a, 6), 0, Ui.dp(a, 6))
+                // The name and the size on one line, on the same baseline.
+                addView(LinearLayout(a).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    addView(Ui.text(a, Ui.Type.BODY, title, lines = 2), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                    addView(size, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+                })
+                addView(hintView)
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        }
+        return SizedRow(view, box, hintView, size, title).also { it.setSize("") }
     }
 
     private fun row(a: Activity, title: String, hint: String, on: Boolean, change: (Boolean) -> Unit): View {

@@ -8,7 +8,7 @@ import org.mozilla.geckoview.StorageController
 import java.io.File
 
 /**
- * What Swift keeps on the phone (Settings → Storage), and clearing what sites have stored. The
+ * What Swift keeps on the phone (Settings → Storage & data), and clearing what sites have stored. The
  * engine keeps each site's stored data in its profile under storage/default (and temporary), one
  * folder per origin, such as "https+++m.youtube.com^geckoViewUserContextId=…".
  */

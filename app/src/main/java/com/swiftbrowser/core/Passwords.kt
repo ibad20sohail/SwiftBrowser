@@ -106,8 +106,8 @@ object Passwords {
 
     fun putBack(row: LoginRow) = SwiftApp.db.saveLogin(row)
 
-    /** Clearing browsing data: sign-ins saved since [since] (0: all of them). */
-    fun clearSince(profileId: Long, since: Long) = SwiftApp.db.deleteLoginsSince(profileId, since)
+    /** Clearing browsing data: sign-ins saved since [since] (0: all of them); 2.8: until [until] for chosen dates. */
+    fun clearSince(profileId: Long, since: Long, until: Long = Long.MAX_VALUE) = SwiftApp.db.deleteLoginsSince(profileId, since, until)
 
     /** Sites the user said never to save for. */
     fun never(origin: String): Boolean = hostOf(origin) in (SwiftApp.prefs.sp.getStringSet(NEVER, emptySet()) ?: emptySet())

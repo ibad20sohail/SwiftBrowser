@@ -23,12 +23,10 @@ object WhatsNew {
     private class Item(val icon: Int, val title: String, val text: String)
 
     private val NEW = listOf(
-        Item(R.drawable.ic_folder, "Files", "A file manager: browse the phone and SD card, copy, move, rename and delete, and open ZIP, 7z, RAR and TAR files like folders, extract them or make your own."),
-        Item(R.drawable.ic_documents, "New icons", "Swift's icon is round and dark. Documents and Files have icons of their own in the app list, and are on Swift's icon (hold it) and the widget."),
-        Item(R.drawable.ic_home, "Home page", "Smaller shortcuts, five to a row: hold one and the others make room as you move it. Your profile shows under the logo (tap to change it), and the start screen is in your colours."),
-        Item(R.drawable.ic_speed, "Smoother with many tabs", "Tabs in the background slow the page you're on much less, tabs not opened for half an hour let go of their page, and pages always draw with the graphics chip."),
-        Item(R.drawable.ic_refresh, "Stuck pages", "A page that stops responding offers Stop, and a page that crashes loads again by itself."),
-        Item(R.drawable.ic_info, "Better problem reports", "Swift keeps a detailed log of the last 3 days (a file a day), including why the engine crashed. Send it from Settings → About."),
+        Item(R.drawable.ic_documents, "Documents on their own screen", "A document opens full screen, not in a tab, and looks as it was made: Word as pages, PDFs and sheets in their own colours, even old .doc and .ppt files. Back returns where you were."),
+        Item(R.drawable.ic_image, "Pictures, videos and music", "From Files they open in Swift's own viewer: zoom and swipe through pictures, play videos and songs."),
+        Item(R.drawable.ic_folder, "Better Files and Documents", "A start page with storage and categories, grid views, selecting several at once, Details, and Back one step at a time."),
+        Item(R.drawable.ic_delete, "Clear data by dates", "Choose the days to clear and see how much space each item takes before you clear it."),
     )
 
     private class Card(val icon: Int, val title: String, val text: String)

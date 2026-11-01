@@ -148,17 +148,29 @@ object Docs {
         uri.scheme == ContentResolver.SCHEME_FILE && uri.path.orEmpty().startsWith(tempDir(ctx).path + "/")
 
     /**
-     * Opens [uri] in a new tab, in Swift's viewer. [web]: the page link it was downloaded from (for
-     * "Exact view (online)"). Says so and returns false when Swift can't show it.
+     * Opens [uri] in Swift's viewer, on its own screen over [ctx] (2.8: not in a tab). [web]: the page
+     * link it was downloaded from (for "Exact view (online)"). Returns false when Swift can't show it.
+     * [from] and [backTo] are no longer needed: Back returns to the screen it was opened from.
      */
+    @Suppress("UNUSED_PARAMETER")
     fun open(
         ctx: Context, uri: Uri, nameHint: String? = null, mimeHint: String? = null, web: String? = null,
         from: Tab? = null, incognito: Boolean = from?.incognito ?: false, backTo: String? = null,
     ): Boolean {
-        if (!readable(ctx, uri)) return false
+        val id = register(ctx, uri, nameHint, mimeHint, web, incognito) ?: return false
+        com.swiftbrowser.ui.DocumentActivity.open(ctx, id, incognito)
+        return true
+    }
+
+    /**
+     * Remembers [uri] as a document (in Documents, unless incognito) and gives its id; null when
+     * Swift can't show it (2.8: split from [open], for the viewer screen opened by other apps).
+     */
+    fun register(ctx: Context, uri: Uri, nameHint: String? = null, mimeHint: String? = null, web: String? = null, incognito: Boolean = false): String? {
+        if (!readable(ctx, uri)) return null
         val (name, size) = describe(ctx, uri, nameHint)
         val mime = mimeHint ?: if (uri.scheme == ContentResolver.SCHEME_CONTENT) ctx.contentResolver.getType(uri) else null
-        val kind = kindOf(name, mime) ?: return false
+        val kind = kindOf(name, mime) ?: return null
         // A file another app chose to share can be opened again later (Continue, a restored tab).
         if (uri.scheme == ContentResolver.SCHEME_CONTENT) {
             try {
@@ -179,8 +191,7 @@ object Docs {
             io.execute { SwiftApp.db.saveDocument(id, key, name, kind.key, size, web, profile) }
         }
         L.d("Opening document ${kind.key} ($size bytes)")
-        reopen(id, from, incognito, backTo)
-        return true
+        return id
     }
 
     /**
@@ -212,16 +223,22 @@ object Docs {
         }
     }
 
-    private class Waiting(val id: String, val incognito: Boolean, val backTo: String?)
-
-    private val waiting = ArrayList<Waiting>()
+    /** What waits for the viewer page to exist (Swift still starting, opened from another app). */
+    private val waiting = ArrayList<() -> Unit>()
     private var trimmed = false
+
+    /** [action] once the viewer page can be loaded: at once if it can already. */
+    fun whenViewerReady(action: () -> Unit) {
+        if (Helper.extension != null) action() else waiting += action
+    }
 
     /** The helper extension is ready: documents asked for meanwhile open now. */
     fun onViewerReady() {
-        val list = waiting.toList()
-        waiting.clear()
-        main.post { list.forEach { reopen(it.id, null, it.incognito, it.backTo) } }
+        main.post {
+            val list = waiting.toList()
+            waiting.clear()
+            list.forEach { it() }
+        }
         if (!trimmed) {
             trimmed = true
             val ctx = SwiftApp.instance ?: return
@@ -243,24 +260,11 @@ object Docs {
     }
 
     /**
-     * Opens a document Swift has seen before (Continue, Documents, a shortcut); its tab if it is open
-     * already. [from]: the tab it was opened from (Back returns there); [backTo]: the screen Back
-     * returns to otherwise (BACK_DOCUMENTS, BACK_DOWNLOADS, BACK_APP).
+     * Opens a document Swift has seen before (Continue, Documents, a shortcut) on the viewer's screen
+     * over [ctx] (2.8). [leaveSwift]: Back goes out of Swift (a home screen shortcut).
      */
-    fun reopen(id: String, from: Tab? = null, incognito: Boolean = from?.incognito ?: false, backTo: String? = null): Boolean {
-        val url = viewerUrl(id)
-        if (url == null) {
-            // Swift is still starting (opened from another app): the tab opens when the viewer can.
-            if (waiting.none { it.id == id }) waiting += Waiting(id, incognito, backTo)
-            return true
-        }
-        val open = TabManager.tabs.firstOrNull { it.url == url && it.incognito == incognito }
-        if (open != null) {
-            TabManager.select(open)
-        } else {
-            val tab = TabManager.newTab(url, parent = from?.takeIf { it.incognito == incognito }, incognito = incognito)
-            tab.backTo = backTo
-        }
+    fun reopen(ctx: Context, id: String, incognito: Boolean = false, leaveSwift: Boolean = false): Boolean {
+        com.swiftbrowser.ui.DocumentActivity.open(ctx, id, incognito, leaveSwift)
         return true
     }
 
@@ -365,11 +369,60 @@ object Docs {
             }
             "doc-reading" -> (TabManager.ui as? MainActivity)?.setDocumentReading(tab, msg.optBoolean("on"), msg.optBoolean("auto"))
             "doc-zip" -> if (port != null) io.execute { listZip(id, port) }
+            "doc-convert" -> if (port != null) convertOld(id, port)
             "doc-save" -> {
                 val part = Saving(id, msg.optString("name"), msg.optString("mime"), msg.optInt("seq"), msg.optString("data"), msg.optBoolean("last"))
-                io.execute { savePart(tab.profileId, part) }
+                io.execute { savePart(tab, part) }
             }
             "doc-action" -> main.post { act(tab, id, msg.optString("action"), msg) }
+        }
+    }
+
+    /** Old Word and PowerPoint files being laid out (2.8): a thread of their own, it can take seconds. */
+    private val converting = com.swiftbrowser.core.Background.single("docs-convert")
+
+    /**
+     * An old Word or PowerPoint file as [OldOffice] lays it out (pages, slides, their pictures), sent
+     * to the viewer in pieces (2.8). A password, or a file it can't read, is said instead; the viewer
+     * then shows the text alone.
+     */
+    private fun convertOld(id: String, port: WebExtension.Port) = converting.execute {
+        val doc = find(id)
+        val ctx = SwiftApp.instance
+        if (doc == null || ctx == null) {
+            post(port, JSONObject().put("type", "doc-html").put("error", "gone"))
+            return@execute
+        }
+        val uri = Uri.parse(doc.uri)
+        var copy: File? = null
+        try {
+            // The converter reads a file: another app's document is copied into the cache first.
+            val file = if (uri.scheme == ContentResolver.SCHEME_FILE) {
+                File(uri.path.orEmpty())
+            } else {
+                File(File(tempDir(ctx), "convert").apply { mkdirs() }, id.take(16)).also { f ->
+                    copy = f
+                    stream(ctx, uri).use { input -> FileOutputStream(f).use { input.copyTo(it, 65536) } }
+                }
+            }
+            val r = if (doc.kind == Kind.OLD_SLIDES) OldOffice.slides(file) else OldOffice.word(file)
+            L.d("Laid out an old ${doc.kind.label} file (${r.pages} pages, ${r.html.length / 1024} KB)")
+            val html = r.html
+            var from = 0
+            do {
+                val to = minOf(html.length, from + CHUNK)
+                val msg = JSONObject().put("type", "doc-html").put("data", html.substring(from, to)).put("last", to >= html.length)
+                if (to >= html.length && r.note != null) msg.put("note", r.note)
+                post(port, msg)
+                from = to
+            } while (from < html.length)
+        } catch (e: OldOffice.PasswordProtected) {
+            post(port, JSONObject().put("type", "doc-html").put("error", "password"))
+        } catch (e: Exception) {
+            L.w("Couldn't lay out an old Office file", e)
+            post(port, JSONObject().put("type", "doc-html").put("error", "convert"))
+        } finally {
+            copy?.delete()
         }
     }
 
@@ -546,7 +599,7 @@ object Docs {
         post(port, reply.put("entries", entries))
     }
 
-    /** A document inside a ZIP: taken out into Swift's cache and opened in its own tab (Back returns to the ZIP). */
+    /** A document inside a ZIP: taken out into Swift's cache and opened over it (Back returns to the ZIP). */
     private fun openEntry(a: Activity, tab: Tab, doc: Doc, entry: String) {
         io.execute {
             val dir = File(tempDir(a), (if (doc.incognito) "private/zip/" else "zip/") + doc.id)
@@ -602,7 +655,7 @@ object Docs {
     private class Saving(val id: String, val name: String, val mime: String, val seq: Int, val data: String, val last: Boolean)
 
     /** A file the viewer made (a filled-in PDF), arriving in pieces: put together, then saved to Downloads. */
-    private fun savePart(profileId: Long, part: Saving) {
+    private fun savePart(tab: Tab, part: Saving) {
         val ctx = SwiftApp.instance ?: return
         val dir = File(tempDir(ctx), "out").apply { mkdirs() }
         val file = File(dir, part.id + ".part")
@@ -611,28 +664,36 @@ object Docs {
         } catch (e: Exception) {
             L.w("Couldn't save the document", e)
             file.delete()
-            main.post { (TabManager.ui as? MainActivity)?.snack("Couldn't save the file") }
+            main.post { screenOf(tab)?.let { com.swiftbrowser.ui.Messages.show(it, "Couldn't save the file") } }
             return
         }
         if (!part.last) return
         val name = UrlUtils.sanitizeFileName(part.name).ifBlank { "document.pdf" }
-        main.post { saveToDownloads(profileId, name, part.mime.ifBlank { "application/pdf" }, null, { out -> file.copyTo(out, true) }) { file.delete() } }
+        main.post { saveToDownloads(tab, name, part.mime.ifBlank { "application/pdf" }, null, { out -> file.copyTo(out, true) }) { file.delete() } }
     }
 
+    /** Where [tab]'s viewer is on screen: its own screen (2.8), or the browser for a viewer in a tab. */
+    private fun screenOf(tab: Tab): Activity? = com.swiftbrowser.ui.DocumentActivity.hostOf(tab) ?: TabManager.ui as? MainActivity
+
     /** Puts a file in Downloads (asking for storage access once), then offers to open it. */
-    private fun saveToDownloads(profileId: Long, name: String, mime: String, web: String?, write: (File) -> Unit, after: () -> Unit = {}) {
-        val a = TabManager.ui as? MainActivity ?: return
-        a.withStorage {
-            Downloads.saveFile(profileId, name, mime, web, write = write) { item ->
+    private fun saveToDownloads(tab: Tab, name: String, mime: String, web: String?, write: (File) -> Unit, after: () -> Unit = {}) {
+        val a = screenOf(tab) ?: return
+        val save = {
+            Downloads.saveFile(tab.profileId, name, mime, web, write = write) { item ->
                 after()
                 if (item == null) {
-                    a.snack("Couldn't save the file")
+                    com.swiftbrowser.ui.Messages.show(a, "Couldn't save the file")
                 } else {
-                    a.snack("Saved to Downloads", "Open") {
-                        if (!open(a, Uri.fromFile(File(item.filePath)), item.fileName, item.mime)) a.openFileInTab(item.filePath)
+                    com.swiftbrowser.ui.Messages.show(a, "Saved to Downloads", "Open") {
+                        if (!open(a, Uri.fromFile(File(item.filePath)), item.fileName, item.mime)) (TabManager.ui as? MainActivity)?.openFileInTab(item.filePath)
                     }
                 }
             }
+        }
+        when (a) {
+            is com.swiftbrowser.ui.DocumentActivity -> a.withStorage(save)
+            is MainActivity -> a.withStorage(save)
+            else -> save()
         }
     }
 
@@ -641,7 +702,7 @@ object Docs {
         val ctx = SwiftApp.instance ?: return
         val uri = Uri.parse(doc.uri)
         val mime = UrlUtils.mimeFromName(doc.name) ?: doc.kind.mimeTypes.first()
-        saveToDownloads(tab.profileId, doc.name, mime, doc.web, { out ->
+        saveToDownloads(tab, doc.name, mime, doc.web, { out ->
             stream(ctx, uri).use { input -> FileOutputStream(out).use { input.copyTo(it, 65536) } }
             // The kept copy is the document from now on (the cached one goes after a week).
             if (isTemp(ctx, uri)) SwiftApp.db.moveDocument(doc.id, Uri.fromFile(out).toString())
@@ -649,7 +710,7 @@ object Docs {
     }
 
     /** Word, Excel, PowerPoint and the rest as a PDF, or printed (the page as the viewer shows it). */
-    private fun printOrSave(a: MainActivity, tab: Tab, doc: Doc, print: Boolean) {
+    private fun printOrSave(a: Activity, tab: Tab, doc: Doc, print: Boolean) {
         if (print && doc.kind == Kind.PDF) {
             printFile(a, doc.name) { stream(a, Uri.parse(doc.uri)) }
             return
@@ -663,11 +724,11 @@ object Docs {
             .accept({ _ -> makePdf(a, tab, doc, session, name, print, restore) }, { _ -> makePdf(a, tab, doc, session, name, print, restore) })
     }
 
-    private fun makePdf(a: MainActivity, tab: Tab, doc: Doc, session: org.mozilla.geckoview.GeckoSession, name: String, print: Boolean, restore: () -> Unit) {
+    private fun makePdf(a: Activity, tab: Tab, doc: Doc, session: org.mozilla.geckoview.GeckoSession, name: String, print: Boolean, restore: () -> Unit) {
         session.saveAsPdf().accept({ stream ->
             restore()
             if (stream == null) {
-                a.snack("Couldn't make a PDF of this document")
+                com.swiftbrowser.ui.Messages.show(a, "Couldn't make a PDF of this document")
                 return@accept
             }
             if (print) {
@@ -680,14 +741,14 @@ object Docs {
                     } catch (e: Exception) {
                         false
                     }
-                    main.post { if (ok) printFile(a, name) { FileInputStream(file) } else a.snack("Couldn't print this document") }
+                    main.post { if (ok) printFile(a, name) { FileInputStream(file) } else com.swiftbrowser.ui.Messages.show(a, "Couldn't print this document") }
                 }
             } else {
-                saveToDownloads(tab.profileId, name, "application/pdf", doc.web, { out -> stream.use { input -> out.outputStream().use { input.copyTo(it) } } })
+                saveToDownloads(tab, name, "application/pdf", doc.web, { out -> stream.use { input -> out.outputStream().use { input.copyTo(it) } } })
             }
         }, { _ ->
             restore()
-            a.snack("Couldn't make a PDF of this document")
+            com.swiftbrowser.ui.Messages.show(a, "Couldn't make a PDF of this document")
         })
     }
 
@@ -728,7 +789,8 @@ object Docs {
     const val EXTRA_DOC_ID = "doc_id"
 
     private fun shortcutFor(ctx: Context, doc: Doc, shortId: String): ShortcutInfoCompat {
-        val intent = Intent(ACTION_OPEN_DOC).setClass(ctx, MainActivity::class.java).putExtra(EXTRA_DOC_ID, doc.id)
+        // 2.8: straight to the viewer's screen (older shortcuts still go through the browser).
+        val intent = Intent(ACTION_OPEN_DOC).setClass(ctx, com.swiftbrowser.ui.DocumentActivity::class.java).putExtra(EXTRA_DOC_ID, doc.id)
         return ShortcutInfoCompat.Builder(ctx, shortId)
             .setShortLabel(doc.name.take(24).ifBlank { doc.kind.label })
             .setLongLabel(doc.name.take(60))
@@ -775,14 +837,18 @@ object Docs {
     // ------------------------------------------------------------------ the viewer's buttons
 
     private fun act(tab: Tab, id: String, action: String, msg: JSONObject) {
-        val a = TabManager.ui as? MainActivity ?: return
+        val screen = com.swiftbrowser.ui.DocumentActivity.hostOf(tab)
+        val a: Activity = screen ?: TabManager.ui as? MainActivity ?: return
         when (action) {
-            "documents" -> a.openDocuments()
-            "find" -> a.openFind()
+            "documents", "find", "close" -> if (screen != null) screen.onPageAction(action) else when (action) {
+                "documents" -> (a as MainActivity).openDocuments()
+                "find" -> (a as MainActivity).openFind()
+            }
             "exact" -> {
                 val doc = find(id) ?: return
                 val web = doc.web ?: return
-                TabManager.newTab(EXACT_VIEW + Uri.encode(web), parent = tab, incognito = tab.incognito)
+                TabManager.newTab(EXACT_VIEW + Uri.encode(web), parent = tab.takeIf { it in TabManager.tabs }, incognito = tab.incognito)
+                if (screen != null) screen.startActivity(Intent(screen, MainActivity::class.java))
             }
             "share", "open-with", "save-copy", "print", "save-pdf", "shortcut", "open-entry" -> io.execute {
                 val doc = find(id) ?: return@execute
@@ -792,7 +858,7 @@ object Docs {
                         "save-copy" -> saveCopy(tab, doc)
                         "print" -> printOrSave(a, tab, doc, print = true)
                         "save-pdf" -> printOrSave(a, tab, doc, print = false)
-                        "shortcut" -> if (doc.incognito) a.snack("Incognito documents can't go on the home screen") else pinShortcut(a, doc)
+                        "shortcut" -> if (doc.incognito) com.swiftbrowser.ui.Messages.show(a, "Incognito documents can't go on the home screen") else pinShortcut(a, doc)
                         "open-entry" -> openEntry(a, tab, doc, msg.optString("entry"))
                     }
                 }

@@ -297,9 +297,9 @@ object Ui {
         }
 
     /**
-     * Swift's logo in the accent colour (2.3): the white comet (2.6) on a rounded square with a soft diagonal
-     * gradient. Blue (the default) is exactly the app icon's blue, so nothing changes colour when
-     * Swift starts.
+     * Swift's logo in the accent colour (2.3): the white comet (2.6) on a circle (2.8, round like the
+     * app icon; a rounded square before) with a soft diagonal gradient. Blue (the default) is exactly
+     * the app icon's blue, so nothing changes colour when Swift starts.
      */
     fun logo(ctx: Context): Drawable {
         val accent = Looks.accent
@@ -313,14 +313,11 @@ object Ui {
             intArrayOf(Tones.mix(seed, Color.WHITE, 0.24), Tones.mix(seed, Color.BLACK, 0.22))
         }
         val size = dp(ctx, 48)
-        val square = object : GradientDrawable(Orientation.TL_BR, colors) {
-            // The corners keep their share of the size, however big the logo is drawn.
-            override fun onBoundsChange(r: android.graphics.Rect) {
-                super.onBoundsChange(r)
-                cornerRadius = r.width() * 0.22f
-            }
-        }.apply { setSize(size, size) }
-        return android.graphics.drawable.LayerDrawable(arrayOf(square, ContextCompat.getDrawable(ctx, R.drawable.ic_logo_mark)!!))
+        val circle = GradientDrawable(GradientDrawable.Orientation.TL_BR, colors).apply {
+            shape = GradientDrawable.OVAL
+            setSize(size, size)
+        }
+        return android.graphics.drawable.LayerDrawable(arrayOf(circle, ContextCompat.getDrawable(ctx, R.drawable.ic_logo_mark)!!))
     }
 
     fun circle(fill: Int): GradientDrawable = GradientDrawable().apply {

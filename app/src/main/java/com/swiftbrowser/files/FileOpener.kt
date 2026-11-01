@@ -13,9 +13,12 @@ import com.swiftbrowser.ui.Messages
 import java.io.File
 
 /**
- * Opening files from the Files screen (2.7): documents in Swift's viewer; pictures, videos, sounds
- * and web pages in a Swift tab (Back there returns to Files); apps with Android's installer; the
- * rest in another app. Sharing goes through Swift's file provider (Android refuses file:// links).
+ * Opening files from the Files screen (2.7): documents in Swift's viewer; web pages in a Swift tab
+ * (Back there returns to Files); apps with Android's installer; the rest in another app. Sharing
+ * goes through Swift's file provider (Android refuses file:// links).
+ *
+ * 2.8: documents, pictures, videos and music open on screens of their own over Files (Back returns
+ * to the folder), no longer in browser tabs.
  */
 object FileOpener {
     /**
@@ -29,7 +32,14 @@ object FileOpener {
                 install(a, f)
                 false
             }
-            Docs.kindOf(name, null) != null -> inSwift(a, name) { Docs.open(a, Uri.fromFile(f), name, backTo = Docs.BACK_FILES) }
+            Docs.kindOf(name, null) != null -> {
+                if (!Docs.open(a, Uri.fromFile(f), name)) Messages.show(a, "Swift can't show “$name”")
+                false
+            }
+            com.swiftbrowser.ui.MediaViewerActivity.kindOf(name) != null -> {
+                com.swiftbrowser.ui.MediaViewerActivity.open(a, f)
+                false
+            }
             FileKind.showsInTab(name) -> inSwift(a, name) {
                 // The engine plays and shows these itself; MainActivity shows the tab when it comes up.
                 TabManager.newTab(Uri.fromFile(f).toString(), incognito = false).backTo = Docs.BACK_FILES

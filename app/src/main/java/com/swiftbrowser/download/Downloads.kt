@@ -142,10 +142,13 @@ object Downloads {
     fun all(): List<Item> = synchronized(items) { items.values.reversed() }
 
     /** Clearing browsing data (2.6): entries started since [since] leave the list; the files stay, running ones go on. */
-    fun removeEntriesSince(since: Long) {
-        val gone = synchronized(items) { items.values.filter { it.created >= since && it.status != RUNNING && it.status != QUEUED && it.status != CONVERTING } }
-        for (item in gone) remove(item.id, deleteFile = false)
+    fun removeEntriesSince(since: Long, until: Long = Long.MAX_VALUE) {
+        for (item in entriesSince(since, until)) remove(item.id, deleteFile = false)
     }
+
+    /** 2.8: the entries [removeEntriesSince] takes from the list (started from [since] to [until], not running). */
+    fun entriesSince(since: Long, until: Long = Long.MAX_VALUE): List<Item> =
+        synchronized(items) { items.values.filter { it.created in since..until && it.status != RUNNING && it.status != QUEUED && it.status != CONVERTING } }
 
     fun get(id: Long): Item? = synchronized(items) { items[id] }
 
@@ -486,46 +489,6 @@ object Downloads {
         persist(item)
         MediaScannerConnection.scanFile(app, arrayOf(item.filePath), null, null)
         main.post { DownloadService.notifyFinished(app, item) }
-    }
-
-    /**
-     * Finished downloads still in Swift's own folders (from before storage access, or Swift's SD card
-     * folder) move to [dir], so they stay if Swift is uninstalled (2.5). Downloads in progress stay.
-     * [onDone] hears on the main thread how many moved and how many couldn't.
-     */
-    fun moveKeptTo(dir: File, onDone: (moved: Int, failed: Int) -> Unit) {
-        scope.launch {
-            var moved = 0
-            var failed = 0
-            val busy = synchronized(items) { items.values.filter { it.status != DONE }.map { it.filePath }.toSet() }
-            for (f in com.swiftbrowser.core.Storage.keptDownloads(app)) {
-                if (f.path in busy || f.path.startsWith(dir.path + "/")) continue
-                val to = uniqueFile(dir, f.name)
-                val ok = runCatching {
-                    dir.mkdirs()
-                    if (!f.renameTo(to)) {
-                        // Another storage (Swift's data → the phone's shared storage): copied, then removed.
-                        f.inputStream().use { i -> to.outputStream().use { o -> i.copyTo(o) } }
-                        if (to.length() != f.length()) throw IOException("short copy")
-                        f.delete()
-                    }
-                    true
-                }.getOrElse { to.delete(); false }
-                if (!ok) {
-                    failed++
-                    continue
-                }
-                moved++
-                synchronized(items) { items.values.filter { it.filePath == f.path } }.forEach {
-                    it.filePath = to.path
-                    it.fileName = to.name
-                    persist(it)
-                }
-                MediaScannerConnection.scanFile(app, arrayOf(to.path), null, null)
-            }
-            changed(immediate = true)
-            main.post { onDone(moved, failed) }
-        }
     }
 
     /** The last incognito tab closed (2.6): its finished downloads leave the list (their files stay). */

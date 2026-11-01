@@ -5,7 +5,7 @@ ad-heavy sites on an old phone (Moto E4, Android 7.1.2).
 
 ## Download
 
-**[Download Swift 2.7 (APK)](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v2.7/Swift-2.7.apk)**
+**[Download Swift 2.8 (APK)](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v2.8/Swift-2.8.apk)**
 for Android 7 and newer (32-bit ARM, about 150 MB). It installs over an earlier Swift and keeps
 tabs and settings. From 1.4 on, Swift can also update itself: Settings → Check for updates.
 
@@ -30,6 +30,28 @@ ones, and a short welcome on the first start.
 - **Night light** (2.3, Settings → Look & screen): a warm layer over Swift, pages and videos too,
   from 7 pm to 7 am or always, in three strengths. Taps go through it.
 
+- **New in 2.8**:
+  - **Documents on a screen of their own**, not in a tab: full screen over whatever opened them
+    (Documents, Files, Downloads, a site, another app's "Open with"), with a Back arrow; Back closes
+    the document's panels first, then returns where you were.
+  - **Documents look as they were made**: Word as pages (white paper, its fonts, colours, tables and
+    pictures; Reading view is a switch), PDFs and Excel in their own colours, in dark mode too; only
+    the viewer's bars follow your colours. Old Word files (.doc, before 2007) now show as their pages
+    (fonts, colours, tables, pictures) and old PowerPoint files (.ppt) as their slides, laid out, with
+    speaker notes, read on the phone (Apache POI 5.0 for Word, Swift's own reader for PowerPoint).
+  - **Pictures, videos and music from Files** open in Swift's own viewer: zoom and swipe through a
+    folder's pictures, play videos and songs (the next song follows).
+  - **Documents screen**: Recently opened as page previews, list or grid, hold to select several
+    (share, star, delete), Details, smaller filter chips, blank previews replaced by the file's mark.
+  - **Files**: a start page with storage bars, categories, recent files and favourite folders; grid
+    view with thumbnails; checkboxes when selecting; Back goes up one folder at a time.
+  - **Smaller headers** with room above the search box (Documents, Files, History, Bookmarks,
+    Downloads), and Swift's logo is round inside the app too, like its icon.
+  - **Clear browsing data**: choose dates (from a day to a day), see how much each item takes for
+    that time (MB, or how many), the total on the Clear button, and delete the downloaded files too.
+  - **Settings rearranged**: Clear browsing data, When you quit and Backup are in **Storage & data**;
+    **Privacy & security** keeps secure connections, secure DNS, cookie banners, passwords and site
+    settings. "Downloads kept inside Swift" is gone.
 - **New in 2.7**:
   - **Files**, a file manager (≡ menu, its own icon, Swift's icon and the widget): phone storage, the
     SD card, Downloads; copy, move, rename, delete, new folder, share, properties; archives (ZIP, 7z,
@@ -57,7 +79,7 @@ ones, and a short welcome on the first start.
     errors. Site names only, never addresses; nothing of the engine's while incognito is open.
     Settings → About → Send a problem report attaches them.
 - **New in 2.6**:
-  - **Clear browsing data by time** (Settings → Privacy & backup, or Clear data in the ≡ menu): the
+  - **Clear browsing data by time** (Settings → Storage & data since 2.8, or Clear data in the ≡ menu): the
     last hour, 24 hours, 7 days, 4 weeks or all time, and what: history, cookies and site data,
     saved pictures and files, the downloads list, the documents list, where you left off, site
     settings, saved passwords. Cookies for a time are cleared for the sites visited then (the

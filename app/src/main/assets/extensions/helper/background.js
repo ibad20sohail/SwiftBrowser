@@ -73,11 +73,30 @@ function onNative(msg) {
       pageDark: colours(msg.pageDark),
     });
   } else if (msg.type === 'clear-articles') {
-    // Clear browsing data (2.6): the articles kept for reader view go too.
-    articles.clear();
+    // Clear browsing data (2.6): the articles kept for reader view go too. 2.8: for a time (from
+    // and/or to given), only those made then; an article's id is the time it was made (base 36).
+    const from = typeof msg.from === 'number' ? msg.from : null;
+    const to = typeof msg.to === 'number' ? msg.to : null;
+    if (from === null && to === null) {
+      articles.clear();
+      browser.storage.local.get(null).then(all => {
+        const keys = Object.keys(all || {}).filter(k => k === 'articleIds' || k.startsWith('article:'));
+        return keys.length ? browser.storage.local.remove(keys) : null;
+      }).catch(() => { });
+      return;
+    }
+    const goes = id => {
+      const made = parseInt(id, 36);
+      return isNaN(made) || ((from === null || made >= from) && (to === null || made <= to));
+    };
+    for (const id of Array.from(articles.keys())) {
+      if (goes(id)) { articles.delete(id); }
+    }
     browser.storage.local.get(null).then(all => {
-      const keys = Object.keys(all || {}).filter(k => k === 'articleIds' || k.startsWith('article:'));
-      return keys.length ? browser.storage.local.remove(keys) : null;
+      const ids = ((all && all.articleIds) || []);
+      const gone = Object.keys(all || {}).filter(k => k.startsWith('article:') && goes(k.substring(8)));
+      const left = ids.filter(id => !goes(id));
+      return browser.storage.local.set({ articleIds: left }).then(() => gone.length ? browser.storage.local.remove(gone) : null);
     }).catch(() => { });
   }
 }

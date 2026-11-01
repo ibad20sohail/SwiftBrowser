@@ -69,9 +69,9 @@ class SettingsActivity : AppCompatActivity() {
         ADBLOCK("Ad blocking", R.drawable.ic_shield),
         SPEED("Speed & memory", R.drawable.ic_speed),
         VIDEO("Video & downloads", R.drawable.ic_movie),
-        PRIVACY("Privacy & backup", R.drawable.ic_lock),
+        PRIVACY("Privacy & security", R.drawable.ic_lock),
         VPN("VPN", R.drawable.ic_vpn),
-        STORAGE("Storage", R.drawable.ic_storage),
+        STORAGE("Storage & data", R.drawable.ic_storage),
         ABOUT("About Swift", R.drawable.ic_info),
     }
 
@@ -429,11 +429,11 @@ class SettingsActivity : AppCompatActivity() {
         ).joinToString(" · ").ifEmpty { "Players and downloads" }
         Topic.PRIVACY -> listOfNotNull(
             if (prefs.httpsOnly) "Secure connections" else null,
-            "Clear history and data",
-            "Back up",
+            "Passwords",
+            "Site settings",
         ).joinToString(" · ")
         Topic.VPN -> VpnUi.label().let { if (com.swiftbrowser.vpn.Vpn.locations().isEmpty()) "Change your country for free (Proton VPN)" else it }
-        Topic.STORAGE -> usage?.let { "Swift uses ${UrlUtils.formatBytes(it.total)} · cache ${UrlUtils.formatBytes(it.cache)}" } ?: "Calculating…"
+        Topic.STORAGE -> (usage?.let { "Swift uses ${UrlUtils.formatBytes(it.total)} · " } ?: "") + "Clear data · Back up"
         Topic.ABOUT -> "Swift ${BuildConfig.VERSION_NAME} · Updates · Problem report"
     }
 
@@ -763,13 +763,7 @@ class SettingsActivity : AppCompatActivity() {
             }
         }
 
-        // Privacy & storage
-        def(Topic.PRIVACY, null, "Clear browsing data", "history cookies cache delete last hour day week time") {
-            action(R.drawable.ic_delete, "Clear browsing data", { "The last hour, day, week or all of it: history, cookies, saved files and more" }) { clearData() }
-        }
-        def(Topic.PRIVACY, null, "When you quit", "quit exit close clear on exit") {
-            action(R.drawable.ic_quit, "When you quit", { ClearData.quitSummary() }) { ClearData.chooseForQuit(this@SettingsActivity) { refreshAll() } }
-        }
+        // Privacy & security
         def(Topic.PRIVACY, null, "Use secure connections", "secure https only encrypted insecure http") {
             switch(
                 R.drawable.ic_lock, "Use secure connections",
@@ -823,21 +817,6 @@ class SettingsActivity : AppCompatActivity() {
         def(Topic.PRIVACY, "Sites", "Site settings", "desktop location sound permissions per site") {
             action(R.drawable.ic_tune, "Site settings", { siteSettingsText() }) { chooseSite() }
         }
-        def(Topic.PRIVACY, "Backup", "Back up", "export save copy backup") {
-            action(R.drawable.ic_download, "Back up", { "Settings, bookmarks, history, open tabs and site settings, to one file" }) { backUp() }
-        }
-        def(Topic.PRIVACY, "Backup", "Back up every week", "automatic backup weekly") {
-            switch(
-                R.drawable.ic_history, "Back up every week",
-                { if (prefs.autoBackup) autoBackupText() else "Off: only when you tap Back up" },
-                checked = { prefs.autoBackup },
-            ) { prefs.autoBackup = it }
-        }
-        def(Topic.PRIVACY, "Backup", "Restore from a backup", "import restore backup new phone") {
-            action(R.drawable.ic_update, "Restore from a backup", { "Adds a backup's contents to this phone, then restarts Swift" }) {
-                chooseBackup()
-            }
-        }
 
         // VPN
         def(Topic.VPN, null, "VPN", "vpn proton wireguard country ip hide location change country") {
@@ -884,17 +863,35 @@ class SettingsActivity : AppCompatActivity() {
         def(Topic.STORAGE, null, "Storage used", "space size phone memory") {
             custom(storageBreakdown(refresh))
         }
+        def(Topic.STORAGE, "Clear data", "Clear browsing data", "history cookies cache delete last hour day week time") {
+            action(R.drawable.ic_delete, "Clear browsing data", { "The last hour, day, week, days you choose or all of it: history, cookies, saved files and more" }) { clearData() }
+        }
+        def(Topic.STORAGE, "Clear data", "When you quit", "quit exit close clear on exit") {
+            action(R.drawable.ic_quit, "When you quit", { ClearData.quitSummary() }) { ClearData.chooseForQuit(this@SettingsActivity) { refreshAll() } }
+        }
         def(Topic.STORAGE, "Free up space", "Clear the cache", "cache files space") {
             action(R.drawable.ic_delete, "Clear the cache", { usage?.let { "${UrlUtils.formatBytes(it.cache)} of files sites reuse" } }) { clearCache() }
         }
         def(Topic.STORAGE, "Free up space", "Data sites stored", "site storage sites space clear") {
             action(R.drawable.ic_globe, "Data sites stored", { usage?.let { "${UrlUtils.formatBytes(it.sites)} · see and clear each site" } }) { showSiteStorage() }
         }
-        def(Topic.STORAGE, "Free up space", "Downloads kept inside Swift", "downloads inside app folder android data deleted uninstall") {
-            action(R.drawable.ic_download, "Downloads kept inside Swift", { keptText() }) { moveKeptDownloads() }
-        }
         def(Topic.STORAGE, "Free up space", "Clear sites you don't visit", "old unused sites 30 days") {
             action(R.drawable.ic_history, "Clear sites you don't visit", { "Everything of sites not visited for 30 days" }) { clearUnusedSites() }
+        }
+        def(Topic.STORAGE, "Backup", "Back up", "export save copy backup") {
+            action(R.drawable.ic_download, "Back up", { "Settings, bookmarks, history, open tabs and site settings, to one file" }) { backUp() }
+        }
+        def(Topic.STORAGE, "Backup", "Back up every week", "automatic backup weekly") {
+            switch(
+                R.drawable.ic_history, "Back up every week",
+                { if (prefs.autoBackup) autoBackupText() else "Off: only when you tap Back up" },
+                checked = { prefs.autoBackup },
+            ) { prefs.autoBackup = it }
+        }
+        def(Topic.STORAGE, "Backup", "Restore from a backup", "import restore backup new phone") {
+            action(R.drawable.ic_update, "Restore from a backup", { "Adds a backup's contents to this phone, then restarts Swift" }) {
+                chooseBackup()
+            }
         }
 
         // About
@@ -1294,35 +1291,6 @@ class SettingsActivity : AppCompatActivity() {
         refreshAll()
         if (grantResults.firstOrNull() == android.content.pm.PackageManager.PERMISSION_GRANTED) {
             snack("New downloads go to ${Downloads.describe(Downloads.directory())}")
-        }
-    }
-
-    private fun keptText(): String {
-        val u = usage ?: return "Calculating…"
-        // Only files in Swift's own folders count here; the downloads in the chosen folder are not "kept inside" (2.5).
-        if (u.kept <= 0) return "None · your downloads are in ${Downloads.describe(Downloads.directory())}"
-        return UrlUtils.formatBytes(u.kept) + " · deleted if Swift is uninstalled. Tap to move them out"
-    }
-
-    /** Moves what is in Swift's own folders to the download folder, or says there is nothing there. */
-    private fun moveKeptDownloads() {
-        val u = usage ?: return
-        val dir = Downloads.directory()
-        when {
-            u.kept <= 0 -> snack("Nothing is kept inside Swift. Your downloads are in ${Downloads.describe(dir)}")
-            !Downloads.hasStoragePermission(this) -> askStorageAccess()
-            dir.path.contains("/Android/data/") -> snack("Your download folder is Swift's own folder. Choose another one first")
-            else -> Dialogs.confirm(
-                this, "Move them out of Swift?",
-                "${UrlUtils.formatBytes(u.kept)} of downloads are in Swift's own folder and would be deleted if Swift is uninstalled. Move them to ${Downloads.describe(dir)}?",
-                "Move",
-            ) {
-                snack("Moving…")
-                Downloads.moveKeptTo(dir) { moved, failed ->
-                    snack(if (failed > 0) "Moved $moved, $failed couldn't be moved" else "Moved $moved to ${Downloads.describe(dir)}")
-                    computeStorage()
-                }
-            }
         }
     }
 
@@ -2264,6 +2232,8 @@ class SettingsActivity : AppCompatActivity() {
                     "Downloads inside Swift" to u.kept, "Other" to u.other,
                 )
                 parts.forEachIndexed { i, (label, bytes) ->
+                    // 2.8: only shown when there are some (the option to move them out is gone).
+                    if (bytes <= 0 && label == "Downloads inside Swift") return@forEachIndexed
                     val c = color(colors[i])
                     if (bytes > 0 && u.total > 0) {
                         bar.addView(View(this).apply { setBackgroundColor(c) }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, bytes.toFloat() / u.total))

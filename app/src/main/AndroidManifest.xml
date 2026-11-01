@@ -81,7 +81,20 @@
                 <action android:name="android.intent.action.WEB_SEARCH" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
-            <!-- 2.4: "Open with Swift" for documents from other apps (Docs.open shows them). -->
+        </activity>
+
+        <activity android:name=".ui.HistoryActivity" android:exported="false" android:windowSoftInputMode="stateAlwaysHidden" />
+        <activity android:name=".ui.BookmarksActivity" android:exported="false" android:windowSoftInputMode="stateAlwaysHidden" />
+        <!-- 2.8: a document on a screen of its own, over whatever opened it. No task affinity: from
+             another app it joins that app's task (Back returns there), or a task of its own. -->
+        <activity
+            android:name=".ui.DocumentActivity"
+            android:autoRemoveFromRecents="true"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation"
+            android:exported="true"
+            android:taskAffinity=""
+            android:windowSoftInputMode="adjustResize|stateHidden">
+            <!-- 2.4: "Open with Swift" for documents from other apps; since 2.8 straight to the viewer's screen. -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -106,10 +119,16 @@
                 <data android:mimeType="text/comma-separated-values" />
                 <data android:mimeType="text/plain" />
             </intent-filter>
+            <intent-filter>
+                <action android:name="com.swiftbrowser.action.OPEN_DOC" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
         </activity>
-
-        <activity android:name=".ui.HistoryActivity" android:exported="false" android:windowSoftInputMode="stateAlwaysHidden" />
-        <activity android:name=".ui.BookmarksActivity" android:exported="false" android:windowSoftInputMode="stateAlwaysHidden" />
+        <!-- 2.8: pictures, videos and music opened from Files, on a screen of their own. -->
+        <activity
+            android:name=".ui.MediaViewerActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"
+            android:exported="false" />
         <activity android:name=".ui.DownloadsActivity" android:exported="false" android:windowSoftInputMode="stateAlwaysHidden" />
         <!-- Its own task affinity (2.7): opened from its own icon, it is an app of its own in recent apps. -->
         <activity

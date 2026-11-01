@@ -532,7 +532,7 @@ class MediaViewerActivity : AppCompatActivity() {
         val bar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             setPadding(Ui.dp(this@MediaViewerActivity, 4), 0, Ui.dp(this@MediaViewerActivity, 4), 0)
-            val lp = { LinearLayout.LayoutParams(0, Ui.dp(this@MediaViewerActivity, 60), 1f) }
+            val lp = { LinearLayout.LayoutParams(0, Ui.dp(this@MediaViewerActivity, 52), 1f) }
             addView(barButton(R.drawable.ic_share, "Share") { share() }, lp())
             addView(barButton(R.drawable.ic_edit, "Edit") { edit() }, lp())
             if (current().file != null) addView(barButton(R.drawable.ic_delete, "Delete") { askDelete() }, lp())
@@ -549,6 +549,7 @@ class MediaViewerActivity : AppCompatActivity() {
         root.addView(bottom, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM))
     }
 
+    /** An icon of the bottom bar (2.9: no words under it; its name is said by TalkBack and shown when held). */
     private fun barButton(icon: Int, label: String, click: () -> Unit) = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
         gravity = Gravity.CENTER
@@ -560,10 +561,7 @@ class MediaViewerActivity : AppCompatActivity() {
             setImageDrawable(Ui.icon(this@MediaViewerActivity, icon, Color.WHITE))
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }, LinearLayout.LayoutParams(Ui.dp(this@MediaViewerActivity, 24), Ui.dp(this@MediaViewerActivity, 24)))
-        addView(Ui.text(this@MediaViewerActivity, Ui.Type.CAPTION, label, 0xDDFFFFFF.toInt(), lines = 1).apply {
-            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-            setPadding(0, Ui.dp(this@MediaViewerActivity, 4), 0, 0)
-        })
+        androidx.appcompat.widget.TooltipCompat.setTooltipText(this, label)
         setOnClickListener { click() }
     }
 

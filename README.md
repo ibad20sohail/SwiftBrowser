@@ -5,7 +5,7 @@ ad-heavy sites on an old phone (Moto E4, Android 7.1.2).
 
 ## Download
 
-**[Download Swift 2.9 (APK)](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v2.9/Swift-2.9.apk)**
+**[Download Swift 2.9.1 (APK)](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v2.9.1/Swift-2.9.1.apk)**
 for Android 7 and newer (32-bit ARM, about 150 MB). It installs over an earlier Swift and keeps
 tabs and settings. From 1.4 on, Swift can also update itself: Settings → Check for updates.
 
@@ -30,6 +30,10 @@ ones, and a short welcome on the first start.
 - **Night light** (2.3, Settings → Look & screen): a warm layer over Swift, pages and videos too,
   from 7 pm to 7 am or always, in three strengths. Taps go through it.
 
+- **New in 2.9.1**:
+  - **Files**: the search box and the folder path scroll away with the list (more room for files);
+    they come back at the top of the list, and stay put in an empty or short folder.
+  - **Picture viewer**: the bottom buttons are icons only; holding one shows its name.
 - **New in 2.9**:
   - **Media player** (Files, "Open with Swift"): Android's Media3 player with swipe gestures
     (brightness, volume, seeking), double-tap skips, hold for 2×, lock, speed, picture size, turning,

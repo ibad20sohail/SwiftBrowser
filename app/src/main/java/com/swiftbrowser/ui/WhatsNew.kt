@@ -20,9 +20,12 @@ import kotlin.math.abs
  * update, once, what is new in this version. Nothing otherwise.
  */
 object WhatsNew {
-    private class Item(val icon: Int, val title: String, val text: String)
+    /** A point of what's new; [version] is the versionCode it came in (2.9.1: an update shows only what is newer than the version before). */
+    private class Item(val icon: Int, val title: String, val text: String, val version: Int = 19)
 
     private val NEW = listOf(
+        Item(R.drawable.ic_search, "More room in Files", "The search box and the folder path now scroll away with the list. Scroll back to the top to search.", version = 20),
+        Item(R.drawable.ic_image, "Cleaner picture viewer", "The buttons under a picture are icons only. Hold one to see its name.", version = 20),
         Item(R.drawable.ic_play, "Media player", "Videos and music from Files play in Swift's own player: swipe for brightness, volume and seeking, speed, subtitles, going on where you stopped, and music in the background."),
         Item(R.drawable.ic_image, "Picture viewer", "Crop and turn pictures, see their details, slideshows, moving GIFs and set as wallpaper. Swift can also open pictures, videos and music from other apps."),
         Item(R.drawable.ic_folder, "Files tools", "A recycle bin (30 days), Free up space, a Private folder behind your screen lock, and Wi-Fi transfer to your computer. Documents are in Files now."),
@@ -52,12 +55,13 @@ object WhatsNew {
         when {
             newInstall && !prefs.welcomeDone -> welcome(a)
             // Never recorded (an update from 1.8 or older), or an older version than this one.
-            !newInstall && seen < BuildConfig.VERSION_CODE -> whatsNew(a)
+            !newInstall && seen < BuildConfig.VERSION_CODE -> whatsNew(a, seen)
         }
     }
 
     /** What's new in this version, as a sheet of short points. */
-    fun whatsNew(a: MainActivity) {
+    fun whatsNew(a: MainActivity, seen: Int = 0) {
+        val items = NEW.filter { it.version > seen }.ifEmpty { NEW }
         val col = Sheets.column(a)
         col.addView(LinearLayout(a).apply {
             orientation = LinearLayout.VERTICAL
@@ -69,7 +73,7 @@ object WhatsNew {
                 setPadding(0, Ui.dp(a, 12), 0, 0)
             })
         })
-        for (item in NEW) {
+        for (item in items) {
             col.addView(LinearLayout(a).apply {
                 orientation = LinearLayout.HORIZONTAL
                 setPadding(Ui.dp(a, 24), Ui.dp(a, 10), Ui.dp(a, 24), Ui.dp(a, 10))

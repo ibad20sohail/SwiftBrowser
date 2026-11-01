@@ -262,6 +262,10 @@ class FilesActivity : ListActivity() {
     private val swiftDownloads: File by lazy { Downloads.directory() }
 
     private lateinit var pathScroll: HorizontalScrollView
+    /** The search box and the path, at the top of the page: they scroll away with the list (2.9.1). */
+    private lateinit var appBar: com.google.android.material.appbar.AppBarLayout
+    /** How far [appBar] has gone up (0: all on show). */
+    private var appBarOffset = 0
     private lateinit var crumbs: LinearLayout
     private lateinit var jobStrip: LinearLayout
     private lateinit var jobText: TextView
@@ -662,7 +666,40 @@ class FilesActivity : ListActivity() {
             overScrollMode = View.OVER_SCROLL_NEVER
             addView(crumbs)
         }
-        column.addView(pathScroll, column.indexOfChild(box), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(this, 40)))
+        // 2.9.1: the search box and the path belong to the top of the page: scrolling down takes them
+        // away with the list (more room for files), and they come back once the list is at its top.
+        // The list only moves by an offset as they go, so scrolling costs no new layout.
+        val searchBox = search.parent as View
+        val at = column.indexOfChild(searchBox)
+        column.removeView(searchBox)
+        column.removeView(box)
+        appBar = com.google.android.material.appbar.AppBarLayout(this).apply {
+            background = null
+            stateListAnimator = null
+            elevation = 0f
+            addOnOffsetChangedListener { _, offset -> appBarOffset = offset }
+        }
+        fun scrollsAway(height: Int) = com.google.android.material.appbar.AppBarLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, height).apply {
+            scrollFlags = com.google.android.material.appbar.AppBarLayout.LayoutParams.SCROLL_FLAG_SCROLL
+        }
+        appBar.addView(searchBox, scrollsAway(ViewGroup.LayoutParams.WRAP_CONTENT))
+        appBar.addView(pathScroll, scrollsAway(Ui.dp(this, 40)))
+        // Only a list longer than the room under them takes them away (an empty or short folder keeps them).
+        val topBehavior = object : com.google.android.material.appbar.AppBarLayout.Behavior() {
+            override fun onStartNestedScroll(parent: androidx.coordinatorlayout.widget.CoordinatorLayout, child: com.google.android.material.appbar.AppBarLayout, directTargetChild: View, target: View, nestedScrollAxes: Int, type: Int) =
+                (appBarOffset != 0 || listOverflows()) && super.onStartNestedScroll(parent, child, directTargetChild, target, nestedScrollAxes, type)
+        }
+        topBehavior.setDragCallback(object : com.google.android.material.appbar.AppBarLayout.Behavior.DragCallback() {
+            override fun canDrag(appBarLayout: com.google.android.material.appbar.AppBarLayout) = appBarOffset != 0 || listOverflows()
+        })
+        val page = androidx.coordinatorlayout.widget.CoordinatorLayout(this)
+        page.addView(appBar, androidx.coordinatorlayout.widget.CoordinatorLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { behavior = topBehavior })
+        page.addView(box, androidx.coordinatorlayout.widget.CoordinatorLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT).apply {
+            behavior = com.google.android.material.appbar.AppBarLayout.ScrollingViewBehavior()
+        })
+        column.addView(page, at, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        // Moving the list took its focus away: back to it, so the search box shows no cursor until tapped.
+        list.requestFocus()
 
         bottom = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -838,6 +875,25 @@ class FilesActivity : ListActivity() {
     private fun restorePosition() {
         val p = positions[positionKey()] ?: 0
         (list.layoutManager as? LinearLayoutManager)?.scrollToPositionWithOffset(p.coerceAtLeast(0), 0)
+        showPageTop(p <= 0)
+    }
+
+    /**
+     * The search box and the path on show again, as at the top of the page (2.9.1); with [atTop]
+     * false, gone as when scrolled down to where the list now is.
+     */
+    private fun showPageTop(atTop: Boolean = true) {
+        if ((appBarOffset == 0) != atTop) appBar.setExpanded(atTop, false)
+    }
+
+    /** The list goes on past the bottom of the screen (asked once a swipe starts, not as it moves). */
+    private fun listOverflows(): Boolean {
+        if (list.canScrollVertically(1) || list.canScrollVertically(-1)) return true
+        var bottom = 0
+        for (i in 0 until list.childCount) bottom = maxOf(bottom, list.getChildAt(i).bottom)
+        if (bottom == 0) return false
+        val box = list.parent as View
+        return box.top + list.top + bottom > (box.parent as View).height
     }
 
     /** Reads the folder off the main thread (a big one takes a moment on a slow phone). */
@@ -1091,6 +1147,7 @@ class FilesActivity : ListActivity() {
         shownRowCount = if (onStartPage) 0 else shown.count { it is Row }
         applyLayout()
         adapter.set(shown, removals)
+        if (shown.isEmpty()) showPageTop()
         // 2.9: a new place comes in from the side it was reached from; the start page's cards, the first time, one after another.
         if (!loading && pendingSlide != 0) {
             val slide = pendingSlide
@@ -1652,6 +1709,7 @@ class FilesActivity : ListActivity() {
                 pendingSlide = SLIDE_FORWARD
                 render()
                 list.scrollToPosition(0)
+                showPageTop()
                 if (idx.unsafe > 0) say("${idx.unsafe} files in it have names that point outside its folder: Swift leaves them out", long = true)
             }.onFailure { e ->
                 render()
@@ -2592,6 +2650,7 @@ class FilesActivity : ListActivity() {
             searchRows = rows.filter { it.name.contains(q, ignoreCase = true) }
             render()
             list.scrollToPosition(0)
+            showPageTop()
             return
         }
         val from = dir
@@ -2610,6 +2669,7 @@ class FilesActivity : ListActivity() {
             searchRows = found.map { rowOf(it) }
             render()
             list.scrollToPosition(0)
+            showPageTop()
         }
     }
 
@@ -2991,6 +3051,7 @@ class FilesActivity : ListActivity() {
             selected.clear()
             render()
             list.scrollToPosition(0)
+            showPageTop()
         }
         h.box.addView(Palette.paint(chips), FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
     }

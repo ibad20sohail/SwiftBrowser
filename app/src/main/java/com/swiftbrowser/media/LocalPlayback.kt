@@ -41,6 +41,8 @@ import java.util.Locale
  */
 @OptIn(UnstableApi::class)
 object LocalPlayback {
+    private const val MAX_BOOST_MB = 1000
+
     /** One video or song of the list. */
     class Entry(
         val uri: Uri,
@@ -157,8 +159,11 @@ object LocalPlayback {
 
     private fun build(ctx: Context): ExoPlayer {
         // The phone's hardware decoders first (smooth and light on the battery); another decoder
-        // when one can't start, rather than an error.
-        val renderers = DefaultRenderersFactory(ctx).setEnableDecoderFallback(true)
+        // when one can't start, rather than an error. FFmpeg (2.9.2) only for sound none of the phone's
+        // decoders can play (Dolby and DTS in films): "on" puts it after them, "prefer" would before.
+        val renderers = DefaultRenderersFactory(ctx)
+            .setEnableDecoderFallback(true)
+            .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
         // Smaller buffers than ExoPlayer's (up to 128 MB for video): the phone has 2 GB of memory
         // shared with the engine. 32 MB is still a minute of a typical film ahead.
         val load = DefaultLoadControl.Builder()
@@ -329,8 +334,44 @@ object LocalPlayback {
     }
 
     /** Stops for good: the place is remembered, the notification goes, and the screen closes. */
+    /**
+     * 2.9.2: sound above the phone's loudest, from 0 (none) to 1 (about twice as loud), for quiet
+     * films on a quiet speaker. Android's loudness enhancer on the player's sound; it ends with the player.
+     */
+    var boost = 0f
+        private set
+    private var enhancer: android.media.audiofx.LoudnessEnhancer? = null
+    private var enhancerSession = 0
+
+    fun setBoost(amount: Float) {
+        boost = amount.coerceIn(0f, 1f)
+        val p = player ?: return
+        try {
+            val session = p.audioSessionId
+            if (enhancer != null && enhancerSession != session) {
+                enhancer?.release()
+                enhancer = null
+            }
+            if (boost <= 0f) {
+                enhancer?.enabled = false
+                return
+            }
+            val e = enhancer ?: android.media.audiofx.LoudnessEnhancer(session).also {
+                enhancer = it
+                enhancerSession = session
+            }
+            e.setTargetGain((boost * MAX_BOOST_MB).toInt())
+            e.enabled = true
+        } catch (t: Throwable) {
+            L.w("Player: no volume boost on this phone", t)
+        }
+    }
+
     fun release() {
         val p = player ?: return
+        runCatching { enhancer?.release() }
+        enhancer = null
+        boost = 0f
         saveNow()
         cancelSleep(notify = false)
         main.removeCallbacks(saver)

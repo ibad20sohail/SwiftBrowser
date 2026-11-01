@@ -15,6 +15,12 @@ object PlayerSettings {
     const val BACKGROUND_AUDIO = "player_background_audio"
     const val SPEED = "player_speed"
     const val SUBTITLE_SIZE = "player_subtitle_size"
+    const val SUBTITLE_COLOUR = "player_subtitle_colour"
+    const val SUBTITLE_BACKGROUND = "player_subtitle_background"
+
+    /** 2.9.2: the subtitles' colour (white or yellow) and what is behind them. */
+    val SUBTITLE_COLOURS = listOf("White" to 0xFFFFFFFF.toInt(), "Yellow" to 0xFFFFE34D.toInt())
+    val SUBTITLE_BACKGROUNDS = listOf("See-through box", "Dark box", "None")
     const val ROTATION = "player_rotation"
     const val DOUBLE_TAP_SECONDS = "player_double_tap_seconds"
 
@@ -56,6 +62,16 @@ object PlayerSettings {
     var subtitleSize: Int
         get() = sp.getInt(SUBTITLE_SIZE, 100).coerceIn(50, 300)
         set(v) = sp.edit { putInt(SUBTITLE_SIZE, v.coerceIn(50, 300)) }
+
+    /** An index of [SUBTITLE_COLOURS]. */
+    var subtitleColour: Int
+        get() = sp.getInt(SUBTITLE_COLOUR, 0).coerceIn(0, SUBTITLE_COLOURS.size - 1)
+        set(v) = sp.edit { putInt(SUBTITLE_COLOUR, v.coerceIn(0, SUBTITLE_COLOURS.size - 1)) }
+
+    /** An index of [SUBTITLE_BACKGROUNDS]. */
+    var subtitleBackground: Int
+        get() = sp.getInt(SUBTITLE_BACKGROUND, 0).coerceIn(0, SUBTITLE_BACKGROUNDS.size - 1)
+        set(v) = sp.edit { putInt(SUBTITLE_BACKGROUND, v.coerceIn(0, SUBTITLE_BACKGROUNDS.size - 1)) }
 
     /** How the screen turns for videos: [ROTATE_AUTO], [ROTATE_SENSOR], [ROTATE_LANDSCAPE] or [ROTATE_PORTRAIT]. */
     var rotation: String

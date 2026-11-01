@@ -26,12 +26,17 @@ object Power {
     var noticeShown = false
 
     /** The battery's level (percent; -1 not known yet) and whether it's charging. */
-    private var percent = -1
-    private var charging = false
+    @Volatile var percent = -1
+        private set
+    @Volatile var charging = false
+        private set
     private var androidSaver = false
 
     /** Told when [saving] changes (MainActivity says so on screen). */
     var listener: ((Boolean) -> Unit)? = null
+
+    /** Told on every battery report (2.9.2: torrents pause when it runs low). */
+    val batteryListeners = java.util.concurrent.CopyOnWriteArrayList<() -> Unit>()
 
     fun init(ctx: Context) {
         val app = ctx.applicationContext
@@ -39,7 +44,10 @@ object Power {
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(c: Context, i: Intent) {
                 when (i.action) {
-                    Intent.ACTION_BATTERY_CHANGED -> read(i)
+                    Intent.ACTION_BATTERY_CHANGED -> {
+                        read(i)
+                        batteryListeners.forEach { it() }
+                    }
                     PowerManager.ACTION_POWER_SAVE_MODE_CHANGED -> androidSaver = pm.isPowerSaveMode
                 }
                 update()

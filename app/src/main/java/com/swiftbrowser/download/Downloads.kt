@@ -15,6 +15,7 @@ import com.swiftbrowser.core.L
 import com.swiftbrowser.core.Prefs
 import com.swiftbrowser.core.UrlUtils
 import com.swiftbrowser.engine.Engine
+import com.swiftbrowser.torrent.Torrents
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
@@ -57,6 +58,8 @@ object Downloads {
 
     const val KIND_FILE = "file"
     const val KIND_HLS = "hls"
+    /** 2.9.2: a torrent, run by Torrents; its path is its file, or its folder when it has several. */
+    const val KIND_TORRENT = "torrent"
 
     private const val MAX_PARALLEL = 2
 
@@ -96,6 +99,9 @@ object Downloads {
             }
 
         @Volatile var bytesPerSecond: Long = 0
+
+        /** A torrent's people sharing it right now (2.9.2). */
+        @Volatile var peers: Int = 0
     }
 
     private lateinit var app: Context
@@ -151,6 +157,7 @@ object Downloads {
             if (gone.isEmpty()) return@launch
             synchronized(items) { gone.forEach { items.remove(it.id) } }
             gone.forEach { if (!it.incognito) db.deleteDownload(it.id) }
+            gone.filter { it.kind == KIND_TORRENT }.forEach { Torrents.remove(it, deleteFiles = false) }
             changed(immediate = true)
         }
     }
@@ -170,6 +177,42 @@ object Downloads {
 
     fun activeCount(): Int = synchronized(items) {
         items.values.count { it.status == RUNNING || it.status == QUEUED || it.status == CONVERTING }
+    }
+
+    /** 2.9.2: the row of the torrent with info hash [hash], if it is in the list. */
+    fun findTorrent(hash: String): Item? = synchronized(items) {
+        items.values.firstOrNull { it.kind == KIND_TORRENT && it.extra.optString("hash").equals(hash, ignoreCase = true) }
+    }
+
+    /**
+     * 2.9.2: a torrent's row (Torrents.add): [path] is its file, or its folder when it has several;
+     * [total] the size of the files chosen (-1 until a magnet link's file list is known).
+     */
+    fun addTorrent(name: String, url: String, path: String, total: Long, extra: JSONObject): Item {
+        val now = System.currentTimeMillis()
+        val profileId = prefs.currentProfileId
+        val clean = UrlUtils.sanitizeFileName(name)
+        val id = db.insertDownload(DownloadRow(0, profileId, KIND_TORRENT, url, path, clean, null, total, 0, QUEUED, null, "{}", null, extra.toString(), now))
+        val item = Item(id, profileId, KIND_TORRENT, url, path, clean, null, total, 0, QUEUED, null, emptyMap(), null, extra, now)
+        synchronized(items) { items[id] = item }
+        changed(immediate = true)
+        schedule()
+        return item
+    }
+
+    /** 2.9.2: Torrents changed [item] (null: only progress): saved with [persist], and shown. */
+    fun torrentChanged(item: Item?, persist: Boolean) {
+        if (persist && item != null) persist(item)
+        changed(immediate = persist)
+        if (persist && activeCount() > 0) startService()
+    }
+
+    /** Who runs is worked out again (2.9.2: after a torrent's files changed). */
+    fun reschedule() = main.post { schedule() }
+
+    /** The notification's Pause all (2.9.2): everything downloading or waiting stops until resumed. */
+    fun pauseAll() {
+        synchronized(items) { items.values.filter { it.status == RUNNING || it.status == QUEUED }.map { it.id } }.forEach { pause(it) }
     }
 
     fun addListener(l: () -> Unit) {
@@ -228,6 +271,9 @@ object Downloads {
      * Where a new download of [name] goes (2.9): with "Sort downloads into folders", a folder for
      * its type inside the download folder; anything else stays in the download folder itself.
      */
+    /** 2.9.2: where a torrent whose main file is [name] goes: its kind's folder when sorting is on, else null. */
+    fun sortedFolderFor(name: String): File? = directoryFor(name, null).takeIf { prefs.sortDownloads && it != directory() }
+
     private fun directoryFor(name: String, mime: String?): File {
         val dir = directory()
         if (!prefs.sortDownloads) return dir
@@ -391,9 +437,11 @@ object Downloads {
         stopJob(id)
         firstResponses.remove(id)?.body?.let { runCatching { it.close() } }
         synchronized(items) { items.remove(id) }
+        // 2.9.2: a torrent's files are its own list (a folder may hold others'), deleted by Torrents.
+        if (item.kind == KIND_TORRENT) Torrents.remove(item, deleteFiles = deleteFile || item.status != DONE)
         scope.launch {
             if (!item.incognito) db.deleteDownload(id)
-            if (deleteFile || item.status != DONE) File(item.filePath).delete()
+            if (item.kind != KIND_TORRENT && (deleteFile || item.status != DONE)) File(item.filePath).delete()
         }
         changed(immediate = true)
         schedule()
@@ -416,7 +464,7 @@ object Downloads {
     private fun retryFailed() {
         var any = false
         synchronized(items) { items.values.toList() }.forEach { item ->
-            if (item.status != FAILED || !networkError(item.error)) return@forEach
+            if (item.status != FAILED || item.kind == KIND_TORRENT || !networkError(item.error)) return@forEach
             val tries = item.extra.optInt("retries", 0)
             if (tries >= 3) return@forEach
             item.extra.put("retries", tries + 1)
@@ -438,7 +486,7 @@ object Downloads {
 
     /** The phone moved between Wi-Fi and mobile data, or the setting changed. */
     fun onNetworkChanged() {
-        synchronized(items) { items.values.toList() }.forEach { item ->
+        synchronized(items) { items.values.filter { it.kind != KIND_TORRENT } }.forEach { item ->
             if (item.status == RUNNING && mustWait(item)) {
                 stopJob(item.id)
                 item.status = QUEUED
@@ -454,8 +502,9 @@ object Downloads {
 
     private fun schedule() {
         val toStart = synchronized(items) {
-            val running = items.values.count { it.status == RUNNING || it.status == CONVERTING }
-            items.values.filter { it.status == QUEUED && !jobs.containsKey(it.id) }
+            // 2.9.2: torrents have their own turns and rules (Torrents).
+            val running = items.values.count { (it.status == RUNNING || it.status == CONVERTING) && it.kind != KIND_TORRENT }
+            items.values.filter { it.status == QUEUED && it.kind != KIND_TORRENT && !jobs.containsKey(it.id) }
                 .filter { item ->
                     val wait = mustWait(item)
                     item.error = if (wait) WAITING_FOR_WIFI else item.error?.takeIf { it != WAITING_FOR_WIFI }
@@ -467,6 +516,7 @@ object Downloads {
                 .take((MAX_PARALLEL - running).coerceAtLeast(0))
         }
         for (item in toStart) launch(item)
+        Torrents.reschedule()
         if (activeCount() > 0) startService()
     }
 

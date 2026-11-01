@@ -790,6 +790,9 @@ class DownloadsActivity : ListActivity() {
         })
         list.adapter = adapter
         list.itemAnimator = null
+        buildTop()
+        // 2.9.2: a magnet link or .torrent file opened with Swift from another app.
+        if (savedInstanceState == null) openTorrent(intent)
         // Finished, failed and paused downloads can be swiped off the list (the file stays).
         enableSwipe({ vh ->
             val d = adapter.items.getOrNull(vh.bindingAdapterPosition)
@@ -804,6 +807,200 @@ class DownloadsActivity : ListActivity() {
         super.onStart()
         Downloads.addListener(listener)
         refresh()
+        // 2.9.2: torrents waiting for space or the night are looked at again; a copied magnet link is offered.
+        com.swiftbrowser.torrent.Torrents.reschedule()
+        checkClipboard()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        openTorrent(intent)
+    }
+
+    // ------------------------------------------------------------------ 2.9.2: torrents
+
+    /** All, Videos, Torrents or Files: which downloads the list shows. */
+    private var filter = 0
+    private lateinit var magnetCard: LinearLayout
+    private lateinit var magnetText: TextView
+    private var copiedMagnet: String? = null
+
+    /** Under the search box: the copied magnet link's card, and the filter chips. */
+    private fun buildTop() {
+        val box = search.parent as View
+        val column = box.parent as LinearLayout
+        val top = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        magnetText = Ui.text(this, Ui.Type.BODY_SECONDARY, "", Ui.onAccentContainer(this), lines = 2)
+        magnetCard = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            visibility = View.GONE
+            background = Ui.shape(this@DownloadsActivity, Ui.accentContainer(this@DownloadsActivity), 16)
+            setPadding(Ui.dp(this@DownloadsActivity, 16), Ui.dp(this@DownloadsActivity, 10), Ui.dp(this@DownloadsActivity, 4), Ui.dp(this@DownloadsActivity, 10))
+            isClickable = true
+            setOnClickListener { copiedMagnet?.let { link -> TorrentSheet.magnet(this@DownloadsActivity, link) { added() } } }
+            addView(ImageView(this@DownloadsActivity).apply {
+                setImageDrawable(Ui.icon(this@DownloadsActivity, R.drawable.ic_torrent, Ui.onAccentContainer(this@DownloadsActivity)))
+                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            }, LinearLayout.LayoutParams(Ui.dp(this@DownloadsActivity, 24), Ui.dp(this@DownloadsActivity, 24)))
+            addView(LinearLayout(this@DownloadsActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(Ui.dp(this@DownloadsActivity, 14), 0, Ui.dp(this@DownloadsActivity, 8), 0)
+                addView(Ui.text(this@DownloadsActivity, Ui.Type.SUBTITLE, "Add the copied magnet link", Ui.onAccentContainer(this@DownloadsActivity)))
+                addView(magnetText)
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            addView(ImageButton(this@DownloadsActivity).apply {
+                setImageDrawable(Ui.icon(this@DownloadsActivity, R.drawable.ic_close, Ui.onAccentContainer(this@DownloadsActivity)))
+                background = Ui.ripple(this@DownloadsActivity, null, 20)
+                contentDescription = "Not now"
+                setOnClickListener {
+                    dismissedMagnet = copiedMagnet?.let { com.swiftbrowser.torrent.TorrentFiles.magnetHash(it) }
+                    magnetCard.visibility = View.GONE
+                }
+            }, LinearLayout.LayoutParams(Ui.dp(this@DownloadsActivity, 44), Ui.dp(this@DownloadsActivity, 44)))
+        }
+        top.addView(magnetCard, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            setMargins(Ui.dp(this@DownloadsActivity, 16), Ui.dp(this@DownloadsActivity, 2), Ui.dp(this@DownloadsActivity, 16), Ui.dp(this@DownloadsActivity, 8))
+        })
+        val chips = Sheets.chipRow(this, FILTERS, filter) { i ->
+            filter = i
+            refresh()
+            list.scrollToPosition(0)
+        }.apply { setPadding(Ui.dp(this@DownloadsActivity, 12), 0, Ui.dp(this@DownloadsActivity, 12), Ui.dp(this@DownloadsActivity, 4)) }
+        top.addView(Palette.paint(chips), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        column.addView(top, column.indexOfChild(box) + 1)
+    }
+
+    /** A magnet link on the clipboard that isn't in the list yet: offered at the top. */
+    private fun checkClipboard() {
+        val cm = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
+        val text = try {
+            cm.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(this)?.toString()?.trim()
+        } catch (_: Exception) {
+            null
+        }
+        val hash = text?.takeIf { it.startsWith("magnet:?", ignoreCase = true) }?.let { com.swiftbrowser.torrent.TorrentFiles.magnetHash(it) }
+        if (hash == null || hash == dismissedMagnet || Downloads.findTorrent(hash) != null) {
+            copiedMagnet = null
+            magnetCard.visibility = View.GONE
+            return
+        }
+        copiedMagnet = text
+        magnetText.text = com.swiftbrowser.torrent.TorrentFiles.magnetName(text) ?: "A torrent"
+        magnetCard.visibility = View.VISIBLE
+    }
+
+    private fun added() {
+        magnetCard.visibility = View.GONE
+        if (filter != 0 && filter != FILTER_TORRENTS) {
+            filter = 0
+            refresh()
+        }
+        Messages.show(this, "Added to your downloads")
+    }
+
+    /** A magnet link or a .torrent file sent to Swift by another app ("Open with"). */
+    private fun openTorrent(i: Intent?) {
+        val data = i?.data ?: return
+        if (i.action != Intent.ACTION_VIEW) return
+        if (data.scheme.equals("magnet", ignoreCase = true)) {
+            TorrentSheet.magnet(this, data.toString()) { added() }
+            return
+        }
+        lifecycleScope.launch {
+            val bytes = withContext(Dispatchers.IO) {
+                runCatching {
+                    contentResolver.openInputStream(data)?.use { input ->
+                        val out = java.io.ByteArrayOutputStream()
+                        val buf = ByteArray(64 * 1024)
+                        while (true) {
+                            val n = input.read(buf)
+                            if (n < 0) break
+                            out.write(buf, 0, n)
+                            // No torrent file is this big: something else.
+                            if (out.size() > MAX_TORRENT_FILE) return@use null
+                        }
+                        out.toByteArray()
+                    }
+                }.getOrNull()
+            }
+            if (bytes == null) Messages.show(this@DownloadsActivity, "Couldn't read this torrent file") else TorrentSheet.file(this@DownloadsActivity, bytes) { added() }
+        }
+    }
+
+    private fun isVideo(d: Downloads.Item): Boolean {
+        if (d.kind == Downloads.KIND_TORRENT) {
+            return com.swiftbrowser.torrent.Torrents.mainFile(d)?.let { PlayerActivity.kindOf(it.name) == PlayerActivity.Kind.VIDEO } == true
+        }
+        val mime = d.mime ?: UrlUtils.mimeFromName(d.fileName) ?: ""
+        return d.kind == Downloads.KIND_HLS || mime.startsWith("video")
+    }
+
+    private fun shown(d: Downloads.Item): Boolean = when (filter) {
+        FILTER_VIDEOS -> isVideo(d)
+        FILTER_TORRENTS -> d.kind == Downloads.KIND_TORRENT
+        FILTER_FILES -> d.kind != Downloads.KIND_TORRENT && !isVideo(d)
+        else -> true
+    }
+
+    /** "6 min", "1 h 20 min": how long [seconds] is. */
+    private fun duration(seconds: Long): String = when {
+        seconds < 60 -> "<1 min"
+        seconds < 3600 -> "${seconds / 60} min"
+        else -> "${seconds / 3600} h ${(seconds % 3600) / 60} min"
+    }
+
+    private fun torrentStatus(d: Downloads.Item): String = when (d.status) {
+        Downloads.DONE -> listOf("Torrent", UrlUtils.formatBytes(d.done), dateText(d.created)).joinToString(" · ")
+        Downloads.QUEUED -> d.error ?: "Waiting to start…"
+        Downloads.PAUSED -> "Paused · ${UrlUtils.formatBytes(d.done)}${if (d.percent >= 0) " (${d.percent}%)" else ""}"
+        Downloads.FAILED -> "Didn't finish: ${d.error ?: "something went wrong"}. Tap ↻ to try again."
+        else -> d.error ?: buildString {
+            if (d.percent >= 0) append("${d.percent}% · ")
+            append(UrlUtils.formatBytes(d.done))
+            if (d.total > 0) append(" of ").append(UrlUtils.formatBytes(d.total))
+            val speed = d.bytesPerSecond
+            if (speed > 0) append(" · ").append(UrlUtils.formatBytes(speed)).append("/s")
+            append(" · ").append(
+                when (d.peers) {
+                    0 -> "looking for people sharing it"
+                    1 -> "1 peer"
+                    else -> "${d.peers} peers"
+                },
+            )
+            if (speed > 0 && d.total > d.done) append(" · ").append(duration((d.total - d.done) / speed)).append(" left")
+        }
+    }
+
+    private fun openTorrentItem(d: Downloads.Item) {
+        val main = com.swiftbrowser.torrent.Torrents.mainFile(d)
+        val folder = File(d.filePath)
+        when {
+            main != null && main.exists() && PlayerActivity.kindOf(main.name) != null -> PlayerActivity.open(this, main)
+            folder.isDirectory -> FilesActivity.open(this, folder)
+            main != null && main.exists() -> FilesActivity.open(this, main.parentFile ?: return)
+            else -> Messages.show(this, "The files aren't there any more")
+        }
+    }
+
+    private fun torrentMenu(d: Downloads.Item) {
+        val done = d.status == Downloads.DONE
+        val running = d.status == Downloads.RUNNING || d.status == Downloads.QUEUED
+        val actions = ArrayList<Sheets.Action>()
+        if (done) {
+            val video = isVideo(d)
+            actions += Sheets.Action(if (video) R.drawable.ic_play else R.drawable.ic_open_new, if (video) "Play" else "Open", primary = true) { openTorrentItem(d) }
+            actions += Sheets.Action(R.drawable.ic_folder, "Where", primary = true) { showInFolder(d) }
+        }
+        actions += Sheets.Action(R.drawable.ic_link, "Copy link", primary = true) { copyText(this, d.url) }
+        if (d.extra.optInt("files") > 1) actions += Sheets.Action(R.drawable.ic_check, "Choose the files") { TorrentSheet.chooseFiles(this, d) }
+        if (!running) actions += Sheets.Action(R.drawable.ic_close, "Remove from list (keep the files)") { removeFromList(d, deleteFile = false) }
+        actions += if (running || d.status == Downloads.PAUSED) {
+            Sheets.Action(R.drawable.ic_close, "Cancel download", danger = true) { removeFromList(d, deleteFile = true) }
+        } else {
+            Sheets.Action(R.drawable.ic_delete, "Delete the files", danger = true) { removeFromList(d, deleteFile = true) }
+        }
+        Sheets.actions(this, d.fileName, statusText(d), actions, iconRes = R.drawable.ic_torrent)
     }
 
     override fun onStop() {
@@ -817,8 +1014,8 @@ class DownloadsActivity : ListActivity() {
     private var drawn: List<String> = emptyList()
 
     private fun refresh() {
-        val items = Downloads.all().filter { it.id !in hiddenIds && (query.isEmpty() || it.fileName.contains(query, ignoreCase = true)) }
-        val now = items.map { "${it.status}|${it.done}|${it.total}|${it.fileName}|${it.error}|${it.bytesPerSecond}" }
+        val items = Downloads.all().filter { it.id !in hiddenIds && shown(it) && (query.isEmpty() || it.fileName.contains(query, ignoreCase = true)) }
+        val now = items.map { "${it.status}|${it.done}|${it.total}|${it.fileName}|${it.error}|${it.bytesPerSecond}|${it.peers}" }
         if (items.size == adapter.items.size && items.indices.all { items[it] === adapter.items[it] }) {
             for (i in now.indices) if (now[i] != drawn.getOrNull(i)) adapter.notifyItemChanged(i)
         } else {
@@ -827,6 +1024,10 @@ class DownloadsActivity : ListActivity() {
         drawn = now
         if (query.isNotEmpty()) {
             showEmpty(items.isEmpty(), "Nothing found", "No download has \"$query\" in its name.", R.drawable.ic_search)
+        } else if (filter == FILTER_TORRENTS) {
+            showEmpty(items.isEmpty(), "No torrents yet", "Tap a magnet link on a site, or open a .torrent file, and it downloads here.", R.drawable.ic_torrent)
+        } else if (filter != 0) {
+            showEmpty(items.isEmpty(), "Nothing here", "No download of this kind yet.", R.drawable.ic_download)
         } else {
             showEmpty(
                 items.isEmpty(), "No downloads yet",
@@ -891,6 +1092,7 @@ class DownloadsActivity : ListActivity() {
             val video = d.kind == Downloads.KIND_HLS || mime.startsWith("video")
             h.icon.setImageResource(
                 when {
+                    d.kind == Downloads.KIND_TORRENT -> R.drawable.ic_torrent
                     video -> R.drawable.ic_movie
                     mime.startsWith("image") -> R.drawable.ic_image
                     mime.startsWith("audio") -> R.drawable.ic_headphones
@@ -948,7 +1150,7 @@ class DownloadsActivity : ListActivity() {
         }
     }
 
-    private fun statusText(d: Downloads.Item): String = when (d.status) {
+    private fun statusText(d: Downloads.Item): String = if (d.kind == Downloads.KIND_TORRENT) torrentStatus(d) else when (d.status) {
         Downloads.DONE -> listOfNotNull(
             com.swiftbrowser.docs.Docs.kindOf(d.fileName, d.mime)?.label, UrlUtils.formatBytes(d.done), dateText(d.created),
         ).joinToString(" · ")
@@ -965,6 +1167,10 @@ class DownloadsActivity : ListActivity() {
     }
 
     private fun open(d: Downloads.Item) {
+        if (d.kind == Downloads.KIND_TORRENT) {
+            openTorrentItem(d)
+            return
+        }
         if (VpnUi.isSetupFile(d)) {
             VpnUi.addDownloaded(this, d)
             return
@@ -1005,6 +1211,10 @@ class DownloadsActivity : ListActivity() {
     }
 
     private fun menu(d: Downloads.Item) {
+        if (d.kind == Downloads.KIND_TORRENT) {
+            torrentMenu(d)
+            return
+        }
         val done = d.status == Downloads.DONE
         val running = d.status == Downloads.RUNNING || d.status == Downloads.QUEUED || d.status == Downloads.CONVERTING
         val actions = ArrayList<Sheets.Action>()
@@ -1033,7 +1243,8 @@ class DownloadsActivity : ListActivity() {
 
     /** Opens the phone's file manager at the download's folder, or says where it is. */
     private fun showInFolder(d: Downloads.Item) {
-        val dir = File(d.filePath).parentFile ?: return
+        // A torrent of several files is a folder of its own: there.
+        val dir = File(d.filePath).takeIf { d.kind == Downloads.KIND_TORRENT && it.isDirectory } ?: File(d.filePath).parentFile ?: return
         // 2.7: in Swift's own Files screen.
         if (dir.isDirectory) {
             FilesActivity.open(this, dir)
@@ -1047,6 +1258,15 @@ class DownloadsActivity : ListActivity() {
     }
 
     companion object {
+        private val FILTERS = listOf("All", "Videos", "Torrents", "Files")
+        private const val FILTER_VIDEOS = 1
+        private const val FILTER_TORRENTS = 2
+        private const val FILTER_FILES = 3
+        private const val MAX_TORRENT_FILE = 20 * 1024 * 1024
+
+        /** The copied magnet link the user said "not now" to (until another is copied). */
+        private var dismissedMagnet: String? = null
+
         fun openFileIntent(ctx: Context, d: Downloads.Item): Intent? {
             val file = File(d.filePath)
             if (!file.exists()) return null

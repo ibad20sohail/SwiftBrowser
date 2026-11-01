@@ -69,6 +69,9 @@ object Cleaner {
         "notifications", "pictures", "podcasts", "recordings", "ringtones",
     )
 
+    /** libtorrent's file of a torrent's pieces that belong to files not chosen (".<info hash>.parts"). */
+    private val TORRENT_PARTS = Regex("""\.([0-9a-fA-F]{40})\.parts""")
+
     /** Folders the camera and screenshots write to, wherever they are: kept even when empty. */
     private val KEEP = setOf("camera", "screenshots")
 
@@ -85,6 +88,13 @@ object Cleaner {
             if (name.startsWith(".")) {
                 // Unfinished copies Swift left (a copy that failed while replacing a file, an upload cut off).
                 if (name.startsWith(".swift-") && name.endsWith(".part")) leftovers += Found(f, f.length(), f.lastModified(), false, "An unfinished copy", -1, true)
+                // 2.9.2: pieces a torrent kept for files that weren't chosen, once it is finished or gone.
+                TORRENT_PARTS.matchEntire(name)?.let { m ->
+                    val item = com.swiftbrowser.download.Downloads.findTorrent(m.groupValues[1])
+                    if (item == null || item.status == com.swiftbrowser.download.Downloads.DONE) {
+                        leftovers += Found(f, f.length(), f.lastModified(), false, "Left over from a torrent", -1, true)
+                    }
+                }
                 return
             }
             progress.files++
@@ -141,6 +151,7 @@ object Cleaner {
             File(ctx.cacheDir, "doc_thumbs") to "Pictures of documents",
             File(ctx.cacheDir, "docs/archive") to "Files opened from archives",
             File(ctx.cacheDir, "docs/share") to "Copies made for sharing",
+            File(ctx.cacheDir, "torrent-fetch") to "Torrent file lists",
         ) + ctx.externalCacheDirs.filterNotNull().map { it to "Swift's cache on " + (if (Volumes.isCard(ctx, it)) "the SD card" else "the phone's storage") }
         for ((dir, label) in own) {
             if (!dir.isDirectory) continue

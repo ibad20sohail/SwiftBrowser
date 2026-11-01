@@ -989,7 +989,8 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         when (kind) {
             PlayerGestures.BRIGHTNESS -> swipeFrom = brightness()
             PlayerGestures.VOLUME -> {
-                swipeFrom = audio.getStreamVolume(AudioManager.STREAM_MUSIC).toFloat()
+                val max = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+                swipeFrom = audio.getStreamVolume(AudioManager.STREAM_MUSIC) + LocalPlayback.boost * max
                 lastVolume = -1
             }
             PlayerGestures.SEEK -> {
@@ -1010,7 +1011,9 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
             }
             PlayerGestures.VOLUME -> {
                 val max = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
-                val v = (swipeFrom + amount * max * 1.2f).roundToInt().coerceIn(0, max)
+                // 2.9.2: past the phone's loudest the swipe goes on into the boost, up to 200%.
+                val at = (swipeFrom + amount * max * 1.2f).coerceIn(0f, max * 2f)
+                val v = at.roundToInt().coerceIn(0, max)
                 if (v != lastVolume) {
                     lastVolume = v
                     try {
@@ -1019,7 +1022,13 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
                         L.w("Player: volume not allowed", e)
                     }
                 }
-                showHud(R.drawable.ic_volume, "Volume", if (v == 0) "Off" else "${v * 100 / max}%", v.toFloat() / max)
+                val boost = ((at - max) / max).coerceIn(0f, 1f)
+                if (abs(boost - LocalPlayback.boost) >= 0.02f || (boost == 0f) != (LocalPlayback.boost == 0f)) LocalPlayback.setBoost(boost)
+                if (boost > 0f) {
+                    showHud(R.drawable.ic_volume, "Volume boost", "${100 + (boost * 100).roundToInt()}%", boost)
+                } else {
+                    showHud(R.drawable.ic_volume, "Volume", if (v == 0) "Off" else "${v * 100 / max}%", v.toFloat() / max)
+                }
             }
             PlayerGestures.SEEK -> {
                 val p = player ?: return
@@ -1168,6 +1177,7 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
             actions += Sheets.Action(R.drawable.ic_headphones, if (LocalPlayback.background) "Stop playing in background" else "Play in background", primary = true) { toggleBackground() }
             actions += Sheets.Action(if (p.repeatMode == Player.REPEAT_MODE_ONE) R.drawable.ic_repeat_one else R.drawable.ic_repeat, "Repeat: ${repeatLabel(p.repeatMode)}") { nextRepeat() }
         }
+        if (videoMode && !e.incognito) actions += Sheets.Action(R.drawable.ic_image, "Screenshot") { screenshot() }
         if (n > 1) actions += Sheets.Action(R.drawable.ic_view_list, "Playlist") { playlistSheet() }
         actions += Sheets.Action(R.drawable.ic_reopen, "Open with another app") { openWith() }
         if (f != null) {
@@ -1179,6 +1189,63 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         }
         actions += Sheets.Action(R.drawable.ic_info, "Details") { details() }
         Sheets.actions(this, e.title, sub, actions, icon = if (videoMode || e.incognito) null else LocalPlayback.smallArt, iconRes = if (videoMode) R.drawable.ic_movie else R.drawable.ic_music_note)
+    }
+
+    /** 2.9.2: the picture on screen, saved in Pictures › Swift (the video's own size, up to 1920 wide). */
+    private fun screenshot() {
+        val p = player ?: return
+        val size = p.videoSize
+        if (size.width <= 0 || size.height <= 0) {
+            say("There's no picture to save yet")
+            return
+        }
+        // As it looks: some videos' pixels aren't square.
+        val wide = size.width * size.pixelWidthHeightRatio
+        val scale = minOf(1f, 1920f / wide)
+        val w = (wide * scale).roundToInt().coerceAtLeast(1)
+        val h = (size.height * scale).roundToInt().coerceAtLeast(1)
+        val bitmap = try {
+            android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888)
+        } catch (e: OutOfMemoryError) {
+            say("Not enough memory for a screenshot")
+            return
+        }
+        val title = LocalPlayback.current?.title ?: "Video"
+        val at = time(p.currentPosition).replace(':', '.')
+        try {
+            android.view.PixelCopy.request(surface, bitmap, { result ->
+                if (result != android.view.PixelCopy.SUCCESS) {
+                    bitmap.recycle()
+                    say("Couldn't take a screenshot of this video")
+                    return@request
+                }
+                LocalPlayback.io.execute {
+                    val saved = try {
+                        @Suppress("DEPRECATION")
+                        val dir = File(android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_PICTURES), "Swift").apply { mkdirs() }
+                        var f = File(dir, UrlUtils.sanitizeFileName("$title $at") + ".jpg")
+                        var k = 2
+                        while (f.exists()) f = File(dir, UrlUtils.sanitizeFileName("$title $at ($k)") + ".jpg").also { k++ }
+                        f.outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 92, it) }
+                        android.media.MediaScannerConnection.scanFile(applicationContext, arrayOf(f.path), arrayOf("image/jpeg"), null)
+                        f
+                    } catch (e: Exception) {
+                        L.w("Player: saving a screenshot", e)
+                        null
+                    } finally {
+                        bitmap.recycle()
+                    }
+                    handler.post {
+                        if (isDestroyed) return@post
+                        if (saved == null) say("Couldn't save the screenshot") else say("Saved in Pictures › Swift", "Show") { MediaViewerActivity.open(this, saved) }
+                    }
+                }
+            }, handler)
+        } catch (e: Exception) {
+            bitmap.recycle()
+            L.w("Player: screenshot", e)
+            say("Couldn't take a screenshot of this video")
+        }
     }
 
     private fun speedSheet() {
@@ -1319,8 +1386,10 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         if (!e.video) return
         val token = subToken
         LocalPlayback.io.execute {
-            val found = Subtitles.besideVideo(f)
-            val first = found.firstOrNull()?.let { Subtitles.read(it) }
+            val beside = Subtitles.besideVideo(f)
+            // 2.9.2: also a torrent's Subs folder; from there only an English file shows by itself.
+            val found = beside + Subtitles.inSubsFolder(f)
+            val first = (beside.firstOrNull() ?: found.firstOrNull { Subtitles.isEnglish(it) })?.let { Subtitles.read(it) }
             handler.post {
                 if (token != subToken || isDestroyed) return@post
                 subFiles = found
@@ -1456,6 +1525,16 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
             PlayerSettings.subtitleSize = sizes[i]
             applySubtitleSize()
         })
+        col.addView(Sheets.label(this, "Colour", top = 16))
+        col.addView(Sheets.chipRow(this, PlayerSettings.SUBTITLE_COLOURS.map { it.first }, PlayerSettings.subtitleColour) { i ->
+            PlayerSettings.subtitleColour = i
+            applySubtitleSize()
+        })
+        col.addView(Sheets.label(this, "Background", top = 16))
+        col.addView(Sheets.chipRow(this, PlayerSettings.SUBTITLE_BACKGROUNDS, PlayerSettings.subtitleBackground) { i ->
+            PlayerSettings.subtitleBackground = i
+            applySubtitleSize()
+        })
         col.addView(Sheets.label(this, "Timing", top = 16))
         col.addView(delayRow(subFile != null))
         col.addView(Sheets.note(this, if (subFile != null) "Earlier if the words come after the voices, later if they come before." else "Timing can be changed for subtitle files. The video's own subtitles keep its timing."))
@@ -1524,6 +1603,16 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
     private fun applySubtitleSize() {
         val landscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
         subtitleText.setTextSize(TypedValue.COMPLEX_UNIT_SP, (if (landscape) 21f else 17f) * PlayerSettings.subtitleSize / 100f)
+        // 2.9.2: their colour, and a box (see-through or dark) or none behind them.
+        subtitleText.setTextColor(PlayerSettings.SUBTITLE_COLOURS[PlayerSettings.subtitleColour].second)
+        val box = when (PlayerSettings.subtitleBackground) {
+            0 -> 0x8C000000.toInt()
+            1 -> 0xE6000000.toInt()
+            else -> 0
+        }
+        subtitleText.background = if (box != 0) Ui.shape(this, box, 6) else null
+        // Without a box, a heavier shadow keeps them readable on a bright picture.
+        subtitleText.setShadowLayer(Ui.dpf(this, if (box == 0) 3.5f else 2f), 0f, 0f, Color.BLACK)
     }
 
     /** Subtitles rise above the controls while they are shown. */
@@ -1594,14 +1683,24 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         if (tracks.isEmpty) return
         if (e === shownEntry && e.video != videoMode) applyMode(e.video)
         if (warnedTracks === e) return
+        // 2.9.2: 10-bit HEVC (small "x265 10bit" films). The phone's decoders say it is beyond them
+        // rather than unsupported, so ExoPlayer tries anyway and the picture stays still: said plainly.
+        val video = tracks.groups.firstOrNull { it.type == C.TRACK_TYPE_VIDEO }?.takeIf { it.length > 0 }?.getTrackFormat(0)
+        if (video != null && tenBit(video) && !tracks.isTypeSupported(C.TRACK_TYPE_VIDEO, false)) {
+            warnedTracks = e
+            L.w("Player: 10-bit HEVC (${video.codecs}) beyond the phone's decoders")
+            say("This video is 10-bit HEVC, which this phone's chip can't play. Look for an x264 or 8-bit version.", action = "Open with", long = true) { openWith() }
+            return
+        }
         val noPicture = tracks.containsType(C.TRACK_TYPE_VIDEO) && !tracks.isTypeSupported(C.TRACK_TYPE_VIDEO, true)
         val noSound = tracks.containsType(C.TRACK_TYPE_AUDIO) && !tracks.isTypeSupported(C.TRACK_TYPE_AUDIO, true)
         if (!noPicture && !noSound) return
         warnedTracks = e
         val type = if (noPicture) C.TRACK_TYPE_VIDEO else C.TRACK_TYPE_AUDIO
-        val codec = tracks.groups.firstOrNull { it.type == type }?.takeIf { it.length > 0 }?.getTrackFormat(0)?.let { codecName(it) }
+        val format = tracks.groups.firstOrNull { it.type == type }?.takeIf { it.length > 0 }?.getTrackFormat(0)
+        val codec = format?.let { codecName(it) }
         val what = if (noPicture) "picture" else "sound"
-        L.w("Player: no decoder for the $what (${codec ?: "unknown"})")
+        L.w("Player: no decoder for the $what (${codec ?: "unknown"}, ${format?.codecs})")
         say("This phone can't play this video's $what" + (codec?.let { " ($it)" } ?: "") + ". Another app may.", action = "Open with", long = true) { openWith() }
     }
 
@@ -1754,13 +1853,18 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
                 abs(rate - rate.roundToInt()) < 0.01f -> ", ${rate.roundToInt()} frames a second"
                 else -> String.format(Locale.US, ", %.3f frames a second", rate)
             }
-            lines += "Picture: ${v.width} × ${v.height}" + (codecName(v)?.let { ", $it" } ?: "") + fps
+            lines += "Picture: ${v.width} × ${v.height}" + (codecName(v)?.let { ", $it" } ?: "") + (if (tenBit(v)) " 10-bit" else "") + fps
         }
         p.audioFormat?.let { a ->
             lines += "Sound: " + listOfNotNull(codecName(a), channels(a.channelCount), if (a.sampleRate > 0) "${a.sampleRate / 1000.0} kHz".replace(".0 ", " ") else null).joinToString(", ")
         }
         Dialogs.info(this, e.title, lines.joinToString("\n").ifBlank { "Nothing more is known about it." })
     }
+
+    /** HEVC in 10 bits (Main 10 profile, "hvc1.2…"), which phones of this age can't decode. */
+    private fun tenBit(f: Format): Boolean =
+        f.sampleMimeType == MimeTypes.VIDEO_H265 &&
+            (f.codecs?.let { it.startsWith("hvc1.2") || it.startsWith("hev1.2") } == true || f.colorInfo?.lumaBitdepth == 10)
 
     private fun trackName(f: Format, n: Int, fallback: String): String {
         val parts = ArrayList<String>()
@@ -1911,6 +2015,10 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
             in SOUNDS -> Kind.AUDIO
             else -> null
         }
+
+        /** 2.9.2: what plays [file] from outside an activity (a finished download's Play). */
+        fun intentFor(ctx: Context, file: File): Intent =
+            Intent(ctx, PlayerActivity::class.java).setAction(ACTION_PLAY_FILE).putExtra(EXTRA_PATH, file.path).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
 
         /** Plays [file] (a video or song on the phone); the others of its folder are the playlist. */
         fun open(from: Context, file: File) {

@@ -58,6 +58,8 @@ class SwiftApp : Application() {
         com.swiftbrowser.engine.Power.init(this)
         com.swiftbrowser.vpn.Vpn.onAppStart(this)
         com.swiftbrowser.vpn.VpnTileService.watch(this)
+        // 2.9.2: torrents, run with the rules above (the VPN, mobile data, the battery).
+        com.swiftbrowser.torrent.Torrents.init(this)
         com.swiftbrowser.core.Health.init(this)
         L.d(
             "Swift ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) started on ${android.os.Build.MANUFACTURER} " +

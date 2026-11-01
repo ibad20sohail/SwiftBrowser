@@ -5,7 +5,7 @@ ad-heavy sites on an old phone (Moto E4, Android 7.1.2).
 
 ## Download
 
-**[Download Swift 2.9.1 (APK)](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v2.9.1/Swift-2.9.1.apk)**
+**[Download Swift 2.9.2 (APK)](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v2.9.2/Swift-2.9.2.apk)**
 for Android 7 and newer (32-bit ARM, about 150 MB). It installs over an earlier Swift and keeps
 tabs and settings. From 1.4 on, Swift can also update itself: Settings → Check for updates.
 
@@ -30,6 +30,20 @@ ones, and a short welcome on the first start.
 - **Night light** (2.3, Settings → Look & screen): a warm layer over Swift, pages and videos too,
   from 7 pm to 7 am or always, in three strengths. Taps go through it.
 
+- **New in 2.9.2**:
+  - **Torrents** (libtorrent): magnet links on pages, .torrent files and "Open with Swift" open a panel
+    with the torrent's files (junk such as samples, .txt and .exe unticked, a warning for Windows
+    programs and 10-bit videos, a free space check). They download in Downloads with progress,
+    speed, peers and time left, go on after a restart, and stop sharing once complete. They pause
+    while Swift's VPN is on (Proton's free servers refuse torrents), wait for Wi-Fi (at first),
+    pause on low battery and when storage runs out. Settings → Video & downloads → Torrents: how
+    many at once, speed limits, Wi-Fi only, only while charging, at night only, extra trackers.
+  - **Downloads**: filters (All, Videos, Torrents, Files), a card for a copied magnet link, Pause all
+    and Play in the notifications, and the phone stays awake while something downloads.
+  - **Player**: Dolby (AC-3, E-AC-3, TrueHD) and DTS sound through FFmpeg; a clear message for 10-bit
+    HEVC videos; volume boost up to 200%; subtitle colour and background; screenshots; subtitles
+    from a Subs folder next to the video.
+  - **Files**: Free up space also lists what torrents leave behind.
 - **New in 2.9.1**:
   - **Files**: the search box and the folder path scroll away with the list (more room for files);
     they come back at the top of the list, and stay put in an empty or short folder.

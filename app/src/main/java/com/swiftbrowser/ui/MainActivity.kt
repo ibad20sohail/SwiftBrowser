@@ -2653,8 +2653,39 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         }
     }
 
+    private fun torrentAdded() = snack("Added to your downloads", "View") { openDownloads() }
+
+    /** A .torrent file a page sent: read (it is small), then its panel. */
+    private fun readTorrent(tab: Tab, response: WebResponse) {
+        lifecycleScope.launch {
+            val bytes = withContext(Dispatchers.IO) {
+                runCatching {
+                    response.body?.use { input ->
+                        val out = java.io.ByteArrayOutputStream()
+                        val buf = ByteArray(64 * 1024)
+                        while (true) {
+                            val n = input.read(buf)
+                            if (n < 0) break
+                            out.write(buf, 0, n)
+                            // No torrent file is this big: something else.
+                            if (out.size() > 20 * 1024 * 1024) return@use null
+                        }
+                        out.toByteArray()
+                    }
+                }.getOrNull()
+            }
+            closeIfOnlyDownload(tab, response.uri)
+            if (bytes == null) snack("Couldn't read this torrent file") else TorrentSheet.file(this@MainActivity, bytes) { torrentAdded() }
+        }
+    }
+
     override fun onExternalApp(tab: Tab, url: String) {
         if (tab !== current) return
+        // 2.9.2: magnet links are torrents, which Swift downloads itself.
+        if (url.startsWith("magnet:", ignoreCase = true)) {
+            TorrentSheet.magnet(this, url) { torrentAdded() }
+            return
+        }
         val intent = try {
             if (url.startsWith("intent:")) Intent.parseUri(url, Intent.URI_INTENT_SCHEME) else Intent(Intent.ACTION_VIEW, Uri.parse(url))
         } catch (e: Exception) {
@@ -2692,6 +2723,11 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         val mime = response.headers["Content-Type"]?.substringBefore(';')?.trim()
         val name = UrlUtils.fileName(response.uri, disposition, mime)
         val size = response.headers["Content-Length"]?.toLongOrNull() ?: -1
+        // 2.9.2: a .torrent file opens the torrent panel instead of being saved.
+        if (mime == "application/x-bittorrent" || name.endsWith(".torrent", ignoreCase = true)) {
+            readTorrent(tab, response)
+            return
+        }
         val start = {
             withStorage {
                 Downloads.startFromResponse(tab.profileId, response, name, mime, tab.url, tab.incognito)

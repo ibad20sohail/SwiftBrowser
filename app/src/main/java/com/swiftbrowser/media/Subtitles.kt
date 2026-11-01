@@ -64,7 +64,8 @@ object Subtitles {
 
     /**
      * Subtitle files next to [video] named like it ("Film.srt", "Film.en.srt"), the exact name
-     * first. Reads the folder: call it off the main thread.
+     * first, then English ones (2.9.2: not "Film.de.srt" for being first in the alphabet). Reads the
+     * folder: call it off the main thread.
      */
     fun besideVideo(video: File): List<File> {
         val base = video.nameWithoutExtension
@@ -72,7 +73,37 @@ object Subtitles {
         return files.filter { f ->
             f.isFile && f.extension.lowercase(Locale.ROOT) in EXTENSIONS &&
                 (f.nameWithoutExtension.equals(base, ignoreCase = true) || f.name.startsWith("$base.", ignoreCase = true))
-        }.sortedWith(compareBy<File>({ !it.nameWithoutExtension.equals(base, ignoreCase = true) }, { it.name.lowercase(Locale.ROOT) }))
+        }.sortedWith(compareBy<File>({ !it.nameWithoutExtension.equals(base, ignoreCase = true) }, { !isEnglish(it) }, { it.name.lowercase(Locale.ROOT) }))
+    }
+
+    private val SUB_FOLDERS = setOf("subs", "sub", "subtitles", "subtitle")
+    private val ENGLISH = Regex("(?i)(^|[^a-z])(en|eng|english)([^a-z]|$)")
+
+    /** An English subtitle file, by its name ("2_English.srt", "Film.en.srt"). */
+    fun isEnglish(f: File) = ENGLISH.containsMatchIn(f.nameWithoutExtension)
+
+    /**
+     * 2.9.2: subtitle files in a Subs (or Subtitles) folder next to [video], the way torrents pack
+     * them: the video's own folder in it ("Subs/Show.S01E01/2_English.srt"), files named like the
+     * video, or, for the only video of its folder, all of them. English first. Reads folders: call it
+     * off the main thread.
+     */
+    fun inSubsFolder(video: File): List<File> {
+        val base = video.nameWithoutExtension
+        val files = video.parentFile?.listFiles() ?: return emptyList()
+        val folders = files.filter { it.isDirectory && it.name.lowercase(Locale.ROOT) in SUB_FOLDERS }
+        if (folders.isEmpty()) return emptyList()
+        val alone = files.count { it.isFile && com.swiftbrowser.ui.PlayerActivity.kindOf(it.name) == com.swiftbrowser.ui.PlayerActivity.Kind.VIDEO } <= 1
+        fun subtitle(f: File) = f.isFile && f.extension.lowercase(Locale.ROOT) in EXTENSIONS
+        val out = ArrayList<File>()
+        for (d in folders) {
+            val inside = d.listFiles() ?: continue
+            inside.firstOrNull { it.isDirectory && it.name.equals(base, ignoreCase = true) }?.listFiles()?.filter(::subtitle)?.let { out += it }
+            val loose = inside.filter(::subtitle)
+            val named = loose.filter { it.nameWithoutExtension.equals(base, ignoreCase = true) || it.name.startsWith("$base.", ignoreCase = true) }
+            out += if (named.isNotEmpty()) named else if (alone) loose else emptyList()
+        }
+        return out.distinct().sortedWith(compareBy<File>({ !isEnglish(it) }, { it.name.lowercase(Locale.ROOT) }))
     }
 
     /** Reads subtitle file [f]. Blocking. Null if it isn't one Swift can read. */

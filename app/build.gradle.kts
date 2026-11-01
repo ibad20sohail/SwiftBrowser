@@ -21,8 +21,8 @@ android {
         applicationId = "com.swiftbrowser.app"
         minSdk = 24
         targetSdk = 35
-        versionCode = 20
-        versionName = "2.9.1"
+        versionCode = 21
+        versionName = "2.9.2"
     }
 
     flavorDimensions += "abi"
@@ -154,6 +154,18 @@ dependencies {
     val media3 = "1.11.1"
     implementation("androidx.media3:media3-exoplayer:$media3")
     implementation("androidx.media3:media3-exoplayer-hls:$media3")
+    // Dolby (AC-3, E-AC-3, TrueHD) and DTS sound in films (2.9.2), which the phone has no decoders
+    // for: Media3's FFmpeg audio decoder as Jellyfin builds it (FFmpeg 6.0, audio decoders only,
+    // Android 6+). It's made for Media3 1.9 but only calls what 1.11 still has (checked class by
+    // class); it brings no Java of its own beyond the decoder. Gradle uses Media3 1.11 for both.
+    implementation("org.jellyfin.media3:media3-ffmpeg-decoder:1.9.0+1")
+    // 2.9.2: torrents (Torrents) with libtorrent, the C++ engine of qBittorrent and Deluge, through
+    // libtorrent4j (MIT). 2.1.0-38 is the newest build whose native library runs on Android 7: from
+    // 2.1.0-39 on it is built for Android 9 (API 28). The native part comes per ABI, like the flavors.
+    val libtorrent4j = "2.1.0-38"
+    implementation("org.libtorrent4j:libtorrent4j:$libtorrent4j")
+    "phoneImplementation"("org.libtorrent4j:libtorrent4j-android-arm:$libtorrent4j")
+    "emuImplementation"("org.libtorrent4j:libtorrent4j-android-x86_64:$libtorrent4j")
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
 
     // Reports leaked screens and objects in test builds on the PC emulator only.

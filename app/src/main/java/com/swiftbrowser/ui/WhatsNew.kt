@@ -24,6 +24,10 @@ object WhatsNew {
     private class Item(val icon: Int, val title: String, val text: String, val version: Int = 19)
 
     private val NEW = listOf(
+        Item(R.drawable.ic_torrent, "Torrents", "Tap a magnet link or open a .torrent file, choose its files (junk is left unticked) and it downloads in Downloads. Torrents pause while Swift's VPN is on and stop sharing once they are done.", version = 21),
+        Item(R.drawable.ic_volume, "Dolby and DTS sound", "Films with Dolby or DTS sound now play with sound in Swift's player. A 10-bit HEVC video, which this phone can't play, says so.", version = 21),
+        Item(R.drawable.ic_play, "Player", "Swipe up past the loudest for a volume boost up to 200%. Subtitles in white or yellow, with or without a box, also from a torrent's Subs folder. Screenshots from the ⋮ menu.", version = 21),
+        Item(R.drawable.ic_download, "Downloads", "Filters for videos, torrents and other files, Pause all in the notification, and downloads keep going with the screen off.", version = 21),
         Item(R.drawable.ic_search, "More room in Files", "The search box and the folder path now scroll away with the list. Scroll back to the top to search.", version = 20),
         Item(R.drawable.ic_image, "Cleaner picture viewer", "The buttons under a picture are icons only. Hold one to see its name.", version = 20),
         Item(R.drawable.ic_play, "Media player", "Videos and music from Files play in Swift's own player: swipe for brightness, volume and seeking, speed, subtitles, going on where you stopped, and music in the background."),

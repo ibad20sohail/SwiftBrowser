@@ -38,6 +38,8 @@ import com.swiftbrowser.engine.DataSaver
 import com.swiftbrowser.core.Prefs
 import com.swiftbrowser.files.FilesSettings
 import com.swiftbrowser.media.PlayerSettings
+import com.swiftbrowser.torrent.TorrentSettings
+import com.swiftbrowser.torrent.Torrents
 import com.swiftbrowser.core.Profiles
 import com.swiftbrowser.core.Updates
 import com.swiftbrowser.core.UrlUtils
@@ -887,6 +889,64 @@ class SettingsActivity : AppCompatActivity() {
         def(Topic.VIDEO, "Downloads", "Download folder", "storage location where save sd card") {
             action(R.drawable.ic_folder, "Download folder", { downloadFolderText() }) {
                 if (Downloads.hasStoragePermission(this@SettingsActivity)) chooseDownloadFolder() else askStorageAccess()
+            }
+        }
+
+        // 2.9.2: torrents (TorrentSettings). They always pause while Swift's VPN is on.
+        def(Topic.VIDEO, "Torrents", "Torrents at once", "torrents at once parallel queue magnet") {
+            action(R.drawable.ic_torrent, "Torrents at once", { "${TorrentSettings.atOnce} at a time; the others wait their turn" }) {
+                val choices = TorrentSettings.AT_ONCE_CHOICES
+                choose("Torrents at once", choices.map { if (it == 1) "1 at a time" else "$it at a time" }, choices.indexOf(TorrentSettings.atOnce)) { i ->
+                    TorrentSettings.atOnce = choices[i]
+                    Torrents.applySettings()
+                }
+            }
+        }
+        def(Topic.VIDEO, "Torrents", "Torrent download speed", "torrent download speed limit bandwidth") {
+            action(R.drawable.ic_download, "Download speed", { TorrentSettings.speedLabel(TorrentSettings.downLimitKb) }) {
+                val choices = TorrentSettings.DOWN_CHOICES
+                choose("Torrent download speed", choices.map { TorrentSettings.speedLabel(it) }, choices.indexOf(TorrentSettings.downLimitKb)) { i ->
+                    TorrentSettings.downLimitKb = choices[i]
+                    Torrents.applySettings()
+                }
+            }
+        }
+        def(Topic.VIDEO, "Torrents", "Torrent upload speed", "torrent upload sharing speed limit seeding") {
+            action(R.drawable.ic_share, "Upload speed", { TorrentSettings.speedLabel(TorrentSettings.upLimitKb) + " (only while downloading: sharing stops when it's done)" }) {
+                val choices = TorrentSettings.UP_CHOICES
+                choose("Torrent upload speed", choices.map { TorrentSettings.speedLabel(it) }, choices.indexOf(TorrentSettings.upLimitKb)) { i ->
+                    TorrentSettings.upLimitKb = choices[i]
+                    Torrents.applySettings()
+                }
+            }
+        }
+        def(Topic.VIDEO, "Torrents", "Torrents on Wi-Fi only", "torrent wifi mobile data") {
+            switch(R.drawable.ic_wifi, "Wi-Fi only", { if (TorrentSettings.wifiOnly) "On mobile data torrents wait for Wi-Fi" else "Torrents use mobile data too" }, checked = { TorrentSettings.wifiOnly }) {
+                TorrentSettings.wifiOnly = it
+                Torrents.applySettings()
+            }
+        }
+        def(Topic.VIDEO, "Torrents", "Only while charging", "torrent charging charger battery heat") {
+            switch(R.drawable.ic_battery, "Only while charging", { if (TorrentSettings.chargingOnly) "Torrents wait for the charger" else "Off: torrents run on battery too" }, checked = { TorrentSettings.chargingOnly }) {
+                TorrentSettings.chargingOnly = it
+                Torrents.applySettings()
+            }
+        }
+        def(Topic.VIDEO, "Torrents", "At night only", "torrent night schedule time cheap data") {
+            switch(R.drawable.ic_history, "At night only", { if (TorrentSettings.nightOnly) "Torrents run from 1 am to 7 am" else "Off: torrents run at any time" }, checked = { TorrentSettings.nightOnly }) {
+                TorrentSettings.nightOnly = it
+                Torrents.applySettings()
+            }
+        }
+        def(Topic.VIDEO, "Torrents", "Pause on low battery", "torrent battery low pause") {
+            switch(R.drawable.ic_battery, "Pause on low battery", { "Below 15% unless charging; they go on at 20%" }, checked = { TorrentSettings.batteryPause }) {
+                TorrentSettings.batteryPause = it
+                Torrents.applySettings()
+            }
+        }
+        def(Topic.VIDEO, "Torrents", "Extra trackers", "torrent trackers public peers faster start") {
+            switch(R.drawable.ic_speed, "Extra trackers", { "Well-known public trackers help torrents with few sharers start sooner" }, checked = { TorrentSettings.extraTrackers }) {
+                TorrentSettings.extraTrackers = it
             }
         }
 

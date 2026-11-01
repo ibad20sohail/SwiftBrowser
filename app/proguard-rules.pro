@@ -27,3 +27,8 @@
 # getters of metafile pictures. Swift calls neither: it reads the records' fields. POI needs no
 # keep rules on this path (it creates its records with constructors, not by reflection).
 -dontwarn java.awt.**
+
+# 2.9.2, torrents (libtorrent4j). Its native library calls back into the generated SWIG classes
+# (and looks them up by name), so they keep their names and members.
+-keep class org.libtorrent4j.swig.** { *; }
+-dontwarn org.libtorrent4j.**

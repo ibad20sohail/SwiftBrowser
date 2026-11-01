@@ -6,11 +6,11 @@ import android.content.pm.PackageManager
 import com.swiftbrowser.core.L
 
 /**
- * Documents and Files as icons of their own in the phone's app list (2.7), next to Swift's. They
- * are aliases of those screens (AndroidManifest.xml); Settings can hide them.
+ * Files as an icon of its own in the phone's app list (2.7), next to Swift's: an alias of its
+ * screen (AndroidManifest.xml); Settings can hide it. (2.9: Documents' icon went with its screen.)
  */
 object AppIcons {
-    private val ALIASES = listOf("com.swiftbrowser.ui.DocumentsApp", "com.swiftbrowser.ui.FilesApp")
+    private val ALIASES = listOf("com.swiftbrowser.ui.FilesApp")
 
     fun shown(ctx: Context): Boolean = try {
         ctx.packageManager.getComponentEnabledSetting(ComponentName(ctx.packageName, ALIASES[0])) !=

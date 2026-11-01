@@ -137,6 +137,22 @@ object Downloads {
         com.swiftbrowser.engine.DataSaver.onlineListeners += { retryFailed() }
         // A moment after starting, so the app comes up first.
         main.postDelayed({ schedule() }, 4000)
+        main.postDelayed({ dropMissing() }, 6000)
+    }
+
+    /**
+     * Finished downloads whose file was deleted (in Files, the gallery, another app) leave the list
+     * (2.9): at start and each time the Downloads screen is shown.
+     */
+    fun dropMissing() {
+        scope.launch {
+            val done = synchronized(items) { items.values.filter { it.status == DONE } }
+            val gone = done.filter { !File(it.filePath).exists() }
+            if (gone.isEmpty()) return@launch
+            synchronized(items) { gone.forEach { items.remove(it.id) } }
+            gone.forEach { if (!it.incognito) db.deleteDownload(it.id) }
+            changed(immediate = true)
+        }
     }
 
     fun all(): List<Item> = synchronized(items) { items.values.reversed() }
@@ -208,6 +224,31 @@ object Downloads {
 
     private fun usable(dir: File): Boolean = (dir.isDirectory || dir.mkdirs()) && dir.canWrite()
 
+    /**
+     * Where a new download of [name] goes (2.9): with "Sort downloads into folders", a folder for
+     * its type inside the download folder; anything else stays in the download folder itself.
+     */
+    private fun directoryFor(name: String, mime: String?): File {
+        val dir = directory()
+        if (!prefs.sortDownloads) return dir
+        val ext = name.substringAfterLast('.', "").lowercase(java.util.Locale.ROOT)
+        val type = mime?.substringBefore('/')?.lowercase(java.util.Locale.ROOT)
+        val folder = when {
+            ext == "apk" -> "Apps"
+            type == "video" || ext in VIDEO_EXTS -> "Videos"
+            type == "audio" || ext in AUDIO_EXTS -> "Music"
+            type == "image" || ext in IMAGE_EXTS -> "Pictures"
+            com.swiftbrowser.docs.Docs.kindOf(name, mime) != null && ext != "zip" -> "Documents"
+            else -> return dir
+        }
+        val sub = File(dir, folder)
+        return if (usable(sub)) sub else dir
+    }
+
+    private val VIDEO_EXTS = setOf("mp4", "m4v", "mkv", "webm", "3gp", "mov", "avi", "ts", "flv", "wmv", "m3u8")
+    private val AUDIO_EXTS = setOf("mp3", "m4a", "aac", "ogg", "oga", "opus", "wav", "flac", "amr", "wma")
+    private val IMAGE_EXTS = setOf("jpg", "jpeg", "png", "gif", "webp", "bmp", "heic", "svg")
+
     /** Swift's folder on a removable SD card, if the phone has one (deleted with the app). */
     fun sdCardDirectory(): File? =
         app.getExternalFilesDirs(Environment.DIRECTORY_DOWNLOADS).drop(1).firstOrNull { it != null && Environment.getExternalStorageState(it) == Environment.MEDIA_MOUNTED }
@@ -244,7 +285,8 @@ object Downloads {
         profileId: Long, kind: String, url: String, fileName: String, mime: String?, total: Long,
         headers: Map<String, String>, pageUrl: String?, extra: JSONObject, incognito: Boolean = false,
     ): Item {
-        val file = synchronized(items) { uniqueFile(directory(), UrlUtils.sanitizeFileName(fileName)) }
+        val clean = UrlUtils.sanitizeFileName(fileName)
+        val file = synchronized(items) { uniqueFile(directoryFor(clean, mime), clean) }
         val now = System.currentTimeMillis()
         val id = if (incognito) {
             // Incognito downloads aren't written down (the file itself is kept, as in other browsers).

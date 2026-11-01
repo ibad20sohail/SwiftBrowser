@@ -56,7 +56,12 @@ object FileIndex {
     private const val MEDIA_TYPE = MediaStore.Files.FileColumns.MEDIA_TYPE
     private val PROJECTION = arrayOf(DATA, SIZE, DATE, MEDIA_TYPE)
 
-    private val DOCUMENT_EXTS: List<String> = Docs.Kind.entries.filter { it != Docs.Kind.ZIP }.flatMap { it.extensions }
+    /**
+     * 2.9: Files is where documents are found now (PDF, Word, Excel, PowerPoint, e-books, text):
+     * the settings, logs and subtitles apps leave in shared folders aren't documents to anyone.
+     */
+    private val NOT_DOCUMENTS = setOf("json", "xml", "ini", "cfg", "yaml", "yml", "log", "srt", "vtt", "sub")
+    private val DOCUMENT_EXTS: List<String> = Docs.Kind.entries.filter { it != Docs.Kind.ZIP }.flatMap { it.extensions }.filter { it !in NOT_DOCUMENTS }
     private val ARCHIVE_EXTS = listOf("zip", "7z", "rar", "tar", "tgz", "tbz2", "tbz", "txz", "gz", "bz2", "xz")
 
     /** Settings and logs that apps leave in shared folders: not what anyone means by recent files. */
@@ -142,21 +147,24 @@ object FileIndex {
         val totals = HashMap<Category, LongArray>()
         val recent = ArrayList<FileItem>()
         val now = System.currentTimeMillis()
+        val gone = ArrayList<String>()
         val (selection, args) = selectionFor(Category.shown)
         query(ctx, selection, args) { path, size, time, mediaType ->
             if (skip(path)) return@query true
             val name = path.substringAfterLast('/')
             val cat = categoryOf(name, mediaType) ?: return@query true
+            if (cat == Category.DOCUMENTS && FileKind.extension(name) in NOT_DOCUMENTS) return@query true
             totals.getOrPut(cat) { LongArray(2) }.let {
                 it[0]++
                 it[1] += size.coerceAtLeast(0)
             }
             // A file dated in the future (a wrong clock somewhere) would stay at the top for good.
             if (recent.size < RECENT_MAX && time <= now + DAY && FileKind.extension(name) !in NOT_RECENT) {
-                stillThere(ctx, path, name, size)?.let { recent += it }
+                stillThere(ctx, path, name, size, gone)?.let { recent += it }
             }
             !stop()
         }
+        FileOps.forgetPaths(ctx, gone)
         var count = 0L
         var bytes = 0L
         for (f in downloadFiles(LIST_MAX, stop)) {
@@ -167,11 +175,18 @@ object FileIndex {
         return Overview(totals.mapValues { (_, v) -> Summary(v[0].toInt(), v[1]) }, recent)
     }
 
-    /** A file the index knows, if it is still there (the index may not know yet that it went). */
-    private fun stillThere(ctx: Context, path: String, name: String, size: Long): FileItem? {
+    /**
+     * A file the index knows, if it is still there (the index may not know yet that it went). 2.9: one
+     * that went is added to [gone], for the index to forget (only on a storage that is in: a card taken
+     * out comes back as it was).
+     */
+    private fun stillThere(ctx: Context, path: String, name: String, size: Long, gone: MutableList<String>): FileItem? {
         val f = File(path)
         val t = f.lastModified()
-        if (t <= 0L) return null
+        if (t <= 0L) {
+            if (Volumes.of(ctx, f) != null) gone += path
+            return null
+        }
         return FileItem(f, name, false, size, t, -1, FileKind.of(name), placeOf(ctx, f.parentFile))
     }
 
@@ -181,6 +196,7 @@ object FileIndex {
             return downloadFiles(LIST_MAX, stop).map { FileItem.of(it, where = placeOf(ctx, it.parentFile)) }.sortedByDescending { it.time }
         }
         val out = ArrayList<FileItem>()
+        val gone = ArrayList<String>()
         val now = System.currentTimeMillis()
         val recentOnly = cat == Category.RECENT
         val (selection, args) = selectionFor(if (recentOnly) Category.shown else listOf(cat))
@@ -190,13 +206,14 @@ object FileIndex {
             val kind = categoryOf(name, mediaType)
             if (recentOnly) {
                 if (kind == null || time > now + DAY || FileKind.extension(name) in NOT_RECENT) return@query true
-            } else if (kind != cat) {
+            } else if (kind != cat || (cat == Category.DOCUMENTS && FileKind.extension(name) in NOT_DOCUMENTS)) {
                 return@query true
             }
             // Its date read from the file itself also tells that it is still there.
-            stillThere(ctx, path, name, size)?.let { out += it }
+            stillThere(ctx, path, name, size, gone)?.let { out += it }
             out.size < (if (recentOnly) RECENT_MAX else LIST_MAX) && !stop()
         }
+        FileOps.forgetPaths(ctx, gone)
         return out
     }
 

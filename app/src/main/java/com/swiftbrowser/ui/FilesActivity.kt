@@ -45,8 +45,10 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.swiftbrowser.R
 import com.swiftbrowser.SwiftApp
 import com.swiftbrowser.core.L
+import com.swiftbrowser.core.Profiles
 import com.swiftbrowser.core.UrlUtils
 import com.swiftbrowser.docs.DocIcon
+import com.swiftbrowser.docs.DocThumbs
 import com.swiftbrowser.docs.Docs
 import com.swiftbrowser.download.Downloads
 import com.swiftbrowser.files.Archives
@@ -59,7 +61,10 @@ import com.swiftbrowser.files.FileOpener
 import com.swiftbrowser.files.FileOps
 import com.swiftbrowser.files.FileProblem
 import com.swiftbrowser.files.FileThumbs
+import com.swiftbrowser.files.FilesSettings
 import com.swiftbrowser.files.PlainAccess
+import com.swiftbrowser.files.PrivateFolder
+import com.swiftbrowser.files.RecycleBin
 import com.swiftbrowser.files.Transfers
 import com.swiftbrowser.files.Volumes
 import kotlinx.coroutines.CancellationException
@@ -88,6 +93,14 @@ import java.util.Locale
  * with their pictures; selected rows and tiles show a tick; the top keeps two buttons (the rest is
  * under ⋮), so the folder's name fits. Back goes one step at a time: a search, the selection, an
  * archive, up a folder to the top of the storage, the start page, then out of Files.
+ *
+ * 2.9: Delete moves things to the recycle bin (RecycleBin), with Undo; the bin is a place of its
+ * own, with Restore and Delete forever. Private (PrivateFolder) is a folder inside Swift that opens
+ * with the screen lock or a PIN and locks when Files is left. The start page gets recent documents
+ * (Files is where documents are found now), and tools: Free up space (CleanerActivity), the
+ * recycle bin, Private and Wi-Fi transfer (WifiTransferActivity). Options are in FilesSettings
+ * (also in Swift's Settings), read again each time Files shows. Places slide in from the side
+ * they're reached from, and deleted rows close up.
  */
 class FilesActivity : ListActivity() {
     /** A row: a file or folder on the phone ([file]) or in the archive being looked at ([entry]). */
@@ -119,8 +132,35 @@ class FilesActivity : ListActivity() {
     /** The start page's categories, with their numbers once counted. */
     private class CategoryGrid(val counts: Map<FileIndex.Category, FileIndex.Summary>?)
 
+    /** 2.9: the Documents category's kinds to pick from (All, PDF, Word…), [chosen] being the one on show. */
+    private class DocFilter(val labels: List<String>, val chosen: Int)
+
+    /** Documents' kinds as people name them, each with the viewer's kinds it covers. */
+    private enum class DocGroup(val label: String, val kinds: Set<Docs.Kind>) {
+        PDF("PDF", setOf(Docs.Kind.PDF)),
+        WORD("Word", setOf(Docs.Kind.WORD, Docs.Kind.OLD_WORD, Docs.Kind.ODT, Docs.Kind.RTF)),
+        EXCEL("Excel", setOf(Docs.Kind.SHEET)),
+        POWERPOINT("PowerPoint", setOf(Docs.Kind.SLIDES, Docs.Kind.OLD_SLIDES, Docs.Kind.ODP)),
+        EBOOK("E-books", setOf(Docs.Kind.EPUB)),
+        TEXT("Text", setOf(Docs.Kind.TEXT)),
+    }
+
     /** A line of help on the start page. */
     private class Hint(val text: String)
+
+    /** The start page's tools (2.9). */
+    private enum class Tool(val label: String, val icon: Int) {
+        CLEAN("Free up space", R.drawable.ic_files_clean),
+        BIN("Recycle bin", R.drawable.ic_files_bin),
+        PRIVATE("Private", R.drawable.ic_lock),
+        TRANSFER("Wi-Fi transfer", R.drawable.ic_files_transfer),
+    }
+
+    /** The tools' cards, with what the recycle bin holds once counted. */
+    private class ToolGrid(val bin: RecycleBin.Summary?)
+
+    /** 2.9: the documents opened in Swift lately, as small cards with their first page. */
+    private class RecentDocs(val docs: List<Docs.Doc>)
 
     /** What the start page shows ([counts] and [recent] come a moment after the rest). */
     private class HomeData(
@@ -128,15 +168,45 @@ class FilesActivity : ListActivity() {
         val favourites: List<Row>,
         val counts: Map<FileIndex.Category, FileIndex.Summary>?,
         val recent: List<Row>?,
+        val bin: RecycleBin.Summary?,
+        val docs: List<Docs.Doc>,
     )
 
     private val sp get() = SwiftApp.prefs.sp
-    private val sort get() = sp.getInt(PREF_SORT, FileOps.SORT_NAME)
-    private val categorySort get() = sp.getInt(PREF_CATEGORY_SORT, FileOps.SORT_DATE)
-    private val showHidden get() = sp.getBoolean(PREF_HIDDEN, false)
+
+    // 2.9: Files' options live in FilesSettings (Swift's Settings changes them too), read as they are now.
+    private val sort get() = FilesSettings.sort
+    private val categorySort get() = FilesSettings.categorySort
+    private val showHidden get() = FilesSettings.showHidden
 
     /** Tiles instead of rows (2.8), remembered. */
     private var grid = false
+
+    /** Small pictures in the lists (2.9: can be turned off in Settings). */
+    private var thumbsOn = true
+
+    /** The options as the list on show used them: another value means Settings changed them meanwhile. */
+    private var settingsShown = ""
+
+    /** The recycle bin's things are on show (2.9). */
+    private var inBin = false
+
+    /** The bin's things by their rows' keys. */
+    private var binItems: Map<String, RecycleBin.Item> = emptyMap()
+
+    /**
+     * Until when leaving Files is for a file of Private's opened in another screen (or Android's lock
+     * question): Private then stays open a minute instead of locking at once. A moment only: a screen
+     * that opens goes over Files straight away.
+     */
+    private var privateGraceUntil = 0L
+
+    private fun keepPrivateOpen() {
+        privateGraceUntil = SystemClock.elapsedRealtime() + 5_000
+    }
+
+    /** What to do once Android's screen-lock question is answered. */
+    private var afterUnlock: (() -> Unit)? = null
 
     /** The start page is on show (an archive opened from it shows over it). */
     private var home = false
@@ -218,37 +288,19 @@ class FilesActivity : ListActivity() {
         if (granted) accessGiven() else render()
     }
 
-    private var afterWrite: (() -> Unit)? = null
-    private val askWrite = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        val run = afterWrite
-        afterWrite = null
-        if (granted) run?.invoke() else say("Swift needs access to your files to change them")
-    }
+    /** Asking Android for the right to change files and the SD card (2.9: shared with the cleaner). */
+    private val changes = ChangeAccess(this) { say(it, long = true) }
 
-    private var cardAsked: Volumes.Volume? = null
-    private var afterCard: (() -> Unit)? = null
-    private var cardTriedPicker = false
-    private val askCard: androidx.activity.result.ActivityResultLauncher<Intent> = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
-        val v = cardAsked ?: return@registerForActivityResult
-        if (r.resultCode == RESULT_OK && Volumes.onAccessResult(this, v, r.data)) {
-            val run = afterCard
-            afterCard = null
+    /** Android's own screen-lock question, before Private opens (2.9). */
+    private val askUnlock = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
+        val run = afterUnlock
+        afterUnlock = null
+        if (r.resultCode == RESULT_OK) {
+            PrivateFolder.unlock()
+            // The screen lock keeps Private now: a PIN chosen while the phone had none isn't needed any more
+            // (one forgotten is reset this way, as "Forgot PIN" says).
+            if (PrivateFolder.hasPin()) PrivateFolder.clearPin()
             run?.invoke()
-        } else if (r.resultCode == RESULT_OK) {
-            afterCard = null
-            Dialogs.info(this, "Choose the SD card itself", "Swift needs the whole SD card, not a folder in it. Try again and pick the card at the top.")
-        } else if (!cardTriedPicker) {
-            // The short question was refused or isn't there: Android's folder picker instead.
-            cardTriedPicker = true
-            try {
-                askCard.launch(Volumes.pickerIntent(v))
-            } catch (_: Exception) {
-                afterCard = null
-                say(Transfers.CARD_TEXT, long = true)
-            }
-        } else {
-            afterCard = null
-            say("Swift can only read the SD card until you allow it to change files there", long = true)
         }
     }
 
@@ -277,41 +329,8 @@ class FilesActivity : ListActivity() {
         }
     }
 
-    /** Runs [action] once Swift may change files (asking Android first if needed). */
-    private fun withWriteAccess(action: () -> Unit) {
-        val granted = ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
-        if (granted || Build.VERSION.SDK_INT > 28) {
-            action()
-        } else {
-            afterWrite = action
-            askWrite.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
-        }
-    }
-
     /** Runs [action] once Swift may change [files] (on an SD card, Android is asked once, for good). */
-    private fun withChanges(files: Collection<File>, action: () -> Unit) = withWriteAccess {
-        val v = Volumes.cardWithoutAccess(this, files)
-        if (v == null) {
-            action()
-            return@withWriteAccess
-        }
-        Dialogs.confirm(
-            this, "Allow changes on the SD card",
-            "Android lets Swift change files on the SD card only once you allow it. On the next screen, tap Allow (or choose the SD card and tap Select).",
-            "Continue",
-        ) {
-            cardAsked = v
-            afterCard = action
-            cardTriedPicker = false
-            try {
-                askCard.launch(Volumes.accessIntent(this, v))
-            } catch (e: Exception) {
-                L.w("No way to ask for the card", e)
-                afterCard = null
-                say(Transfers.CARD_TEXT, long = true)
-            }
-        }
-    }
+    private fun withChanges(files: Collection<File>, action: () -> Unit) = changes.withChanges(files, action)
 
     // ------------------------------------------------------------------ the screen
 
@@ -323,7 +342,14 @@ class FilesActivity : ListActivity() {
         gridCols = (widthDp / 112).coerceIn(3, 6)
         tilePx = dp((widthDp - 16) / gridCols - 16)
         tileIconPad = (tilePx * 0.3f).toInt()
-        grid = sp.getBoolean(PREF_GRID, false)
+        grid = FilesSettings.grid
+        thumbsOn = FilesSettings.thumbnails
+        settingsShown = settingsKey()
+        readAnimationScale()
+        if (savedInstanceState != null) {
+            homeShown = true
+            quietOnce = true
+        }
         toolbar.title = "Files"
         // 2.8: the ← at the top goes back a step, like Android's Back (it closed Files from any folder).
         toolbar.setNavigationOnClickListener { if (selected.isNotEmpty()) clearSelection() else onBackPressedDispatcher.onBackPressed() }
@@ -345,15 +371,26 @@ class FilesActivity : ListActivity() {
         }
         list.layoutManager = lm
         list.adapter = adapter
-        list.itemAnimator = null
+        // 2.9: only removals (and the rows closing up after them) move, briefly; everything else changes in place.
+        list.itemAnimator = androidx.recyclerview.widget.DefaultItemAnimator().apply {
+            removeDuration = Motion.SHORT
+            moveDuration = Motion.SHORT
+            addDuration = Motion.SHORT
+            changeDuration = 0
+            supportsChangeAnimations = false
+        }
         list.setHasFixedSize(true)
         // A screen of tiles and a few more, so going back and forth between list and grid makes few new ones.
         list.recycledViewPool.setMaxRecycledViews(TYPE_TILE, gridCols * 6)
         onBackPressedDispatcher.addCallback(this, back)
         Volumes.refresh(this)
         needAccess = !hasAccess()
-        // Turned sideways: the same place. Otherwise the folder asked for, or where Files was left.
-        val place = savedInstanceState?.getString(STATE_PLACE) ?: intent.getStringExtra(EXTRA_FOLDER) ?: sp.getString(PREF_LAST, null)
+        // 2.9: things in the recycle bin past their time go for good (a quick look at its index).
+        if (!needAccess) RecycleBin.purgeSoon(this, force = true)
+        // Turned sideways: the same place. Otherwise the folder asked for, or where Files was left
+        // (2.9: or the start page, as chosen in Settings).
+        val place = savedInstanceState?.getString(STATE_PLACE) ?: intent.getStringExtra(EXTRA_FOLDER)
+            ?: if (FilesSettings.startAt == FilesSettings.START_LAST) sp.getString(PREF_LAST, null) else null
         // Without access Android hides the folders (they can't even be checked): there once it is given.
         if (needAccess) wanted = place
         goTo(place)
@@ -378,27 +415,43 @@ class FilesActivity : ListActivity() {
      */
     private fun goTo(place: String?) {
         val cat = place?.takeIf { it.startsWith(CATEGORY) }?.let { FileIndex.Category.of(it.removePrefix(CATEGORY)) }
+        // 2.9: a folder in Private (a screen turned sideways, "Show in Files" from a file of it) asks to unlock over the start page.
+        val private = place?.takeIf { it.startsWith("/") }?.let { File(it) }?.takeIf { PrivateFolder.isInside(this, it) }
         // "/sdcard/Download" is a link to the phone's storage: its real path, so Back can go up it a folder at a time.
-        val path = place?.takeIf { it.startsWith("/") }?.let { File(it) }?.let { f ->
+        val path = place?.takeIf { it.startsWith("/") && private == null }?.let { File(it) }?.let { f ->
             if (Volumes.of(this, f) == null) runCatching { f.canonicalFile }.getOrDefault(f) else f
         }
         val folder = path?.takeIf { it.isDirectory } ?: path?.takeIf { it.isFile }?.parentFile
         when {
+            place == PLACE_BIN -> openBin()
+            private != null -> {
+                showHome()
+                openPrivate(private.takeIf { it.isDirectory } ?: private.parentFile)
+            }
             cat != null -> openCategory(cat)
             folder != null -> openFolder(folder)
             else -> showHome()
         }
     }
 
-    /** The place on show, as remembered: a folder's path, "cat:" and a category, or "home". */
+    /** The place on show, as remembered: a folder's path, "cat:" and a category, "bin", or "home". */
     private fun placeKey(): String {
         val cat = category
         return when {
             home -> PLACE_HOME
+            inBin -> PLACE_BIN
             cat != null -> CATEGORY + cat.key
             else -> dir.path
         }
     }
+
+    /** A folder of Private's is on show (2.9). */
+    private val inPrivate get() = !home && !inBin && category == null && PrivateFolder.isInside(this, dir)
+
+    /** Files' options as they are now, to tell when Settings changed them. */
+    private fun settingsKey() = listOf(
+        FilesSettings.grid, FilesSettings.showHidden, FilesSettings.thumbnails, FilesSettings.sort, FilesSettings.categorySort, FilesSettings.binDays,
+    ).joinToString("|")
 
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
@@ -407,11 +460,88 @@ class FilesActivity : ListActivity() {
 
     private val jobListener: () -> Unit = { onJobsChanged() }
 
+    private var started = false
+
+    // ------------------------------------------------------------------ movement (2.9)
+
+    /** Android's "Remove animations" (its animator scale at 0) turns Files' movement off too. */
+    private var animationsOn = true
+
+    /** How the next place comes in: from the right (deeper), the left (back up), or a short fade. */
+    private var pendingSlide = 0
+
+    /** The start page has shown once (its cards come in one after another only then). */
+    private var homeShown = false
+
+    /** The screen was made again (turned sideways): what it shows first doesn't come in again. */
+    private var quietOnce = false
+
+    private fun readAnimationScale() {
+        animationsOn = try {
+            android.provider.Settings.Global.getFloat(contentResolver, android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, 1f) > 0f
+        } catch (_: Exception) {
+            true
+        }
+    }
+
+    /**
+     * The list (one view, drawn through one layer while it moves: cheap on a slow graphics chip)
+     * comes in a little from the side, or fades and rises a little.
+     */
+    private fun slideList(direction: Int) {
+        if (!animationsOn || direction == 0) return
+        list.animate().cancel()
+        list.alpha = 0f
+        if (direction == SLIDE_FADE) {
+            list.translationX = 0f
+            list.translationY = Ui.dpf(this, 8f)
+        } else {
+            list.translationY = 0f
+            list.translationX = Ui.dpf(this, 28f) * direction
+        }
+        list.animate().alpha(1f).translationX(0f).translationY(0f).setDuration(Motion.NORMAL).setInterpolator(Motion.enter).withLayer().start()
+    }
+
+    /** The start page's first cards, one after another (the few on screen, never a long list). */
+    private fun stagger() {
+        if (!animationsOn) return
+        // Once the cards are laid out, just before they are first drawn.
+        list.viewTreeObserver.addOnPreDrawListener(object : android.view.ViewTreeObserver.OnPreDrawListener {
+            override fun onPreDraw(): Boolean {
+                list.viewTreeObserver.removeOnPreDrawListener(this)
+                Motion.stagger(list, step = 28, max = 8)
+                return true
+            }
+        })
+    }
+
+    /** List ↔ grid: the new layout fades in over a moment. */
+    private fun crossFade() {
+        if (!animationsOn) return
+        list.animate().cancel()
+        list.alpha = 0.15f
+        list.animate().alpha(1f).setDuration(Motion.NORMAL).setInterpolator(Motion.standard).withLayer().start()
+    }
+
     override fun onStart() {
         super.onStart()
         visible = WeakReference(this)
         FileJobs.addScreen(jobListener)
         onJobsChanged()
+        // 2.9: Private locks after a minute out of sight; if it was on show, it asks to be unlocked again.
+        PrivateFolder.back()
+        if (inPrivate && !PrivateFolder.isUnlocked && afterUnlock == null) {
+            val where = dir
+            showHome()
+            openPrivate(where)
+        }
+        if (started) {
+            readAnimationScale()
+            RecycleBin.purgeSoon(this)
+            applySettings()
+            pruneGone()
+        }
+        started = true
     }
 
     override fun onStop() {
@@ -419,7 +549,50 @@ class FilesActivity : ListActivity() {
         if (visible?.get() === this) visible = null
         // Files may come and go while Swift is out of sight: the start page counts again on return.
         homeDirty = true
+        // 2.9: leaving Files locks Private at once; a file of it opened in another screen gives it a minute.
+        if (!isChangingConfigurations) {
+            if (SystemClock.elapsedRealtime() < privateGraceUntil) PrivateFolder.away() else PrivateFolder.lock()
+            privateGraceUntil = 0L
+        }
         super.onStop()
+    }
+
+    /** Settings changed Files' options while it was out of sight: the list follows them. */
+    private fun applySettings() {
+        val key = settingsKey()
+        if (key == settingsShown) return
+        settingsShown = key
+        grid = FilesSettings.grid
+        thumbsOn = FilesSettings.thumbnails
+        menuShown = ""
+        if (index == null) {
+            if (!home && category == null && !inBin) listed = FileOps.sorted(listed, sort)
+            else if (category != null) listed = FileOps.sorted(listed, categorySort)
+            rows = listed.map { rowOf(it) }
+        }
+        applyLayout()
+        render()
+        if (!home && category == null && !inBin && index == null) load(keepScroll = true)
+    }
+
+    /**
+     * Files deleted elsewhere while Files was out of sight (a picture deleted in the viewer, another
+     * app) leave the list on show before anyone taps them, and Android's media index forgets them.
+     */
+    private fun pruneGone() {
+        if (index != null || home || loading) return
+        val shownNow = rows
+        if (shownNow.isEmpty()) return
+        val gen = placeGen
+        val app = applicationContext
+        val fromIndex = category != null
+        lifecycleScope.launch {
+            val gone = withContext(Dispatchers.IO) {
+                shownNow.mapNotNull { r -> r.file?.takeIf { !it.exists() } }.also { g -> if (fromIndex) FileOps.forgetPaths(app, g.map { it.path }) }
+            }
+            if (gen != placeGen || gone.isEmpty()) return@launch
+            dropRows(gone, quietly = true)
+        }
     }
 
     override fun onResume() {
@@ -462,14 +635,15 @@ class FilesActivity : ListActivity() {
                 idx != null && inArchive.isNotEmpty() -> showArchiveFolder(inArchive.substringBeforeLast('/', ""))
                 idx != null -> leaveArchive()
                 home -> finish()
-                category != null -> showHome()
+                category != null || inBin -> showHome()
                 else -> upFolder()?.let { openFolder(it) } ?: showHome()
             }
         }
     }
 
-    /** The folder above, while still on the same storage. */
+    /** The folder above, while still on the same storage (or in Private). */
     private fun upFolder(): File? {
+        if (PrivateFolder.isInside(this, dir)) return if (dir.path == PrivateFolder.root(this).path) null else dir.parentFile
         val v = Volumes.of(this, dir) ?: return null
         if (dir.path == v.root.path) return null
         return dir.parentFile
@@ -588,6 +762,8 @@ class FilesActivity : ListActivity() {
         searching = false
         home = false
         category = null
+        inBin = false
+        binItems = emptyMap()
         index = null
         inArchive = ""
         focusPath = null
@@ -598,14 +774,41 @@ class FilesActivity : ListActivity() {
 
     /** Shows [to] (leaving an archive, a category or a search), remembered for next time. */
     private fun openFolder(to: File, remember: Boolean = true) {
+        // 2.9: Private's folders only once it is unlocked, and never remembered as where Files was left.
+        val private = PrivateFolder.isInside(this, to)
+        if (private && !PrivateFolder.isUnlocked) {
+            openPrivate(to)
+            return
+        }
+        // 2.9: a folder below comes in from the right, one above from the left.
+        val from = dir.takeIf { !home && category == null && !inBin && index == null }
+        pendingSlide = when {
+            home || category != null || inBin -> SLIDE_FORWARD
+            from == null -> SLIDE_FADE
+            from.path == to.path -> 0
+            to.path.startsWith(from.path + "/") -> SLIDE_FORWARD
+            from.path.startsWith(to.path + "/") -> SLIDE_BACK
+            else -> SLIDE_FADE
+        }
         leavePlace()
         dir = to
-        if (remember) sp.edit().putString(PREF_LAST, to.path).apply()
+        if (remember) sp.edit().putString(PREF_LAST, if (private) PLACE_HOME else to.path).apply()
+        if (private) PrivateFolder.tidyOrigins(this)
         load()
+    }
+
+    /** The recycle bin (2.9): what was deleted, newest first, with the days each has left. */
+    private fun openBin() {
+        pendingSlide = SLIDE_FORWARD
+        leavePlace()
+        inBin = true
+        sp.edit().putString(PREF_LAST, PLACE_BIN).apply()
+        loadBin()
     }
 
     /** The start page (2.8): storages, categories, favourite folders and recent files. */
     private fun showHome() {
+        pendingSlide = SLIDE_BACK
         leavePlace()
         home = true
         sp.edit().putString(PREF_LAST, PLACE_HOME).apply()
@@ -616,6 +819,7 @@ class FilesActivity : ListActivity() {
 
     /** One category's files from all over the phone (2.8), newest first unless sorted otherwise. */
     private fun openCategory(cat: FileIndex.Category) {
+        pendingSlide = SLIDE_FORWARD
         leavePlace()
         category = cat
         sp.edit().putString(PREF_LAST, CATEGORY + cat.key).apply()
@@ -684,6 +888,33 @@ class FilesActivity : ListActivity() {
         }
     }
 
+    /** Reads the recycle bin off the main thread (its index on each storage). */
+    private fun loadBin(keepScroll: Boolean = false) {
+        if (!hasAccess()) {
+            render()
+            return
+        }
+        loadJob?.cancel()
+        val gen = placeGen
+        val app = applicationContext
+        loading = true
+        if (!keepScroll) showLoadingSoon("Opening the recycle bin…")
+        renderPath()
+        updateChrome()
+        loadJob = lifecycleScope.launch {
+            val (items, found) = withContext(Dispatchers.IO) {
+                val all = RecycleBin.list(app)
+                all to all.map { b ->
+                    val where = if (b.from == null) "a folder no longer known" else FileIndex.placeOf(app, b.home)
+                    FileItem(b.file, b.name, b.isDir, b.size, b.deletedAt, if (b.isDir) b.files else -1, FileKind.of(b.name, b.isDir), where)
+                }
+            }
+            if (gen != placeGen) return@launch
+            binItems = items.associateBy { it.file.path }
+            showRead(found, keepScroll)
+        }
+    }
+
     /** A folder or a category was read: its rows show. */
     private fun showRead(found: List<FileItem>?, keepScroll: Boolean) {
         loading = false
@@ -698,7 +929,7 @@ class FilesActivity : ListActivity() {
             val i = rows.indexOfFirst { it.file?.path == p }
             if (i >= 0) (list.layoutManager as? LinearLayoutManager)?.scrollToPositionWithOffset(i, list.height / 3)
         }
-        if (searchRows != null || (category != null && search.text.isNotBlank())) runSearch()
+        if (searchRows != null || ((category != null || inBin) && search.text.isNotBlank())) runSearch()
     }
 
     /** Reads the place on show again after a change, keeping where the list was. */
@@ -706,9 +937,27 @@ class FilesActivity : ListActivity() {
         when {
             index != null -> {}
             home -> loadHome()
+            inBin -> loadBin(keepScroll = true)
             category != null -> loadCategory(keepScroll = true)
             else -> load(keepScroll = true)
         }
+    }
+
+    /**
+     * Takes [files] off the list on show at once (2.9: deleted, or found gone), before the place is
+     * read again; [quietly] when nothing else follows (the list isn't read again).
+     */
+    private fun dropRows(files: Collection<File>, quietly: Boolean = false) {
+        val paths = files.map { it.path }.toHashSet()
+        val keep = { r: Row -> r.file?.path !in paths }
+        rows = rows.filter(keep)
+        listed = listed.filter { it.file.path !in paths }
+        rowsBytes = listed.sumOf { it.size.coerceAtLeast(0) }
+        searchRows = searchRows?.filter(keep)
+        paths.forEach { selected.remove(it) }
+        homeCache?.let { c -> homeCache = HomeData(c.storages, c.favourites.filter(keep), c.counts, c.recent?.filter(keep), c.bin, c.docs) }
+        render(removals = true)
+        if (quietly) L.d("Files: ${paths.size} gone meanwhile, taken off the list")
     }
 
     /**
@@ -722,19 +971,32 @@ class FilesActivity : ListActivity() {
         homeDirty = false
         val app = applicationContext
         homeJob = lifecycleScope.launch {
-            val (storages, favourites) = withContext(Dispatchers.IO) {
+            var docs: List<Docs.Doc> = emptyList()
+            val (storages, favourites, bin) = withContext(Dispatchers.IO) {
                 val cards = Volumes.refresh(app).map { v -> v.space().let { (free, total) -> StorageCard(v, free, total) } }
-                val favs = Favourites.paths().map { File(it) }.filter { it.isDirectory }
+                val favs = Favourites.paths().map { File(it) }.filter { it.isDirectory && !PrivateFolder.isInside(app, it) }
                     .map { rowOf(FileItem.of(it, count = true, where = FileIndex.placeOf(app, it.parentFile))) }
-                cards to favs
+                docs = recentDocuments()
+                Triple(cards, favs, RecycleBin.summaryNow(app))
             }
             val before = homeCache
-            homeCache = HomeData(storages, favourites, before?.counts, before?.recent)
+            homeCache = HomeData(storages, favourites, before?.counts, before?.recent, bin, docs)
             if (onStartPage) render()
             val overview = withContext(Dispatchers.IO) { FileIndex.overview(app) { !isActive } }
-            homeCache = HomeData(storages, favourites, overview.counts, overview.recent.map { rowOf(it) })
+            homeCache = HomeData(storages, favourites, overview.counts, overview.recent.map { rowOf(it) }, bin, docs)
             if (onStartPage) render()
         }
+    }
+
+    /** The documents opened in Swift lately (2.9), but not files deleted since. Off the main thread. */
+    private fun recentDocuments(): List<Docs.Doc> = try {
+        SwiftApp.db.recentDocuments(Profiles.currentId, HOME_DOCS).filter { d ->
+            val u = Uri.parse(d.uri)
+            !(u.scheme == "file" && !File(u.path.orEmpty()).exists())
+        }
+    } catch (e: Exception) {
+        L.w("Files: recent documents couldn't be read", e)
+        emptyList()
     }
 
     private fun homeItems(): List<Any> {
@@ -742,17 +1004,45 @@ class FilesActivity : ListActivity() {
         val out = ArrayList<Any>()
         out += Header("Storage")
         if (data != null) out.addAll(data.storages) else Volumes.all(this).forEach { out += StorageCard(it, -1, -1) }
+        // 2.9: Files is where documents are found: the ones read lately come first, to carry on.
+        if (!data?.docs.isNullOrEmpty()) {
+            out += Header("Recent documents", "Show all") { openCategory(FileIndex.Category.DOCUMENTS) }
+            out += RecentDocs(data!!.docs)
+        }
         out += Header("Categories")
         out += CategoryGrid(data?.counts)
+        out += Header("Tools")
+        out += ToolGrid(data?.bin)
         if (data != null) {
             out += Header("Favourites")
             if (data.favourites.isEmpty()) out += Hint("Keep the folders you use most here: tap ⋮ next to a folder, then Add to favourites.")
             else out.addAll(data.favourites)
         }
-        val recent = data?.recent
+        val recent = data?.recent?.let { stillThere(it) }
         if (recent != null) {
             out += Header("Recent files", if (recent.size > HOME_RECENT) "Show all" else null) { openCategory(FileIndex.Category.RECENT) }
             if (recent.isEmpty()) out += Hint(FileIndex.Category.RECENT.hint) else out.addAll(recent.take(HOME_RECENT))
+        }
+        return out
+    }
+
+    /**
+     * 2.9: the start page shows what it read last time at once, and files may have been deleted since
+     * (in another app, or here): those leave before they are shown (a look at the few on show), and
+     * Android's media index forgets them, so the next reading doesn't bring them back.
+     */
+    private fun stillThere(recent: List<Row>): List<Row> {
+        val out = ArrayList<Row>(recent.size)
+        val gone = ArrayList<String>()
+        for (r in recent) {
+            val f = r.file
+            // Only the ones that will show are looked at (and one more, for "Show all").
+            if (out.size > HOME_RECENT || f == null || f.exists()) out += r else gone += f.path
+        }
+        if (gone.isNotEmpty()) {
+            homeCache?.let { c -> homeCache = HomeData(c.storages, c.favourites, c.counts, c.recent?.filter { it.file?.path !in gone }, c.bin, c.docs) }
+            val app = applicationContext
+            lifecycleScope.launch(Dispatchers.IO) { FileOps.forgetPaths(app, gone) }
         }
         return out
     }
@@ -783,7 +1073,7 @@ class FilesActivity : ListActivity() {
         list.postDelayed(showLoading, 250)
     }
 
-    private fun render() {
+    private fun render(removals: Boolean = false) {
         list.removeCallbacks(showLoading)
         val access = hasAccess()
         val shown: List<Any> = when {
@@ -791,12 +1081,28 @@ class FilesActivity : ListActivity() {
             else -> searchRows ?: when {
                 index != null -> archiveRows()
                 home -> homeItems()
+                // 2.9: a line at the top of the bin and of Private says how they work.
+                inBin && rows.isNotEmpty() -> listOf(Hint("Things you delete stay here for ${FilesSettings.binDays} days, then go for good. Tap one to restore it.")) + rows
+                inPrivate && dir.path == PrivateFolder.root(this).path && rows.isNotEmpty() -> listOf(Hint(PRIVATE_HINT)) + rows
+                category == FileIndex.Category.DOCUMENTS && rows.isNotEmpty() -> documentRows()
                 else -> rows
             }
         }
-        shownRowCount = if (onStartPage) 0 else shown.size
+        shownRowCount = if (onStartPage) 0 else shown.count { it is Row }
         applyLayout()
-        adapter.set(shown)
+        adapter.set(shown, removals)
+        // 2.9: a new place comes in from the side it was reached from; the start page's cards, the first time, one after another.
+        if (!loading && pendingSlide != 0) {
+            val slide = pendingSlide
+            pendingSlide = 0
+            when {
+                // Turned sideways: the same place, without coming in again.
+                quietOnce -> quietOnce = false
+                onStartPage && !homeShown -> stagger()
+                else -> slideList(slide)
+            }
+        }
+        if (onStartPage) homeShown = true
         renderPath()
         updateChrome()
         val cat = category
@@ -815,10 +1121,31 @@ class FilesActivity : ListActivity() {
             )
             index != null -> showEmpty(shown.isEmpty(), "Nothing in here", null, R.drawable.ic_archive)
             home -> empty.visibility = View.GONE
+            inBin -> showEmpty(shown.isEmpty(), "The recycle bin is empty", "Files you delete in Files stay here for ${FilesSettings.binDays} days, so you can bring them back.", R.drawable.ic_files_bin)
+            inPrivate && dir.path == PrivateFolder.root(this).path -> showEmpty(
+                shown.isEmpty(), "Nothing in Private yet",
+                "Select files or folders anywhere in Files, then tap More → Move to Private. Only you can open them here.\n\n" + PrivateLock.UNINSTALL_TEXT,
+                R.drawable.ic_lock,
+            )
             cat != null -> showEmpty(shown.isEmpty(), cat.nothing, cat.hint, cat.icon)
             unreadable -> showEmpty(true, "Swift can't open this folder", "Android keeps it private, or it is no longer there.", R.drawable.ic_folder)
             else -> showEmpty(shown.isEmpty(), "This folder is empty", if (!showHidden) "Hidden files (names starting with a dot) aren't shown." else null, R.drawable.ic_folder)
         }
+    }
+
+    /**
+     * 2.9: Files is where documents are found: their category picks a kind (PDF, Word, Excel,
+     * PowerPoint, e-books, text), offering only the kinds the phone has. Newest first, as the rest.
+     */
+    private fun documentRows(): List<Any> {
+        val groups = rows.map { r -> Docs.kindOf(r.name, null)?.let { k -> DocGroup.entries.firstOrNull { k in it.kinds } } }
+        val present = DocGroup.entries.filter { it in groups }
+        if (present.size < 2) return rows
+        val chosen = present.firstOrNull { it == docGroup }
+        val out = ArrayList<Any>(rows.size + 1)
+        out += DocFilter(listOf("All") + present.map { it.label }, if (chosen == null) 0 else present.indexOf(chosen) + 1)
+        if (chosen == null) out.addAll(rows) else rows.forEachIndexed { i, r -> if (groups[i] == chosen) out += r }
+        return out
     }
 
     /** Rows or tiles (2.8): the start page is always a list; folders, categories, archives and searches follow the choice. */
@@ -871,7 +1198,18 @@ class FilesActivity : ListActivity() {
         val v = Volumes.of(this, dir)
         when {
             home -> {}
+            inBin -> parts += "Recycle bin" to { loadBin(keepScroll = true) }
             cat != null -> parts += cat.label to { leaveArchive() }
+            inPrivate -> {
+                val root = PrivateFolder.root(this)
+                parts += "Private" to { openFolder(root) }
+                var at = root
+                for (p in dir.path.removePrefix(root.path).split('/').filter { it.isNotEmpty() }) {
+                    at = File(at, p)
+                    val target = at
+                    parts += p to { openFolder(target) }
+                }
+            }
             v != null -> {
                 parts += v.name to { openFolder(v.root) }
                 var at = v.root
@@ -912,6 +1250,7 @@ class FilesActivity : ListActivity() {
     /** The name a folder goes by: "Phone storage" and "SD card" for their tops. */
     private fun folderTitle(f: File): String {
         Volumes.all(this).firstOrNull { it.root.path == f.path }?.let { return it.name }
+        if (f.path == PrivateFolder.root(this).path) return "Private"
         if (f.path == swiftDownloads.path && Volumes.of(this, f) == null) return "Swift's downloads"
         return f.name.ifEmpty { f.path }
     }
@@ -926,10 +1265,13 @@ class FilesActivity : ListActivity() {
         val idx = index
         val cat = category
         val selecting = selected.isNotEmpty()
+        val private = inPrivate
         val hint = when {
             idx != null -> "Search in this archive"
             home -> "Search all your files"
+            inBin -> "Search in the recycle bin"
             cat != null -> "Search in ${cat.label}"
+            private -> "Search in Private"
             else -> "Search in this folder"
         }
         if (search.hint != hint) search.hint = hint
@@ -950,6 +1292,7 @@ class FilesActivity : ListActivity() {
             } else {
                 toolbar.title = when {
                     home -> "Files"
+                    inBin -> "Recycle bin"
                     cat != null -> cat.label
                     else -> folderTitle(dir)
                 }
@@ -957,6 +1300,7 @@ class FilesActivity : ListActivity() {
                     searching -> "Searching…"
                     searchRows != null -> FileJobs.items(searchRows!!.size) + " found" + if (searchRows!!.size >= MAX_FOUND) " (the first ones)" else ""
                     loading || home -> null
+                    inBin -> if (rows.isEmpty()) null else FileJobs.items(rows.size) + " · " + UrlUtils.formatBytes(rowsBytes)
                     cat != null && rows.size >= FileIndex.LIST_MAX -> "The newest ${number(rows.size)} files"
                     cat != null -> filesText(rows.size) + if (rowsBytes > 0) " · " + UrlUtils.formatBytes(rowsBytes) else ""
                     else -> FileJobs.items(rows.size)
@@ -969,6 +1313,8 @@ class FilesActivity : ListActivity() {
         val oneFile = selected.values.singleOrNull()?.takeIf { !it.isDir }
         val bar = when {
             selecting && idx != null -> "entries:" + (oneFile != null)
+            selecting && inBin -> "bin"
+            selecting && private -> "private"
             selecting -> "files"
             idx != null -> "archive:" + idx.file.path
             else -> ""
@@ -981,6 +1327,18 @@ class FilesActivity : ListActivity() {
                     barButton(R.drawable.ic_folder, "Extract to…") { extractSelectedTo() },
                     oneFile?.let { barButton(R.drawable.ic_open_new, "Open") { selected.values.singleOrNull()?.entry?.let { e -> openEntry(e) } } },
                     barButton(R.drawable.ic_info, "Details") { entryDetails(selected.values.toList()) },
+                ))
+                // 2.9: in the recycle bin, things go back or go for good.
+                bar == "bin" -> setActions(listOf(
+                    barButton(R.drawable.ic_files_restore, "Restore") { restoreFromBin(selectedBinItems()) },
+                    barButton(R.drawable.ic_delete, "Delete forever", danger = true) { eraseFromBin(selectedBinItems()) },
+                ))
+                // 2.9: in Private, "Move out" first.
+                bar == "private" -> setActions(listOf(
+                    barButton(R.drawable.ic_move, "Move out") { moveOut(selectedFiles()) },
+                    barButton(R.drawable.ic_share, "Share") { share(selectedFiles()) },
+                    barButton(R.drawable.ic_delete, "Delete", danger = true) { delete(selectedFiles()) },
+                    barButton(R.drawable.ic_more, "More") { moreSheet() },
                 ))
                 selecting -> setActions(listOf(
                     barButton(R.drawable.ic_copy, "Copy") { setClip(selectedFiles(), move = false) },
@@ -997,9 +1355,9 @@ class FilesActivity : ListActivity() {
             }
         }
         actionBar.visibility = if (bar.isEmpty()) View.GONE else View.VISIBLE
-        // Things wait to be put in a folder: only a folder can take them (not the start page or a category).
+        // Things wait to be put in a folder: only a folder can take them (not the start page, a category or the bin).
         val c = clip
-        if (c != null && !selecting && idx == null && !home && cat == null) {
+        if (c != null && !selecting && idx == null && !home && cat == null && !inBin) {
             pasteBar.visibility = View.VISIBLE
             when (c) {
                 is Clip.Files -> {
@@ -1048,8 +1406,38 @@ class FilesActivity : ListActivity() {
     /** The area at the bottom only shows when one of its bars does. */
     private fun updateBottom() {
         val any = jobStrip.visibility == View.VISIBLE || pasteBar.visibility == View.VISIBLE || actionBar.visibility == View.VISIBLE
-        bottom.visibility = if (any) View.VISIBLE else View.GONE
+        // 2.9: the bar slides up from the bottom edge when it comes, and back down when it goes.
+        if (!animationsOn || !bottom.isLaidOut && !any) {
+            bottomLeaving = false
+            bottom.animate().cancel()
+            bottom.translationY = 0f
+            bottom.visibility = if (any) View.VISIBLE else View.GONE
+            return
+        }
+        if (any) {
+            if (bottom.visibility == View.VISIBLE && !bottomLeaving) return
+            bottomLeaving = false
+            bottom.animate().cancel()
+            if (bottom.visibility != View.VISIBLE) {
+                bottom.visibility = View.VISIBLE
+                bottom.translationY = Ui.dpf(this, 72f)
+            }
+            bottom.animate().translationY(0f).setDuration(Motion.NORMAL).setInterpolator(Motion.enter).start()
+        } else if (bottom.visibility == View.VISIBLE && !bottomLeaving) {
+            bottomLeaving = true
+            bottom.animate().cancel()
+            bottom.animate().translationY(bottom.height.toFloat().coerceAtLeast(Ui.dpf(this, 72f))).setDuration(Motion.SHORT).setInterpolator(Motion.exit).withEndAction {
+                if (bottomLeaving) {
+                    bottomLeaving = false
+                    bottom.visibility = View.GONE
+                    bottom.translationY = 0f
+                }
+            }.start()
+        }
     }
+
+    /** The bar at the bottom is sliding away (it shows until it is gone). */
+    private var bottomLeaving = false
 
     /** A message at the bottom, above the bars there. */
     private fun say(text: CharSequence, action: String? = null, long: Boolean = false, onAction: (() -> Unit)? = null) {
@@ -1094,24 +1482,35 @@ class FilesActivity : ListActivity() {
     private fun toggleGrid() {
         rememberPosition()
         grid = !grid
-        sp.edit().putBoolean(PREF_GRID, grid).apply()
+        FilesSettings.grid = grid
+        settingsShown = settingsKey()
         applyLayout()
         adapter.notifyDataSetChanged()
         restorePosition()
+        crossFade()
         updateChrome()
     }
 
     private fun toggleHidden() {
         val show = !showHidden
-        sp.edit().putBoolean(PREF_HIDDEN, show).apply()
+        FilesSettings.showHidden = show
+        settingsShown = settingsKey()
         say(if (show) "Hidden files (names starting with a dot) show now" else "Hidden files aren't shown now")
-        if (!home && category == null && index == null) load(keepScroll = true)
+        if (!home && category == null && index == null && !inBin) load(keepScroll = true)
     }
 
     private fun hiddenAction() = Sheets.Action(
         if (showHidden) R.drawable.ic_visibility_off else R.drawable.ic_visibility,
         if (showHidden) "Hide hidden files" else "Show hidden files",
     ) { toggleHidden() }
+
+    /**
+     * 2.9: Swift's settings showing only the file manager's part. Back here, Files reads its
+     * options again (onStart) and follows any change at once.
+     */
+    private fun settingsAction() = Sheets.Action(R.drawable.ic_settings, "Settings") {
+        startActivity(Intent(this, SettingsActivity::class.java).putExtra(SettingsActivity.EXTRA_TOPIC, "FILES").putExtra("only_topic", true))
+    }
 
     /** ⋮ at the top (2.8): what used to be buttons there, and the rest of the old menu. */
     private fun optionsSheet() {
@@ -1129,8 +1528,28 @@ class FilesActivity : ListActivity() {
             home -> {
                 if (searchRows != null) actions += Sheets.Action(R.drawable.ic_select_all, "Select all", primary = true) { selectAll() }
                 actions += Sheets.Action(R.drawable.ic_refresh, "Refresh", primary = true) { if (searchRows != null) runSearch() else loadHome() }
+                // 2.9: the tools, here too.
+                actions += Sheets.Action(R.drawable.ic_files_transfer, "Wi-Fi transfer", primary = true) { WifiTransferActivity.open(this) }
+                actions += Sheets.Action(R.drawable.ic_files_clean, "Free up space", primary = true) { CleanerActivity.open(this) }
+                actions += Sheets.Action(R.drawable.ic_files_bin, "Recycle bin") { openBin() }
+                actions += Sheets.Action(R.drawable.ic_lock, "Private") { openPrivate() }
                 actions += hiddenAction()
+                actions += settingsAction()
                 Sheets.actions(this, "Files", sub, actions, iconRes = R.drawable.ic_folder)
+            }
+            inBin -> {
+                actions += Sheets.Action(R.drawable.ic_select_all, "Select all", primary = true) { selectAll() }
+                actions += Sheets.Action(R.drawable.ic_refresh, "Refresh", primary = true) { loadBin(keepScroll = true) }
+                if (rows.isNotEmpty()) actions += Sheets.Action(R.drawable.ic_delete, "Empty the bin", primary = true, danger = true) { emptyBin() }
+                actions += Sheets.Action(R.drawable.ic_info, "About the recycle bin") {
+                    Dialogs.info(
+                        this, "Recycle bin",
+                        "What you delete in Files waits here for ${FilesSettings.binDays} days, then goes for good. It stays on the same storage (a hidden “${RecycleBin.FOLDER}” folder), " +
+                            "so it still takes room there until then: empty the bin to free it now. Files in Private and in Swift's own folders don't come here.",
+                    )
+                }
+                actions += settingsAction()
+                Sheets.actions(this, "Recycle bin", sub, actions, iconRes = R.drawable.ic_files_bin)
             }
             cat != null -> {
                 actions += Sheets.Action(R.drawable.ic_sort, "Sort", primary = true) { chooseSort() }
@@ -1139,7 +1558,31 @@ class FilesActivity : ListActivity() {
                 if (cat == FileIndex.Category.DOWNLOADS) {
                     for (f in FileIndex.downloadFolders()) actions += Sheets.Action(R.drawable.ic_folder, "Open the “${folderTitle(f)}” folder") { openFolder(f) }
                 }
+                actions += Sheets.Action(R.drawable.ic_files_transfer, "Wi-Fi transfer") { WifiTransferActivity.open(this) }
+                actions += settingsAction()
                 Sheets.actions(this, cat.label, sub, actions, iconRes = cat.icon)
+            }
+            inPrivate -> {
+                actions += Sheets.Action(R.drawable.ic_folder_add, "New folder", primary = true) { newFolder() }
+                actions += Sheets.Action(R.drawable.ic_sort, "Sort", primary = true) { chooseSort() }
+                actions += Sheets.Action(R.drawable.ic_select_all, "Select all", primary = true) { selectAll() }
+                actions += Sheets.Action(R.drawable.ic_lock, "Lock now", primary = true) {
+                    PrivateFolder.lock()
+                    showHome()
+                    say("Private is locked")
+                }
+                actions += hiddenAction()
+                actions += Sheets.Action(R.drawable.ic_refresh, "Refresh") { load(keepScroll = true) }
+                actions += Sheets.Action(R.drawable.ic_info, "About Private") {
+                    Dialogs.info(
+                        this, "Private",
+                        "Files here are kept inside Swift: other apps, the Gallery and computers (Wi-Fi transfer too) can't see them. " +
+                            (if (PrivateLock.hasScreenLock(this)) "Opening Private asks for your screen lock." else "Opening Private asks for its PIN (Swift's Settings can change it).") +
+                            " It locks when you leave Files, or after a minute away.\n\n" + PrivateLock.UNINSTALL_TEXT,
+                    )
+                }
+                actions += settingsAction()
+                Sheets.actions(this, folderTitle(dir), sub, actions, iconRes = R.drawable.ic_lock)
             }
             else -> {
                 val here = dir
@@ -1150,7 +1593,9 @@ class FilesActivity : ListActivity() {
                 actions += Sheets.Action(R.drawable.ic_refresh, "Refresh", primary = true) { load(keepScroll = true) }
                 actions += hiddenAction()
                 actions += Sheets.Action(if (fav) R.drawable.ic_star else R.drawable.ic_star_border, if (fav) "Remove from favourites" else "Add to favourites") { setFavourite(here, !fav) }
+                actions += Sheets.Action(R.drawable.ic_files_transfer, "Wi-Fi transfer") { WifiTransferActivity.open(this) }
                 actions += Sheets.Action(R.drawable.ic_info, "About this folder") { details(listOf(here)) }
+                actions += settingsAction()
                 Sheets.actions(this, folderTitle(here), sub, actions, iconRes = R.drawable.ic_folder)
             }
         }
@@ -1161,7 +1606,8 @@ class FilesActivity : ListActivity() {
         MaterialAlertDialogBuilder(this)
             .setTitle("Sort by")
             .setSingleChoiceItems(FileOps.sortLabels.toTypedArray(), if (forCategory) categorySort else sort) { d, which ->
-                sp.edit().putInt(if (forCategory) PREF_CATEGORY_SORT else PREF_SORT, which).apply()
+                if (forCategory) FilesSettings.categorySort = which else FilesSettings.sort = which
+                settingsShown = settingsKey()
                 d.dismiss()
                 // An archive sorts as it shows; the folder or category under it keeps its order.
                 if (index == null) {
@@ -1203,6 +1649,7 @@ class FilesActivity : ListActivity() {
                 selected.clear()
                 searchRows = null
                 if (search.text.isNotEmpty()) search.setText("")
+                pendingSlide = SLIDE_FORWARD
                 render()
                 list.scrollToPosition(0)
                 if (idx.unsafe > 0) say("${idx.unsafe} files in it have names that point outside its folder: Swift leaves them out", long = true)
@@ -1231,6 +1678,7 @@ class FilesActivity : ListActivity() {
 
     private fun showArchiveFolder(path: String) {
         rememberPosition()
+        pendingSlide = if (path.length > inArchive.length && path.startsWith(inArchive)) SLIDE_FORWARD else SLIDE_BACK
         inArchive = path
         selected.clear()
         if (search.text.isNotEmpty()) search.setText("")
@@ -1246,6 +1694,7 @@ class FilesActivity : ListActivity() {
         index = null
         inArchive = ""
         selected.clear()
+        pendingSlide = SLIDE_BACK
         when {
             home -> {
                 render()
@@ -1294,6 +1743,7 @@ class FilesActivity : ListActivity() {
             job.message == "Cancelled" -> {}
             job.failed || f == null -> say(job.message ?: "Swift couldn't open this file", long = true)
             Archives.formatOf(f.name) != null -> openArchive(f)
+            inPrivate -> openPrivateFile(Row(f.path, f.name, false, f.length(), f.lastModified(), -1, FileKind.of(f.name), f, null, null), f)
             FileOpener.open(this, f) -> finish()
         }
     }
@@ -1387,7 +1837,15 @@ class FilesActivity : ListActivity() {
         if (files.isEmpty()) return
         val actions = ArrayList<Sheets.Action>()
         val one = files.singleOrNull()
+        val private = inPrivate
         if (one != null) actions += Sheets.Action(R.drawable.ic_edit, "Rename") { rename(one) }
+        // 2.9: into Private from the phone's storage or a card; within Private, copying and moving between its folders.
+        if (private) {
+            actions += Sheets.Action(R.drawable.ic_copy, "Copy") { setClip(files, move = false) }
+            actions += Sheets.Action(R.drawable.ic_move, "Move to another folder") { setClip(files, move = true) }
+        } else if (files.all { canGoPrivate(it) }) {
+            actions += Sheets.Action(R.drawable.ic_lock, "Move to Private") { moveToPrivate(files) }
+        }
         actions += Sheets.Action(R.drawable.ic_archive, "Compress") { compress(files) }
         if (files.all { it.isFile && Archives.formatOf(it.name) != null }) {
             actions += Sheets.Action(R.drawable.ic_unarchive, if (files.size == 1) "Extract to folder “${Archives.baseName(files[0].name)}”" else "Extract each to its own folder") {
@@ -1395,9 +1853,9 @@ class FilesActivity : ListActivity() {
                 files.forEach { extract(it, null, null, "", it.parentFile ?: dir, named = true) }
             }
         }
-        if (one != null && one.isFile) actions += Sheets.Action(R.drawable.ic_reopen, "Open with another app") { FileOpener.openWith(this, one) }
+        if (one != null && one.isFile) actions += Sheets.Action(R.drawable.ic_reopen, "Open with another app") { openWith(one) }
         if (one != null && one.isFile && !rowsNow.singleOrNull()?.where.isNullOrEmpty()) actions += Sheets.Action(R.drawable.ic_folder, "Show in folder") { showInFolder(one) }
-        if (one != null && one.isDirectory) {
+        if (one != null && one.isDirectory && !private) {
             val fav = Favourites.has(one)
             actions += Sheets.Action(if (fav) R.drawable.ic_star else R.drawable.ic_star_border, if (fav) "Remove from favourites" else "Add to favourites") { setFavourite(one, !fav) }
         }
@@ -1419,10 +1877,46 @@ class FilesActivity : ListActivity() {
             }
             e != null -> openEntry(e)
             f == null -> {}
+            // 2.9: in the bin, a tap shows what can be done (restore it, or delete it for good).
+            inBin -> binSheet(r)
             r.isDir -> openFolder(f)
             Archives.formatOf(r.name) != null -> openArchive(f)
+            inPrivate -> openPrivateFile(r, f)
             FileOpener.open(this, f) -> finish()
         }
+    }
+
+    /**
+     * A file of Private's (2.9), opened without leaving a trace: documents in Swift's viewer as
+     * incognito ones (not added to the recent documents), pictures, videos and music on their
+     * screens, the rest in another app. Leaving Files for them gives Private a minute before it locks.
+     */
+    private fun openPrivateFile(r: Row, f: File) {
+        val name = f.name
+        keepPrivateOpen()
+        when {
+            r.kind == FileKind.APK -> FileOpener.install(this, f)
+            Docs.kindOf(name, null) != null -> {
+                val uri = Docs.shareUri(this, f)
+                if (uri == null || !Docs.open(this, uri, name, incognito = true)) {
+                    privateGraceUntil = 0L
+                    say("Swift can't show “$name”")
+                }
+            }
+            MediaViewerActivity.kindOf(name) != null -> FileOpener.open(this, f)
+            else -> FileOpener.openWith(this, f)
+        }
+    }
+
+    /** "Open with another app": from Private, Private stays open a minute meanwhile. */
+    private fun openWith(f: File) {
+        if (inPrivate) keepPrivateOpen()
+        FileOpener.openWith(this, f)
+    }
+
+    private fun share(files: List<File>) {
+        if (inPrivate) keepPrivateOpen()
+        FileOpener.share(this, files)
     }
 
     /** The folder a file found elsewhere (a category, a search, recent files) is in, with the file in sight. */
@@ -1437,6 +1931,14 @@ class FilesActivity : ListActivity() {
         val f = r.file
         if (f == null) {
             entrySheet(r)
+            return
+        }
+        if (inBin) {
+            binSheet(r)
+            return
+        }
+        if (inPrivate) {
+            privateSheet(r, f)
             return
         }
         val actions = ArrayList<Sheets.Action>()
@@ -1471,6 +1973,23 @@ class FilesActivity : ListActivity() {
         }
         // 2.8: a file found in a category, a search or recent files can be seen where it is.
         if (!r.isDir && !r.where.isNullOrEmpty()) actions += Sheets.Action(R.drawable.ic_folder, "Show in folder") { showInFolder(f) }
+        actions += Sheets.Action(R.drawable.ic_edit, "Rename") { rename(f) }
+        if (canGoPrivate(f)) actions += Sheets.Action(R.drawable.ic_lock, "Move to Private") { moveToPrivate(listOf(f)) }
+        actions += Sheets.Action(R.drawable.ic_info, "Details") { details(listOf(f)) }
+        actions += Sheets.Action(R.drawable.ic_delete, "Delete", danger = true) { delete(listOf(f)) }
+        Sheets.actions(this, r.name, subtitleOf(r), actions, iconRes = r.kind.icon)
+    }
+
+    /** A file or folder in Private (2.9): open, share or move it out; it never goes to the recycle bin. */
+    private fun privateSheet(r: Row, f: File) {
+        val actions = ArrayList<Sheets.Action>()
+        actions += Sheets.Action(R.drawable.ic_open_new, "Open", primary = true) { open(r) }
+        if (!r.isDir) actions += Sheets.Action(R.drawable.ic_share, "Share", primary = true) { share(listOf(f)) }
+        actions += Sheets.Action(R.drawable.ic_move, "Move out", primary = true) { moveOut(listOf(f)) }
+        actions += Sheets.Action(R.drawable.ic_archive, "Compress", primary = true) { compress(listOf(f)) }
+        if (!r.isDir && Archives.formatOf(r.name) != null) actions += Sheets.Action(R.drawable.ic_unarchive, "Extract here") { extract(f, null, null, "", f.parentFile ?: dir, named = true) }
+        if (!r.isDir) actions += Sheets.Action(R.drawable.ic_reopen, "Open with another app") { openWith(f) }
+        actions += Sheets.Action(R.drawable.ic_move, "Move to another folder") { setClip(listOf(f), move = true) }
         actions += Sheets.Action(R.drawable.ic_edit, "Rename") { rename(f) }
         actions += Sheets.Action(R.drawable.ic_info, "Details") { details(listOf(f)) }
         actions += Sheets.Action(R.drawable.ic_delete, "Delete", danger = true) { delete(listOf(f)) }
@@ -1520,23 +2039,276 @@ class FilesActivity : ListActivity() {
         }
     }
 
+    /**
+     * Delete (2.9): to the recycle bin at once, with Undo in the message. Files the bin can't take
+     * (in Private, in Swift's own folders, or with the bin turned off in Settings) are asked about
+     * and erased; ones that couldn't go to the bin (no room, the card refused) are offered the same.
+     */
     private fun delete(files: List<File>) {
         if (files.isEmpty()) return
+        if (!FilesSettings.useRecycleBin || files.any { !RecycleBin.canHold(this, it) }) {
+            erase(files)
+            return
+        }
+        withChanges(files) {
+            clearSelection()
+            // Off the list at once: the move itself is a rename, but a big folder is counted first.
+            dropRows(files)
+            RecycleBin.move(this, files) { b -> (visible?.get() ?: this).binned(b) }
+        }
+    }
+
+    private fun binned(b: RecycleBin.Batch) {
+        homeDirty = true
+        if (isFinishing) return
+        // Read again once the rows taken off have closed up.
+        list.postDelayed({ if (!isFinishing) reload() }, if (animationsOn) Motion.SHORT + 100 else 0L)
+        if (b.items.isNotEmpty()) {
+            say("Moved ${RecycleBin.movedText(b.items)} to the recycle bin", "Undo") {
+                RecycleBin.restore(this, b.items) { _, failed ->
+                    homeDirty = true
+                    // A category and the start page read Android's media index, which learns of them a moment later.
+                    if (!isFinishing) list.postDelayed({ if (!isFinishing) reload() }, if (home || category != null) 900L else 0L)
+                    if (failed > 0) say("$failed couldn't be put back: they're still in the recycle bin", long = true)
+                }
+            }
+        }
+        if (b.failed.isNotEmpty()) {
+            val failed = b.failed
+            Dialogs.confirm(
+                this, "Delete for good?",
+                RecycleBin.couldntText(failed) + " Delete " + (if (failed.size == 1) "it" else "them") + " for good instead? Swift can't bring " + (if (failed.size == 1) "it" else "them") + " back.",
+                "Delete", danger = true,
+            ) { eraseNow(failed) }
+        }
+    }
+
+    /** Deleting for good, asked first (what the bin can't take). */
+    private fun erase(files: List<File>) {
         val title = if (files.size == 1) "Delete “${files[0].name}”?" else "Delete ${files.size} items?"
         val folders = files.count { it.isDirectory }
-        val message = when {
-            files.size == 1 && folders == 1 -> "The folder goes with everything in it. Swift can't bring it back."
-            files.size == 1 -> "Swift can't bring it back."
-            folders > 0 -> "Folders go with everything in them. Swift can't bring them back."
-            else -> "Swift can't bring them back."
+        val them = if (files.size == 1) "it" else "them"
+        val why = when {
+            inPrivate -> "Files in Private don't go to the recycle bin. "
+            !FilesSettings.useRecycleBin -> ""
+            else -> "These have no recycle bin (Swift's own folders). "
         }
-        Dialogs.confirm(this, title, message, "Delete", danger = true) {
-            withChanges(files) {
-                clearSelection()
-                val what = if (files.size == 1) files[0].name else FileJobs.items(files.size)
-                val job = FileJobs.start(this, FileJobs.Kind.DELETE, "Deleting $what", onDone = ::doneHere) { w -> Transfers.delete(w, files) }
-                showProgress(job)
+        val message = why + when {
+            files.size == 1 && folders == 1 -> "The folder goes with everything in it. Swift can't bring it back."
+            folders > 0 -> "Folders go with everything in them. Swift can't bring them back."
+            else -> "Swift can't bring $them back."
+        }
+        Dialogs.confirm(this, title, message, "Delete", danger = true) { eraseNow(files) }
+    }
+
+    private fun eraseNow(files: List<File>) {
+        withChanges(files) {
+            clearSelection()
+            val what = if (files.size == 1) files[0].name else FileJobs.items(files.size)
+            val job = FileJobs.start(this, FileJobs.Kind.DELETE, "Deleting $what", onDone = ::doneHere) { w -> Transfers.delete(w, files) }
+            showProgress(job)
+        }
+    }
+
+    // ------------------------------------------------------------------ the recycle bin (2.9)
+
+    private fun selectedBinItems(): List<RecycleBin.Item> = selected.keys.mapNotNull { binItems[it] }
+
+    private fun binText(b: RecycleBin.Item): String {
+        val left = b.daysLeft()
+        return when (left) {
+            0 -> "goes today"
+            1 -> "1 day left"
+            else -> "$left days left"
+        }
+    }
+
+    /** One thing in the bin: where it was, when it was deleted and when it goes; Restore or Delete forever. */
+    private fun binSheet(r: Row) {
+        val b = binItems[r.key] ?: return
+        val actions = ArrayList<Sheets.Action>()
+        actions += Sheets.Action(R.drawable.ic_files_restore, "Restore", primary = true) { restoreFromBin(listOf(b)) }
+        actions += Sheets.Action(R.drawable.ic_delete, "Delete forever", primary = true, danger = true) { eraseFromBin(listOf(b)) }
+        actions += Sheets.Action(R.drawable.ic_info, "Details", primary = true) { binDetails(b) }
+        Sheets.actions(this, b.name, "Deleted ${dateText(b.deletedAt)} · ${binText(b)}", actions, iconRes = r.kind.icon)
+    }
+
+    private fun binDetails(b: RecycleBin.Item) {
+        val col = Sheets.column(this)
+        col.addView(Sheets.header(this, b.name, FileKind.of(b.name, b.isDir).label))
+        detailRow(col, "Was in", if (b.from == null) "Not known (it goes back to the top of ${b.volume.name})" else FileIndex.placeOf(this, b.home))
+        if (b.from != null) detailRow(col, "Full path", File(b.home, b.name).path)
+        detailRow(col, "Deleted", longDate(b.deletedAt))
+        detailRow(col, "Goes for good", DateUtils.formatDateTime(this, b.goesAt(), DateUtils.FORMAT_SHOW_DATE or DateUtils.FORMAT_SHOW_YEAR) + " (" + binText(b) + ")")
+        detailRow(col, "Size", bytesText(b.size))
+        if (b.isDir) detailRow(col, "Holds", if (b.files == 1) "1 file" else "${number(b.files)} files")
+        Sheets.sheet(this, col).showImmersive()
+    }
+
+    private fun restoreFromBin(items: List<RecycleBin.Item>) {
+        if (items.isEmpty()) return
+        withChanges(items.map { it.home } + items.map { it.holder }) {
+            clearSelection()
+            RecycleBin.restore(this, items) { back, failed ->
+                homeDirty = true
+                if (isFinishing) return@restore
+                if (inBin) loadBin(keepScroll = true)
+                val first = back.firstOrNull()
+                when {
+                    first == null -> say("Swift couldn't restore " + if (items.size == 1) "“${items[0].name}”" else "them", long = true)
+                    failed > 0 -> say("Restored ${FileJobs.items(back.size)}. $failed couldn't be.", long = true)
+                    else -> say("Restored " + (if (back.size == 1) "“${first.name}”" else FileJobs.items(back.size)), "Show") {
+                        if (first.isDirectory) openFolder(first) else showInFolder(first)
+                    }
+                }
             }
+        }
+    }
+
+    private fun eraseFromBin(items: List<RecycleBin.Item>) {
+        if (items.isEmpty()) return
+        val title = if (items.size == 1) "Delete “${items[0].name}” for good?" else "Delete ${items.size} items for good?"
+        Dialogs.confirm(this, title, "${UrlUtils.formatBytes(items.sumOf { it.size })} is freed. Swift can't bring " + (if (items.size == 1) "it" else "them") + " back.", "Delete forever", danger = true) {
+            withChanges(items.map { it.holder }) {
+                clearSelection()
+                RecycleBin.erase(this, items) { n ->
+                    homeDirty = true
+                    if (isFinishing) return@erase
+                    if (inBin) loadBin(keepScroll = true)
+                    say(if (n == items.size) "Deleted " + (if (n == 1) "“${items[0].name}”" else FileJobs.items(n)) + " for good" else "Deleted $n. ${items.size - n} couldn't be.")
+                }
+            }
+        }
+    }
+
+    private fun emptyBin() {
+        val all = binItems.values.toList()
+        if (all.isEmpty()) return
+        Dialogs.confirm(
+            this, "Empty the recycle bin?",
+            "Everything in it (${FileJobs.items(all.size)}, ${UrlUtils.formatBytes(all.sumOf { it.size })}) is deleted for good.",
+            "Empty the bin", danger = true,
+        ) {
+            withChanges(all.map { it.holder }) {
+                clearSelection()
+                RecycleBin.empty(this) { n ->
+                    homeDirty = true
+                    if (isFinishing) return@empty
+                    if (inBin) loadBin(keepScroll = true)
+                    say(if (n == 1) "Deleted 1 item for good" else "Deleted $n items for good")
+                }
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------ Private (2.9)
+
+    /** Private's folder (or [to] in it), once it is unlocked. */
+    private fun openPrivate(to: File? = null) {
+        val root = PrivateFolder.root(this)
+        val target = to?.takeIf { PrivateFolder.isInside(this, it) && it.isDirectory } ?: root
+        unlockPrivate {
+            if (!root.isDirectory) root.mkdirs()
+            openFolder(target)
+        }
+    }
+
+    /**
+     * Unlocks Private: the phone's screen lock (Android asks), or on a phone without one Swift's own
+     * PIN (chosen the first time). What Private is, is said once before.
+     */
+    private fun unlockPrivate(then: () -> Unit) {
+        if (PrivateFolder.isUnlocked) {
+            then()
+            return
+        }
+        PrivateLock.introThen(this) {
+            val intent = if (PrivateLock.hasScreenLock(this)) PrivateLock.credentialIntent(this) else null
+            if (intent != null) {
+                try {
+                    afterUnlock = then
+                    keepPrivateOpen()
+                    askUnlock.launch(intent)
+                    return@introThen
+                } catch (e: Exception) {
+                    L.w("Private: Android's lock question couldn't be shown", e)
+                    afterUnlock = null
+                    privateGraceUntil = 0L
+                }
+            }
+            val ok = {
+                PrivateFolder.unlock()
+                then()
+            }
+            if (PrivateFolder.hasPin()) PrivateLock.askPin(this) { ok() } else PrivateLock.setUpPin(this) { ok() }
+        }
+    }
+
+    /** Whether [f] can be moved into Private: on the phone's storage or a card, not the bin or a storage's top. */
+    private fun canGoPrivate(f: File): Boolean {
+        val v = Volumes.of(this, f) ?: return false
+        return f.path != v.root.path && !RecycleBin.isInBin(this, f)
+    }
+
+    /** Moves [files] into Private (a file job); a PIN is chosen first on a phone without a screen lock. */
+    private fun moveToPrivate(files: List<File>) {
+        val list = files.filter { canGoPrivate(it) }
+        if (list.isEmpty()) return
+        PrivateLock.introThen(this) {
+            val go = {
+                withChanges(list) {
+                    clearSelection()
+                    val what = if (list.size == 1) list[0].name else FileJobs.items(list.size)
+                    val job = FileJobs.start(this, FileJobs.Kind.MOVE, "Moving $what to Private", onDone = ::doneHere) { w -> PrivateFolder.moveIn(w, list) }
+                    showProgress(job)
+                }
+            }
+            if (PrivateLock.hasScreenLock(this) || PrivateFolder.hasPin()) go() else PrivateLock.setUpPin(this) { go() }
+        }
+    }
+
+    /** "Move out": back where it came from (when known), to Download, or to a folder the user goes to. */
+    private fun moveOut(files: List<File>) {
+        if (files.isEmpty()) return
+        val origins = files.map { PrivateFolder.origin(this, it) }
+        @Suppress("DEPRECATION")
+        val download = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+        val actions = ArrayList<Sheets.Action>()
+        if (origins.all { it != null }) {
+            val places = origins.filterNotNull().distinctBy { it.path }
+            val label = if (places.size == 1) "Back to “${FileIndex.placeOf(this, places[0])}”" else "Back where each came from"
+            actions += Sheets.Action(R.drawable.ic_files_restore, label, primary = true) {
+                moveOutTo(files.indices.groupBy({ origins[it]!! }, { files[it] }))
+            }
+        }
+        actions += Sheets.Action(R.drawable.ic_download, "To Download", primary = true) { moveOutTo(mapOf(download to files)) }
+        actions += Sheets.Action(R.drawable.ic_folder, "Choose a folder…", primary = true) {
+            clip = Clip.Files(files, move = true)
+            clearSelection()
+            say("Go to the folder you want, then tap Move here")
+        }
+        val them = if (files.size == 1) "“${files[0].name}”" else FileJobs.items(files.size)
+        Sheets.actions(this, "Move $them out of Private", "Other apps and the Gallery can see it again where it goes.", actions, iconRes = R.drawable.ic_move)
+    }
+
+    private fun moveOutTo(groups: Map<File, List<File>>) {
+        val all = groups.values.flatten()
+        withChanges(groups.keys) {
+            clearSelection()
+            val what = if (all.size == 1) all[0].name else FileJobs.items(all.size)
+            val job = FileJobs.start(this, FileJobs.Kind.MOVE, "Moving $what out of Private", onDone = ::doneHere) { w ->
+                for ((dest, list) in groups) {
+                    if (!dest.isDirectory) {
+                        val a = Volumes.accessFor(w.ctx, dest) ?: throw com.swiftbrowser.files.FileProblem(Transfers.CARD_TEXT)
+                        if (!a.mkdirs(dest)) throw com.swiftbrowser.files.FileProblem("Swift couldn't make the folder “${dest.name}”.")
+                    }
+                    Transfers.copy(w, list, dest, move = true)
+                }
+                PrivateFolder.tidyOrigins(w.ctx)
+                if (groups.size == 1) w.result(groups.keys.first())
+                w.message("Moved " + (if (all.size == 1) "“${all[0].name}”" else FileJobs.items(all.size)) + " out of Private")
+            }
+            showProgress(job)
         }
     }
 
@@ -1558,7 +2330,8 @@ class FilesActivity : ListActivity() {
                     val ok = withContext(Dispatchers.IO) {
                         val access = Volumes.accessFor(this@FilesActivity, f) ?: return@withContext false
                         access.rename(f, name).also { done ->
-                            if (done) {
+                            // 2.9: Private's files were never in Android's media index, and mustn't be.
+                            if (done && !PrivateFolder.isInside(this@FilesActivity, f)) {
                                 FileOps.forget(this@FilesActivity, f)
                                 FileOps.scan(this@FilesActivity, listOf(to.path))
                             }
@@ -1584,12 +2357,13 @@ class FilesActivity : ListActivity() {
             Favourites.remove(from)
             Favourites.add(to)
         }
+        PrivateFolder.renamed(this, from, to)
         homeDirty = true
         val swap = { r: Row -> if (r.file?.path == from.path) rowOf(FileItem.of(to, count = to.isDirectory, where = r.where)) else r }
         when {
             index != null -> {}
             home -> homeCache?.let { c ->
-                homeCache = HomeData(c.storages, c.favourites.map(swap), c.counts, c.recent?.map(swap))
+                homeCache = HomeData(c.storages, c.favourites.map(swap), c.counts, c.recent?.map(swap), c.bin, c.docs)
                 if (onStartPage) render()
             }
             category != null -> {
@@ -1812,7 +2586,7 @@ class FilesActivity : ListActivity() {
             render()
             return
         }
-        if (category != null) {
+        if (category != null || inBin) {
             // Not read yet: searched once it is.
             if (loading) return
             searchRows = rows.filter { it.name.contains(q, ignoreCase = true) }
@@ -1857,15 +2631,30 @@ class FilesActivity : ListActivity() {
         homeDirty = true
         when {
             index != null -> {}
-            home || category != null -> reload()
-            dir.path in job.touched || job.touched.isEmpty() -> load(keepScroll = true)
+            home || category != null || inBin -> reload()
+            dir.path in job.touched || job.touched.isEmpty() || job.result?.path == dir.path -> {
+                // 2.9: what was deleted or moved away closes up first (a folder of a few hundred at most is looked at), then the folder is read again.
+                val gone = if ((job.kind == FileJobs.Kind.DELETE || job.kind == FileJobs.Kind.MOVE) && animationsOn && rows.size <= 300) {
+                    rows.mapNotNull { r -> r.file?.takeIf { !it.exists() } }
+                } else {
+                    emptyList()
+                }
+                if (gone.isNotEmpty() && gone.size <= MAX_ANIMATED) {
+                    dropRows(gone)
+                    list.postDelayed({ if (!isFinishing) load(keepScroll = true) }, Motion.SHORT + 100)
+                } else {
+                    load(keepScroll = true)
+                }
+            }
         }
         val text = job.message ?: return
         val result = job.result
-        if (!job.failed && job.kind == FileJobs.Kind.EXTRACT && result != null && result.isDirectory && result.path != dir.path) {
-            say(text, "Show") { openFolder(result) }
-        } else {
-            say(text, long = job.failed)
+        val show = !job.failed && (job.kind == FileJobs.Kind.EXTRACT || job.kind == FileJobs.Kind.MOVE) && result != null && result.isDirectory && result.path != dir.path
+        when {
+            // 2.9: moved into Private: there with Open (it asks to unlock first).
+            show && result != null && PrivateFolder.isInside(this, result) -> say(text, "Open") { openPrivate(result) }
+            show && result != null -> say(text, "Show") { openFolder(result) }
+            else -> say(text, long = job.failed)
         }
     }
 
@@ -2019,6 +2808,12 @@ class FilesActivity : ListActivity() {
     // ------------------------------------------------------------------ the list
 
     private fun subtitleOf(r: Row): String {
+        // 2.9: in the bin, when it was deleted and how long it stays, then where it was (a second line).
+        binItems[r.key]?.takeIf { inBin }?.let { b ->
+            val size = if (b.isDir) FileJobs.items(b.files).replace("item", "file") else UrlUtils.formatBytes(b.size)
+            val deleted = if (DateUtils.isToday(b.deletedAt)) "today" else dateText(b.deletedAt)
+            return "$size · deleted $deleted · ${binText(b)}\nfrom ${r.where}"
+        }
         val parts = ArrayList<String>(4)
         if (r.entry?.encrypted == true) parts += "Locked"
         if (r.isDir) {
@@ -2073,13 +2868,169 @@ class FilesActivity : ListActivity() {
 
     private class HintHolder(val text: TextView) : RecyclerView.ViewHolder(text)
 
+    private class ToolsHolder(v: View, val captions: Map<Tool, Pair<View, TextView>>) : RecyclerView.ViewHolder(v)
+
+    private class FilterHolder(val box: FrameLayout) : RecyclerView.ViewHolder(box) {
+        var shown = ""
+    }
+
+    private class DocsHolder(v: View, val strip: LinearLayout) : RecyclerView.ViewHolder(v) {
+        var shown = ""
+    }
+
+    /** A strip of document cards that scrolls sideways. */
+    private fun makeRecentDocs(): DocsHolder {
+        val strip = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(dp(12), dp(2), dp(12), dp(6))
+        }
+        val scroll = HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            overScrollMode = View.OVER_SCROLL_NEVER
+            clipToPadding = false
+            addView(strip)
+            layoutParams = RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        }
+        return DocsHolder(scroll, strip)
+    }
+
+    /** How far a document was read: "Page 8 of 14", "48% read" (null before it was really begun). */
+    private fun progressText(doc: Docs.Doc): String? = when {
+        doc.place == null || doc.progress <= 0.02f -> null
+        doc.kind == Docs.Kind.PDF && doc.total > 0 -> "Page ${doc.place} of ${doc.total}"
+        doc.progress >= 0.97f -> "Read"
+        else -> "${(doc.progress * 100).toInt()}% read"
+    }
+
+    /** The cards, made again only when the documents or how far they were read changed. */
+    private fun bindRecentDocs(h: DocsHolder, item: RecentDocs) {
+        val key = item.docs.joinToString("|") { it.id + ":" + it.progress }
+        if (key == h.shown) return
+        h.shown = key
+        h.strip.removeAllViews()
+        val w = dp(104)
+        for (doc in item.docs) {
+            val card = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(4), dp(4), dp(4), dp(6))
+                background = Ui.ripple(this@FilesActivity, null, 14)
+                Ui.pressable(this, 0.96f)
+                setOnClickListener { openDoc(doc) }
+                setOnLongClickListener { v ->
+                    Haptics.hold(v)
+                    docSheet(doc)
+                    true
+                }
+            }
+            val thumb = ImageView(this).apply {
+                background = Ui.shape(this@FilesActivity, Palette.color(this@FilesActivity, R.color.card_bg), 12, Palette.color(this@FilesActivity, R.color.outline))
+                clipToOutline = true
+                scaleType = ImageView.ScaleType.CENTER
+                setImageDrawable(DocIcon(doc.kind, dp(40)))
+                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+                tag = doc.uri
+            }
+            card.addView(thumb, LinearLayout.LayoutParams(w, dp(132)))
+            if (thumbsOn) {
+                DocThumbs.load(this, doc.uri, doc.kind, w) { bmp ->
+                    if (thumb.tag != doc.uri) return@load
+                    thumb.scaleType = ImageView.ScaleType.CENTER_CROP
+                    thumb.setImageBitmap(bmp)
+                }
+            }
+            card.addView(Ui.text(this, Ui.Type.BODY, doc.name, lines = 2).apply {
+                textSize = 13f
+                setPadding(dp(2), dp(6), dp(2), 0)
+            }, LinearLayout.LayoutParams(w, ViewGroup.LayoutParams.WRAP_CONTENT))
+            val progress = progressText(doc) ?: dateText(doc.opened)?.let { "Opened $it" }
+            if (progress != null) {
+                card.addView(Ui.text(this, Ui.Type.CAPTION, progress, lines = 1).apply { setPadding(dp(2), dp(2), dp(2), 0) }, LinearLayout.LayoutParams(w, ViewGroup.LayoutParams.WRAP_CONTENT))
+            }
+            card.contentDescription = doc.name + (progress?.let { ", $it" } ?: "")
+            h.strip.addView(card, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(4) })
+        }
+    }
+
+    /** Opens a document where it was left, in Swift's viewer. */
+    private fun openDoc(doc: Docs.Doc) {
+        try {
+            Docs.reopen(this, doc.id)
+        } catch (e: Exception) {
+            L.w("Files: a recent document couldn't open", e)
+            say("Swift can't open “${doc.name}” any more")
+        }
+    }
+
+    /** Holding a recent document: open, share, see it in its folder, or take it off the list. */
+    private fun docSheet(doc: Docs.Doc) {
+        val u = Uri.parse(doc.uri)
+        val file = if (u.scheme == "file") File(u.path.orEmpty()) else null
+        val actions = ArrayList<Sheets.Action>()
+        actions += Sheets.Action(R.drawable.ic_open_new, "Open", primary = true) { openDoc(doc) }
+        actions += Sheets.Action(R.drawable.ic_share, "Share", primary = true) { Docs.handOver(this, doc, share = true) }
+        if (file != null && Volumes.of(this, file) != null) actions += Sheets.Action(R.drawable.ic_folder, "Show in folder", primary = true) { showInFolder(file) }
+        actions += Sheets.Action(R.drawable.ic_close, "Remove from recent") {
+            lifecycleScope.launch {
+                withContext(Dispatchers.IO) { runCatching { SwiftApp.db.forgetDocument(doc.id) } }
+                homeCache?.let { c -> homeCache = HomeData(c.storages, c.favourites, c.counts, c.recent, c.bin, c.docs.filter { it.id != doc.id }) }
+                if (onStartPage) render()
+            }
+        }
+        Sheets.actions(this, doc.name, progressText(doc) ?: doc.kind.label, actions, iconRes = R.drawable.ic_documents)
+    }
+
+    /** The kinds of documents as chips (made again only when they change). */
+    private fun bindDocFilter(h: FilterHolder, f: DocFilter) {
+        val key = f.labels.joinToString("|") + "#" + f.chosen
+        if (key == h.shown) return
+        h.shown = key
+        h.box.removeAllViews()
+        val chips = Sheets.chipRow(this, f.labels, f.chosen) { i ->
+            val label = f.labels.getOrNull(i)
+            docGroup = DocGroup.entries.firstOrNull { it.label == label }
+            selected.clear()
+            render()
+            list.scrollToPosition(0)
+        }
+        h.box.addView(Palette.paint(chips), FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+    }
+
     private inner class Adapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
         var items: List<Any> = emptyList()
             private set
 
-        fun set(list: List<Any>) {
+        /**
+         * Shows [list]. With [removals] (2.9), when it is the list on show less a few things (deleted,
+         * moved away), those close up one by one; otherwise (and for many at once) all show anew.
+         */
+        fun set(list: List<Any>, removals: Boolean = false) {
+            val old = items
             items = list
+            val gone = old.size - list.size
+            if (removals && animationsOn && gone in 1..MAX_ANIMATED) {
+                val removed = ArrayList<Int>(gone)
+                var j = 0
+                for (i in old.indices) {
+                    if (j < list.size && keyOf(old[i]) == keyOf(list[j])) j++ else removed += i
+                }
+                if (j == list.size && removed.size == gone) {
+                    for (p in removed.asReversed()) notifyItemRemoved(p)
+                    return
+                }
+            }
             notifyDataSetChanged()
+        }
+
+        private fun keyOf(o: Any): Any = when (o) {
+            is Row -> o.key
+            is Hint -> "hint:" + o.text
+            is Header -> "header:" + o.text + "|" + o.action
+            is StorageCard -> "storage:" + o.volume.root.path
+            is DocFilter -> "filter:" + o.labels.joinToString(",") + "|" + o.chosen
+            is CategoryGrid -> "categories"
+            is ToolGrid -> "tools"
+            is RecentDocs -> "docs:" + o.docs.joinToString(",") { it.id }
+            else -> o
         }
 
         override fun getItemCount() = items.size
@@ -2089,6 +3040,9 @@ class FilesActivity : ListActivity() {
             is Header -> TYPE_HEADER
             is StorageCard -> TYPE_STORAGE
             is CategoryGrid -> TYPE_CATEGORIES
+            is ToolGrid -> TYPE_TOOLS
+            is DocFilter -> TYPE_DOC_FILTER
+            is RecentDocs -> TYPE_DOCS
             else -> TYPE_HINT
         }
 
@@ -2098,6 +3052,12 @@ class FilesActivity : ListActivity() {
             TYPE_HEADER -> makeHeader()
             TYPE_STORAGE -> makeStorage()
             TYPE_CATEGORIES -> makeCategories()
+            TYPE_TOOLS -> makeTools()
+            TYPE_DOCS -> makeRecentDocs()
+            TYPE_DOC_FILTER -> FilterHolder(FrameLayout(this@FilesActivity).apply {
+                setPadding(0, dp(4), 0, dp(6))
+                layoutParams = RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            })
             else -> HintHolder(Ui.text(this@FilesActivity, Ui.Type.BODY_SECONDARY, "").apply {
                 setPadding(dp(20), dp(2), dp(20), dp(8))
                 layoutParams = RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
@@ -2111,11 +3071,14 @@ class FilesActivity : ListActivity() {
                 is Row -> {
                     val h = holder as FileHolder
                     // Only the selection changed: the tick and the marking, not the picture.
-                    if (payloads.isNotEmpty() && h.boundKey == item.key) bindSelection(h, item, PAYLOAD_TOGGLED in payloads) else bind(h, item)
+                    if (payloads.isNotEmpty() && h.boundKey == item.key) bindSelection(h, item, PAYLOAD_TOGGLED in payloads, fade = PAYLOAD_SELECTION in payloads) else bind(h, item)
                 }
                 is Header -> bindHeader(holder as HeaderHolder, item)
                 is StorageCard -> bindStorage(holder as StorageHolder, item)
                 is CategoryGrid -> bindCategories(holder as CategoriesHolder, item)
+                is ToolGrid -> bindTools(holder as ToolsHolder, item)
+                is DocFilter -> bindDocFilter(holder as FilterHolder, item)
+                is RecentDocs -> bindRecentDocs(holder as DocsHolder, item)
                 is Hint -> (holder as HintHolder).text.text = item.text
             }
         }
@@ -2268,14 +3231,19 @@ class FilesActivity : ListActivity() {
     private fun bind(h: FileHolder, r: Row) {
         h.boundKey = r.key
         h.title.text = r.name
-        h.subtitle?.text = subtitleOf(r)
+        h.subtitle?.let { s ->
+            // The bin's rows say where things were on a second line.
+            val lines = if (inBin) 2 else 1
+            if (s.maxLines != lines) s.maxLines = lines
+            s.text = subtitleOf(r)
+        }
         h.thumb?.cancel()
         h.thumb = null
         h.icon.tag = r.key
         setIcon(h, r)
         h.play?.visibility = if (r.kind == FileKind.VIDEO) View.VISIBLE else View.GONE
         val f = r.file
-        if (f != null && !r.isDir && FileThumbs.has(r.kind)) {
+        if (f != null && !r.isDir && thumbsOn && FileThumbs.has(r.kind)) {
             val key = r.key
             // An app's icon stays an icon on a tile, not a blown-up square.
             val apkOnTile = h.tile && r.kind == FileKind.APK
@@ -2311,9 +3279,17 @@ class FilesActivity : ListActivity() {
     }
 
     /** The tick box while selecting (a small pop when tapped), and the selected row's or tile's marking. */
-    private fun bindSelection(h: FileHolder, r: Row, toggled: Boolean) {
+    private fun bindSelection(h: FileHolder, r: Row, toggled: Boolean, fade: Boolean = false) {
         val selecting = selected.isNotEmpty()
         val on = r.key in selected
+        // 2.9: the tick boxes fade in as selecting starts (only the rows on screen are bound, so it is a few).
+        if (fade && selecting && h.check.visibility != View.VISIBLE && animationsOn) {
+            h.check.alpha = 0f
+            h.check.animate().alpha(1f).setDuration(Motion.SHORT).setInterpolator(Motion.enter).start()
+        } else if (h.check.alpha != 1f && !fade) {
+            h.check.animate().cancel()
+            h.check.alpha = 1f
+        }
         h.check.visibility = if (selecting) View.VISIBLE else View.GONE
         // A tile keeps ⋮'s room, so the grid's lines don't change height when selecting starts.
         h.more.visibility = if (!selecting) View.VISIBLE else if (h.tile) View.INVISIBLE else View.GONE
@@ -2341,7 +3317,7 @@ class FilesActivity : ListActivity() {
 
     // ------------------------------------------------------------------ the start page's parts
 
-    /** The start page's cards: a soft outline on the card colour, as on the Documents screen's thumbnails. */
+    /** The start page's cards: a soft outline on the card colour. */
     private fun cardFill(): Drawable =
         Ui.ripple(this, Ui.shape(this, Palette.color(this, R.color.card_bg), Ui.R_MEDIUM, Palette.color(this, R.color.outline)), Ui.R_MEDIUM)
 
@@ -2455,6 +3431,73 @@ class FilesActivity : ListActivity() {
         return CategoriesHolder(col, counts)
     }
 
+    /** 2.9: Free up space, Recycle bin, Private and Wi-Fi transfer, as cards like the categories'. */
+    private fun makeTools(): ToolsHolder {
+        val ctx = this
+        val col = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), 0, dp(12), 0)
+            layoutParams = RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        }
+        val captions = HashMap<Tool, Pair<View, TextView>>()
+        for (line in Tool.entries.chunked(2)) {
+            val row = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL }
+            for (t in line) {
+                val card = LinearLayout(ctx).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(dp(12), dp(12), dp(8), dp(12))
+                    background = cardFill()
+                    Ui.pressable(this, 0.96f)
+                    setOnClickListener { onTool(t) }
+                }
+                card.addView(Ui.iconBadge(ctx, t.icon, 36), LinearLayout.LayoutParams(dp(36), dp(36)).apply { marginEnd = dp(12) })
+                val caption = Ui.text(ctx, Ui.Type.CAPTION, "", lines = 1)
+                card.addView(LinearLayout(ctx).apply {
+                    orientation = LinearLayout.VERTICAL
+                    addView(Ui.text(ctx, Ui.Type.SUBTITLE, t.label, lines = 1))
+                    addView(caption)
+                }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                captions[t] = card to caption
+                row.addView(card, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { setMargins(dp(4), dp(4), dp(4), dp(4)) })
+            }
+            col.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        }
+        return ToolsHolder(col, captions)
+    }
+
+    private fun bindTools(h: ToolsHolder, g: ToolGrid) {
+        for ((t, views) in h.captions) {
+            val text = when (t) {
+                Tool.CLEAN -> "Big, twin and old files"
+                Tool.BIN -> g.bin.let { b ->
+                    when {
+                        b == null -> "Counting…"
+                        b.count == 0 -> "Empty"
+                        else -> "${number(b.count)} · ${UrlUtils.formatBytes(b.bytes)}"
+                    }
+                }
+                Tool.PRIVATE -> when {
+                    PrivateFolder.isUnlocked -> "Open now"
+                    FilesSettings.privateLockKind(this) == FilesSettings.LOCK_NONE -> "Set up a PIN"
+                    else -> "Locked"
+                }
+                Tool.TRANSFER -> "Files to a computer"
+            }
+            views.second.text = text
+            views.first.contentDescription = "${t.label}, $text"
+        }
+    }
+
+    private fun onTool(t: Tool) {
+        when (t) {
+            Tool.CLEAN -> CleanerActivity.open(this)
+            Tool.BIN -> openBin()
+            Tool.PRIVATE -> openPrivate()
+            Tool.TRANSFER -> WifiTransferActivity.open(this)
+        }
+    }
+
     private fun bindCategories(h: CategoriesHolder, g: CategoryGrid) {
         for ((c, views) in h.counts) {
             val s = g.counts?.get(c)
@@ -2472,13 +3515,14 @@ class FilesActivity : ListActivity() {
         /** The folder to open (a path). */
         const val EXTRA_FOLDER = "folder"
 
-        private const val PREF_SORT = "files_sort"
-        private const val PREF_CATEGORY_SORT = "files_category_sort"
-        private const val PREF_HIDDEN = "files_hidden"
-        private const val PREF_GRID = "files_grid"
+        // 2.9: the options' keys are in FilesSettings; this is where Files was left.
         private const val PREF_LAST = "files_last_folder"
         private const val STATE_PLACE = "place"
         private const val PLACE_HOME = "home"
+        private const val PLACE_BIN = "bin"
+
+        private const val PRIVATE_HINT = "Only you can open these, in Swift: other apps, the Gallery and computers can't see them. " +
+            "Uninstalling Swift or clearing its data deletes them."
         private const val CATEGORY = "cat:"
         private const val MAX_FOUND = 300
 
@@ -2498,6 +3542,22 @@ class FilesActivity : ListActivity() {
         private const val TYPE_STORAGE = 3
         private const val TYPE_CATEGORIES = 4
         private const val TYPE_HINT = 5
+        private const val TYPE_TOOLS = 6
+        private const val TYPE_DOC_FILTER = 7
+        private const val TYPE_DOCS = 8
+
+        private const val SLIDE_FORWARD = 1
+        private const val SLIDE_BACK = -1
+        private const val SLIDE_FADE = 2
+
+        /** More rows than this removed at once show anew instead of closing up one by one. */
+        private const val MAX_ANIMATED = 30
+
+        /** Recent documents on the start page. */
+        private const val HOME_DOCS = 12
+
+        /** The kind of documents picked in their category (2.9), kept while Swift runs; null: all. */
+        private var docGroup: DocGroup? = null
 
         /** Rows rebound for their selection only; the one tapped also pops its tick. */
         private const val PAYLOAD_SELECTION = "selection"

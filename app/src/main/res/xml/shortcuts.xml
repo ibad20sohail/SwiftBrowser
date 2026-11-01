@@ -33,14 +33,4 @@
             android:targetClass="com.swiftbrowser.ui.MainActivity"
             android:targetPackage="com.swiftbrowser.app" />
     </shortcut>
-    <shortcut
-        android:shortcutId="documents"
-        android:enabled="true"
-        android:icon="@drawable/ic_shortcut_documents"
-        android:shortcutShortLabel="@string/shortcut_documents">
-        <intent
-            android:action="com.swiftbrowser.action.DOCUMENTS"
-            android:targetClass="com.swiftbrowser.ui.MainActivity"
-            android:targetPackage="com.swiftbrowser.app" />
-    </shortcut>
 </shortcuts>

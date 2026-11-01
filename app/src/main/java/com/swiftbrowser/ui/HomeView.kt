@@ -40,7 +40,6 @@ class HomeView @JvmOverloads constructor(
         fun onNewsSettings()
         fun onContinueClicked(item: com.swiftbrowser.media.Unfinished.Item)
         fun onContinueLongClicked(item: com.swiftbrowser.media.Unfinished.Item)
-        fun onDocumentsTile()
 
         /** The profile pill under the logo (2.7): change profile. */
         fun onProfileClicked()
@@ -64,7 +63,6 @@ class HomeView @JvmOverloads constructor(
 
     /** The shortcuts shown, in order (without the Add button). */
     private var shownTiles: List<TopSites.Tile> = emptyList()
-    private var tilesBuiltWithDocs = false
 
     // Dragging a shortcut to another place (2.7: the others make way while it is held, as in the menu).
     private var dragged: View? = null
@@ -356,7 +354,7 @@ class HomeView @JvmOverloads constructor(
         val hidden = SwiftApp.prefs.hiddenTiles
         // Shown again within half a minute (back from a page, a new tab): the same shortcuts, without
         // reading the history again (2.6).
-        val key = "$profileId|${hidden.sorted()}|${SwiftApp.prefs.homeDocuments}|${TopSites.historyChanged}"
+        val key = "$profileId|${hidden.sorted()}|${TopSites.historyChanged}"
         val now = android.os.SystemClock.elapsedRealtime()
         if (!force && key == tilesFor && now - tilesAt < 30_000 && tilesBox.childCount > 0) return
         tilesFor = key
@@ -377,26 +375,20 @@ class HomeView @JvmOverloads constructor(
 
     private fun bindTiles(tiles: List<TopSites.Tile>) {
         // The same shortcuts as on screen: nothing to build again (2.6).
-        if (tiles == shownTiles && tilesBox.childCount > 0 && !animateTiles && tilesBuiltWithDocs == SwiftApp.prefs.homeDocuments) return
-        tilesBuiltWithDocs = SwiftApp.prefs.homeDocuments
+        if (tiles == shownTiles && tilesBox.childCount > 0 && !animateTiles) return
         shownTiles = tiles
         tilesBox.removeAllViews()
         tileViews.clear()
         tilesTitle.visibility = if (incognito) View.GONE else View.VISIBLE
         val inflater = LayoutInflater.from(context)
-        // The last place is an "Add" button while there is room; Documents (2.4) just before it.
+        // The last place is an "Add" button while there is room (2.9: no Documents tile any more).
         val cells = ArrayList<Any?>(tiles)
-        if (SwiftApp.prefs.homeDocuments) cells += DOCUMENTS
         if (tiles.size < TopSites.MAX) cells += null
         for (rowTiles in cells.chunked(COLUMNS)) {
             val row = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
             for (t in rowTiles) {
                 if (t == null) {
                     row.addView(addTile(inflater, row))
-                    continue
-                }
-                if (t === DOCUMENTS) {
-                    row.addView(documentsTile(inflater, row))
                     continue
                 }
                 t as TopSites.Tile
@@ -583,39 +575,6 @@ class HomeView @JvmOverloads constructor(
         views.forEachIndexed { i, v -> v.tag = shownTiles[i] }
     }
 
-    /** Documents (2.4): the phone's PDFs and Office files. Hold it to take it off the home page. */
-    private fun documentsTile(inflater: LayoutInflater, row: LinearLayout): View {
-        val v = Palette.paint(inflater.inflate(R.layout.item_tile, row, false))
-        v.findViewById<TextView>(R.id.tile_label).text = "Documents"
-        v.findViewById<View>(R.id.tile_letter).visibility = View.GONE
-        v.findViewById<ImageView>(R.id.tile_icon).apply {
-            visibility = View.VISIBLE
-            setImageDrawable(Ui.icon(context, R.drawable.ic_documents, Ui.onAccent(context)))
-            background = Ui.shape(context, Ui.accent(context), 15)
-            scaleType = ImageView.ScaleType.CENTER
-        }
-        v.contentDescription = "Documents"
-        v.setOnClickListener { listener?.onDocumentsTile() }
-        v.setOnLongClickListener {
-            Haptics.hold(v)
-            val a = context as? android.app.Activity ?: return@setOnLongClickListener true
-            Sheets.actions(a, "Documents", "Your PDFs, Word, Excel and PowerPoint files", listOf(
-                Sheets.Action(R.drawable.ic_open_new, "Open", primary = true) { listener?.onDocumentsTile() },
-                Sheets.Action(R.drawable.ic_close, "Take off the home page") {
-                    SwiftApp.prefs.homeDocuments = false
-                    refreshTiles()
-                    Messages.show(a, "Documents is still in the ≡ menu", "Undo") {
-                        SwiftApp.prefs.homeDocuments = true
-                        refreshTiles()
-                    }
-                },
-            ), iconRes = R.drawable.ic_documents)
-            true
-        }
-        Ui.pressable(v, 0.92f)
-        return v
-    }
-
     private fun addTile(inflater: LayoutInflater, row: LinearLayout): View {
         val v = Palette.paint(inflater.inflate(R.layout.item_tile, row, false))
         v.findViewById<TextView>(R.id.tile_label).text = "Add"
@@ -655,9 +614,6 @@ class HomeView @JvmOverloads constructor(
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
     private companion object {
-        /** The Documents tile's place among the shortcuts. */
-        val DOCUMENTS = Any()
-
         /** Shortcuts to a row (2.7: five, smaller). */
         const val COLUMNS = 5
     }

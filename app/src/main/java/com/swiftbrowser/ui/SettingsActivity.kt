@@ -36,6 +36,8 @@ import com.swiftbrowser.core.SearchEngine
 import com.swiftbrowser.core.SiteSettings
 import com.swiftbrowser.engine.DataSaver
 import com.swiftbrowser.core.Prefs
+import com.swiftbrowser.files.FilesSettings
+import com.swiftbrowser.media.PlayerSettings
 import com.swiftbrowser.core.Profiles
 import com.swiftbrowser.core.Updates
 import com.swiftbrowser.core.UrlUtils
@@ -69,6 +71,7 @@ class SettingsActivity : AppCompatActivity() {
         ADBLOCK("Ad blocking", R.drawable.ic_shield),
         SPEED("Speed & memory", R.drawable.ic_speed),
         VIDEO("Video & downloads", R.drawable.ic_movie),
+        FILES("Files & media", R.drawable.ic_folder),
         PRIVACY("Privacy & security", R.drawable.ic_lock),
         VPN("VPN", R.drawable.ic_vpn),
         STORAGE("Storage & data", R.drawable.ic_storage),
@@ -138,6 +141,8 @@ class SettingsActivity : AppCompatActivity() {
                 // A search is cleared first (2.6).
                 val box = settingsSearch
                 when {
+                    // 2.9: opened for one part only (Files' own settings): Back returns there.
+                    topic != null && intent.getBooleanExtra(EXTRA_ONLY, false) -> finish()
                     topic != null -> show(null)
                     box != null && box.text.isNotEmpty() -> box.setText("")
                     else -> finish()
@@ -432,6 +437,7 @@ class SettingsActivity : AppCompatActivity() {
             "Passwords",
             "Site settings",
         ).joinToString(" · ")
+        Topic.FILES -> "File manager and the media player"
         Topic.VPN -> VpnUi.label().let { if (com.swiftbrowser.vpn.Vpn.locations().isEmpty()) "Change your country for free (Proton VPN)" else it }
         Topic.STORAGE -> (usage?.let { "Swift uses ${UrlUtils.formatBytes(it.total)} · " } ?: "") + "Clear data · Back up"
         Topic.ABOUT -> "Swift ${BuildConfig.VERSION_NAME} · Updates · Problem report"
@@ -507,12 +513,124 @@ class SettingsActivity : AppCompatActivity() {
         def(Topic.LOOK, "Menu", "Reset the menu", "menu buttons default reset order") {
             action(R.drawable.ic_update, "Reset the menu", { "Every button back where it started" }) { resetMenu() }
         }
-        def(Topic.LOOK, "App icons", "Documents and Files in the app list", "icon launcher home screen app list documents files apps") {
+        def(Topic.FILES, "Files", "Files in the app list", "icon launcher home screen app list documents files apps") {
             switch(
-                R.drawable.ic_folder, "Documents and Files in the app list",
-                { "Their own icons next to Swift's, to open them straight away" },
+                R.drawable.ic_folder, "Files in the app list",
+                { "Its own icon next to Swift's, to open it straight away" },
                 checked = { AppIcons.shown(this@SettingsActivity) },
             ) { AppIcons.show(this@SettingsActivity, it) }
+        }
+        // 2.9: the file manager (FilesSettings).
+        def(Topic.FILES, "Files", "Files opens at", "start page last folder open where") {
+            action(R.drawable.ic_home, "Files opens at", { if (FilesSettings.startAt == FilesSettings.START_HOME) "Its start page" else "The last folder you were in" }) {
+                val keys = listOf(FilesSettings.START_HOME, FilesSettings.START_LAST)
+                choose("Files opens at", listOf("Its start page", "The last folder you were in"), keys.indexOf(FilesSettings.startAt)) { i ->
+                    FilesSettings.startAt = keys[i]
+                }
+            }
+        }
+        def(Topic.FILES, "Files", "Show hidden files", "hidden dot files system") {
+            switch(R.drawable.ic_folder, "Show hidden files", { "Files and folders whose names start with a dot" }, checked = { FilesSettings.showHidden }) {
+                FilesSettings.showHidden = it
+            }
+        }
+        def(Topic.FILES, "Files", "Grid", "grid list view tiles") {
+            switch(R.drawable.ic_grid_view, "Grid", { if (FilesSettings.grid) "Folders show as tiles with pictures" else "Folders show as a list" }, checked = { FilesSettings.grid }) {
+                FilesSettings.grid = it
+            }
+        }
+        def(Topic.FILES, "Files", "Sort folders by", "sort order name date size type") {
+            action(R.drawable.ic_sort, "Sort folders by", { FilesSettings.sortLabels.getOrNull(FilesSettings.sort) ?: "" }) {
+                choose("Sort folders by", FilesSettings.sortLabels, FilesSettings.sort) { i -> FilesSettings.sort = i }
+            }
+        }
+        def(Topic.FILES, "Files", "Picture previews", "thumbnails previews pictures videos") {
+            switch(R.drawable.ic_image, "Picture previews", { "Small pictures of photos and videos in the lists" }, checked = { FilesSettings.thumbnails }) {
+                FilesSettings.thumbnails = it
+            }
+        }
+        def(Topic.FILES, "Recycle bin", "Use the recycle bin", "recycle bin trash deleted restore undo") {
+            switch(R.drawable.ic_files_bin, "Use the recycle bin", { if (FilesSettings.useRecycleBin) "Deleted files can be brought back for ${FilesSettings.binDays} days" else "Off: deleting is for good" }, checked = { FilesSettings.useRecycleBin }) {
+                FilesSettings.useRecycleBin = it
+            }
+        }
+        def(Topic.FILES, "Recycle bin", "Keep deleted files", "recycle bin days keep") {
+            action(R.drawable.ic_history, "Keep deleted files", { "${FilesSettings.binDays} days, then they go for good" }) {
+                choose("Keep deleted files", FilesSettings.BIN_DAY_CHOICES.map { "$it days" }, FilesSettings.BIN_DAY_CHOICES.indexOf(FilesSettings.binDays)) { i ->
+                    FilesSettings.binDays = FilesSettings.BIN_DAY_CHOICES[i]
+                }
+            }
+        }
+        def(Topic.FILES, "Recycle bin", "Empty the recycle bin", "empty recycle bin trash delete forever") {
+            action(R.drawable.ic_delete, "Empty the recycle bin", { "Deletes everything in it for good" }) {
+                Dialogs.confirm(this@SettingsActivity, "Empty the recycle bin?", "Everything in it is deleted for good. This can't be undone.", "Empty") {
+                    FilesSettings.emptyBin(this@SettingsActivity) { n -> snack(if (n > 0) "Deleted $n for good" else "The recycle bin was empty") }
+                }
+            }
+        }
+        def(Topic.FILES, "Private", "Private folder lock", "private folder lock pin screen lock") {
+            action(R.drawable.ic_lock, "Private folder lock", {
+                when (FilesSettings.privateLockKind(this@SettingsActivity)) {
+                    FilesSettings.LOCK_SCREEN -> "Your phone's screen lock"
+                    FilesSettings.LOCK_PIN -> "Swift's PIN · tap to change it"
+                    else -> "Not set up yet: open Private in Files"
+                }
+            }) {
+                if (FilesSettings.privateLockKind(this@SettingsActivity) == FilesSettings.LOCK_PIN) FilesSettings.changePin(this@SettingsActivity)
+                else snack("Private uses your phone's screen lock. Set or change it in Android's settings.")
+            }
+        }
+        // 2.9: Swift's video and music player (PlayerSettings).
+        def(Topic.FILES, "Media player", "Swipe gestures", "player gestures swipe brightness volume seek vlc") {
+            switch(R.drawable.ic_play, "Swipe gestures", { "Brightness on the left, volume on the right, sideways to move through the video" }, checked = { PlayerSettings.gestures }) {
+                PlayerSettings.gestures = it
+            }
+        }
+        def(Topic.FILES, "Media player", "Go on where you left off", "resume position continue player video music") {
+            switch(R.drawable.ic_history, "Go on where you left off", { "Videos and long recordings start where you stopped" }, checked = { PlayerSettings.resume }) {
+                PlayerSettings.resume = it
+            }
+        }
+        def(Topic.FILES, "Media player", "Keep music playing", "background music notification lock screen") {
+            switch(R.drawable.ic_headphones, "Keep music playing", { "When you leave the player or turn the screen off, with controls in the notification" }, checked = { PlayerSettings.backgroundAudio }) {
+                PlayerSettings.backgroundAudio = it
+            }
+        }
+        def(Topic.FILES, "Media player", "Speed", "player speed default fast slow") {
+            action(R.drawable.ic_speed, "Speed", { "Videos start at " + PlayerSettings.speedLabel(PlayerSettings.defaultSpeed) }) {
+                choose("Speed", PlayerSettings.SPEEDS.map { PlayerSettings.speedLabel(it) }, PlayerSettings.SPEEDS.indexOfFirst { it == PlayerSettings.defaultSpeed }) { i ->
+                    PlayerSettings.defaultSpeed = PlayerSettings.SPEEDS[i]
+                }
+            }
+        }
+        def(Topic.FILES, "Media player", "Turning the screen", "rotation landscape portrait orientation auto") {
+            action(R.drawable.ic_fullscreen, "Turning the screen", { PlayerSettings.rotationLabel(PlayerSettings.rotation) }) {
+                choose("Turning the screen", PlayerSettings.ROTATIONS.map { PlayerSettings.rotationLabel(it) }, PlayerSettings.ROTATIONS.indexOf(PlayerSettings.rotation)) { i ->
+                    PlayerSettings.rotation = PlayerSettings.ROTATIONS[i]
+                }
+            }
+        }
+        def(Topic.FILES, "Media player", "Double-tap skips", "double tap skip seconds forward back") {
+            action(R.drawable.ic_forward, "Double-tap skips", { "${PlayerSettings.doubleTapSeconds} seconds" }) {
+                choose("Double-tap skips", PlayerSettings.DOUBLE_TAP_CHOICES.map { "$it seconds" }, PlayerSettings.DOUBLE_TAP_CHOICES.indexOf(PlayerSettings.doubleTapSeconds)) { i ->
+                    PlayerSettings.doubleTapSeconds = PlayerSettings.DOUBLE_TAP_CHOICES[i]
+                }
+            }
+        }
+        def(Topic.FILES, "Media player", "Subtitle size", "subtitles captions text size") {
+            action(R.drawable.ic_subtitles, "Subtitle size", { "${PlayerSettings.subtitleSize}%" }) {
+                choose("Subtitle size", PlayerSettings.SUBTITLE_SIZES.map { "$it%" }, PlayerSettings.SUBTITLE_SIZES.indexOf(PlayerSettings.subtitleSize)) { i ->
+                    PlayerSettings.subtitleSize = PlayerSettings.SUBTITLE_SIZES[i]
+                }
+            }
+        }
+        def(Topic.FILES, "Media player", "Forget where videos were left", "positions resume forget clear continue") {
+            action(R.drawable.ic_delete, "Forget where videos were left", { "Videos and songs start from the beginning again" }) {
+                Dialogs.confirm(this@SettingsActivity, "Forget every place?", "Videos and songs will start from the beginning, and leave the home page's Continue row.", "Forget") {
+                    PlayerSettings.clearPositions(this@SettingsActivity)
+                    snack("Forgotten")
+                }
+            }
         }
         def(Topic.LOOK, "Feel", "Light vibration", "haptic vibrate feedback touch") {
             switch(R.drawable.ic_vibration, "Light vibration", { "A short buzz when you hold something or drag a tab" }, checked = { prefs.haptics }) {
@@ -524,11 +642,6 @@ class SettingsActivity : AppCompatActivity() {
         def(Topic.NEWS, null, "Show news", "news headlines stories home page feed") {
             switch(R.drawable.ic_news, "Show news", { "Headlines under the shortcuts on the home page" }, checked = { prefs.newsEnabled }) {
                 prefs.newsEnabled = it
-            }
-        }
-        def(Topic.NEWS, null, "Documents shortcut", "documents files pdf word excel powerpoint home shortcut") {
-            switch(R.drawable.ic_documents, "Documents shortcut", { "Your PDFs and Office files, among the home page's shortcuts" }, checked = { prefs.homeDocuments }) {
-                prefs.homeDocuments = it
             }
         }
         def(Topic.NEWS, null, "Continue watching and reading", "continue unfinished videos articles reading resume home") {
@@ -732,6 +845,13 @@ class SettingsActivity : AppCompatActivity() {
                 prefs.autoLandscape = it
             }
         }
+        def(Topic.VIDEO, "Playing", "Swift player for website videos", "player native vlc smooth lag gestures play in swift player website streaming") {
+            switch(
+                R.drawable.ic_play, "Swift player for website videos",
+                { if (prefs.sitePlayer) "A button on playing videos opens them in Swift's player: smoother, with gestures and subtitles" else "Off: videos play in the page" },
+                checked = { prefs.sitePlayer },
+            ) { prefs.sitePlayer = it }
+        }
         def(Topic.VIDEO, "Playing", "Play silent videos by themselves", "autoplay previews muted") {
             switch(R.drawable.ic_play, "Play silent videos by themselves", { "Like previews in YouTube's feed. Off scrolls smoother." }, checked = { prefs.autoplayMuted }) {
                 prefs.autoplayMuted = it
@@ -756,6 +876,13 @@ class SettingsActivity : AppCompatActivity() {
                 prefs.wifiOnlyDownloads = it
                 Downloads.onNetworkChanged()
             }
+        }
+        def(Topic.VIDEO, "Downloads", "Sort downloads into folders", "sort organise folders type videos music pictures documents apps") {
+            switch(
+                R.drawable.ic_folder, "Sort downloads into folders",
+                { if (prefs.sortDownloads) "Videos, Music, Pictures, Documents and Apps in your download folder" else "Off: everything goes into the download folder" },
+                checked = { prefs.sortDownloads },
+            ) { prefs.sortDownloads = it }
         }
         def(Topic.VIDEO, "Downloads", "Download folder", "storage location where save sd card") {
             action(R.drawable.ic_folder, "Download folder", { downloadFolderText() }) {
@@ -2014,6 +2141,19 @@ class SettingsActivity : AppCompatActivity() {
         else -> "$n tabs: a lot of memory"
     }
 
+    /** A single choice from [labels] (2.9); [picked] then the rows refresh. */
+    private fun choose(title: String, labels: List<String>, checked: Int, picked: (Int) -> Unit) {
+        MaterialAlertDialogBuilder(this)
+            .setTitle(title)
+            .setSingleChoiceItems(labels.toTypedArray(), checked) { d, which ->
+                picked(which)
+                d.dismiss()
+                refreshAll()
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .showImmersive()
+    }
+
     private fun chooseLiveTabs() {
         val options = (1..Prefs.MAX_LIVE_TABS_LIMIT).toList()
         val labels = options.map { liveTabsText(it) }.toTypedArray()
@@ -2349,6 +2489,9 @@ class SettingsActivity : AppCompatActivity() {
     companion object {
         /** Opens this topic (Topic's name) instead of the main page. */
         const val EXTRA_TOPIC = "topic"
+
+        /** With [EXTRA_TOPIC]: only that part of the settings; Back leaves rather than showing the rest (2.9). */
+        const val EXTRA_ONLY = "only_topic"
 
         /** Everyday words for what settings are about, for the search box. */
         private val SYNONYMS = mapOf(

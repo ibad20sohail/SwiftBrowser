@@ -17,6 +17,8 @@ object Unfinished {
         val url: String, val title: String, val progress: Float, val caption: String, val video: Boolean, val updated: Long, val image: String?,
         /** A document left part-way (2.4), opened again in Swift's viewer. */
         val doc: com.swiftbrowser.docs.Docs.Doc? = null,
+        /** A video or song on the phone left part-way in Swift's player (2.9). */
+        val localPath: String? = null,
     )
 
     private const val MAX = 8
@@ -52,11 +54,21 @@ object Unfinished {
             val share = (r[2] as Double).toFloat()
             Item(r[0] as String, (r[1] as String?).orEmpty(), share, "${(share * 100).toInt()}% read", false, r[3] as Long, r[4] as String?)
         }
-        val docs = db.unfinishedDocuments(profileId, since, MAX).map { d ->
+        // 2.9: a document whose file was deleted leaves the row (and is forgotten).
+        val docs = db.unfinishedDocuments(profileId, since, MAX).filter { d ->
+            !com.swiftbrowser.docs.Docs.isGone(d.uri).also { gone -> if (gone) db.forgetDocumentUri(d.uri) }
+        }.map { d ->
             val caption = if (d.kind == com.swiftbrowser.docs.Docs.Kind.PDF && d.total > 0) "Page ${d.place} of ${d.total}" else "${(d.progress * 100).toInt()}% read"
             Item(d.uri, d.name, d.progress, caption, false, d.updated, null, d)
         }
-        return (videos + articles + docs).filter { it.url !in hidden }.sortedByDescending { it.updated }.take(MAX)
+        // 2.9: videos and songs from the phone, left part-way in Swift's player (files that still exist).
+        val local = SwiftApp.instance?.let { ctx ->
+            LocalMedia.recent(ctx, MAX).filter { it.updated >= since && it.duration > 0 && !com.swiftbrowser.files.PrivateFolder.isInside(ctx, java.io.File(it.path)) }.map { m ->
+                val left = ((m.duration - m.position) / 60_000).toInt().coerceAtLeast(1)
+                Item("file://" + m.path, m.title, (m.position.toFloat() / m.duration).coerceIn(0f, 1f), "$left min left", m.video, m.updated, null, localPath = m.path)
+            }
+        }.orEmpty()
+        return (videos + articles + docs + local).filter { it.url !in hidden }.sortedByDescending { it.updated }.take(MAX)
     }
 
     private val YOUTUBE_ID = Regex("^https?://(?:www\\.|m\\.|music\\.)?(?:youtube\\.com/(?:watch\\?(?:.*&)?v=|shorts/|live/)|youtu\\.be/)([A-Za-z0-9_-]{11})")
@@ -81,6 +93,7 @@ object Unfinished {
         hidden -= item.url
         TabManager.io.execute {
             when {
+                item.localPath != null -> SwiftApp.instance?.let { LocalMedia.forget(it, item.localPath) }
                 item.doc != null -> SwiftApp.db.setDocumentPlace(item.doc.id, "", 0f, 0)
                 item.video -> SwiftApp.db.deleteVideoPosition(item.url)
                 else -> SwiftApp.db.deleteReadingPosition(item.url)

@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<!-- 2.9: Wi-Fi transfer's page on the computer: the phone's folders, downloads (a folder or the
+     ticked files as a ZIP) and uploads into the folder on show. Names are always set as text,
+     never as HTML. {{ACCENT}} and {{ON_ACCENT}} are the phone's colours. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Swift · Wi-Fi transfer</title>
+<style>
+:root{--accent:{{ACCENT}};--on:{{ON_ACCENT}};--bg:#f6f7f9;--card:#fff;--text:#1b1c1f;--muted:#5f6368;--line:#e3e5ea;--hover:rgba(0,0,0,.04);--danger:#d93025}
+@media (prefers-color-scheme:dark){:root{--bg:#15171c;--card:#1f2228;--text:#e8eaed;--muted:#a0a4ab;--line:#33363d;--hover:rgba(255,255,255,.05);--danger:#f28b82}}
+*{box-sizing:border-box}
+body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text);margin:0;font-size:14px}
+header{display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:14px 24px;background:var(--card);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:2}
+.brand{font-weight:600;font-size:16px}
+.roots{display:flex;gap:6px;flex-wrap:wrap}
+.chip{border:1px solid var(--line);background:transparent;color:var(--text);border-radius:16px;padding:6px 14px;cursor:pointer;font-size:13px}
+.chip.on{background:var(--accent);color:var(--on);border-color:var(--accent)}
+main{max-width:1100px;margin:0 auto;padding:16px 24px 120px}
+.crumbs{display:flex;flex-wrap:wrap;align-items:center;gap:2px;margin:4px 0 12px;font-size:15px}
+.crumbs a{color:var(--accent);text-decoration:none;padding:4px 6px;border-radius:8px;cursor:pointer}
+.crumbs a:hover{background:var(--hover)}
+.crumbs span.sep{color:var(--muted)}
+.crumbs b{padding:4px 6px}
+.tools{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
+.btn{border:0;border-radius:20px;padding:8px 16px;font-size:14px;cursor:pointer;background:var(--accent);color:var(--on);text-decoration:none;display:inline-block}
+.btn.plain{background:transparent;color:var(--accent);border:1px solid var(--line)}
+.btn[disabled]{opacity:.45;cursor:default}
+.free{color:var(--muted);margin-left:auto}
+.box{background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+table{width:100%;border-collapse:collapse}
+th{text-align:left;font-weight:500;color:var(--muted);font-size:12px;padding:10px 12px;border-bottom:1px solid var(--line)}
+td{padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:middle}
+tr:last-child td{border-bottom:0}
+tbody tr:hover{background:var(--hover)}
+td.name{word-break:break-all}
+td.name a{color:var(--text);text-decoration:none;cursor:pointer}
+td.name a:hover{text-decoration:underline}
+td.num,td.date{color:var(--muted);white-space:nowrap}
+td.act a{color:var(--accent);text-decoration:none;white-space:nowrap}
+.ico{display:inline-block;width:22px;text-align:center;margin-right:8px}
+.empty{padding:40px;text-align:center;color:var(--muted)}
+.drop{display:none;position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:5;align-items:center;justify-content:center}
+.drop div{background:var(--card);border:2px dashed var(--accent);border-radius:16px;padding:40px 56px;font-size:18px}
+.drop.on{display:flex}
+.uploads{position:fixed;right:20px;bottom:20px;width:340px;max-height:50vh;overflow:auto;background:var(--card);border:1px solid var(--line);border-radius:14px;box-shadow:0 4px 18px rgba(0,0,0,.15);display:none;z-index:3}
+.uploads.on{display:block}
+.uploads h3{margin:0;padding:12px 14px;font-size:14px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between}
+.up{padding:10px 14px;border-bottom:1px solid var(--line)}
+.up .n{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.up .s{color:var(--muted);font-size:12px;margin-top:4px;display:flex;justify-content:space-between}
+.bar{height:5px;background:var(--line);border-radius:3px;margin-top:6px;overflow:hidden}
+.bar i{display:block;height:100%;width:0;background:var(--accent)}
+.up.bad .s{color:var(--danger)}
+.x{cursor:pointer;color:var(--accent);background:none;border:0;font-size:12px}
+.msg{padding:10px 14px;border-radius:10px;background:var(--card);border:1px solid var(--line);margin-bottom:12px;display:none}
+.msg.on{display:block}
+input[type=checkbox]{width:16px;height:16px;accent-color:var(--accent)}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">Swift · your phone</div>
+  <div class="roots" id="roots"></div>
+</header>
+<main>
+  <div class="crumbs" id="crumbs"></div>
+  <div class="msg" id="msg"></div>
+  <div class="tools">
+    <button class="btn" id="upload">Upload files</button>
+    <input type="file" id="pick" multiple hidden>
+    <button class="btn plain" id="mkdir">New folder</button>
+    <button class="btn plain" id="zipSel" disabled>Download ticked (ZIP)</button>
+    <a class="btn plain" id="zipAll">Download this folder (ZIP)</a>
+    <span class="free" id="free"></span>
+  </div>
+  <div class="box">
+    <table>
+      <thead><tr><th style="width:36px"><input type="checkbox" id="all" aria-label="Tick all"></th><th>Name</th><th>Size</th><th>Changed</th><th></th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div class="empty" id="empty" hidden></div>
+  </div>
+</main>
+<div class="drop" id="drop"><div>Drop files to upload them to this folder</div></div>
+<div class="uploads" id="uploads"><h3><span id="upTitle">Uploads</span><button class="x" id="upClose">Close</button></h3><div id="upList"></div></div>
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var cur = { v: 0, p: '' }, items = [], free = -1, canWrite = true, roots = [], ticked = {};
+  var queue = [], busy = false;
+
+  function enc(s) { return encodeURIComponent(s); }
+  function qs(v, p) { return 'v=' + enc(v) + '&p=' + enc(p); }
+  function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+  function size(n) {
+    if (n < 0) return '';
+    if (n < 1024) return n + ' B';
+    var u = ['KB', 'MB', 'GB', 'TB'], i = -1;
+    do { n /= 1024; i++; } while (n >= 1024 && i < u.length - 1);
+    return (n < 10 && i > 0 ? n.toFixed(1) : Math.round(n)) + ' ' + u[i];
+  }
+  function when(t) { return t > 0 ? new Date(t).toLocaleString([], { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''; }
+  function say(text) { var m = $('msg'); m.textContent = text || ''; m.className = text ? 'msg on' : 'msg'; }
+
+  function api(url, opt) {
+    return fetch(url, Object.assign({ credentials: 'same-origin' }, opt || {})).then(function (r) {
+      if (r.status === 401) { location.href = '/'; throw new Error('signin'); }
+      return r.json().then(function (j) { if (!r.ok) throw new Error(j.error || 'Something went wrong'); return j; });
+    });
+  }
+
+  function icon(it) {
+    if (it.d) return '📁';
+    var x = (it.n.split('.').pop() || '').toLowerCase();
+    if (/^(jpe?g|png|gif|webp|bmp|heic|heif|avif)$/.test(x)) return '🖼️';
+    if (/^(mp4|m4v|mkv|webm|3gp|mov|avi)$/.test(x)) return '🎬';
+    if (/^(mp3|m4a|aac|ogg|opus|flac|wav)$/.test(x)) return '🎵';
+    if (/^(zip|7z|rar|tar|gz|xz|bz2)$/.test(x)) return '🗜️';
+    if (x === 'apk') return '📦';
+    return '📄';
+  }
+
+  function fromHash() {
+    var h = location.hash.replace(/^#/, ''), o = { v: 0, p: '' };
+    h.split('&').forEach(function (kv) { var a = kv.split('='); if (a[0] === 'v') o.v = parseInt(decodeURIComponent(a[1] || '0'), 10) || 0; if (a[0] === 'p') o.p = decodeURIComponent(a[1] || ''); });
+    return o;
+  }
+  function go(v, p) { location.hash = qs(v, p); }
+
+  function load() {
+    cur = fromHash();
+    ticked = {};
+    say('');
+    api('/api/list?' + qs(cur.v, cur.p)).then(function (j) {
+      items = j.items; free = j.free; canWrite = j.canWrite; cur.p = j.p;
+      render(j);
+    }).catch(function (e) {
+      if (e.message === 'signin') return;
+      items = []; render(null); say(e.message);
+    });
+  }
+
+  function renderRoots() {
+    var box = $('roots'); box.textContent = '';
+    roots.forEach(function (r) {
+      var b = el('button', 'chip' + (r.v === cur.v ? ' on' : ''), r.name);
+      b.title = r.free >= 0 ? size(r.free) + ' free of ' + size(r.total) : '';
+      b.onclick = function () { go(r.v, ''); };
+      box.appendChild(b);
+    });
+  }
+
+  function render(j) {
+    renderRoots();
+    var c = $('crumbs'); c.textContent = '';
+    var root = roots.filter(function (r) { return r.v === cur.v; })[0];
+    var parts = cur.p ? cur.p.split('/') : [];
+    var top = el(parts.length ? 'a' : 'b', null, root ? root.name : 'Phone');
+    if (parts.length) top.onclick = function () { go(cur.v, ''); };
+    c.appendChild(top);
+    parts.forEach(function (name, i) {
+      c.appendChild(el('span', 'sep', '›'));
+      var last = i === parts.length - 1;
+      var a = el(last ? 'b' : 'a', null, name);
+      if (!last) { var to = parts.slice(0, i + 1).join('/'); a.onclick = function () { go(cur.v, to); }; }
+      c.appendChild(a);
+    });
+    $('free').textContent = free >= 0 ? size(free) + ' free on the phone' : '';
+    $('upload').disabled = !canWrite; $('mkdir').disabled = !canWrite;
+    $('upload').title = canWrite ? '' : 'Swift may only read here';
+    $('zipAll').href = '/zip?' + qs(cur.v, cur.p);
+    var body = $('rows'); body.textContent = '';
+    items.forEach(function (it) {
+      var tr = el('tr');
+      var cb = el('input'); cb.type = 'checkbox'; cb.setAttribute('aria-label', 'Tick ' + it.n);
+      cb.onchange = function () { if (cb.checked) ticked[it.n] = true; else delete ticked[it.n]; updateTicks(); };
+      var td0 = el('td'); td0.appendChild(cb); tr.appendChild(td0);
+      var td = el('td', 'name'); td.appendChild(el('span', 'ico', icon(it)));
+      var a = el('a', null, it.n);
+      var path = cur.p ? cur.p + '/' + it.n : it.n;
+      if (it.d) { a.onclick = function () { go(cur.v, path); }; }
+      else { a.href = '/dl?' + qs(cur.v, path) + '&view=1'; a.target = '_blank'; a.rel = 'noopener'; }
+      td.appendChild(a); tr.appendChild(td);
+      tr.appendChild(el('td', 'num', it.d ? '' : size(it.s)));
+      tr.appendChild(el('td', 'date', when(it.t)));
+      var act = el('td', 'act'), dl = el('a', null, it.d ? 'ZIP' : 'Download');
+      dl.href = it.d ? '/zip?' + qs(cur.v, path) : '/dl?' + qs(cur.v, path);
+      act.appendChild(dl); tr.appendChild(act);
+      body.appendChild(tr);
+    });
+    var e = $('empty');
+    e.hidden = items.length > 0;
+    e.textContent = j ? 'This folder is empty.' + (canWrite ? ' Drop files here to upload them.' : '') : 'This folder can’t be shown.';
+    $('all').checked = false;
+    updateTicks();
+  }
+
+  function updateTicks() {
+    var n = Object.keys(ticked).length;
+    $('zipSel').disabled = n === 0;
+    $('zipSel').textContent = n ? 'Download ' + n + ' ticked (ZIP)' : 'Download ticked (ZIP)';
+  }
+
+  $('all').onchange = function () {
+    var on = $('all').checked; ticked = {};
+    Array.prototype.forEach.call(document.querySelectorAll('#rows input[type=checkbox]'), function (cb, i) { cb.checked = on; if (on) ticked[items[i].n] = true; });
+    updateTicks();
+  };
+  $('zipSel').onclick = function () {
+    var names = Object.keys(ticked);
+    if (!names.length) return;
+    if (names.length === 1) {
+      var it = items.filter(function (x) { return x.n === names[0]; })[0];
+      if (it && !it.d) { location.href = '/dl?' + qs(cur.v, cur.p ? cur.p + '/' + it.n : it.n); return; }
+    }
+    location.href = '/zip?' + qs(cur.v, cur.p) + names.map(function (n) { return '&n=' + enc(n); }).join('');
+  };
+  $('mkdir').onclick = function () {
+    var name = prompt('Name of the new folder');
+    if (!name) return;
+    api('/api/mkdir?' + qs(cur.v, cur.p) + '&name=' + enc(name), { method: 'POST', headers: { 'X-Swift': '1' } })
+      .then(load).catch(function (e) { say(e.message); });
+  };
+
+  // ---------------------------------------------------------------- uploads (one file at a time)
+  $('upload').onclick = function () { $('pick').click(); };
+  $('pick').onchange = function () { add($('pick').files); $('pick').value = ''; };
+  $('upClose').onclick = function () { if (!busy) { $('uploads').className = 'uploads'; $('upList').textContent = ''; } };
+
+  function add(files) {
+    if (!canWrite) { say('Swift may only read this folder. On the phone, open Files and allow changes there first.'); return; }
+    var where = { v: cur.v, p: cur.p };
+    Array.prototype.forEach.call(files, function (f) {
+      var row = el('div', 'up'), name = el('div', 'n', f.name), s = el('div', 's'), state = el('span', null, 'Waiting'), x = el('button', 'x', 'Cancel');
+      var bar = el('div', 'bar'), fill = el('i');
+      bar.appendChild(fill); s.appendChild(state); s.appendChild(x);
+      row.appendChild(name); row.appendChild(bar); row.appendChild(s);
+      $('upList').appendChild(row);
+      var job = { file: f, where: where, row: row, state: state, fill: fill, x: x, cancelled: false };
+      x.onclick = function () { job.cancelled = true; if (job.xhr) job.xhr.abort(); else done(job, 'Cancelled', true); };
+      queue.push(job);
+    });
+    $('uploads').className = 'uploads on';
+    next();
+  }
+
+  function done(job, text, bad) {
+    job.state.textContent = text; job.x.remove();
+    if (bad) job.row.className = 'up bad';
+  }
+
+  function next() {
+    if (busy) return;
+    var job = queue.shift();
+    if (!job) { $('upTitle').textContent = 'Uploads'; return; }
+    if (job.cancelled) return next();
+    if (free >= 0 && job.file.size > free) { done(job, 'Not enough room on the phone', true); return next(); }
+    busy = true;
+    $('upTitle').textContent = 'Uploading… (' + (queue.length + 1) + ' left)';
+    var x = new XMLHttpRequest(); job.xhr = x;
+    x.open('POST', '/upload?' + qs(job.where.v, job.where.p));
+    x.setRequestHeader('X-Swift', '1');
+    x.upload.onprogress = function (e) {
+      if (!e.lengthComputable) return;
+      job.fill.style.width = (100 * e.loaded / e.total).toFixed(1) + '%';
+      job.state.textContent = size(e.loaded) + ' of ' + size(e.total);
+    };
+    x.onload = function () {
+      var j = {}; try { j = JSON.parse(x.responseText); } catch (err) { /* not JSON */ }
+      if (x.status === 401) { location.href = '/'; return; }
+      if (x.status === 200) { job.fill.style.width = '100%'; done(job, 'Done', false); free -= job.file.size; }
+      else done(job, j.error || 'Failed', true);
+      finish(job);
+    };
+    x.onerror = function () { done(job, 'The connection to the phone was lost', true); finish(job); };
+    x.onabort = function () { done(job, 'Cancelled', true); finish(job); };
+    var fd = new FormData(); fd.append('file', job.file, job.file.name);
+    x.send(fd);
+  }
+
+  function finish(job) {
+    busy = false;
+    if (job.where.v === cur.v && job.where.p === cur.p && !queue.length) load();
+    next();
+  }
+
+  // Dropping files anywhere on the page.
+  var depth = 0;
+  document.addEventListener('dragenter', function (e) { if (e.dataTransfer && Array.prototype.indexOf.call(e.dataTransfer.types, 'Files') >= 0) { depth++; $('drop').className = 'drop on'; e.preventDefault(); } });
+  document.addEventListener('dragleave', function () { depth = Math.max(0, depth - 1); if (!depth) $('drop').className = 'drop'; });
+  document.addEventListener('dragover', function (e) { e.preventDefault(); });
+  document.addEventListener('drop', function (e) { e.preventDefault(); depth = 0; $('drop').className = 'drop'; if (e.dataTransfer && e.dataTransfer.files.length) add(e.dataTransfer.files); });
+  window.addEventListener('beforeunload', function (e) { if (busy) { e.preventDefault(); e.returnValue = ''; } });
+  window.addEventListener('hashchange', load);
+
+  api('/api/roots').then(function (r) { roots = r; load(); }).catch(function (e) { if (e.message !== 'signin') say(e.message); });
+})();
+</script>
+</body>
+</html>

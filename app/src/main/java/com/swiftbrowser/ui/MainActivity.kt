@@ -963,7 +963,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
                 ACTION_NEW_TAB -> TabManager.newTab(incognito = false)
                 ACTION_INCOGNITO -> TabManager.newTab(incognito = true)
                 // Hold Swift's icon, or the widget (2.7).
-                ACTION_DOCUMENTS -> openDocuments()
+                // Shortcuts and widgets from before 2.9: documents are in Files now.
+                ACTION_DOCUMENTS -> FilesActivity.open(this)
                 ACTION_FILES -> FilesActivity.open(this)
                 // The widget's bar and the New tab tile (2.6): a new tab (or the empty one open), ready to type.
                 ACTION_SEARCH -> {
@@ -1615,16 +1616,16 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             }
 
             override fun onContinueClicked(item: com.swiftbrowser.media.Unfinished.Item) {
-                // A document opens in Swift's viewer, where it was left (2.4).
+                // A document opens in Swift's viewer, where it was left (2.4); a video or song from the
+                // phone in Swift's player, which goes on from there (2.9).
                 item.doc?.let { Docs.reopen(this@MainActivity, it.id); return }
+                item.localPath?.let { PlayerActivity.open(this@MainActivity, java.io.File(it)); return }
                 openInCurrent(item.url)
                 // An article opens in reader view again, where it was left.
                 if (!item.video) current?.readerOnLoad = item.url
             }
 
             override fun onContinueLongClicked(item: com.swiftbrowser.media.Unfinished.Item) = continueMenu(item)
-
-            override fun onDocumentsTile() = openDocuments()
 
             override fun onProfileClicked() = Sheets.profiles(this@MainActivity)
         }
@@ -1667,6 +1668,14 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
     /** Holding a card in the home page's "Continue" (2.3). */
     private fun continueMenu(item: com.swiftbrowser.media.Unfinished.Item) {
+        item.localPath?.let { path ->
+            Sheets.actions(this, item.title, item.caption, listOf(
+                Sheets.Action(R.drawable.ic_play, "Play", primary = true) { PlayerActivity.open(this, java.io.File(path)) },
+                Sheets.Action(R.drawable.ic_folder, "Show in Files", primary = true) { FilesActivity.open(this, java.io.File(path).parentFile) },
+                Sheets.Action(R.drawable.ic_close, "Remove from Continue", danger = true) { home.removeContinue(item) },
+            ))
+            return
+        }
         item.doc?.let { doc ->
             val actions = listOf(
                 Sheets.Action(R.drawable.ic_open_new, "Open", primary = true) { Docs.reopen(this, doc.id) },
@@ -2018,6 +2027,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
     override fun onTabSelected(tab: Tab) {
         selectionMenu.dismiss()
+        updateSitePlayerChip()
         if (resumeChipFor != null && resumeChipFor !== tab) hideResumeChip(null)
         // What this tab's page asked while it wasn't on screen (an alert, a sign-in) shows now (2.6).
         tab.session?.let { s -> root.post { if (current === tab) com.swiftbrowser.tabs.SessionFactory.prompts.showWaiting(s) } }
@@ -2089,6 +2099,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     override fun onTabUpdated(tab: Tab) {
         if (tab !== current) return
         syncSession(tab)
+        updateSitePlayerChip()
         val pageStarted = tab.loading && !shownLoading
         if (pageStarted) {
             selectionMenu.dismiss()
@@ -2184,6 +2195,73 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     override fun onPlayingChanged(tab: Tab) {
         if (tab !== current) return
         updateKeepScreenOn()
+        updateSitePlayerChip()
+    }
+
+    // ------------------------------------------------------------------ Swift's player for site videos (2.9)
+
+    private var sitePlayerChip: View? = null
+
+    /** The video a site plays, as Swift's player can take it: its stream (HLS) first, else the biggest video file. */
+    private fun siteVideo(tab: Tab): com.swiftbrowser.media.MediaItem? =
+        tab.media.lastOrNull { it.kind == com.swiftbrowser.media.MediaItem.Kind.HLS }
+            ?: tab.media.filter { it.kind == com.swiftbrowser.media.MediaItem.Kind.FILE && !it.mime.startsWith("audio") }.maxByOrNull { it.size }
+
+    /**
+     * With "Swift player for website videos" on, a playing video gets a small button that opens it
+     * in Swift's own player (smoother on this phone, with gestures and subtitles).
+     */
+    private fun updateSitePlayerChip() {
+        val tab = current
+        // Once a video has played on the page (it stays offered while the page is open).
+        val wanted = prefs.sitePlayer && tab != null && !tab.showsHome && (tab.videoPlaying || fullscreenTab === tab) && siteVideo(tab) != null
+        if (!wanted) {
+            sitePlayerChip?.let { chip ->
+                sitePlayerChip = null
+                chip.animate().alpha(0f).setDuration(150).withEndAction { root.removeView(chip) }.start()
+            }
+            return
+        }
+        if (sitePlayerChip != null) return
+        val pad = dp(12f).toInt()
+        val chip = TextView(this).apply {
+            text = "▶  Swift player"
+            textSize = 14f
+            setTextColor(color(Looks.accent.onPrimary))
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            gravity = android.view.Gravity.CENTER
+            setPadding(pad + dp(2f).toInt(), 0, pad + dp(2f).toInt(), 0)
+            background = android.graphics.drawable.GradientDrawable().apply {
+                cornerRadius = dp(20f)
+                setColor(color(Looks.accent.primary))
+            }
+            elevation = dp(6f)
+            contentDescription = "Play this video in Swift's player"
+            setOnClickListener { playInSwiftPlayer() }
+        }
+        val lp = FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, dp(40f).toInt(), android.view.Gravity.TOP or android.view.Gravity.END)
+        lp.topMargin = pad + if (bottomBar || fullscreenTab != null) 0 else toolbarPx
+        lp.marginEnd = pad
+        root.addView(chip, lp)
+        chip.alpha = 0f
+        chip.animate().alpha(1f).setDuration(200).start()
+        sitePlayerChip = chip
+    }
+
+    /** Hands the site's video to Swift's player, with what the site needs (where it was shown, the browser's name). */
+    private fun playInSwiftPlayer() {
+        val tab = current ?: return
+        val video = siteVideo(tab) ?: return
+        Helper.lookupHeaders(video.url) { found ->
+            val headers = HashMap<String, String>()
+            video.headers.forEach { (k, v) -> headers[k] = v }
+            found.forEach { (k, v) -> headers[k] = v }
+            if (headers.keys.none { it.equals("referer", true) }) headers["Referer"] = video.frameUrl.ifBlank { video.pageUrl }
+            if (headers.keys.none { it.equals("user-agent", true) }) headers["User-Agent"] = GeckoSession.getDefaultUserAgent()
+            // The page stops, so the two don't play at once.
+            tab.mediaSession?.pause()
+            PlayerActivity.openStream(this, video.url, tab.title.ifBlank { null }, headers, tab.incognito)
+        }
     }
 
     /**
@@ -2736,12 +2814,6 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         startActivity(Intent(this, DownloadsActivity::class.java))
     }
 
-    /** Documents (2.4): what was opened in Swift and the phone's documents. */
-    fun openDocuments() {
-        quickMenu.close()
-        startActivity(Intent(this, DocumentsActivity::class.java))
-    }
-
     fun openList(cls: Class<out Activity>) {
         openUrlLauncher.launch(Intent(this, cls))
     }
@@ -2832,6 +2904,10 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     override fun onFullScreen(tab: Tab, fullScreen: Boolean) {
         if (tab !== current) return
         if (fullScreen) enterFullscreen(tab) else exitFullscreen()
+        // The Swift player button moves with the bars (2.9).
+        sitePlayerChip?.let { root.removeView(it) }
+        sitePlayerChip = null
+        updateSitePlayerChip()
     }
 
     private fun enterFullscreen(tab: Tab) {
@@ -3062,7 +3138,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
                 val to = tab.backTo
                 TabManager.close(tab)
                 when (to) {
-                    Docs.BACK_DOCUMENTS -> openDocuments()
+                    Docs.BACK_DOCUMENTS -> FilesActivity.open(this)
                     Docs.BACK_DOWNLOADS -> openDownloads()
                     // 2.7: back to the folder it was opened from.
                     Docs.BACK_FILES -> FilesActivity.open(this)

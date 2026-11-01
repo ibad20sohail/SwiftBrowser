@@ -15,7 +15,6 @@ class SearchWidget : AppWidgetProvider() {
         val views = RemoteViews(ctx.packageName, R.layout.widget_search).apply {
             setOnClickPendingIntent(R.id.widget_bar, open(ctx, MainActivity.ACTION_SEARCH, 1))
             setOnClickPendingIntent(R.id.widget_text, open(ctx, MainActivity.ACTION_SEARCH, 1))
-            setOnClickPendingIntent(R.id.widget_documents, open(ctx, MainActivity.ACTION_DOCUMENTS, 4))
             setOnClickPendingIntent(R.id.widget_files, open(ctx, MainActivity.ACTION_FILES, 5))
             setOnClickPendingIntent(R.id.widget_incognito, open(ctx, MainActivity.ACTION_INCOGNITO, 2))
             setOnClickPendingIntent(R.id.widget_scan, open(ctx, MainActivity.ACTION_SCAN, 3))

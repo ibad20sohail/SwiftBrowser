@@ -215,8 +215,9 @@ class DocumentActivity : AppCompatActivity() {
         when (action) {
             "find" -> openFind()
             "close" -> close()
+            // 2.9: documents are found in Files.
             "documents" -> {
-                startActivity(Intent(this, DocumentsActivity::class.java))
+                FilesActivity.open(this)
                 finish()
             }
         }

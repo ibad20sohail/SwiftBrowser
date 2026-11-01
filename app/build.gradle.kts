@@ -21,8 +21,8 @@ android {
         applicationId = "com.swiftbrowser.app"
         minSdk = 24
         targetSdk = 35
-        versionCode = 18
-        versionName = "2.8"
+        versionCode = 19
+        versionName = "2.9"
     }
 
     flavorDimensions += "abi"
@@ -146,6 +146,14 @@ dependencies {
     implementation("org.apache.poi:poi-scratchpad:5.0.0") {
         exclude(group = "org.slf4j", module = "jcl-over-slf4j")
     }
+    // 2.9: Swift's own player for videos and music (PlayerActivity, MusicService): AndroidX Media3's
+    // ExoPlayer, with hardware decoding, and HLS for website videos. 1.11 is the newest release; it
+    // runs on Android 6 and later and builds with compileSdk 36. Its notification library
+    // (media3-session) isn't used: the notification and lock screen controls are Android's own media
+    // session, as for pages (PlaybackService).
+    val media3 = "1.11.1"
+    implementation("androidx.media3:media3-exoplayer:$media3")
+    implementation("androidx.media3:media3-exoplayer-hls:$media3")
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
 
     // Reports leaked screens and objects in test builds on the PC emulator only.

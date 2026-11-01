@@ -136,6 +136,12 @@ object Docs {
         (if (base.endsWith("/")) base else "$base/") + "docs/view.html#" + id
     }
 
+    /**
+     * A document whose file is no longer there (2.9): deleted or moved elsewhere, or its cached copy
+     * expired. Recent lists drop it. Another app's document (content://) can't be checked cheaply.
+     */
+    fun isGone(uri: String): Boolean = Uri.parse(uri).let { it.scheme == ContentResolver.SCHEME_FILE && !File(it.path.orEmpty()).exists() }
+
     fun isViewerUrl(url: String?): Boolean = url != null && url.startsWith("moz-extension://") && url.contains("/docs/view.html")
 
     /** The document a viewer tab shows. */
@@ -841,7 +847,7 @@ object Docs {
         val a: Activity = screen ?: TabManager.ui as? MainActivity ?: return
         when (action) {
             "documents", "find", "close" -> if (screen != null) screen.onPageAction(action) else when (action) {
-                "documents" -> (a as MainActivity).openDocuments()
+                "documents" -> com.swiftbrowser.ui.FilesActivity.open(a)
                 "find" -> (a as MainActivity).openFind()
             }
             "exact" -> {
@@ -923,7 +929,7 @@ object Docs {
     private const val MAX_ENTRY = 300L * 1_048_576
 
     /** new_tab, incognito and scan in res/xml/shortcuts.xml. */
-    private const val STATIC_SHORTCUTS = 4
+    private const val STATIC_SHORTCUTS = 3
 
     /** Microsoft's free viewer for Office files on the web (the link is sent to Microsoft). */
     const val EXACT_VIEW = "https://view.officeapps.live.com/op/view.aspx?src="

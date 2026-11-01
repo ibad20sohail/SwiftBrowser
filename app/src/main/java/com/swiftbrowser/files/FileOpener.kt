@@ -36,7 +36,11 @@ object FileOpener {
                 if (!Docs.open(a, Uri.fromFile(f), name)) Messages.show(a, "Swift can't show “$name”")
                 false
             }
-            com.swiftbrowser.ui.MediaViewerActivity.kindOf(name) != null -> {
+            com.swiftbrowser.ui.PlayerActivity.kindOf(name) != null -> {
+                com.swiftbrowser.ui.PlayerActivity.open(a, f)
+                false
+            }
+            com.swiftbrowser.ui.MediaViewerActivity.kindOf(name) == com.swiftbrowser.ui.MediaViewerActivity.Kind.IMAGE -> {
                 com.swiftbrowser.ui.MediaViewerActivity.open(a, f)
                 false
             }

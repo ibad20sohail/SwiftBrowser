@@ -435,6 +435,7 @@ object Playback {
 
     fun onPlayingChanged(ctx: Context, t: Tab) {
         if (t.playing) {
+            LocalPlayback.pause()
             if (tab !== t) {
                 title = null
                 artist = null

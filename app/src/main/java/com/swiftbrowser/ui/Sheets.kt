@@ -16,7 +16,6 @@ import android.view.ViewGroup
 import android.widget.EditText
 import android.widget.ImageView
 import android.widget.LinearLayout
-import android.widget.ScrollView
 import android.widget.TextView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
@@ -66,10 +65,24 @@ object Sheets {
     fun sheet(ctx: Context, content: View, expand: Boolean = true): BottomSheetDialog {
         Palette.paint(content)
         val dialog = BottomSheetDialog(ctx)
-        val scroll = if (content is RecyclerView || content is ScrollView) content else ScrollView(ctx).apply {
+        // 2.9: a NestedScrollView, which tells the sheet it is scrolled (a plain ScrollView let the
+        // sheet take the drag and close mid-list).
+        val scroll = if (content is RecyclerView || content is androidx.core.widget.NestedScrollView) content else SheetScroll(ctx).apply {
             isVerticalScrollBarEnabled = false
             overScrollMode = View.OVER_SCROLL_NEVER
             addView(content)
+        }
+        // A swipe that starts while the list is scrolled down only scrolls it, all the way back to the
+        // top; only one that starts at the top (or on the handle) pulls the sheet down.
+        val holdSheet = HoldSheet(dialog)
+        when (scroll) {
+            is SheetScroll -> scroll.hold = holdSheet
+            is RecyclerView -> scroll.addOnItemTouchListener(object : RecyclerView.SimpleOnItemTouchListener() {
+                override fun onInterceptTouchEvent(rv: RecyclerView, e: android.view.MotionEvent): Boolean {
+                    holdSheet.onTouch(rv, e)
+                    return false
+                }
+            })
         }
         val box = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
@@ -92,6 +105,34 @@ object Sheets {
             dialog.setOnShowListener { Motion.stagger(group) }
         }
         return dialog
+    }
+
+    /** Keeps the sheet still for a swipe that begins with its list scrolled down (2.9). */
+    private class HoldSheet(private val dialog: BottomSheetDialog) {
+        private var held = false
+
+        fun onTouch(list: View, e: android.view.MotionEvent) {
+            when (e.actionMasked) {
+                android.view.MotionEvent.ACTION_DOWN -> if (dialog.behavior.isDraggable && list.canScrollVertically(-1)) {
+                    dialog.behavior.isDraggable = false
+                    held = true
+                }
+                android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> if (held) {
+                    held = false
+                    dialog.behavior.isDraggable = true
+                }
+            }
+        }
+    }
+
+    /** The sheet's scrolling box: it sees every touch first, also those on its rows. */
+    private class SheetScroll(ctx: Context) : androidx.core.widget.NestedScrollView(ctx) {
+        var hold: HoldSheet? = null
+
+        override fun dispatchTouchEvent(ev: android.view.MotionEvent): Boolean {
+            hold?.onTouch(this, ev)
+            return super.dispatchTouchEvent(ev)
+        }
     }
 
     fun column(ctx: Context) = LinearLayout(ctx).apply {

@@ -23,10 +23,11 @@ object WhatsNew {
     private class Item(val icon: Int, val title: String, val text: String)
 
     private val NEW = listOf(
-        Item(R.drawable.ic_documents, "Documents on their own screen", "A document opens full screen, not in a tab, and looks as it was made: Word as pages, PDFs and sheets in their own colours, even old .doc and .ppt files. Back returns where you were."),
-        Item(R.drawable.ic_image, "Pictures, videos and music", "From Files they open in Swift's own viewer: zoom and swipe through pictures, play videos and songs."),
-        Item(R.drawable.ic_folder, "Better Files and Documents", "A start page with storage and categories, grid views, selecting several at once, Details, and Back one step at a time."),
-        Item(R.drawable.ic_delete, "Clear data by dates", "Choose the days to clear and see how much space each item takes before you clear it."),
+        Item(R.drawable.ic_play, "Media player", "Videos and music from Files play in Swift's own player: swipe for brightness, volume and seeking, speed, subtitles, going on where you stopped, and music in the background."),
+        Item(R.drawable.ic_image, "Picture viewer", "Crop and turn pictures, see their details, slideshows, moving GIFs and set as wallpaper. Swift can also open pictures, videos and music from other apps."),
+        Item(R.drawable.ic_folder, "Files tools", "A recycle bin (30 days), Free up space, a Private folder behind your screen lock, and Wi-Fi transfer to your computer. Documents are in Files now."),
+        Item(R.drawable.ic_tune, "Files settings", "Settings → Files & media, also from Files' ⋮ menu: how Files opens, the recycle bin, Private and the player."),
+        Item(R.drawable.ic_check, "Smaller fixes", "Panels scroll back up without closing, deleted files leave the recent lists, and two new choices: Swift player for website videos and sorting downloads into folders."),
     )
 
     private class Card(val icon: Int, val title: String, val text: String)

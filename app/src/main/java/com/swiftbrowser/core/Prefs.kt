@@ -38,11 +38,6 @@ class Prefs(ctx: Context) {
         get() = sp.getBoolean(NEWS_ENABLED, true)
         set(v) = sp.edit { putBoolean(NEWS_ENABLED, v) }
 
-    /** The Documents shortcut among the home page's shortcuts (2.4). */
-    var homeDocuments: Boolean
-        get() = sp.getBoolean(HOME_DOCUMENTS, true)
-        set(v) = sp.edit { putBoolean(HOME_DOCUMENTS, v) }
-
     /** Night light (2.3): 0 off, 1 at night, 2 always (see ui.NightLight). */
     var nightLight: Int
         get() = sp.getInt(NIGHT_LIGHT, 0)
@@ -330,6 +325,16 @@ class Prefs(ctx: Context) {
         get() = sp.getBoolean("login_offer", true)
         set(v) = sp.edit { putBoolean("login_offer", v) }
 
+    /** Videos on sites can be played in Swift's own player (a button over the page) (2.9, off at first). */
+    var sitePlayer: Boolean
+        get() = sp.getBoolean("site_player", false)
+        set(v) = sp.edit { putBoolean("site_player", v) }
+
+    /** New downloads go into Videos, Music, Pictures, Documents or Apps in the download folder (2.9, off at first). */
+    var sortDownloads: Boolean
+        get() = sp.getBoolean("downloads_by_type", false)
+        set(v) = sp.edit { putBoolean("downloads_by_type", v) }
+
     /** Folder for downloads (a full path); empty: Download/Swift. See Downloads.directory. */
     var downloadFolder: String
         get() = sp.getString(DOWNLOAD_FOLDER, "") ?: ""
@@ -402,7 +407,6 @@ class Prefs(ctx: Context) {
         const val NEWS_ENABLED = "news_enabled"
         const val HOME_CONTINUE = "home_continue"
         const val NIGHT_LIGHT = "night_light"
-        const val HOME_DOCUMENTS = "home_documents"
         const val NIGHT_LIGHT_STRENGTH = "night_light_strength"
         const val WELCOME_DONE = "welcome_done"
         const val BAR_SWIPES = "bar_swipes"

@@ -51,7 +51,6 @@ object MenuButtons {
         Button("bookmarks", R.drawable.ic_bookmarks, "Bookmarks"),
         Button("history", R.drawable.ic_history, "History"),
         Button("downloads", R.drawable.ic_download, "Downloads"),
-        Button("documents", R.drawable.ic_documents, "Documents"),
         Button("files", R.drawable.ic_folder, "Files"),
         Button("reader", R.drawable.ic_reader, "Reader view"),
         Button("save", R.drawable.ic_offline, "Save offline"),
@@ -366,7 +365,6 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
             "recent" -> Sheets.recentlyClosed(a)
             "vpn" -> a.showVpnSheet()
             "scan" -> a.scanQr()
-            "documents" -> a.openDocuments()
             "files" -> FilesActivity.open(a)
             "text_size" -> Sheets.textSize(a, tab)
             "home_screen" -> PageActions.addToHomeScreen(a, tab)

@@ -248,15 +248,35 @@ object FileOps {
         }
     }
 
-    /** Deleted files (and everything in a deleted folder) leave the Gallery and music apps. */
+    /**
+     * Deleted files (and everything in a deleted folder) leave the Gallery and music apps. 2.9: only
+     * the index's rows: Android 9 and older otherwise delete a picture, video or song still at that
+     * path along with its row ("deletedata=false" tells them not to).
+     */
     fun forget(ctx: Context, f: File) {
         try {
             ctx.contentResolver.delete(
-                MediaStore.Files.getContentUri("external"),
+                MediaStore.Files.getContentUri("external").buildUpon().appendQueryParameter("deletedata", "false").build(),
                 MediaStore.Files.FileColumns.DATA + "=? OR " + MediaStore.Files.FileColumns.DATA + " LIKE ?",
                 arrayOf(f.path, f.path + "/%"),
             )
         } catch (_: Exception) {
+        }
+    }
+
+    /** Several gone files at once (2.9: ones the media index still listed), rows only as in [forget]. */
+    fun forgetPaths(ctx: Context, paths: Collection<String>) {
+        if (paths.isEmpty()) return
+        val uri = MediaStore.Files.getContentUri("external").buildUpon().appendQueryParameter("deletedata", "false").build()
+        for (chunk in paths.chunked(200)) {
+            try {
+                ctx.contentResolver.delete(
+                    uri,
+                    MediaStore.Files.FileColumns.DATA + " IN (" + chunk.joinToString(",") { "?" } + ")",
+                    chunk.toTypedArray(),
+                )
+            } catch (_: Exception) {
+            }
         }
     }
 }

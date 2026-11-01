@@ -796,6 +796,8 @@ class DownloadsActivity : ListActivity() {
             d != null && d.status != Downloads.RUNNING && d.status != Downloads.QUEUED && d.status != Downloads.CONVERTING
         }) { vh -> adapter.items.getOrNull(vh.bindingAdapterPosition)?.let { removeFromList(it, deleteFile = false) } }
         refresh()
+        // 2.9: files deleted elsewhere leave the list.
+        Downloads.dropMissing()
     }
 
     override fun onStart() {

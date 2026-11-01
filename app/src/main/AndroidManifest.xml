@@ -124,31 +124,63 @@
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
-        <!-- 2.8: pictures, videos and music opened from Files, on a screen of their own. -->
+        <!-- 2.8: pictures opened from Files, on a screen of their own. 2.9: pictures only, and
+             "Open with Swift" for pictures from other apps (no task affinity: Back returns there).
+             Only the kinds Android 7 can show (not SVG or HEIC). -->
         <activity
             android:name=".ui.MediaViewerActivity"
+            android:autoRemoveFromRecents="true"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"
-            android:exported="false" />
-        <activity android:name=".ui.DownloadsActivity" android:exported="false" android:windowSoftInputMode="stateAlwaysHidden" />
-        <!-- Its own task affinity (2.7): opened from its own icon, it is an app of its own in recent apps. -->
-        <activity
-            android:name=".ui.DocumentsActivity"
-            android:exported="false"
-            android:taskAffinity="${applicationId}.documents"
-            android:windowSoftInputMode="stateAlwaysHidden" />
-        <!-- 2.7: Documents as its own icon in the app list (Settings can hide it). -->
-        <activity-alias
-            android:name="com.swiftbrowser.ui.DocumentsApp"
             android:exported="true"
-            android:icon="@drawable/ic_launcher_docs"
-            android:label="@string/app_documents"
-            android:roundIcon="@drawable/ic_launcher_docs"
-            android:targetActivity=".ui.DocumentsActivity">
+            android:taskAffinity="">
             <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:mimeType="image/jpeg" />
+                <data android:mimeType="image/png" />
+                <data android:mimeType="image/gif" />
+                <data android:mimeType="image/webp" />
+                <data android:mimeType="image/bmp" />
             </intent-filter>
-        </activity-alias>
+        </activity>
+        <!-- 2.9: Swift's video and music player. A task of its own (singleTask), so the notification and
+             "Open with Swift" always find the one player screen. Turning is handled by the screen itself
+             (configChanges), so what plays doesn't restart; the orientation is set while playing. -->
+        <activity
+            android:name=".ui.PlayerActivity"
+            android:autoRemoveFromRecents="true"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:taskAffinity="${applicationId}.player"
+            android:windowSoftInputMode="stateAlwaysHidden">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:mimeType="video/*" />
+                <data android:mimeType="audio/*" />
+            </intent-filter>
+        </activity>
+
+        <!-- 2.9: music from the player (and a video's sound with "Play in background") going on with the screen off. -->
+        <service
+            android:name=".media.MusicService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
+
+        <!-- 2.9: Files' "Free up space" and Wi-Fi transfer. -->
+        <activity android:name=".ui.CleanerActivity" android:exported="false" android:windowSoftInputMode="stateAlwaysHidden" />
+        <activity
+            android:name=".ui.WifiTransferActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"
+            android:exported="false"
+            android:windowSoftInputMode="stateAlwaysHidden" />
+
+        <activity android:name=".ui.DownloadsActivity" android:exported="false" android:windowSoftInputMode="stateAlwaysHidden" />
         <activity android:name=".ui.SettingsActivity" android:exported="false" android:windowSoftInputMode="stateAlwaysHidden" />
         <!-- 2.7: Files, a file manager with archives (ZIP, 7z, RAR…). Its own task affinity: opened
              from its own icon it is an app of its own in recent apps, not stacked on the browser. -->

@@ -5,7 +5,7 @@ ad-heavy sites on an old phone (Moto E4, Android 7.1.2).
 
 ## Download
 
-**[Download Swift 2.8 (APK)](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v2.8/Swift-2.8.apk)**
+**[Download Swift 2.9 (APK)](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v2.9/Swift-2.9.apk)**
 for Android 7 and newer (32-bit ARM, about 150 MB). It installs over an earlier Swift and keeps
 tabs and settings. From 1.4 on, Swift can also update itself: Settings → Check for updates.
 
@@ -30,6 +30,26 @@ ones, and a short welcome on the first start.
 - **Night light** (2.3, Settings → Look & screen): a warm layer over Swift, pages and videos too,
   from 7 pm to 7 am or always, in three strengths. Taps go through it.
 
+- **New in 2.9**:
+  - **Media player** (Files, "Open with Swift"): Android's Media3 player with swipe gestures
+    (brightness, volume, seeking), double-tap skips, hold for 2×, lock, speed, picture size, turning,
+    subtitles (a same-name .srt/.vtt/.ass, or pick one; size and timing), sound and subtitle tracks,
+    the folder as a playlist, repeat, shuffle, sleep timer, going on where you stopped (also in the
+    home page's Continue), and music in the background with notification and lock-screen controls.
+  - **Picture viewer**: crop and turn (save a copy or replace), details (camera, settings, place),
+    thumbnail strip, slideshow, moving GIFs, sharp zoom, set as wallpaper or contact photo; Swift can
+    open pictures from other apps.
+  - **Files**: a recycle bin (30 days, Undo, restore), Free up space (large files, duplicates, app
+    files, empty folders, Swift's leftovers), a Private folder behind the screen lock (or a PIN),
+    Wi-Fi transfer (a page on your computer, with a code), Recent documents on the start page, and
+    animations. Settings → Files & media (also from Files' ⋮).
+  - **Documents** are found in Files now: the Documents screen, its icon and menu button are gone
+    (documents still open in the full-screen viewer).
+  - **Swift player for website videos** (Settings → Video & downloads, off at first): a button on a
+    playing video opens it in Swift's player.
+  - **Sort downloads into folders** (off at first): Videos, Music, Pictures, Documents, Apps.
+  - **Fixes**: panels no longer close when you scroll back up; deleted files leave Continue,
+    Downloads and the recent lists.
 - **New in 2.8**:
   - **Documents on a screen of their own**, not in a tab: full screen over whatever opened them
     (Documents, Files, Downloads, a site, another app's "Open with"), with a Back arrow; Back closes

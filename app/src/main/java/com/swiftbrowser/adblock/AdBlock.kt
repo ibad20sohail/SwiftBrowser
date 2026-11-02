@@ -3,6 +3,7 @@ package com.swiftbrowser.adblock
 import android.os.Handler
 import android.os.Looper
 import com.swiftbrowser.core.Db
+import com.swiftbrowser.core.IncognitoChoices
 import com.swiftbrowser.core.L
 import com.swiftbrowser.core.Prefs
 import com.swiftbrowser.core.UrlUtils
@@ -98,19 +99,6 @@ object AdBlock {
     /** "Hide cookie pop-ups" (Settings): the two lists that hide cookie consent notices. Part of Extreme anyway. */
     private val COOKIE_LISTS = listOf("ublock-cookies-easylist", "fanboy-cookiemonster")
 
-    /** Pages on these sites keep third-party scripts in Extreme mode, or signing in would break. */
-    private val EXTREME_EXEMPT = listOf("google.com", "youtube.com", "gmail.com", "accounts.google.com")
-
-    private val BEHIND_THE_SCENE = listOf(
-        "behind-the-scene * * noop",
-        "behind-the-scene * image noop",
-        "behind-the-scene * 3p noop",
-        "behind-the-scene * inline-script noop",
-        "behind-the-scene * 1p-script noop",
-        "behind-the-scene * 3p-script noop",
-        "behind-the-scene * 3p-frame noop",
-    )
-
     fun init(prefs: Prefs, db: Db) {
         this.prefs = prefs
         this.db = db
@@ -120,9 +108,23 @@ object AdBlock {
 
     val global: AdLevel get() = prefs.adLevel
 
-    fun overrideFor(site: String?): AdLevel? = site?.let { overrides[it] }
+    /**
+     * Levels chosen from incognito tabs (3.0.1): in memory only, gone when the last one closes. One
+     * uBO filters every tab, so until then they count for the site's normal tabs too.
+     */
+    private val incognitoOverrides = IncognitoChoices<AdLevel>()
 
+    /** The site's own level now (with one chosen from an incognito tab, 3.0.1). */
+    fun overrideFor(site: String?): AdLevel? = site?.let { incognitoOverrides.get(it, overrides[it]) }
+
+    /** The site's saved level only, for Undo in a normal tab. */
+    fun savedOverrideFor(site: String?): AdLevel? = site?.let { overrides[it] }
+
+    /** The saved levels (Settings, backups, clearing): never the ones chosen from incognito tabs. */
     fun overrides(): Map<String, AdLevel> = LinkedHashMap(overrides)
+
+    /** The levels in use: the saved ones with incognito's choices on top. */
+    private fun inUse(): Map<String, AdLevel> = incognitoOverrides.applyTo(overrides)
 
     /** The level that applies to a page. */
     fun levelFor(url: String?): AdLevel = overrideFor(UrlUtils.site(url)) ?: global
@@ -135,17 +137,31 @@ object AdBlock {
         notifyListeners()
     }
 
-    fun setOverride(site: String, level: AdLevel?) {
-        if (level == null) overrides.remove(site) else overrides[site] = level
-        // 3.0: written off the main thread (the levels are only read back at the next start).
-        val key = level?.key
-        com.swiftbrowser.tabs.TabManager.io.execute {
-            try {
-                db.setSiteLevel(site, key)
-            } catch (e: Exception) {
-                L.w("Couldn't save a site's ad blocking", e)
+    /** [incognito]: chosen from an incognito tab, so kept in memory only (3.0.1). */
+    fun setOverride(site: String, level: AdLevel?, incognito: Boolean = false) {
+        if (incognito) {
+            incognitoOverrides.set(site, level)
+        } else {
+            // A level chosen in a normal tab counts in incognito too.
+            incognitoOverrides.drop(site)
+            if (level == null) overrides.remove(site) else overrides[site] = level
+            // 3.0: written off the main thread (the levels are only read back at the next start).
+            val key = level?.key
+            com.swiftbrowser.tabs.TabManager.io.execute {
+                try {
+                    db.setSiteLevel(site, key)
+                } catch (e: Exception) {
+                    L.w("Couldn't save a site's ad blocking", e)
+                }
             }
         }
+        push()
+        notifyListeners()
+    }
+
+    /** The last incognito tab closed: the levels chosen there go (3.0.1). */
+    fun onIncognitoEnded() {
+        if (!incognitoOverrides.clear()) return
         push()
         notifyListeners()
     }
@@ -256,11 +272,15 @@ object AdBlock {
             AdLevel.EXTREME -> BALANCED_LISTS + HIGH_EXTRA + EXTREME_EXTRA
         }
         val lists = if (prefs.hideCookieNotices) (levelLists + COOKIE_LISTS).distinct() else levelLists
+        val inUse = inUse()
         val msg = JSONObject()
             .put("type", "apply")
             .put("lists", JSONArray(lists))
-            .put("rules", dynamicRules(g))
-            .put("trusted", JSONArray(trustedDirectives(g)))
+            .put("rules", AdRules.dynamicRules(g, inUse))
+            .put("trusted", JSONArray(AdRules.trusted(g, inUse)))
+            // 3.0.1: what uBO may write down: the same without the levels chosen from incognito tabs.
+            .put("rulesKeep", AdRules.dynamicRules(g, overrides))
+            .put("trustedKeep", JSONArray(AdRules.trusted(g, overrides)))
         try {
             p.postMessage(msg)
         } catch (e: Exception) {
@@ -316,36 +336,4 @@ object AdBlock {
 
     private const val LAST_UPDATE_CHECK = "ubo_last_update_check"
     private const val UPDATE_CHECK_INTERVAL_MS = 6L * 3600 * 1000
-
-    private fun dynamicRules(g: AdLevel): String {
-        val rules = ArrayList(BEHIND_THE_SCENE)
-        if (g == AdLevel.EXTREME) {
-            rules += "* * 3p-script block"
-            rules += "* * 3p-frame block"
-            val relaxed = EXTREME_EXEMPT + overrides.filterValues { it != AdLevel.EXTREME }.keys
-            for (site in relaxed.distinct()) {
-                rules += "$site * 3p-script noop"
-                rules += "$site * 3p-frame noop"
-            }
-        } else {
-            for (site in overrides.filterValues { it == AdLevel.EXTREME }.keys) {
-                rules += "$site * 3p-script block"
-                rules += "$site * 3p-frame block"
-            }
-        }
-        return rules.joinToString("\n")
-    }
-
-    /** uBO "trusted sites": filtering is fully off for matching pages. */
-    private fun trustedDirectives(g: AdLevel): List<String> {
-        if (g == AdLevel.OFF) {
-            val enabled = overrides.filterValues { it != AdLevel.OFF }.keys
-            if (enabled.isEmpty()) return listOf("/^/")
-            // Sites are plain hostnames ([a-z0-9.-]), so only the dots need escaping for JS RegExp.
-            val alt = enabled.joinToString("|") { it.replace(".", "\\.") }
-            // Everything is trusted (unfiltered) except pages on the sites the user turned blocking on for.
-            return listOf("/^(?!https?:\\/\\/([^\\/:]*\\.)?($alt)(:\\d+)?\\/)/")
-        }
-        return overrides.filterValues { it == AdLevel.OFF }.keys.toList()
-    }
 }

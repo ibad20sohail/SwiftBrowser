@@ -24,6 +24,13 @@ object WhatsNew {
     private class Item(val icon: Int, val title: String, val text: String, val version: Int = 19)
 
     private val NEW = listOf(
+        Item(R.drawable.ic_incognito, "Incognito leaves nothing behind", "Site settings changed in an incognito tab (desktop site, text size, ad blocking and more) now last only until you close your incognito tabs. Before, they were saved and went into backups.", version = 23),
+        Item(R.drawable.ic_tab, "Keep a tab loaded", "Hold a tab in the tab grid and choose Keep loaded: Swift won't unload it to save memory. A lower number of tabs kept loaded now applies at once.", version = 23),
+        Item(R.drawable.ic_shield, "Memory and security at a glance", "Settings → Speed & memory → Right now shows free memory, Swift's own and its loaded tabs. Privacy & security → Security status shows what is on, and what Swift has checked.", version = 23),
+        Item(R.drawable.ic_play, "Videos on pages", "Website videos play in Swift's player again, and downloads Swift starts no longer close it. Videos on this page has a play button, a desktop tab's videos are fetched as desktop, and downloading the same address again first shows the one you have.", version = 23),
+        Item(R.drawable.ic_subtitles, "Subtitles", "Choose the language subtitles show in first (Settings → Files & media), and the timing you set stays with each video. The player says when a video is too much for this phone's chip.", version = 23),
+        Item(R.drawable.ic_download, "Backups say what they did", "Restoring a backup says exactly what it added. A backup made by a newer Swift is refused instead of half read.", version = 23),
+        Item(R.drawable.ic_palette, "A softer look", "A softer accent in the dark look, a lighter home page and new Continue cards.", version = 23),
         Item(R.drawable.ic_tab, "Lighter pop-ups and tabs", "Links that open a new tab load once, not twice: the hidden copy that kept using memory is gone, and sign-in pop-ups work again. A tab you used for a long time stays loaded when you switch away.", version = 22),
         Item(R.drawable.ic_shield, "Ads blocked from the first page", "After a restart, pages wait for the ad blocker (or tap Load now). If a page loaded before it was ready, Swift offers to reload it.", version = 22),
         Item(R.drawable.ic_lock, "Safer browsing", "Pages can't fake Google in the address bar, long addresses show their real ending, QR codes show where they lead first, and a page can't trap you with endless messages. Incognito and saved passwords stay out of screenshots.", version = 22),

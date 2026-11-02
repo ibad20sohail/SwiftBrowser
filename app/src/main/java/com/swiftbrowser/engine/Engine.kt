@@ -34,7 +34,7 @@ object Engine {
      * Bump when tools/ublock-patch/swift-bridge.js changes: uBO keeps its upstream version number,
      * so GeckoView would otherwise keep the previously installed copy.
      */
-    private const val UBO_BRIDGE_REV = 8
+    private const val UBO_BRIDGE_REV = 9
 
     private const val BRANCH = GeckoPreferenceController.PREF_BRANCH_USER
 
@@ -244,14 +244,18 @@ object Engine {
     /** The site [shownTextScale] was worked out for: page updates of the same site cost nothing. */
     private var shownTextSite: String? = null
 
+    /** Whether that was in an incognito tab, which can have its own size for the site (3.0.1). */
+    private var shownTextIncognito = false
+
     /**
      * The text size for the site on screen: its own (SiteSettings.textScale, 2.3) or the one for
      * all sites. The engine has one size for every page, so it follows the page on screen.
      */
-    fun showTextScaleFor(site: String?, force: Boolean = false) {
-        if (!force && site == shownTextSite && shownTextScale != 0f) return
+    fun showTextScaleFor(site: String?, incognito: Boolean = false, force: Boolean = false) {
+        if (!force && site == shownTextSite && incognito == shownTextIncognito && shownTextScale != 0f) return
         shownTextSite = site
-        val scale = SiteSettings.textScale(site) ?: SwiftApp.prefs.textScale
+        shownTextIncognito = incognito
+        val scale = SiteSettings.textScale(site, incognito) ?: SwiftApp.prefs.textScale
         if (scale == shownTextScale) return
         shownTextScale = scale
         runtime.settings.setFontSizeFactor(scale)

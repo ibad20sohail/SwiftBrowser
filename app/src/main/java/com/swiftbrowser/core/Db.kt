@@ -364,11 +364,11 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 8) {
 
     // ---------------------------------------------------------------- restoring a backup
 
-    /** A tab from a backup, after the tabs already open. Its page loads when it is opened. */
-    fun importTab(profileId: Long, url: String, title: String, groupId: Long?, lastUsed: Long) {
+    /** A tab from a backup, after the tabs already open. Its page loads when it is opened. True: added. */
+    fun importTab(profileId: Long, url: String, title: String, groupId: Long?, lastUsed: Long): Boolean {
         val db = writableDatabase
         val position = db.compileStatement("SELECT IFNULL(MAX(position), 0) + 1 FROM tabs").use { it.simpleQueryForLong() }
-        db.insert("tabs", null, ContentValues().apply {
+        return db.insert("tabs", null, ContentValues().apply {
             put("profile_id", profileId)
             put("url", url)
             put("title", title)
@@ -376,28 +376,28 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 8) {
             put("desktop", 0)
             put("position", position)
             if (groupId != null) put("group_id", groupId) else putNull("group_id")
-        })
+        }) != -1L
     }
 
-    fun importHistory(profileId: Long, url: String, title: String, lastVisit: Long, visits: Int) {
+    /** True: added (3.0.1: a restore says how many were new). */
+    fun importHistory(profileId: Long, url: String, title: String, lastVisit: Long, visits: Int): Boolean =
         writableDatabase.insertWithOnConflict("history", null, ContentValues().apply {
             put("profile_id", profileId)
             put("url", url)
             put("title", title)
             put("last_visit", lastVisit)
             put("visits", visits)
-        }, SQLiteDatabase.CONFLICT_IGNORE)
-    }
+        }, SQLiteDatabase.CONFLICT_IGNORE) != -1L
 
-    fun importBookmark(profileId: Long, url: String, title: String, created: Long, folder: String = "") {
+    /** True: added (not already there). */
+    fun importBookmark(profileId: Long, url: String, title: String, created: Long, folder: String = ""): Boolean =
         writableDatabase.insertWithOnConflict("bookmarks", null, ContentValues().apply {
             put("profile_id", profileId)
             put("url", url)
             put("title", title)
             put("created", created)
             put("folder", folder)
-        }, SQLiteDatabase.CONFLICT_IGNORE)
-    }
+        }, SQLiteDatabase.CONFLICT_IGNORE) != -1L
 
     // ---------------------------------------------------------------- tab groups
 

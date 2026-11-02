@@ -74,6 +74,9 @@ class Tab(
     /** The tab left the home page; Back on its first page returns there. */
     var leftHome = false
 
+    /** "Keep loaded" (3.0.1): Swift never unloads this tab's page to save memory. */
+    var kept = false
+
     /** The page couldn't load for lack of a connection: it loads again when there is one. */
     var waitingForConnection = false
 

@@ -71,6 +71,10 @@ function onNative(msg) {
       accentDark: /^#[0-9a-f]{6}$/i.test(msg.accentDark || '') ? msg.accentDark : '#8ab4ff',
       pageLight: colours(msg.pageLight),
       pageDark: colours(msg.pageDark),
+    }, {
+      // 3.0.1: the same lists without what incognito tabs chose: only these are written down.
+      liteExcept: Array.isArray(msg.liteExceptKeep) ? msg.liteExceptKeep : null,
+      darkSites: Array.isArray(msg.darkSitesKeep) ? sites(msg.darkSitesKeep) : null,
     });
   } else if (msg.type === 'clear-articles') {
     // Clear browsing data (2.6): the articles kept for reader view go too. 2.8: for a time (from
@@ -179,13 +183,18 @@ function setStyle(name, on, exclude, only) {
   });
 }
 
-function setLook(look) {
+// [kept]: the site lists to write down instead of the ones in use (3.0.1: what incognito tabs chose
+// is used, never kept).
+function setLook(look, kept) {
   setStyle('lite', look.lite, look.liteExcept);
   setStyle('youtube', look.fixes);
   setStyle('theflixer', look.fixes);
   const dark = look.darkSites || [];
   setStyle('dark', dark.length > 0, null, dark);
-  browser.storage.local.set({ look }).catch(() => { });
+  const stored = Object.assign({}, look);
+  if (kept && kept.liteExcept) { stored.liteExcept = kept.liteExcept; }
+  if (kept && kept.darkSites) { stored.darkSites = kept.darkSites; }
+  browser.storage.local.set({ look: stored }).catch(() => { });
 }
 
 browser.storage.local.get('look').then(r => {

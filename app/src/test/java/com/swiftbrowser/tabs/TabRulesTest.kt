@@ -90,4 +90,47 @@ class TabRulesTest {
         assertFalse(TabRules.sameAddress("https://example.com/a", "https://example.com/b"))
         assertFalse(TabRules.sameAddress("https://example.com/#top", "https://example.com/"))
     }
+
+    // ------------------------------------------------------------------ unloading (3.0.1)
+
+    private val idleSince = 1_000L
+
+    private fun tab(id: Long, lastUsed: Long, spared: Boolean = false, kept: Boolean = false) =
+        TabRules.Loaded(id, lastUsed, spared, kept)
+
+    @Test
+    fun theLongestUnusedTabsGoFirstUntilTheLimitIsKept() {
+        val others = listOf(tab(3, 5_000), tab(1, 2_000), tab(2, 3_000))
+        // The open tab and three others with a limit of 2: the two oldest go.
+        assertEquals(listOf(1L, 2L), TabRules.toUnload(others, openCounts = true, max = 2, idleSince = idleSince))
+        assertEquals(emptyList<Long>(), TabRules.toUnload(others, openCounts = true, max = 4, idleSince = idleSince))
+    }
+
+    @Test
+    fun aPlayingTabStaysButStillCounts() {
+        val others = listOf(tab(1, 2_000, spared = true), tab(2, 3_000))
+        assertEquals(listOf(2L), TabRules.toUnload(others, openCounts = true, max = 2, idleSince = idleSince))
+    }
+
+    @Test
+    fun aKeptTabStaysAndLeavesRoomForOthers() {
+        val others = listOf(tab(1, 2_000, kept = true), tab(2, 3_000))
+        assertEquals(emptyList<Long>(), TabRules.toUnload(others, openCounts = true, max = 2, idleSince = idleSince))
+        // Even with battery saver or low memory (a limit of 1) and long unused, it stays.
+        val old = listOf(tab(1, 10, kept = true), tab(2, 20))
+        assertEquals(listOf(2L), TabRules.toUnload(old, openCounts = true, max = 1, idleSince = idleSince))
+    }
+
+    @Test
+    fun tabsNotOpenedForHalfAnHourGoWhateverTheNumber() {
+        val others = listOf(tab(1, 500), tab(2, 3_000), tab(3, 700, spared = true))
+        assertEquals(listOf(1L), TabRules.toUnload(others, openCounts = true, max = 10, idleSince = idleSince))
+    }
+
+    @Test
+    fun anOpenTabKeptLoadedDoesNotCount() {
+        val others = listOf(tab(1, 2_000))
+        assertEquals(listOf(1L), TabRules.toUnload(others, openCounts = true, max = 1, idleSince = idleSince))
+        assertEquals(emptyList<Long>(), TabRules.toUnload(others, openCounts = false, max = 1, idleSince = idleSince))
+    }
 }

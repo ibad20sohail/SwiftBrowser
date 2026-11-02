@@ -513,6 +513,12 @@ class TabSwitcherView @JvmOverloads constructor(
         }
     }
 
+    /** [tab]'s card, drawn again (3.0.1: its "Keep loaded" mark changed). */
+    private fun redrawCard(tab: Tab) {
+        val idx = adapter.items.indexOfFirst { it is Item.TabCard && it.tab === tab }
+        if (idx >= 0) adapter.notifyItemChanged(idx)
+    }
+
     /** The picture each tab's card shows (3.0): a card is redrawn only for a new one. */
     private val shownPictures = HashMap<Long, java.lang.ref.WeakReference<android.graphics.Bitmap>>()
 
@@ -662,6 +668,19 @@ class TabSwitcherView @JvmOverloads constructor(
                 if (opened.isNotEmpty()) {
                     val label = if (opened.size == 1) "Close the tab it opened" else "Close ${opened.size} tabs it opened"
                     actions += Sheets.Action(R.drawable.ic_close, label) { TabManager.closeTabs(opened, undoable = true) }
+                }
+                // 3.0.1: "Keep loaded": Swift never unloads its page to save memory.
+                actions += if (tab.kept) {
+                    Sheets.Action(R.drawable.ic_memory, "Let Swift unload it") {
+                        TabManager.setKept(tab, false)
+                        redrawCard(tab)
+                    }
+                } else {
+                    Sheets.Action(R.drawable.ic_memory, "Keep loaded") {
+                        TabManager.setKept(tab, true)
+                        redrawCard(tab)
+                        Messages.show(activity, "Swift won't unload this tab. If the phone runs out of memory, Android can still close its page.", long = true)
+                    }
                 }
                 actions += Sheets.Action(R.drawable.ic_close, "Close tab", danger = true) { TabManager.close(tab, undoable = true) }
             }
@@ -1037,6 +1056,7 @@ class TabSwitcherView @JvmOverloads constructor(
             h.selected.visibility = if (card.current) View.VISIBLE else View.GONE
             if (card.current) h.selected.background = ring()
             bindTitle(h, card, icon = true)
+            bindKept(h, tab)
             h.thumb.setImageDrawable(null)
             h.placeholder.visibility = View.VISIBLE
             bindPicture(h, card)
@@ -1047,8 +1067,18 @@ class TabSwitcherView @JvmOverloads constructor(
         /** The card's title; a document's mark goes with it (its kind comes from its name). */
         private fun bindTitle(h: CardHolder, card: Item.TabCard, icon: Boolean = com.swiftbrowser.docs.Docs.isViewerUrl(card.url)) {
             h.title.text = card.title
-            h.itemView.contentDescription = card.title
+            h.itemView.contentDescription = if (card.tab.kept) "${card.title}, kept loaded" else card.title
             if (icon) bindIcon(h, card)
+        }
+
+        /** 3.0.1: a tab kept loaded has the memory mark after its title. */
+        private fun bindKept(h: CardHolder, tab: Tab) {
+            val mark = if (!tab.kept) null else ContextCompat.getDrawable(context, R.drawable.ic_memory)?.mutate()?.apply {
+                setBounds(0, 0, dp(14), dp(14))
+                setTint(color(if (showingIncognito) R.color.incognito_hint else R.color.text_secondary))
+            }
+            h.title.setCompoundDrawablesRelative(null, null, mark, null)
+            h.title.compoundDrawablePadding = dp(4)
         }
 
         /** Its site's icon. */

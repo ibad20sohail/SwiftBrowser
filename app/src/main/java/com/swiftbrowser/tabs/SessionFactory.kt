@@ -202,7 +202,7 @@ class TabDelegates(private val tab: Tab) :
     /** Switches the tab between the mobile and desktop versions as the site's setting says. */
     private fun applySiteDesktop(session: GeckoSession, url: String) {
         val site = UrlUtils.site(url) ?: return
-        val want = SiteSettings.desktop(site)
+        val want = SiteSettings.desktop(site, tab.incognito)
         if (want == tab.desktop) return
         tab.desktop = want
         session.settings.setUserAgentMode(
@@ -496,13 +496,13 @@ class TabDelegates(private val tab: Tab) :
             GeckoSession.PermissionDelegate.PERMISSION_STORAGE_ACCESS -> storageAccess(session, perm)
             // Sound only after the user presses play (stops noisy auto-playing ads), unless the site is allowed.
             GeckoSession.PermissionDelegate.PERMISSION_AUTOPLAY_AUDIBLE -> GeckoResult.fromValue(
-                if (SiteSettings.autoplay(UrlUtils.site(perm.uri))) ContentPermission.VALUE_ALLOW else ContentPermission.VALUE_DENY,
+                if (SiteSettings.autoplay(UrlUtils.site(perm.uri), tab.incognito)) ContentPermission.VALUE_ALLOW else ContentPermission.VALUE_DENY,
             )
             // Notification prompts on these sites are spam.
             GeckoSession.PermissionDelegate.PERMISSION_DESKTOP_NOTIFICATION -> GeckoResult.fromValue(ContentPermission.VALUE_DENY)
             GeckoSession.PermissionDelegate.PERMISSION_GEOLOCATION -> {
                 val site = UrlUtils.site(perm.uri)
-                when (SiteSettings.location(site)) {
+                when (SiteSettings.location(site, tab.incognito)) {
                     SiteSettings.Location.ALLOW -> GeckoResult.fromValue(ContentPermission.VALUE_ALLOW)
                     SiteSettings.Location.BLOCK -> GeckoResult.fromValue(ContentPermission.VALUE_DENY)
                     // 3.0: the answer can be kept for the site (not from incognito, which leaves nothing behind).

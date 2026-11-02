@@ -37,10 +37,10 @@ object GeckoFetch {
                     gone.set(true)
                     waiting.getAndSet(null)?.let { close(it) }
                 }
-                start(request, flags).accept({ r ->
+                start(request, flags, { r ->
                     if (r == null) {
                         cont.resumeWithException(IOException("No response"))
-                        return@accept
+                        return@start
                     }
                     waiting.set(r)
                     if (gone.get()) waiting.getAndSet(null)?.let { close(it) } else cont.resume(r) { _, value, _ -> close(value) }
@@ -56,7 +56,7 @@ object GeckoFetch {
         val done = CountDownLatch(1)
         val got = AtomicReference<Any?>()
         val gone = AtomicBoolean(false)
-        start(request, flags).accept({ r ->
+        start(request, flags, { r ->
             got.set(r ?: IOException("No response"))
             done.countDown()
             if (gone.get()) (got.getAndSet(null) as? WebResponse)?.let { close(it) }
@@ -87,7 +87,22 @@ object GeckoFetch {
         (got.getAndSet(null) as? WebResponse)?.let { close(it) }
     }
 
-    private fun start(request: WebRequest, flags: Int) = Engine.executor.fetch(request, flags).withHandler(callbacks)
+    /**
+     * Asks the engine for [request]; [onAnswer] or [onError] runs on the callbacks thread. 3.0.1:
+     * the request is made on that thread, which has a Looper. A GeckoResult made on a thread without
+     * one (the player's loading threads, the downloads' coroutines) has nobody to hand its answer to:
+     * with a listener added (withHandler did), the engine stopped the whole app when it answered
+     * (AssertionError "Shouldn't have listeners with null dispatcher", a "JNI exception" crash).
+     */
+    private fun start(request: WebRequest, flags: Int, onAnswer: (WebResponse?) -> Unit, onError: (Throwable?) -> Unit) {
+        callbacks.post {
+            try {
+                Engine.executor.fetch(request, flags).accept({ onAnswer(it) }, { onError(it) })
+            } catch (e: Throwable) {
+                onError(e)
+            }
+        }
+    }
 
     private fun asIo(e: Throwable?): IOException = e as? IOException ?: IOException("Network error: ${e?.message ?: e?.javaClass?.simpleName ?: "unknown"}", e)
 

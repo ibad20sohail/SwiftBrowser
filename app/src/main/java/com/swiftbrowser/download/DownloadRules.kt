@@ -9,6 +9,20 @@ import java.util.Locale
  * download means, and when a saved stream may become an MP4.
  */
 object DownloadRules {
+    /** 3.0.1: a download asked for again from the same address (see [again]). */
+    enum class Again { NEW, BUSY, DONE }
+
+    /**
+     * What to do when an address is downloaded again in the same profile (and incognito or not):
+     * [status] of the earlier download (null: none), [fileThere]: its file still exists. One still
+     * going is shown instead of a second copy; a finished one is offered to open; else a new one.
+     */
+    fun again(status: Int?, fileThere: Boolean): Again = when (status) {
+        null -> Again.NEW
+        Downloads.QUEUED, Downloads.RUNNING, Downloads.PAUSED, Downloads.CONVERTING -> Again.BUSY
+        Downloads.DONE -> if (fileThere) Again.DONE else Again.NEW
+        else -> Again.NEW
+    }
     /** Why a download stopped, as far as trying again goes. */
     enum class Why {
         /** The connection (or a busy site): worth trying again by itself, a few times. */

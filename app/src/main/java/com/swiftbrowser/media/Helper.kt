@@ -303,6 +303,9 @@ object Helper {
                 JSONObject().put("type", "look").put("lite", prefs.liteMode || com.swiftbrowser.engine.Power.saving).put("fixes", !prefs.sitesAsDesigned)
                     .put("liteExcept", org.json.JSONArray(com.swiftbrowser.core.SiteSettings.liteExceptions()))
                     .put("darkSites", org.json.JSONArray(com.swiftbrowser.core.SiteSettings.darkPages()))
+                    // 3.0.1: what the helper may write down: the same without incognito tabs' choices.
+                    .put("liteExceptKeep", org.json.JSONArray(com.swiftbrowser.core.SiteSettings.liteExceptionsKept()))
+                    .put("darkSitesKeep", org.json.JSONArray(com.swiftbrowser.core.SiteSettings.darkPagesKept()))
                     .put("keepPlaying", prefs.keepPlaying)
                     .put("readerFont", prefs.readerFont).put("readerSpacing", prefs.readerSpacing)
                     .put("accentLight", accentHex(night = false)).put("accentDark", accentHex(night = true))
@@ -348,14 +351,15 @@ object Helper {
 
     private fun addMedia(tab: Tab, msg: JSONObject) {
         val url = msg.optString("url")
-        if (url.isBlank() || tab.media.any { it.url == url }) return
+        // 3.0.1: a page's report is checked: only addresses Swift could fetch (MediaRules).
+        if (!MediaRules.acceptable(url) || tab.media.any { it.url == url }) return
         val item = MediaItem(
             url = url,
             kind = if (msg.optString("kind") == "hls") MediaItem.Kind.HLS else MediaItem.Kind.FILE,
             mime = msg.optString("mime"),
             size = msg.optLong("size", -1),
             headers = toMap(msg.optJSONObject("headers")),
-            frameUrl = msg.optString("frameUrl"),
+            frameUrl = msg.optString("frameUrl").takeIf { MediaRules.acceptable(it) }.orEmpty(),
             pageUrl = tab.url,
             pageTitle = tab.title,
             time = System.currentTimeMillis(),
@@ -440,7 +444,10 @@ object Helper {
         }
     }
 
-    /** Request headers the page used for [url] (cookies, referer), if the extension saw it. */
+    /**
+     * Request headers the page used for [url], if the extension saw it: the Referer only (3.0.1: the
+     * extension keeps no cookies; what Swift fetches itself goes without the profile's, see GeckoDataSource).
+     */
     fun lookupHeaders(url: String, callback: (Map<String, String>) -> Unit) {
         val port = backgroundPort
         if (port == null) {

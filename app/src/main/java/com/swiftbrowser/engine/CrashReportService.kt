@@ -58,7 +58,10 @@ class CrashReportService : Service() {
         val process = listOf(processType, remoteType).filter { it.isNotBlank() }.joinToString("/").ifBlank { visibility }
         Diagnostics.recordEngineCrash(this, visibility == GeckoRuntime.CRASHED_PROCESS_VISIBILITY_MAIN, process, reason)
         // Everything the engine noted that helps, into the day's log (nothing that names pages).
-        val kept = notes.filterKeys { it in KEPT_NOTES }.entries.joinToString("; ") { "${it.key}=${it.value.take(300)}" }
+        // 3.0.1: with the Java exception behind a "JNI exception" crash (its addresses cut to their site).
+        val kept = notes.filterKeys { it in KEPT_NOTES }.entries.joinToString("; ") { (k, v) ->
+            if (k == "JavaStackTrace") "$k=${com.swiftbrowser.core.LogLines.trimAddress(v.take(1500))}" else "$k=${v.take(300)}"
+        }
         com.swiftbrowser.core.L.appendFromOtherProcess(
             this, "E Engine crash ($process, ${visibility.lowercase()}): $reason${if (kept.isNotEmpty()) " | $kept" else ""}",
         )
@@ -73,6 +76,7 @@ class CrashReportService : Service() {
             "AvailablePhysicalMemory", "TotalPhysicalMemory", "AvailableVirtualMemory", "SystemMemoryUsePercentage",
             "GraphicsCriticalError", "AdapterDescription", "AppNotes", "ProcessType", "RemoteType", "StartupCrash",
             "UptimeTS", "LastInteractionDuration", "ShutdownProgress", "IPCMessageName", "IPCFatalErrorMsg",
+            "JavaStackTrace",
         )
     }
 

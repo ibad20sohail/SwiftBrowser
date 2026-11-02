@@ -189,6 +189,17 @@ object Archives {
 
     private fun safeSegment(s: String) = s.replace(BAD, "_").trim().ifEmpty { "_" }
 
+    /**
+     * Where an entry at [rel] (a relative path from the archive) goes inside [dest], whose canonical
+     * path is [destPath]; null when it would land outside (a "../" name, or a link on the way). 3.0.1:
+     * out of the extractor so it can be tested; File.separator, which is "/" on Android.
+     */
+    fun targetIn(dest: File, destPath: String, rel: String): File? {
+        val t = File(dest, rel.split('/').joinToString("/") { safeSegment(it) })
+        val canonical = runCatching { t.canonicalPath }.getOrNull() ?: return null
+        return t.takeIf { canonical.startsWith(destPath + File.separator) }
+    }
+
     /** The name an entry gets when it is taken out (what a memory card accepts). */
     fun outputName(name: String) = safeSegment(name)
 
@@ -554,12 +565,8 @@ object Archives {
         /** Where entry [path] goes, or null when it would leave [dest]. */
         fun target(path: String): File? {
             val rel = if (base.isEmpty()) path else path.removePrefix("$base/")
-            val t = File(dest, rel.split('/').joinToString("/") { safeSegment(it) })
-            val canonical = runCatching { t.canonicalPath }.getOrNull()
-            if (canonical == null || !canonical.startsWith("$destPath/")) {
-                unsafe++
-                return null
-            }
+            val t = targetIn(dest, destPath, rel)
+            if (t == null) unsafe++
             return t
         }
 

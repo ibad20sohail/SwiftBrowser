@@ -103,4 +103,16 @@ class DownloadRulesTest {
         assertFalse(DownloadRules.streamSaved(120, 120, 0, 0, 4_000, 5_000))
         assertFalse(DownloadRules.streamSaved(0, 0, 0, 0, 0, 0))
     }
+
+    @Test
+    fun theSameAddressAgainShowsWhatIsThereFirst() {
+        assertEquals(DownloadRules.Again.NEW, DownloadRules.again(null, fileThere = false))
+        for (going in listOf(Downloads.QUEUED, Downloads.RUNNING, Downloads.PAUSED, Downloads.CONVERTING)) {
+            assertEquals(DownloadRules.Again.BUSY, DownloadRules.again(going, fileThere = false))
+        }
+        assertEquals(DownloadRules.Again.DONE, DownloadRules.again(Downloads.DONE, fileThere = true))
+        // Finished but the file was deleted since, or it failed: a new download, as before.
+        assertEquals(DownloadRules.Again.NEW, DownloadRules.again(Downloads.DONE, fileThere = false))
+        assertEquals(DownloadRules.Again.NEW, DownloadRules.again(Downloads.FAILED, fileThere = true))
+    }
 }

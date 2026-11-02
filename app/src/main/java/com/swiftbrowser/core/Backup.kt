@@ -36,6 +36,25 @@ object Backup {
 
     class Summary(val profiles: Int, val bookmarks: Int, val tabs: Int, val history: Int, val created: String)
 
+    /**
+     * The backup file's format (3.0.1). Backups made before have none and count as 1; a higher one
+     * comes from a newer Swift, and is refused rather than half understood.
+     */
+    const val FORMAT = 1
+
+    /** Whether a backup of [format] can be restored by this Swift. */
+    fun readable(format: Int): Boolean = format in 1..FORMAT
+
+    /** Whether [root] was made by a newer Swift (a higher [FORMAT]). */
+    fun isNewer(root: JSONObject): Boolean = root.optInt("format", 1) > FORMAT
+
+    /**
+     * What a restore added (3.0.1: the message says exactly this; before, a failure with the
+     * settings said nothing was changed although the data was in). [settings]: how many settings were
+     * taken from the backup, -1 when they couldn't be put in (they stay as they were).
+     */
+    class Restored(val profiles: Int, val bookmarks: Int, val history: Int, val tabs: Int, val siteLevels: Int, val settings: Int)
+
     /** Blocking: writes the backup and returns its file. */
     fun write(ctx: Context): File = write(ctx, automatic = false)
 
@@ -65,6 +84,7 @@ object Backup {
         val db = SwiftApp.db
         val root = JSONObject()
             .put("app", "Swift")
+            .put("format", FORMAT)
             .put("version", BuildConfig.VERSION_NAME)
             .put("created", System.currentTimeMillis())
 
@@ -175,33 +195,42 @@ object Backup {
      * Blocking (run on TabManager.io, so it comes after any pending saves): adds the backup's
      * contents. Swift must restart afterwards to load the tabs and settings. 3.0: the data goes in
      * as one transaction (a failure leaves the phone as it was, and 5,000 pages of history take one
-     * write instead of 5,000), then the settings. False when it failed (nothing was changed).
+     * write instead of 5,000), then the settings. Null when the data couldn't go in (nothing was
+     * changed); otherwise what was added (3.0.1).
      */
-    fun restore(ctx: Context, root: JSONObject): Boolean {
+    fun restore(ctx: Context, root: JSONObject): Restored? {
+        // 3.0.1: a backup from a newer Swift is not half understood.
+        if (!readable(root.optInt("format", 1))) return null
         val db = SwiftApp.db
         val profiles = root.optJSONArray("profiles") ?: JSONArray()
         // The backup's profile ids (backups since 2.6) and the ones they get here.
         val ids = HashMap<Long, Long>()
+        var newProfiles = 0
+        var bookmarks = 0
+        var history = 0
+        var tabs = 0
+        var siteLevels = 0
         try {
             db.transaction {
                 val open = db.tabsWithoutState().map { it.profileId to it.url }.toHashSet()
                 for (i in 0 until profiles.length()) {
                     val p = profiles.optJSONObject(i) ?: continue
                     val name = p.text("name", 60).trim().ifBlank { "Restored" }
-                    val pid = Profiles.all().firstOrNull { it.name.equals(name, ignoreCase = true) }?.id ?: Profiles.add(name).id
+                    val pid = Profiles.all().firstOrNull { it.name.equals(name, ignoreCase = true) }?.id
+                        ?: Profiles.add(name).id.also { newProfiles++ }
                     if (p.has("id")) ids[p.optLong("id")] = pid
                     p.optJSONArray("bookmarks")?.let { arr ->
                         for (j in 0 until arr.length()) {
                             val b = arr.optJSONObject(j) ?: continue
                             val url = b.webUrl("url") ?: continue
-                            db.importBookmark(pid, url, b.text("title"), b.optLong("created", System.currentTimeMillis()), b.text("folder", 60).trim())
+                            if (db.importBookmark(pid, url, b.text("title"), b.optLong("created", System.currentTimeMillis()), b.text("folder", 60).trim())) bookmarks++
                         }
                     }
                     p.optJSONArray("history")?.let { arr ->
                         for (j in 0 until minOf(arr.length(), HISTORY_LIMIT)) {
                             val h = arr.optJSONObject(j) ?: continue
                             val url = h.webUrl("url") ?: continue
-                            db.importHistory(pid, url, h.text("title"), h.optLong("last"), h.optInt("visits", 1).coerceAtLeast(1))
+                            if (db.importHistory(pid, url, h.text("title"), h.optLong("last"), h.optInt("visits", 1).coerceAtLeast(1))) history++
                         }
                     }
                     val groups = HashMap<Long, JSONObject>()
@@ -225,7 +254,7 @@ object Backup {
                             val url = t.webUrl("url") ?: continue
                             if ((pid to url) in open) continue
                             open += pid to url
-                            db.importTab(pid, url, t.text("title"), groupFor(t.optLong("group", -1)), t.optLong("used", System.currentTimeMillis()))
+                            if (db.importTab(pid, url, t.text("title"), groupFor(t.optLong("group", -1)), t.optLong("used", System.currentTimeMillis()))) tabs++
                         }
                     }
                 }
@@ -233,17 +262,48 @@ object Backup {
                     for (site in levels.keys()) {
                         if (site.isBlank() || site.length > 253) continue
                         db.setSiteLevel(site, AdLevel.fromKey(levels.optString(site)).key)
+                        siteLevels++
                     }
                 }
             }
         } catch (e: Exception) {
             L.w("Restoring a backup failed; nothing was changed", e)
             Profiles.refresh()
-            return false
+            return null
         }
-        restoreSettings(ctx, root, ids)
-        L.d("Backup restored: ${profiles.length()} profiles")
-        return true
+        // The settings go in as one edit (all of them or none), after the data. 3.0.1: if they fail,
+        // the data stays in and the message says the settings didn't change.
+        val settings = try {
+            restoreSettings(ctx, root, ids)
+        } catch (e: Exception) {
+            L.w("Restoring a backup's settings failed; they stay as they were", e)
+            -1
+        }
+        L.d("Backup restored: ${profiles.length()} profiles, $bookmarks bookmarks, $history history, $tabs tabs, $settings settings")
+        return Restored(newProfiles, bookmarks, history, tabs, siteLevels, settings)
+    }
+
+    /** The message after a restore (3.0.1): exactly what went in. */
+    fun restoredText(r: Restored): String {
+        fun n(count: Int, one: String, many: String) = "$count ${if (count == 1) one else many}"
+        val added = listOfNotNull(
+            n(r.profiles, "profile", "profiles").takeIf { r.profiles > 0 },
+            n(r.bookmarks, "bookmark", "bookmarks").takeIf { r.bookmarks > 0 },
+            n(r.history, "history entry", "history entries").takeIf { r.history > 0 },
+            n(r.tabs, "tab", "tabs").takeIf { r.tabs > 0 },
+            n(r.siteLevels, "site's ad blocking level", "sites' ad blocking levels").takeIf { r.siteLevels > 0 },
+        )
+        val data = when (added.size) {
+            0 -> "Nothing in it was new for this phone."
+            1 -> "Added ${added[0]}."
+            else -> "Added ${added.dropLast(1).joinToString(", ")} and ${added.last()}."
+        }
+        val settings = when {
+            r.settings < 0 -> "Its settings couldn't be put in, so yours stay as they were."
+            r.settings == 0 -> "It had no settings to restore."
+            else -> "${n(r.settings, "setting", "settings")} restored."
+        }
+        return "$data $settings"
     }
 
     /**
@@ -251,9 +311,10 @@ object Backup {
      * each one holds. A list setting replaces this phone's (merged, an old backup could add
      * "Saved passwords" to what Quit clears).
      */
-    private fun restoreSettings(ctx: Context, root: JSONObject, ids: Map<Long, Long>) {
-        val settings = root.optJSONObject("settings") ?: return
+    private fun restoreSettings(ctx: Context, root: JSONObject, ids: Map<Long, Long>): Int {
+        val settings = root.optJSONObject("settings") ?: return 0
         val edit = SwiftApp.prefs.sp.edit()
+        var count = 0
         for (backupKey in settings.keys()) {
             val o = settings.optJSONObject(backupKey) ?: continue
             val raw = when (val v = o.opt("v")) {
@@ -292,27 +353,29 @@ object Backup {
                 is String -> edit.putString(key, value)
                 is Set<*> -> edit.putStringSet(key, value.filterIsInstance<String>().toSet())
             }
+            count++
         }
         edit.commit()
+        return count
     }
 
     private const val QUIT_CLEAR = "quit_clear"
 
     /**
-     * Runs [restore] after the app's pending database writes; [done] on the main thread with whether
-     * it worked.
+     * Runs [restore] after the app's pending database writes; [done] on the main thread with what
+     * was added, or null when nothing was changed.
      */
-    fun restoreThen(ctx: Context, root: JSONObject, done: (Boolean) -> Unit) {
+    fun restoreThen(ctx: Context, root: JSONObject, done: (Restored?) -> Unit) {
         val app = ctx.applicationContext
         TabManager.flushSaves()
         TabManager.io.execute {
-            val ok = try {
+            val restored = try {
                 restore(app, root)
             } catch (e: Exception) {
                 L.w("Restoring a backup failed", e)
-                false
+                null
             }
-            android.os.Handler(android.os.Looper.getMainLooper()).post { done(ok) }
+            android.os.Handler(android.os.Looper.getMainLooper()).post { done(restored) }
         }
     }
 }

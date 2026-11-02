@@ -216,14 +216,15 @@ object Sheets {
 
     /** "Same as all sites" and the sizes; a pick shows on the site's open page straight away (2.3). */
     private fun textSizeChips(ctx: Context, site: String, tab: Tab?, onChanged: (() -> Unit)?): View {
-        val own = SiteSettings.textScale(site)
+        val incognito = tab?.incognito == true
+        val own = SiteSettings.textScale(site, incognito)
         val all = SwiftApp.prefs.textScale
         val labels = listOf("Same as all sites (${(all * 100).roundToInt()}%)") + TEXT_SCALES.map { "${(it * 100).roundToInt()}%" }
         val selected = if (own == null) 0 else TEXT_SCALES.indexOfFirst { abs(it - own) < 0.01f } + 1
         return chips(ctx, labels, selected) { i ->
-            SiteSettings.setTextScale(site, if (i == 0) null else TEXT_SCALES[i - 1])
+            SiteSettings.setTextScale(site, if (i == 0) null else TEXT_SCALES[i - 1], incognito)
             val current = TabManager.current
-            if (current != null && UrlUtils.site(current.url) == site) Engine.showTextScaleFor(site, force = true)
+            if (current != null && UrlUtils.site(current.url) == site) Engine.showTextScaleFor(site, current.incognito, force = true)
             onChanged?.invoke()
         }
     }
@@ -387,6 +388,28 @@ object Sheets {
 
     // ------------------------------------------------------------------ ad blocking
 
+    /**
+     * What a site's own level does (3.0.1: said as it is). The filter lists follow the level for all
+     * sites (with blocking off, the Balanced ones for the sites turned on); a site's own level
+     * changes how its pop-ups, redirects and links to apps are handled, Off turns blocking off there
+     * and Extreme also blocks its third-party scripts and frames.
+     */
+    private fun siteLevelNote(level: AdLevel?): String {
+        val all = AdBlock.global
+        val lists = if (all == AdLevel.OFF) "ads and trackers are blocked with the Balanced lists."
+        else "ads and trackers are blocked with the ${all.label} lists, as on all sites."
+        return when (level) {
+            null -> "Uses the level chosen for all sites (${all.label})."
+            AdLevel.OFF -> "No blocking on this site: pages load exactly as the site sends them."
+            AdLevel.BALANCED, AdLevel.HIGH -> "On this site, pop-ups, redirects and links to apps are handled as at ${level.label}; $lists"
+            AdLevel.EXTREME -> "On this site, third-party scripts and frames are blocked too, and pop-ups and redirects are handled as at Extreme; $lists"
+        }
+    }
+
+    /** 3.0.1: under a site's level chosen from an incognito tab. */
+    private const val INCOGNITO_LEVEL_NOTE =
+        "In incognito, this site's level lasts until you close your incognito tabs, and counts for its normal tabs too until then."
+
     fun shield(a: MainActivity) {
         val tab = TabManager.current ?: return
         val site = UrlUtils.site(tab.url)
@@ -421,14 +444,16 @@ object Sheets {
             col.addView(label(a, "This site: $site", top = 16))
             val override = AdBlock.overrideFor(site)
             val options = listOf("Same as all sites") + levels.map { it.label }
-            val siteDesc = note(a, override?.summary ?: "Uses the level chosen for all sites.")
+            val siteDesc = note(a, siteLevelNote(override))
             col.addView(chipRow(a, options, if (override == null) 0 else levels.indexOf(override) + 1) { i ->
                 val level = if (i == 0) null else levels[i - 1]
-                AdBlock.setOverride(site, level)
-                siteDesc.text = level?.summary ?: "Uses the level chosen for all sites."
+                AdBlock.setOverride(site, level, tab.incognito)
+                siteDesc.text = siteLevelNote(level)
             })
             col.addView(siteDesc)
             col.addView(note(a, "Changes apply when the page reloads."))
+            // 3.0.1: from incognito, kept only until incognito ends (one uBO serves every tab).
+            if (tab.incognito) col.addView(note(a, INCOGNITO_LEVEL_NOTE))
         }
 
         val buttons = LinearLayout(a).apply {
@@ -593,7 +618,7 @@ object Sheets {
     fun videos(a: MainActivity, tab: Tab) {
         val col = column(a)
         lateinit var dialog: BottomSheetDialog
-        col.addView(header(a, "Videos on this page", "Tap one to download it. Start playing the video first if it isn't listed."))
+        col.addView(header(a, "Videos on this page", "Tap one to download it, or ▶ to play it in Swift's player. Start playing the video first if it isn't listed."))
         val list = RecyclerView(a).apply {
             layoutManager = LinearLayoutManager(a)
             isNestedScrollingEnabled = false
@@ -608,9 +633,10 @@ object Sheets {
                     "File" + if (m.size > 0) " · ${UrlUtils.formatBytes(m.size)}" else ""
                 }
                 h.set(R.drawable.ic_movie, if (m.kind == MediaItem.Kind.HLS) "Video stream ($name)" else name, "$info · $host")
-                h.setAction(R.drawable.ic_download, "Download") {
+                // 3.0.1: the button plays it in Swift's player (a tap on the row still downloads it).
+                h.setAction(R.drawable.ic_play, "Play in Swift's player") {
                     dialog.dismiss()
-                    downloadMedia(a, tab, m)
+                    a.playInSwiftPlayer(m)
                 }
             },
             onClick = { m ->
@@ -681,17 +707,23 @@ object Sheets {
         if (!headers.containsKey("referer")) {
             (m.frameUrl.ifBlank { tab.url }).takeIf { UrlUtils.isHttp(it) }?.let { headers["referer"] = it }
         }
-        if (m.kind == MediaItem.Kind.HLS) {
-            downloadHls(a, tab, m.url, headers)
-        } else {
-            a.withStorage {
-                val base = tab.title.ifBlank { UrlUtils.host(tab.url) ?: "video" }
-                val ext = UrlUtils.fileName(m.url, null, m.mime).substringAfterLast('.', "mp4").take(5)
-                val name = UrlUtils.sanitizeFileName("$base.$ext")
-                Downloads.startUrl(tab.profileId, m.url, name, m.mime.ifBlank { null }, headers, tab.url, tab.incognito)
-                a.snack("Downloading $name", "View") { a.openDownloads() }
+        // 3.0.1: the browser name the page saw (a desktop tab's is the desktop one).
+        if (headers.keys.none { it.equals("user-agent", true) }) headers["user-agent"] = com.swiftbrowser.engine.UserAgent.forTab(tab.desktop)
+        fun start() {
+            if (m.kind == MediaItem.Kind.HLS) {
+                downloadHls(a, tab, m.url, headers)
+            } else {
+                a.withStorage {
+                    val base = tab.title.ifBlank { UrlUtils.host(tab.url) ?: "video" }
+                    val ext = UrlUtils.fileName(m.url, null, m.mime).substringAfterLast('.', "mp4").take(5)
+                    val name = UrlUtils.sanitizeFileName("$base.$ext")
+                    Downloads.startUrl(tab.profileId, m.url, name, m.mime.ifBlank { null }, headers, tab.url, tab.incognito)
+                    a.snack("Downloading $name", "View") { a.openDownloads() }
+                }
             }
         }
+        // 3.0.1: the same video asked for again: the one still going, or the finished file, first.
+        if (!a.sameDownload(tab, m.url) { start() }) start()
     }
 
     /** Reads an HLS playlist; if it offers several qualities, lets the user choose one. */
@@ -1035,27 +1067,34 @@ object Sheets {
         val col = column(ctx)
         lateinit var dialog: BottomSheetDialog
         val onThisSite = tab != null && UrlUtils.site(tab.url) == site
-        col.addView(header(ctx, site, "Settings for this site, kept for all its pages and tabs."))
-        col.addView(switchRow(ctx, R.drawable.ic_desktop, "Desktop site", "Always open the computer version", SiteSettings.desktop(site)) { on ->
-            SiteSettings.setDesktop(site, on)
+        // 3.0.1: from an incognito tab, the choices last only until incognito ends (SiteSettings).
+        val incognito = tab?.incognito == true
+        if (incognito) {
+            col.addView(header(ctx, site, "Settings for this site in incognito tabs, forgotten when you close them."))
+            col.addView(note(ctx, "Lite mode, Dark page and ad blocking also change for this site's normal tabs until then."))
+        } else {
+            col.addView(header(ctx, site, "Settings for this site, kept for all its pages and tabs."))
+        }
+        col.addView(switchRow(ctx, R.drawable.ic_desktop, "Desktop site", "Always open the computer version", SiteSettings.desktop(site, incognito)) { on ->
+            SiteSettings.setDesktop(site, on, incognito)
             if (onThisSite && tab != null) TabManager.setDesktop(tab, on)
             onChanged?.invoke()
         })
-        col.addView(switchRow(ctx, R.drawable.ic_volume, "Sound can start by itself", "Videos may play with sound before you tap play", SiteSettings.autoplay(site)) { on ->
-            SiteSettings.setAutoplay(site, on)
+        col.addView(switchRow(ctx, R.drawable.ic_volume, "Sound can start by itself", "Videos may play with sound before you tap play", SiteSettings.autoplay(site, incognito)) { on ->
+            SiteSettings.setAutoplay(site, on, incognito)
             onChanged?.invoke()
         })
-        col.addView(switchRow(ctx, R.drawable.ic_lite, "Lite mode on this site", "Turn off if the site looks broken with Lite mode", !SiteSettings.noLite(site)) { on ->
-            SiteSettings.setNoLite(site, !on)
+        col.addView(switchRow(ctx, R.drawable.ic_lite, "Lite mode on this site", "Turn off if the site looks broken with Lite mode", !SiteSettings.noLite(site, incognito)) { on ->
+            SiteSettings.setNoLite(site, !on, incognito)
             if (onThisSite && tab != null && SwiftApp.prefs.liteMode) TabManager.reload(tab)
             onChanged?.invoke()
         })
-        col.addView(switchRow(ctx, R.drawable.ic_reader, "Open articles in reader view", "Pages with an article open as a clean read by themselves", SiteSettings.autoReader(site)) { on ->
-            SiteSettings.setAutoReader(site, on)
+        col.addView(switchRow(ctx, R.drawable.ic_reader, "Open articles in reader view", "Pages with an article open as a clean read by themselves", SiteSettings.autoReader(site, incognito)) { on ->
+            SiteSettings.setAutoReader(site, on, incognito)
             onChanged?.invoke()
         })
-        col.addView(switchRow(ctx, R.drawable.ic_dark, "Dark page", "Swift turns the site dark, for sites without a dark mode. Pictures stay as they are.", SiteSettings.darkPage(site)) { on ->
-            SiteSettings.setDarkPage(site, on)
+        col.addView(switchRow(ctx, R.drawable.ic_dark, "Dark page", "Swift turns the site dark, for sites without a dark mode. Pictures stay as they are.", SiteSettings.darkPage(site, incognito)) { on ->
+            SiteSettings.setDarkPage(site, on, incognito)
             // A moment for the page style to be in place.
             if (onThisSite && tab != null) android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ TabManager.reload(tab) }, 400)
             onChanged?.invoke()
@@ -1064,18 +1103,18 @@ object Sheets {
         col.addView(textSizeChips(ctx, site, tab, onChanged))
         col.addView(label(ctx, "Location", top = 16))
         val places = SiteSettings.Location.entries
-        col.addView(chips(ctx, places.map { it.label }, places.indexOf(SiteSettings.location(site))) { i ->
-            SiteSettings.setLocation(site, places[i])
+        col.addView(chips(ctx, places.map { it.label }, places.indexOf(SiteSettings.location(site, incognito))) { i ->
+            SiteSettings.setLocation(site, places[i], incognito)
             onChanged?.invoke()
         })
         col.addView(label(ctx, "Ad blocking", top = 16))
         val levels = AdLevel.entries
         val override = AdBlock.overrideFor(site)
-        val levelNote = note(ctx, override?.summary ?: "Uses the level chosen for all sites (${AdBlock.global.label}).")
+        val levelNote = note(ctx, siteLevelNote(override))
         col.addView(chipRow(ctx, listOf("Same as all sites") + levels.map { it.label }, if (override == null) 0 else levels.indexOf(override) + 1) { i ->
             val level = if (i == 0) null else levels[i - 1]
-            AdBlock.setOverride(site, level)
-            levelNote.text = level?.summary ?: "Uses the level chosen for all sites (${AdBlock.global.label})."
+            AdBlock.setOverride(site, level, incognito)
+            levelNote.text = siteLevelNote(level)
             onChanged?.invoke()
         })
         col.addView(levelNote)
@@ -1098,7 +1137,8 @@ object Sheets {
         button("Clear cookies and data of this site") {
             MaterialAlertDialogBuilder(ctx)
                 .setTitle("Clear $site's data?")
-                .setMessage("Its cookies, saved logins and stored data are deleted, so you're signed out of it.")
+                // 3.0.1: said as it is: the engine clears a site for every profile at once.
+                .setMessage("Its cookies and stored data are deleted in every profile and in incognito, so you're signed out of it everywhere. Passwords Swift saved for it stay.")
                 .setPositiveButton("Clear") { _, _ ->
                     Engine.runtime.storageController.clearDataFromBaseDomain(site, org.mozilla.geckoview.StorageController.ClearFlags.ALL)
                     // In every profile: signed out of Google in all of them (3.0).
@@ -1108,16 +1148,16 @@ object Sheets {
                 .setNegativeButton(android.R.string.cancel, null)
                 .showImmersive()
         }
-        if (SiteSettings.hasSettings(site)) {
+        if (SiteSettings.hasSettings(site, incognito)) {
             button("Reset this site's settings") {
-                val wasDesktop = SiteSettings.desktop(site)
-                val saved = SiteSettings.save(site)
-                SiteSettings.reset(site)
+                val wasDesktop = SiteSettings.desktop(site, incognito)
+                val saved = SiteSettings.save(site, incognito)
+                SiteSettings.reset(site, incognito)
                 if (onThisSite && tab != null && wasDesktop) TabManager.setDesktop(tab, false)
                 onChanged?.invoke()
                 (ctx as? android.app.Activity)?.let { a ->
                     Messages.show(a, "$site's settings reset", "Undo") {
-                        SiteSettings.restore(saved)
+                        SiteSettings.restore(saved, incognito)
                         if (onThisSite && tab != null && wasDesktop) TabManager.setDesktop(tab, true)
                         onChanged?.invoke()
                     }

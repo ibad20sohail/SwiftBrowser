@@ -102,6 +102,33 @@ object TabRules {
         }
     }
 
+    // ------------------------------------------------------------------ unloading (3.0.1)
+
+    /**
+     * A loaded background tab as [toUnload] sees it. [spared]: it must stay but counts (playing, or a
+     * pop-up the engine is still to open, or its opener); [kept]: "Keep loaded", it stays and doesn't count.
+     */
+    class Loaded(val id: Long, val lastUsed: Long, val spared: Boolean = false, val kept: Boolean = false)
+
+    /**
+     * The background tabs to unload, by id: the longest unused first while more than [max] pages are
+     * loaded ([openCounts]: the open tab's page is one of them), and any not opened since [idleSince]
+     * whatever the number. Tabs the user keeps loaded are never chosen and leave room for others.
+     */
+    fun toUnload(others: List<Loaded>, openCounts: Boolean, max: Int, idleSince: Long): List<Long> {
+        val counted = others.filter { !it.kept }.sortedBy { it.lastUsed }
+        var live = counted.size + if (openCounts) 1 else 0
+        val out = ArrayList<Long>()
+        for (t in counted) {
+            if (t.spared) continue
+            val idle = t.lastUsed < idleSince
+            if (live <= max && !idle) continue
+            out += t.id
+            live--
+        }
+        return out
+    }
+
     // ------------------------------------------------------------------ links from other apps
 
     /** A tab showing [tabUrl] shows exactly [url] (a link another app sent): the same, or with the slash a site's address gets. */

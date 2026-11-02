@@ -146,6 +146,9 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
     private var shownEntry: LocalPlayback.Entry? = null
     private var warnedTracks: LocalPlayback.Entry? = null
 
+    /** 3.0.1: the video whose decoding by the chip was looked at (once each). */
+    private var hardwareChecked: LocalPlayback.Entry? = null
+
     // Gestures in progress.
     private var swipeFrom = 0f
     private var lastVolume = -1
@@ -1503,12 +1506,16 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         setPlayerText(true, null)
         val f = e.file ?: return
         if (!e.video) return
+        // 3.0.1: the timing chosen for this file last time.
+        subDelayMs = LocalMedia.subtitleDelay(this, f)
         val token = subToken
+        val lang = PlayerSettings.subtitleLanguage
         LocalPlayback.io.execute {
-            val beside = Subtitles.besideVideo(f)
-            // 2.9.2: also a torrent's Subs folder; from there only an English file shows by itself.
-            val found = beside + Subtitles.inSubsFolder(f)
-            val firstFile = beside.firstOrNull() ?: found.firstOrNull { Subtitles.isEnglish(it) }
+            val beside = Subtitles.besideVideo(f, lang)
+            // 2.9.2: also a torrent's Subs folder; from there only an English file shows by itself
+            // (3.0.1: or one in the language chosen in Settings).
+            val found = beside + Subtitles.inSubsFolder(f, lang)
+            val firstFile = beside.firstOrNull() ?: found.firstOrNull { Subtitles.inLanguage(it, lang.ifEmpty { "en" }) }
             val first = firstFile?.let { Subtitles.read(it) }
             handler.post {
                 if (token != subToken || isDestroyed) return@post
@@ -1725,6 +1732,7 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
                 subDelayMs = 0
                 text = delayLabel()
                 refreshSubtitles()
+                saveSubtitleDelay()
             }
         }
         fun pill(label: String, step: Long) = Ui.text(this, Ui.Type.LABEL, label).apply {
@@ -1737,6 +1745,7 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
                 subDelayMs += step
                 value.text = delayLabel()
                 refreshSubtitles()
+                saveSubtitleDelay()
             }
         }
         return LinearLayout(this).apply {
@@ -1747,6 +1756,12 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
             addView(value, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             addView(pill("Later", 250))
         }
+    }
+
+    /** 3.0.1: the timing stays with the file (a file on the phone; a website's video isn't kept). */
+    private fun saveSubtitleDelay() {
+        val f = LocalPlayback.current?.file ?: return
+        LocalMedia.saveSubtitleDelay(this, f, subDelayMs)
     }
 
     private fun delayLabel(): String {
@@ -1869,7 +1884,26 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         }
         val noPicture = tracks.containsType(C.TRACK_TYPE_VIDEO) && !tracks.isTypeSupported(C.TRACK_TYPE_VIDEO, true)
         val noSound = tracks.containsType(C.TRACK_TYPE_AUDIO) && !tracks.isTypeSupported(C.TRACK_TYPE_AUDIO, true)
-        if (!noPicture && !noSound) return
+        if (!noPicture && !noSound) {
+            // 3.0.1: it plays, but maybe not on the chip (only Android's software decoder, or too big
+            // or fast for the chip): said once, so a stutter isn't a mystery. Asked off the main thread.
+            if (video != null && hardwareChecked !== e) {
+                hardwareChecked = e
+                LocalPlayback.io.execute {
+                    val hint = com.swiftbrowser.media.HardwareVideo.hint(video.sampleMimeType, video.width, video.height, video.frameRate)
+                    if (hint != null) {
+                        handler.post {
+                            if (LocalPlayback.current === e && !isDestroyed && warnedTracks !== e) {
+                                warnedTracks = e
+                                L.w("Player: ${video.sampleMimeType} ${video.width}x${video.height} isn't for the phone's chip")
+                                say(hint, long = true)
+                            }
+                        }
+                    }
+                }
+            }
+            return
+        }
         warnedTracks = e
         val type = if (noPicture) C.TRACK_TYPE_VIDEO else C.TRACK_TYPE_AUDIO
         val format = tracks.groups.firstOrNull { it.type == type }?.takeIf { it.length > 0 }?.getTrackFormat(0)
@@ -2218,8 +2252,8 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
 
         /**
          * Plays a website video: an HLS stream (.m3u8) or a plain file at [url], fetched with the
-         * page's [headers] (Referer, Cookie, User-Agent). [incognito]: nothing about it is kept,
-         * logged or shown on the lock screen.
+         * page's [headers] (Referer, User-Agent; no cookies, see GeckoDataSource). [incognito]: nothing
+         * about it is kept, logged or shown on the lock screen.
          */
         fun openStream(from: Context, url: String, title: String?, headers: Map<String, String> = emptyMap(), incognito: Boolean = false) {
             val h = Bundle().apply { for ((k, v) in headers) putString(k, v) }
@@ -2229,7 +2263,7 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
                 .putExtra(EXTRA_TITLE, title)
                 .putExtra(EXTRA_HEADERS, h)
                 .putExtra(EXTRA_INCOGNITO, incognito)
-            // 3.0: only Swift's pages hand over a website video (with their cookies' session).
+            // 3.0: only Swift's pages hand over a website video.
             ViewerAccess.mark(i)
             if (from !is Activity) i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             from.startActivity(i)

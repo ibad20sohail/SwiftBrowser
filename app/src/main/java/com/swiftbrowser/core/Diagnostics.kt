@@ -104,6 +104,7 @@ object Diagnostics {
     fun setOnScreen(onScreen: Boolean) {
         io.execute { writeState(onScreen) }
         com.swiftbrowser.core.Health.onScreen(onScreen)
+        com.swiftbrowser.tabs.TabManager.onScreen(onScreen)
         L.d(if (onScreen) "On screen" else "Out of sight")
     }
 

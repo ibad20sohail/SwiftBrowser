@@ -92,9 +92,47 @@ object LocalMedia {
         val prefix = "$path|"
         val gone = sp.all.keys.filter { it.startsWith(prefix) }
         if (gone.isNotEmpty()) sp.edit { gone.forEach { remove(it) } }
+        val d = delays(ctx)
+        val timings = d.all.keys.filter { it.startsWith(prefix) }
+        if (timings.isNotEmpty()) d.edit { timings.forEach { remove(it) } }
     }
 
-    fun clear(ctx: Context) = sp(ctx).edit { clear() }
+    fun clear(ctx: Context) {
+        sp(ctx).edit { clear() }
+        delays(ctx).edit { clear() }
+    }
+
+    // ------------------------------------------------------------------ subtitle timing (3.0.1)
+
+    /** Each file's subtitle timing (Earlier/Later in the player), kept apart from the places. */
+    private const val DELAYS = "local_media_subtitle_delay"
+
+    private fun delays(ctx: Context): SharedPreferences = ctx.applicationContext.getSharedPreferences(DELAYS, Context.MODE_PRIVATE)
+
+    /** The subtitle timing chosen for [file], in ms (later > 0, earlier < 0); 0 when none. */
+    fun subtitleDelay(ctx: Context, file: File): Long = try {
+        delays(ctx).getString(key(file.path, file.length()), null)?.let { JSONObject(it).optLong("ms") } ?: 0L
+    } catch (_: Exception) {
+        0L
+    }
+
+    /** Keeps [ms] as [file]'s subtitle timing for the next time it plays (0 forgets it). */
+    fun saveSubtitleDelay(ctx: Context, file: File, ms: Long) {
+        val sp = delays(ctx)
+        val k = key(file.path, file.length())
+        if (ms == 0L) {
+            if (sp.contains(k)) sp.edit { remove(k) }
+            return
+        }
+        val all = sp.all
+        sp.edit {
+            putString(k, JSONObject().put("ms", ms).put("u", System.currentTimeMillis()).toString())
+            if (all.size > KEEP + 20) {
+                all.entries.mapNotNull { e -> (e.value as? String)?.let { runCatching { e.key to JSONObject(it).optLong("u") }.getOrNull() } }
+                    .sortedByDescending { it.second }.drop(KEEP).forEach { remove(it.first) }
+            }
+        }
+    }
 
     /**
      * 3.0: forgets the places left off from [from] to [to] (Clear browsing data → Where you left off);
@@ -104,6 +142,14 @@ object LocalMedia {
         val sp = sp(ctx)
         val gone = sp.all.entries.filter { e -> (e.value as? String)?.let { read(it) }?.item?.updated?.let { it in from..to } == true }.map { it.key }
         if (!onlyCount && gone.isNotEmpty()) sp.edit { gone.forEach { remove(it) } }
+        // 3.0.1: subtitle timings chosen then go too (they name the files played).
+        if (!onlyCount) {
+            val d = delays(ctx)
+            val timings = d.all.entries.filter { e ->
+                (e.value as? String)?.let { runCatching { JSONObject(it).optLong("u") }.getOrNull() }?.let { it in from..to } == true
+            }.map { it.key }
+            if (timings.isNotEmpty()) d.edit { timings.forEach { remove(it) } }
+        }
         return gone.size
     }
 

@@ -22,13 +22,17 @@ import java.util.Locale
 /**
  * 3.0: website videos played in Swift's player (and an HLS stream's playlists, keys and parts) are
  * fetched by the engine, as the page itself is: Firefox's up-to-date HTTPS and certificates (Android
- * 7's own connections fail for many sites, see engine.Net), the site's cookies, and an incognito
- * tab's private session for its videos. A Media3 DataSource over GeckoWebExecutor, used for http(s)
- * links; files on the phone and other apps' links are still read by Media3's own.
+ * 7's own connections fail for many sites, see engine.Net), and an incognito tab's private session
+ * for its videos. A Media3 DataSource over GeckoWebExecutor, used for http(s) links; files on the
+ * phone and other apps' links are still read by Media3's own.
+ *
+ * 3.0.1, said as it is: a normal tab's video goes without cookies. Each profile's cookies are in its
+ * own store, which the engine's fetcher can't use, so profiles stay apart, but a video that needs
+ * the site's sign-in may not play here (it still plays on the page).
  */
 @OptIn(UnstableApi::class)
 class GeckoDataSource private constructor(
-    /** The page's headers: Referer, Cookie, User-Agent, Origin. */
+    /** The page's headers: Referer and User-Agent (no cookies, see above). */
     private val headers: Map<String, String>,
     /** From an incognito tab: its private cookies, nothing written to the normal profile. */
     private val private: Boolean,

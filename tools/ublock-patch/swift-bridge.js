@@ -115,6 +115,9 @@ const limitNetworkSuspension = ( ) => {
 
 limitNetworkSuspension();
 
+// Whether the session rules hold rules for sites set from incognito tabs (Swift 3.0.1).
+let sessionHasIncognito = false;
+
 const apply = async msg => {
     await µb.isReadyPromise;
     tuneForPhone();
@@ -135,22 +138,44 @@ const apply = async msg => {
         if ( /\sblock\s*$/m.test(msg.rules) && µb.userSettings.advancedUserEnabled !== true ) {
             µb.changeUserSettings('advancedUserEnabled', true);
         }
-        if ( normalize(permanentFirewall.toString()) !== normalize(msg.rules) ) {
-            permanentFirewall.fromString(msg.rules);
+        // Swift 3.0.1: rules for sites set from incognito tabs are in use (session rules) but never
+        // saved: the saved (permanent) rules are the "keep" ones.
+        const keep = typeof msg.rulesKeep === 'string' ? msg.rulesKeep : msg.rules;
+        let changed = false;
+        if ( normalize(permanentFirewall.toString()) !== normalize(keep) ) {
+            permanentFirewall.fromString(keep);
             sessionFirewall.assign(permanentFirewall);
             µb.savePermanentFirewallRules();
+            changed = true;
+        }
+        const incognito = normalize(keep) !== normalize(msg.rules);
+        if ( incognito || sessionHasIncognito ) {
+            if ( normalize(sessionFirewall.toString()) !== normalize(msg.rules) ) {
+                sessionFirewall.fromString(msg.rules);
+                changed = true;
+            }
+            sessionHasIncognito = incognito;
+        }
+        if ( changed ) {
             cosmeticFilteringEngine.removeFromSelectorCache('*');
             filteringBehaviorChanged();
         }
     }
 
     if ( Array.isArray(msg.trusted) ) {
-        const directives = (µb.netWhitelistDefault || []).concat(msg.trusted);
+        const base = µb.netWhitelistDefault || [];
+        const directives = base.concat(msg.trusted);
+        // Swift 3.0.1: sites trusted from incognito tabs are in use but never saved. uBO saves the
+        // list it holds at that moment, so the kept list is put in place and saved first.
+        const keep = Array.isArray(msg.trustedKeep) ? base.concat(msg.trustedKeep) : directives;
         const want = normalize(directives.join('\n'));
         const have = normalize(µb.stringFromWhitelist(µb.netWhitelist));
         if ( want !== have ) {
-            µb.netWhitelist = µb.whitelistFromArray(directives);
+            µb.netWhitelist = µb.whitelistFromArray(keep);
             µb.saveWhitelist();
+            if ( keep !== directives ) {
+                µb.netWhitelist = µb.whitelistFromArray(directives);
+            }
             filteringBehaviorChanged();
         }
     }

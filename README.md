@@ -5,7 +5,7 @@ ad-heavy sites on an old phone (Moto E4, Android 7.1.2).
 
 ## Download
 
-**[Download Swift 3.0 (APK)](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v3.0/Swift-3.0.apk)**
+**[Download Swift 3.0.1 (APK)](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v3.0.1/Swift-3.0.1.apk)**
 for Android 7 and newer (32-bit ARM, about 172 MB). It installs over an earlier Swift and keeps
 tabs and settings. From 1.4 on, Swift can also update itself: Settings → About Swift → Check for
 updates.
@@ -31,6 +31,25 @@ ones, and a short welcome on the first start.
 - **Night light** (2.3, Settings → Look & screen): a warm layer over Swift, pages and videos too,
   from 7 pm to 7 am or always, in three strengths. Taps go through it.
 
+- **New in 3.0.1**:
+  - **Incognito leaves nothing behind**: site settings changed in an incognito tab last until the
+    incognito tabs close; they are no longer saved or put in backups.
+  - **Keep loaded**: hold a tab in the tab grid and choose Keep loaded; Swift never unloads it to
+    save memory (Android itself still can, if the phone runs out). A lower number of tabs kept
+    loaded applies at once, and the idle check sleeps while Swift is out of sight.
+  - **Right now** (Settings → Speed & memory): free memory, Swift's own, tabs loaded and recent
+    page engine crashes, measured when you look. **Security status** (Privacy & security): what is
+    on, and what Swift has checked (uBlock Origin loaded, the VPN's server answering).
+  - **Videos**: website videos play in Swift's player again, and downloads Swift starts no longer
+    close it (both stopped the app since 3.0); Videos on this page has a play button; a desktop
+    tab's videos and downloads go as desktop; downloading the same address again shows the one you
+    have first; detected video addresses are checked.
+  - **Player**: a subtitle language to show first (Settings → Files & media), the subtitle timing
+    kept for each video, and a note when a video is more than the phone's chip is made for.
+  - **Backups** carry a format number (a newer Swift's backup is refused, not half read) and a
+    restore says exactly what it added.
+  - **Truthful site settings**: clearing a site's data says it happens in every profile, and a
+    site's own Balanced or High level says it only changes pop-ups and redirects there.
 - **New in 3.0** (a full check of the app: bugs, safety and privacy fixes across every screen):
   - **Pop-ups and tabs**: links that open a new tab load once in the engine's own window (before,
     a hidden second copy kept running and using memory, and sign-in pop-ups couldn't report back);
@@ -251,7 +270,8 @@ ones, and a short welcome on the first start.
   - **Blocked this week** (2.3, Settings → Ad blocking): how many ads and trackers were blocked on
     each of the last 7 days (counts only, never which sites).
 - **Profiles**: each profile has its own Google login, cookies, history, bookmarks and tabs.
-- **Incognito tabs**: no history, and cookies and site data go away when the last one closes.
+- **Incognito tabs**: no history, and cookies and site data go away when the last one closes,
+  and so do site settings changed in them (3.0.1: they used to be saved like any other).
 - **Tabs** in a grid with page previews, like Chrome (two columns upright, three on a turned
   phone). The open tab shrinks into its card when the grid opens and grows back when you pick one:
   - Hold a tab and drag it to move it. Hold it over another tab for a moment and let go to
@@ -343,7 +363,9 @@ ones, and a short welcome on the first start.
   desktop mode (remembered), sound that starts by itself, location (ask, allow or block), the
   ad-blocking level, Lite mode, its own **text size** (2.3, also Text size in the menu), **open
   articles in reader view** (2.3; Swift also offers "Always" after you use reader view twice on a
-  site), and clears its cookies and data. Settings → Privacy lists the sites.
+  site), and clears its cookies and data. Settings → Privacy lists the sites. Changed from an
+  incognito tab, they last until incognito closes; Lite mode, Dark page and ad blocking then
+  count for the site's normal tabs too, as one engine part serves every tab.
 - **Secure DNS** (2.2, on with Cloudflare; or Quad9, Google, off): the names of the sites you visit
   are looked up encrypted, so the network can't read them. Wi-Fi sign-in pages still work.
 - **Secure connections first**: every site's secure (https) version when it has one; a site

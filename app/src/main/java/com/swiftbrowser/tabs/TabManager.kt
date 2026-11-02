@@ -60,6 +60,9 @@ object TabManager {
     /** 3.0: the tabs whose Back returns to the home page (Tab.leftHome), kept across restarts. */
     private const val LEFT_HOME = "tabs_left_home"
 
+    /** Tabs kept loaded (3.0.1), by id; incognito ones are never written down. */
+    private const val KEPT = "tabs_kept_loaded"
+
     /**
      * 3.0: [task] on [io], for the database: an error there (the phone full: SQLiteFullException) is
      * logged and Swift carries on. Before 3.0 such an error closed Swift, on a full phone at every start.
@@ -113,6 +116,7 @@ object TabManager {
             if (g.profileId in validProfiles) groups.add(TabGroup(g.id, g.profileId, g.name, g.color)) else deleteGroupRow(g.id)
         }
         val leftHome = prefs.sp.getStringSet(LEFT_HOME, null).orEmpty()
+        val kept = prefs.sp.getStringSet(KEPT, null).orEmpty()
         val repaired = ArrayList<Tab>()
         // Without their histories (2.6): each is read when its tab opens.
         val read = readTabs()
@@ -126,6 +130,7 @@ object TabManager {
             tab.stateLoaded = r.state == null
             tab.groupId = r.groupId?.takeIf { id -> groups.any { it.id == id && it.profileId == r.profileId } }
             tab.leftHome = r.id.toString() in leftHome
+            tab.kept = r.id.toString() in kept
             // 3.0: saved (before 3.0) with more than Android 7 can read back, a picture's data: address
             // or a very long history: it comes back without it, and is saved so.
             val tooLong = !TabRules.storable(r.url)
@@ -149,6 +154,8 @@ object TabManager {
         nextGroupId = maxOf(lastGroupId(), groupRows.maxOfOrNull { it.id } ?: 0L) + 1
         repaired.forEach { scheduleSave(it) }
         if (repaired.isNotEmpty()) L.w("${repaired.size} saved tabs held more than Swift can read back; they keep only what fits")
+        // Ids of tabs closed since are let go.
+        if (kept.size != tabs.count { it.kept }) saveKept()
         main.postDelayed(idleCheck, 5 * 60_000L)
         L.d("Restored ${tabs.size} tabs, ${groups.size} groups")
     }
@@ -447,20 +454,42 @@ object TabManager {
         val low = prefs.maxLiveTabs > 1 && Diagnostics.memoryLow()
         if (low) L.d("Memory low (${Diagnostics.memoryText()}): keeping only the open tab loaded")
         val max = if (low || com.swiftbrowser.engine.Power.saving) 1 else prefs.maxLiveTabs
-        val others = tabs.filter { it.session != null && it !== current }.sortedBy { it.lastUsed }
-        var live = others.size + if (current?.session != null) 1 else 0
+        val others = tabs.filter { it.session != null && it !== current }
         // Tabs not opened for half an hour let go of their page too (2.7), whatever the number:
         // their scripts would otherwise keep sharing the engine with the page on screen.
         val idleSince = System.currentTimeMillis() - IDLE_UNLOAD_MS
-        for (t in others) {
-            // 3.0: nor a pop-up whose window the engine is still to open, nor its opener (see opensPopup).
-            if (t.playing || t.sessionOpening || opensPopup(t)) continue
-            val idle = t.lastUsed < idleSince
-            if (live <= max && !idle) continue
-            L.d("Unloading tab ${t.id} (${if (idle) "not opened for 30 minutes" else "$live loaded, the limit is $max"})")
+        // 3.0: nor a pop-up whose window the engine is still to open, nor its opener (see opensPopup).
+        // 3.0.1: tabs kept loaded stay whatever happens, and leave room for others (TabRules.toUnload).
+        val loaded = others.map { TabRules.Loaded(it.id, it.lastUsed, it.playing || it.sessionOpening || opensPopup(it), it.kept) }
+        val openCounts = current?.session != null && current?.kept != true
+        for (id in TabRules.toUnload(loaded, openCounts, max, idleSince)) {
+            val t = others.firstOrNull { it.id == id } ?: continue
+            L.d("Unloading tab ${t.id} (${if (t.lastUsed < idleSince) "not opened for 30 minutes" else "the limit is $max loaded"})")
             suspend(t)
-            live--
         }
+    }
+
+    /** "Keep loaded" (3.0.1) on or off for [tab]; off lets the usual limits apply to it again. */
+    fun setKept(tab: Tab, on: Boolean) {
+        if (tab.kept == on) return
+        tab.kept = on
+        if (!tab.incognito) saveKept()
+        L.d("Tab ${tab.id} ${if (on) "kept loaded" else "may be unloaded again"}")
+        if (!on) trimLiveSessions()
+    }
+
+    private fun saveKept() {
+        val ids = tabs.filter { it.kept && !it.incognito }.mapTo(HashSet()) { it.id.toString() }
+        prefs.sp.edit().putStringSet(KEPT, ids).apply()
+    }
+
+    /**
+     * Swift came on screen or went out of sight (3.0.1): the idle check only runs while it's on
+     * screen. Out of sight, background tabs are let go a minute after anyway (suspendBackgroundTabs).
+     */
+    fun onScreen(on: Boolean) {
+        main.removeCallbacks(idleCheck)
+        if (on) main.postDelayed(idleCheck, 5 * 60_000L)
     }
 
     /** Looks for tabs to unload every 5 minutes (2.7). */
@@ -490,8 +519,9 @@ object TabManager {
         Helper.sendLook()
     }
 
+    /** Android is short of memory, or Swift is out of sight: background pages go, but playing and kept tabs (3.0.1). */
     fun suspendBackgroundTabs() {
-        tabs.filter { it.session != null && it !== current && !it.playing }.forEach { suspend(it) }
+        tabs.filter { it.session != null && it !== current && !it.playing && !it.kept }.forEach { suspend(it) }
     }
 
     /** Tabs closed together from the tab grid, until the next close; see [undoClose]. */
@@ -555,10 +585,12 @@ object TabManager {
             lastClosed = Closed(entries, goneGroups, if (wasCurrent) cur else null, replacement)
             ui?.onTabsClosed(closing)
         }
-        // The last incognito tab closed (2.6): its documents and downloads are forgotten too.
+        // The last incognito tab closed (2.6): its documents and downloads are forgotten too, and
+        // (3.0.1) the site settings chosen there.
         if (closing.any { it.incognito } && tabs.none { it.incognito }) {
             com.swiftbrowser.docs.Docs.onIncognitoEnded()
             com.swiftbrowser.download.Downloads.onIncognitoEnded()
+            com.swiftbrowser.core.SiteSettings.onIncognitoEnded()
         }
     }
 
@@ -1029,9 +1061,10 @@ object TabManager {
     }
 
     fun setDesktop(tab: Tab, desktop: Boolean) {
-        // Remembered for the site, so its other pages and tabs get the same version (not from an
-        // incognito tab, which leaves nothing behind, 2.6).
-        if (!tab.incognito) UrlUtils.site(tab.url)?.let { if (UrlUtils.isHttp(tab.url)) com.swiftbrowser.core.SiteSettings.setDesktop(it, desktop) }
+        // Remembered for the site, so its other pages and tabs get the same version. From an incognito
+        // tab, only until incognito ends: it leaves nothing behind (2.6; 3.0.1: before, it was
+        // forgotten at the tab's next page).
+        UrlUtils.site(tab.url)?.let { if (UrlUtils.isHttp(tab.url)) com.swiftbrowser.core.SiteSettings.setDesktop(it, desktop, tab.incognito) }
         tab.desktop = desktop
         tab.session?.settings?.let { s ->
             s.setUserAgentMode(
@@ -1138,9 +1171,9 @@ object TabManager {
         Profiles.setCurrent(id)
         val target = profileTabs(id).maxByOrNull { it.lastUsed } ?: createTab("about:blank", id, null, false, false)
         select(target)
-        // Other profiles' pages don't need to stay in memory.
-        tabs.filter { !it.incognito && it.profileId != id && it.session != null }.forEach { suspend(it) }
-        if (previous != null && !previous.incognito && previous.profileId != id) suspend(previous)
+        // Other profiles' pages don't need to stay in memory (3.0.1: but the ones kept loaded).
+        tabs.filter { !it.incognito && it.profileId != id && it.session != null && !it.kept }.forEach { suspend(it) }
+        if (previous != null && !previous.incognito && previous.profileId != id && !previous.kept) suspend(previous)
         ui?.onTabsChanged()
     }
 

@@ -93,20 +93,46 @@ object Subtitles {
      * first, then English ones (2.9.2: not "Film.de.srt" for being first in the alphabet). Reads the
      * folder: call it off the main thread.
      */
-    fun besideVideo(video: File): List<File> {
+    fun besideVideo(video: File, lang: String = ""): List<File> {
         val base = video.nameWithoutExtension
         val files = video.parentFile?.listFiles() ?: return emptyList()
+        fun exact(f: File) = f.nameWithoutExtension.equals(base, ignoreCase = true)
+        // 3.0.1: with a language chosen (Settings → Subtitle language), its files come first.
+        val order = if (lang.isEmpty()) {
+            compareBy<File>({ !exact(it) }, { !isEnglish(it) }, { it.name.lowercase(Locale.ROOT) })
+        } else {
+            compareBy<File>({ !inLanguage(it, lang) }, { !exact(it) }, { it.name.lowercase(Locale.ROOT) })
+        }
         return files.filter { f ->
             f.isFile && f.extension.lowercase(Locale.ROOT) in EXTENSIONS &&
-                (f.nameWithoutExtension.equals(base, ignoreCase = true) || f.name.startsWith("$base.", ignoreCase = true))
-        }.sortedWith(compareBy<File>({ !it.nameWithoutExtension.equals(base, ignoreCase = true) }, { !isEnglish(it) }, { it.name.lowercase(Locale.ROOT) }))
+                (exact(f) || f.name.startsWith("$base.", ignoreCase = true))
+        }.sortedWith(order)
     }
 
     private val SUB_FOLDERS = setOf("subs", "sub", "subtitles", "subtitle")
-    private val ENGLISH = Regex("(?i)(^|[^a-z])(en|eng|english)([^a-z]|$)")
+    /**
+     * 3.0.1: the words a subtitle file's name can give its language by (code, ISO 639-2, name). Hindi
+     * has no "hi": "Film.en.hi.srt" is English for the hard of hearing.
+     */
+    private val LANGUAGE_WORDS = mapOf(
+        "en" to listOf("en", "eng", "english"),
+        "ur" to listOf("ur", "urd", "urdu"),
+        "hi" to listOf("hin", "hindi"),
+        "ar" to listOf("ar", "ara", "arabic"),
+        "fr" to listOf("fr", "fre", "fra", "french"),
+        "es" to listOf("es", "spa", "spanish"),
+        "de" to listOf("de", "ger", "deu", "german"),
+        "tr" to listOf("tr", "tur", "turkish"),
+        "pt" to listOf("pt", "por", "portuguese"),
+        "id" to listOf("id", "ind", "indonesian"),
+    )
+    private val LANGUAGES = LANGUAGE_WORDS.mapValues { (_, words) -> Regex("(?i)(^|[^a-z])(${words.joinToString("|")})([^a-z]|$)") }
+
+    /** A subtitle file in language [lang] (a code of [LANGUAGE_WORDS]), by its name ("2_Urdu.srt", "Film.ur.srt"). */
+    fun inLanguage(f: File, lang: String): Boolean = LANGUAGES[lang]?.containsMatchIn(f.nameWithoutExtension) == true
 
     /** An English subtitle file, by its name ("2_English.srt", "Film.en.srt"). */
-    fun isEnglish(f: File) = ENGLISH.containsMatchIn(f.nameWithoutExtension)
+    fun isEnglish(f: File) = inLanguage(f, "en")
 
     /**
      * 2.9.2: subtitle files in a Subs (or Subtitles) folder next to [video], the way torrents pack
@@ -114,7 +140,7 @@ object Subtitles {
      * video, or, for the only video of its folder, all of them. English first. Reads folders: call it
      * off the main thread.
      */
-    fun inSubsFolder(video: File): List<File> {
+    fun inSubsFolder(video: File, lang: String = ""): List<File> {
         val base = video.nameWithoutExtension
         val files = video.parentFile?.listFiles() ?: return emptyList()
         val folders = files.filter { it.isDirectory && it.name.lowercase(Locale.ROOT) in SUB_FOLDERS }
@@ -129,7 +155,8 @@ object Subtitles {
             val named = loose.filter { it.nameWithoutExtension.equals(base, ignoreCase = true) || it.name.startsWith("$base.", ignoreCase = true) }
             out += if (named.isNotEmpty()) named else if (alone) loose else emptyList()
         }
-        return out.distinct().sortedWith(compareBy<File>({ !isEnglish(it) }, { it.name.lowercase(Locale.ROOT) }))
+        val first = lang.ifEmpty { "en" }
+        return out.distinct().sortedWith(compareBy<File>({ !inLanguage(it, first) }, { it.name.lowercase(Locale.ROOT) }))
     }
 
     /** Reads subtitle file [f] (3.0: in [encoding], or the one it most likely has). Blocking. Null if it isn't one Swift can read. */

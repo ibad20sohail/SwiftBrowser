@@ -240,6 +240,11 @@ object Downloads {
 
     fun get(id: Long): Item? = synchronized(items) { items[id] }
 
+    /** 3.0.1: the newest download of [url] in [profileId], incognito ones only for incognito (torrents aside). */
+    fun findSame(url: String, profileId: Long, incognito: Boolean): Item? = synchronized(items) {
+        items.values.lastOrNull { it.url == url && it.profileId == profileId && it.incognito == incognito && it.kind != KIND_TORRENT }
+    }
+
     fun activeCount(): Int = synchronized(items) {
         items.values.count { it.status == RUNNING || it.status == QUEUED || it.status == CONVERTING }
     }
@@ -930,6 +935,8 @@ object Downloads {
         h("cookie")?.let { b.addHeader("Cookie", it) }
         h("origin")?.let { b.addHeader("Origin", it) }
         h("authorization")?.let { b.addHeader("Authorization", it) }
+        // 3.0.1: the browser name the tab's page saw (a desktop tab's is the desktop one).
+        h("user-agent")?.let { b.addHeader("User-Agent", it) }
         if (range != null) b.addHeader("Range", range)
         return b
     }

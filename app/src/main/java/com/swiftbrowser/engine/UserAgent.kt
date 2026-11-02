@@ -34,6 +34,9 @@ object UserAgent {
         return if (desktop) desktopOf(mobile) else mobile
     }
 
+    /** What a tab's pages are told (3.0.1): for the videos and downloads Swift fetches for it. */
+    fun forTab(desktop: Boolean): String = if (desktop) desktopOf(mobile) else mobile
+
     /** The phone's user agent, for Swift's own downloads (news, pictures) and players. */
     val mobile: String
         get() = GeckoSession.getDefaultUserAgent().let { if (newer) withVersion(it, NEWER) else it }

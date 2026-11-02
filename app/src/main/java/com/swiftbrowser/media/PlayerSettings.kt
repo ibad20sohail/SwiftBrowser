@@ -17,6 +17,16 @@ object PlayerSettings {
     const val SUBTITLE_SIZE = "player_subtitle_size"
     const val SUBTITLE_COLOUR = "player_subtitle_colour"
     const val SUBTITLE_BACKGROUND = "player_subtitle_background"
+    const val SUBTITLE_LANGUAGE = "player_subtitle_language"
+
+    /**
+     * 3.0.1: subtitle languages that can come first ("" is as before: a file named like the video,
+     * else an English one), with their names in Settings.
+     */
+    val SUBTITLE_LANGUAGES = listOf(
+        "" to "Automatic", "en" to "English", "ur" to "Urdu", "hi" to "Hindi", "ar" to "Arabic", "fr" to "French",
+        "es" to "Spanish", "de" to "German", "tr" to "Turkish", "pt" to "Portuguese", "id" to "Indonesian",
+    )
 
     /** 2.9.2: the subtitles' colour (white or yellow) and what is behind them. */
     val SUBTITLE_COLOURS = listOf("White" to 0xFFFFFFFF.toInt(), "Yellow" to 0xFFFFE34D.toInt())
@@ -62,6 +72,11 @@ object PlayerSettings {
     var subtitleSize: Int
         get() = sp.getInt(SUBTITLE_SIZE, 100).coerceIn(50, 300)
         set(v) = sp.edit { putInt(SUBTITLE_SIZE, v.coerceIn(50, 300)) }
+
+    /** 3.0.1: the subtitles shown first, in the video and in files beside it (a code of [SUBTITLE_LANGUAGES]). */
+    var subtitleLanguage: String
+        get() = sp.getString(SUBTITLE_LANGUAGE, "")?.takeIf { l -> SUBTITLE_LANGUAGES.any { it.first == l } } ?: ""
+        set(v) = sp.edit { putString(SUBTITLE_LANGUAGE, v) }
 
     /** An index of [SUBTITLE_COLOURS]. */
     var subtitleColour: Int

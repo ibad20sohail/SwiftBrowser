@@ -675,6 +675,19 @@ class SettingsActivity : AppCompatActivity() {
                 }
             }
         }
+        // 3.0.1: the subtitles shown first, in the video and in subtitle files beside it.
+        def(Topic.FILES, "Media player", "Subtitle language", "subtitles captions language urdu english arabic hindi") {
+            action(R.drawable.ic_subtitles, "Subtitle language", {
+                val lang = PlayerSettings.subtitleLanguage
+                if (lang.isEmpty()) "Automatic: a file named like the video, else English"
+                else "${PlayerSettings.SUBTITLE_LANGUAGES.first { it.first == lang }.second} first, in the video and in subtitle files"
+            }) {
+                choose(
+                    "Subtitle language", PlayerSettings.SUBTITLE_LANGUAGES.map { it.second },
+                    PlayerSettings.SUBTITLE_LANGUAGES.indexOfFirst { it.first == PlayerSettings.subtitleLanguage },
+                ) { i -> PlayerSettings.subtitleLanguage = PlayerSettings.SUBTITLE_LANGUAGES[i].first }
+            }
+        }
         def(Topic.FILES, "Media player", "Forget where videos were left", "positions resume forget clear continue") {
             action(R.drawable.ic_delete, "Forget where videos were left", { "Videos and songs start from the beginning again" }) {
                 Dialogs.confirm(this@SettingsActivity, "Forget every place?", "Videos and songs will start from the beginning, and leave the home page's Continue row.", "Forget") {
@@ -797,6 +810,10 @@ class SettingsActivity : AppCompatActivity() {
         }
 
         // Speed & memory
+        // 3.0.1: what the phone and Swift are doing now, measured when shown (no polling).
+        def(Topic.SPEED, "Right now", "Memory and tabs", "memory ram free used tabs loaded crashes status now speed slow") {
+            action(R.drawable.ic_memory, "Memory and tabs", { rightNowSummary() }) { showRightNow() }
+        }
         def(Topic.SPEED, "How sites look", "Show sites as designed", "blur glass transparency animations new phone quality") {
             switch(
                 R.drawable.ic_glass, "Show sites as designed",
@@ -1009,6 +1026,10 @@ class SettingsActivity : AppCompatActivity() {
         }
 
         // Privacy & security
+        // 3.0.1: the protections at a glance, "Checked" only where Swift has seen them working.
+        def(Topic.PRIVACY, null, "Security status", "security status protections check overview safe vpn dns phishing passwords") {
+            action(R.drawable.ic_shield, "Security status", { "Ad blocking, secure DNS, the VPN and more at a glance" }) { showSecurityStatus() }
+        }
         def(Topic.PRIVACY, null, "Use secure connections", "secure https only encrypted insecure http") {
             switch(
                 R.drawable.ic_lock, "Use secure connections",
@@ -2340,6 +2361,11 @@ class SettingsActivity : AppCompatActivity() {
                 snack("That file isn't a Swift backup")
                 return@launch
             }
+            // 3.0.1: a backup's format says which Swift can read it.
+            if (Backup.isNewer(root)) {
+                snack("That backup was made by a newer Swift. Update Swift, then restore it.")
+                return@launch
+            }
             val s = Backup.summary(root)
             val d = MaterialAlertDialogBuilder(this@SettingsActivity)
                 .setTitle("Restore this backup?")
@@ -2349,12 +2375,20 @@ class SettingsActivity : AppCompatActivity() {
                         "replace these, and Swift restarts. Passwords, the VPN and the Private folder are never in backups.",
                 )
                 .setPositiveButton("Restore") { _, _ ->
-                    // 3.0: a backup that can't be restored changes nothing, and says so.
-                    Backup.restoreThen(this@SettingsActivity, root) { ok ->
-                        if (ok) {
-                            SwiftApp.restart(this@SettingsActivity)
-                        } else if (!isFinishing && !isDestroyed) {
+                    // 3.0: a backup that can't be restored changes nothing, and says so. 3.0.1: one
+                    // that was says exactly what went in, then Swift restarts to load it.
+                    Backup.restoreThen(this@SettingsActivity, root) { restored ->
+                        if (isFinishing || isDestroyed) {
+                            if (restored != null) SwiftApp.restart(this@SettingsActivity)
+                        } else if (restored == null) {
                             Messages.show(this@SettingsActivity, "That backup couldn't be restored. Nothing on this phone was changed.", long = true)
+                        } else {
+                            MaterialAlertDialogBuilder(this@SettingsActivity)
+                                .setTitle("Backup restored")
+                                .setMessage(Backup.restoredText(restored) + "\n\nSwift restarts to load it.")
+                                .setPositiveButton("Restart Swift") { _, _ -> SwiftApp.restart(this@SettingsActivity) }
+                                .setCancelable(false)
+                                .showImmersive()
                         }
                     }
                 }
@@ -2409,6 +2443,90 @@ class SettingsActivity : AppCompatActivity() {
         }
     }
 
+    /** Settings → Privacy & security → Security status (3.0.1). The keystore is read off the main thread. */
+    private fun showSecurityStatus() {
+        lifecycleScope.launch {
+            val profile = com.swiftbrowser.core.Profiles.currentId
+            val passwords = withContext(Dispatchers.IO) {
+                try {
+                    com.swiftbrowser.core.Passwords.count(profile).readable
+                } catch (_: Exception) {
+                    null
+                }
+            }
+            if (isFinishing || isDestroyed) return@launch
+            val vpn = when (com.swiftbrowser.vpn.Vpn.state) {
+                com.swiftbrowser.vpn.Vpn.State.ON -> com.swiftbrowser.core.SecurityStatus.Vpn.ON
+                com.swiftbrowser.vpn.Vpn.State.CONNECTING -> com.swiftbrowser.core.SecurityStatus.Vpn.CONNECTING
+                com.swiftbrowser.vpn.Vpn.State.FAILED -> com.swiftbrowser.core.SecurityStatus.Vpn.FAILED
+                com.swiftbrowser.vpn.Vpn.State.OFF -> com.swiftbrowser.core.SecurityStatus.Vpn.OFF
+            }
+            val inputs = com.swiftbrowser.core.SecurityStatus.Inputs(
+                adLevel = AdBlock.global,
+                uboReady = AdBlock.ready,
+                secureDns = prefs.secureDns,
+                httpsOnly = prefs.httpsOnly,
+                saferBrowsing = prefs.saferBrowsing,
+                passwords = passwords,
+                offerPasswords = prefs.offerPasswords,
+                vpn = vpn,
+                vpnServer = com.swiftbrowser.vpn.Vpn.current()?.server?.takeIf { vpn == com.swiftbrowser.core.SecurityStatus.Vpn.ON },
+                locationSites = com.swiftbrowser.core.SiteSettings.locationAllowedCount(),
+            )
+            MaterialAlertDialogBuilder(this@SettingsActivity)
+                .setTitle("Security status")
+                .setMessage(com.swiftbrowser.core.SecurityStatus.text(com.swiftbrowser.core.SecurityStatus.lines(inputs)))
+                .setPositiveButton("Close", null)
+                .showImmersive()
+        }
+    }
+
+    /** Settings → Speed & memory → Right now (3.0.1): cheap enough for every refresh of the list. */
+    private fun rightNowSummary(): String {
+        val (free, total, _) = com.swiftbrowser.core.RightNow.memory(this)
+        return com.swiftbrowser.core.RightNow.summary(free, total, TabManager.tabs.count { it.session != null }, TabManager.tabs.size)
+    }
+
+    /** The details, measured now: Swift's own memory is read off the main thread. */
+    private fun showRightNow() {
+        lifecycleScope.launch {
+            val app = applicationContext
+            val (parts, crashes) = withContext(Dispatchers.IO) {
+                com.swiftbrowser.core.RightNow.parts(app) to Diagnostics.engineCrashes(app).map { it.time }
+            }
+            if (isFinishing || isDestroyed) return@launch
+            val (free, total, low) = com.swiftbrowser.core.RightNow.memory(this@SettingsActivity)
+            val tabs = TabManager.tabs
+            val snapshot = com.swiftbrowser.core.RightNow.Snapshot(
+                freeMb = free,
+                totalMb = total,
+                low = low,
+                parts = parts,
+                tabs = tabs.size,
+                loaded = tabs.count { it.session != null },
+                kept = tabs.count { it.kept },
+                limitedBy = when {
+                    Power.saving -> "Battery saver is on"
+                    prefs.maxLiveTabs > 1 && Diagnostics.memoryLow() -> "Memory is low"
+                    else -> null
+                },
+                crashesThisWeek = com.swiftbrowser.core.RightNow.crashesSince(crashes, System.currentTimeMillis()),
+                lastRun = when (Diagnostics.problem) {
+                    Diagnostics.Problem.CLOSED_BY_ANDROID -> "Last time, Android closed Swift while it was on screen, most likely to free memory."
+                    Diagnostics.Problem.ENGINE_CRASH -> "Last time, the page engine stopped while Swift was on screen."
+                    null -> null
+                },
+            )
+            MaterialAlertDialogBuilder(this@SettingsActivity)
+                .setTitle("Right now")
+                .setMessage(com.swiftbrowser.core.RightNow.details(snapshot))
+                .setPositiveButton("Refresh") { _, _ -> showRightNow() }
+                .setNegativeButton("Close", null)
+                .showImmersive()
+            refreshAll()
+        }
+    }
+
     private fun liveTabsText(n: Int) = when (n) {
         1 -> "1 tab: least memory; others reload when opened"
         2 -> "2 tabs (best for a 2 GB phone)"
@@ -2436,6 +2554,8 @@ class SettingsActivity : AppCompatActivity() {
             .setTitle("Tabs kept loaded")
             .setSingleChoiceItems(labels, options.indexOf(prefs.maxLiveTabs)) { d, which ->
                 prefs.maxLiveTabs = options[which]
+                // 3.0.1: a lower number applies now, not at the next tab switch.
+                com.swiftbrowser.tabs.TabManager.trimLiveSessions()
                 d.dismiss()
                 refreshAll()
             }

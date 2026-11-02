@@ -255,6 +255,8 @@ object LocalPlayback {
             .clearOverrides()
             .setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, false)
             .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+            // 3.0.1: the video's own subtitles in the chosen language show by themselves (null: as before).
+            .setPreferredTextLanguage(PlayerSettings.subtitleLanguage.ifEmpty { null })
             .build()
         p.prepare()
         p.playWhenReady = true

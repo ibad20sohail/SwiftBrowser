@@ -832,7 +832,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         updateToolbarExtras()
         if (home.visibility == View.VISIBLE) current?.let { home.show(it.incognito) }
         // Settings may have changed the text size for all sites; the site on screen may have its own.
-        current?.let { Engine.showTextScaleFor(UrlUtils.site(it.url)) }
+        current?.let { Engine.showTextScaleFor(UrlUtils.site(it.url), it.incognito) }
         Diagnostics.setOnScreen(true)
         com.swiftbrowser.media.PlaybackService.setOnScreen(true)
         // 3.0: only when it can be seen (not under the home page either).
@@ -1794,7 +1794,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
      */
     private fun autoReader(tab: Tab, attempt: Int = 0) {
         val url = tab.url
-        if (!UrlUtils.isHttp(url) || Helper.isReaderUrl(url) || !SiteSettings.autoReader(UrlUtils.site(url))) return
+        if (!UrlUtils.isHttp(url) || Helper.isReaderUrl(url) || !SiteSettings.autoReader(UrlUtils.site(url), tab.incognito)) return
         val path = Uri.parse(url).path
         if (path.isNullOrEmpty() || path == "/") return
         val page = url.substringBefore('#')
@@ -2209,7 +2209,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         if (resumeChipFor != null && resumeChipFor !== tab) hideResumeChip(null)
         // What this tab's page asked while it wasn't on screen (an alert, a sign-in) shows now (2.6).
         tab.session?.let { s -> root.post { if (current === tab) com.swiftbrowser.tabs.SessionFactory.prompts.showWaiting(s) } }
-        Engine.showTextScaleFor(UrlUtils.site(tab.url))
+        Engine.showTextScaleFor(UrlUtils.site(tab.url), tab.incognito)
         val isNew = seenTabs.add(tab.id)
         syncSession(tab)
         crashView.visibility = if (tab.crashed) View.VISIBLE else View.GONE
@@ -2309,7 +2309,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
                 handler.postDelayed({ if (current === tab) TabManager.reload(tab) }, 500)
             }
         }
-        Engine.showTextScaleFor(UrlUtils.site(tab.url))
+        Engine.showTextScaleFor(UrlUtils.site(tab.url), tab.incognito)
         if (tab.loading != shownLoading || pageStarted) {
             com.swiftbrowser.engine.DataSaver.onSiteShown(UrlUtils.site(tab.url))
             if (!tab.loading) offerImages(tab)
@@ -2437,17 +2437,21 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         sitePlayerChip = chip
     }
 
-    /** Hands the site's video to Swift's player, with what the site needs (where it was shown, the browser's name). */
-    private fun playInSwiftPlayer() {
+    /**
+     * Hands the site's video to Swift's player, with what the site needs (where it was shown, the
+     * browser's name). [chosen]: one picked in "Videos on this page" (3.0.1).
+     */
+    fun playInSwiftPlayer(chosen: com.swiftbrowser.media.MediaItem? = null) {
         val tab = current ?: return
-        val video = siteVideo(tab) ?: return
+        val video = chosen ?: siteVideo(tab) ?: return
         Helper.lookupHeaders(video.url) { found ->
             val headers = HashMap<String, String>()
             video.headers.forEach { (k, v) -> headers[k] = v }
             found.forEach { (k, v) -> headers[k] = v }
             if (headers.keys.none { it.equals("referer", true) }) headers["Referer"] = video.frameUrl.ifBlank { video.pageUrl }
             // The same browser name the page saw (3.0: a newer Firefox version when that's chosen).
-            if (headers.keys.none { it.equals("user-agent", true) }) headers["User-Agent"] = com.swiftbrowser.engine.Net.USER_AGENT
+            // 3.0.1: a desktop tab's video goes with the desktop browser name, as its page did.
+            if (headers.keys.none { it.equals("user-agent", true) }) headers["User-Agent"] = com.swiftbrowser.engine.UserAgent.forTab(tab.desktop)
             // The page stops, so the two don't play at once.
             tab.mediaSession?.pause()
             PlayerActivity.openStream(this, video.url, tab.title.ifBlank { null }, headers, tab.incognito)
@@ -3041,7 +3045,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     }
 
     /** Downloads a link or media file found on the page. */
-    fun downloadUrl(tab: Tab, url: String, nameHint: String? = null) {
+    fun downloadUrl(tab: Tab, url: String, nameHint: String? = null, again: Boolean = false) {
         if (url.startsWith("blob:") || url.startsWith("mediasource:")) {
             snack("This video is streamed in pieces. Use the download button in the address bar.")
             return
@@ -3050,9 +3054,12 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             snack("This link can't be downloaded")
             return
         }
+        if (!again && sameDownload(tab, url) { downloadUrl(tab, url, nameHint, again = true) }) return
         Helper.lookupHeaders(url) { found ->
             val headers = HashMap(found)
             if (!headers.containsKey("referer") && UrlUtils.isHttp(tab.url)) headers["referer"] = tab.url
+            // 3.0.1: the browser name the page saw (a desktop tab's is the desktop one).
+            if (headers.keys.none { it.equals("user-agent", true) }) headers["user-agent"] = com.swiftbrowser.engine.UserAgent.forTab(tab.desktop)
             if (url.contains(".m3u8", ignoreCase = true)) {
                 Sheets.downloadHls(this, tab, url, headers)
                 return@lookupHeaders
@@ -3061,6 +3068,33 @@ class MainActivity : AppCompatActivity(), BrowserUi {
                 val name = nameHint ?: UrlUtils.fileName(url, null, null)
                 Downloads.startUrl(tab.profileId, url, name, UrlUtils.mimeFromName(name), headers, tab.url, tab.incognito)
                 snack("Downloading $name", "View") { openDownloads() }
+            }
+        }
+    }
+
+    /**
+     * 3.0.1: [url] was downloaded before in [tab]'s profile (incognito or not). Still going: Downloads
+     * shows it instead of a second copy. Finished, with its file still there: Show or Download again
+     * ([again]). True when that was handled here; false: download as usual.
+     */
+    fun sameDownload(tab: Tab, url: String, again: () -> Unit): Boolean {
+        val item = Downloads.findSame(url, tab.profileId, tab.incognito) ?: return false
+        val there = item.filePath.isNotEmpty() && java.io.File(item.filePath).exists()
+        return when (com.swiftbrowser.download.DownloadRules.again(item.status, there)) {
+            com.swiftbrowser.download.DownloadRules.Again.NEW -> false
+            com.swiftbrowser.download.DownloadRules.Again.BUSY -> {
+                snack("${item.fileName} is already downloading", "View") { openDownloads() }
+                true
+            }
+            com.swiftbrowser.download.DownloadRules.Again.DONE -> {
+                MaterialAlertDialogBuilder(this)
+                    .setTitle("Downloaded before")
+                    .setMessage("${item.fileName} is already in your downloads.")
+                    .setPositiveButton("Download again") { _, _ -> again() }
+                    .setNeutralButton("Show") { _, _ -> openDownloads() }
+                    .setNegativeButton(android.R.string.cancel, null)
+                    .showImmersive()
+                true
             }
         }
     }

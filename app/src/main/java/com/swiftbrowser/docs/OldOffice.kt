@@ -150,15 +150,36 @@ object OldOffice {
         if (input.length() > MAX_FILE) throw IOException("This file is too big to show (over ${MAX_FILE / 1_048_576} MB)")
         val magic = ByteArray(8)
         val n = FileInputStream(input).use { readFully(it, magic) }
-        val ole = n == 8 && magic.contentEquals(byteArrayOf(0xD0.toByte(), 0xCF.toByte(), 0x11, 0xE0.toByte(), 0xA1.toByte(), 0xB1.toByte(), 0x1A, 0xE1.toByte()))
-        if (!ole) throw WrongFormat(sniff(input, magic, n))
+        if (!isCompound(magic, n)) throw WrongFormat(sniff(input, magic, n))
         // Read-only: POI reads the blocks it needs onto the heap and never maps the file, so it never
         // reaches its buffer "cleaner" (CleanerUtil), which needs Java APIs Android 7 lacks.
         return POIFSFileSystem(input, true)
     }
 
+    /** The first [n] bytes of [magic] are those of an Office 97–2003 compound file (D0 CF 11 E0 A1 B1 1A E1). */
+    internal fun isCompound(magic: ByteArray, n: Int): Boolean =
+        n >= 8 && magic.copyOf(8).contentEquals(byteArrayOf(0xD0.toByte(), 0xCF.toByte(), 0x11, 0xE0.toByte(), 0xA1.toByte(), 0xB1.toByte(), 0x1A, 0xE1.toByte()))
+
+    /** The first [n] bytes of [magic] start a ZIP file (an Office 2007+ file is one). */
+    internal fun isZip(magic: ByteArray, n: Int): Boolean =
+        n >= 4 && magic[0] == 'P'.code.toByte() && magic[1] == 'K'.code.toByte() && magic[2].toInt() == 3 && magic[3].toInt() == 4
+
+    /**
+     * What a file that isn't a compound file is by its first bytes (3.0: split out, so the viewer can
+     * show it as that): "rtf", "pdf", "html", or null. ZIP files are told apart by [sniff].
+     */
+    internal fun headKind(magic: ByteArray, n: Int): String? {
+        val start = String(magic, 0, n.coerceIn(0, magic.size), Charsets.ISO_8859_1).trimStart('﻿', 'ï', '»', '¿', ' ', '\t', '\r', '\n')
+        return when {
+            start.startsWith("{\\rtf") -> "rtf"
+            start.startsWith("%PDF") -> "pdf"
+            start.startsWith("<") -> "html"
+            else -> null
+        }
+    }
+
     private fun sniff(input: File, magic: ByteArray, n: Int): String? {
-        if (n >= 4 && magic[0] == 'P'.code.toByte() && magic[1] == 'K'.code.toByte() && magic[2].toInt() == 3 && magic[3].toInt() == 4) {
+        if (isZip(magic, n)) {
             // An Office Open XML file: which one by its main part.
             return try {
                 java.util.zip.ZipFile(input).use { z ->
@@ -173,13 +194,7 @@ object OldOffice {
                 null
             }
         }
-        val start = String(magic, 0, n, Charsets.ISO_8859_1).trimStart('﻿', 'ï', '»', '¿', ' ', '\t', '\r', '\n')
-        return when {
-            start.startsWith("{\\rtf") -> "rtf"
-            start.startsWith("%PDF") -> "pdf"
-            start.startsWith("<") -> "html"
-            else -> null
-        }
+        return headKind(magic, n)
     }
 
     private fun head(dir: DirectoryNode, name: String, size: Int): ByteArray = dir.createDocumentInputStream(name).use { s ->

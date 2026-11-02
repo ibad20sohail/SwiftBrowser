@@ -1,7 +1,10 @@
 package com.swiftbrowser.tabs
 
+import android.content.ContentValues
+import android.database.sqlite.SQLiteDatabase
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import com.swiftbrowser.SwiftApp
 import com.swiftbrowser.adblock.AdBlock
 import com.swiftbrowser.core.ClosedTabRow
@@ -10,6 +13,7 @@ import com.swiftbrowser.core.Diagnostics
 import com.swiftbrowser.core.L
 import com.swiftbrowser.core.Prefs
 import com.swiftbrowser.core.Profiles
+import com.swiftbrowser.core.TabRow
 import com.swiftbrowser.core.UrlUtils
 import com.swiftbrowser.engine.Engine
 import com.swiftbrowser.media.Helper
@@ -38,7 +42,13 @@ object TabManager {
 
     /** New tabs' ids (2.6): given here, so the database is written off the main thread. */
     private var nextTabId = 1L
+
+    /** Normal groups' ids too (3.0): a new group was written on the main thread before. */
+    private var nextGroupId = 1L
     private var nextIncognitoGroupId = -1L
+
+    /** 3.0: page restores asked for so far, which number them (Tab.restoreToken). */
+    private var restoreCount = 0
 
     /** A tab not opened for this long lets go of its page (2.7). */
     private const val IDLE_UNLOAD_MS = 30 * 60_000L
@@ -47,15 +57,22 @@ object TabManager {
     private const val CLOSED_KEEP = 50
     private const val DAY_MS = 24L * 3600 * 1000
 
-    /**
-     * How long a page waits for uBlock Origin's filters at app start before loading anyway: pages
-     * the user just asked for wait briefly, pages restored at start a little longer.
-     */
-    private const val USER_WAIT_MS = 3000L
-    private const val RESTORE_WAIT_MS = 8000L
+    /** 3.0: the tabs whose Back returns to the home page (Tab.leftHome), kept across restarts. */
+    private const val LEFT_HOME = "tabs_left_home"
 
-    private fun adblockWait(tab: Tab) =
-        if (System.currentTimeMillis() - tab.userNavAt < 2000) USER_WAIT_MS else RESTORE_WAIT_MS
+    /**
+     * 3.0: [task] on [io], for the database: an error there (the phone full: SQLiteFullException) is
+     * logged and Swift carries on. Before 3.0 such an error closed Swift, on a full phone at every start.
+     */
+    private fun ExecutorService.safe(what: String, task: () -> Unit) = execute {
+        try {
+            task()
+        } catch (e: Exception) {
+            L.w("Couldn't $what", e)
+        } catch (e: OutOfMemoryError) {
+            L.w("Couldn't $what: not enough memory")
+        }
+    }
 
     val tabs = ArrayList<Tab>()
     val groups = ArrayList<TabGroup>()
@@ -84,28 +101,116 @@ object TabManager {
         tabs.clear()
         groups.clear()
         val validProfiles = Profiles.all().map { it.id }.toSet()
-        for (g in db.tabGroups()) {
-            if (g.profileId in validProfiles) groups.add(TabGroup(g.id, g.profileId, g.name, g.color)) else db.deleteTabGroup(g.id)
+        // 3.0: nothing read here stops Swift from starting (a damaged or full database): what can't
+        // be read is left out, and what is deleted is deleted off the main thread.
+        val groupRows = try {
+            db.tabGroups()
+        } catch (e: Exception) {
+            L.w("Couldn't read the tab groups", e)
+            emptyList()
         }
+        for (g in groupRows) {
+            if (g.profileId in validProfiles) groups.add(TabGroup(g.id, g.profileId, g.name, g.color)) else deleteGroupRow(g.id)
+        }
+        val leftHome = prefs.sp.getStringSet(LEFT_HOME, null).orEmpty()
+        val repaired = ArrayList<Tab>()
         // Without their histories (2.6): each is read when its tab opens.
-        for (r in db.tabsWithoutState()) {
+        val read = readTabs()
+        for (r in read.rows) {
             if (r.profileId !in validProfiles) {
-                db.deleteTab(r.id)
+                val id = r.id
+                io.safe("delete a tab") { db.deleteTab(id) }
                 continue
             }
             val tab = Tab(r.id, r.profileId, r.url, r.title, r.state, r.parentId, r.lastUsed, r.desktop)
             tab.stateLoaded = r.state == null
             tab.groupId = r.groupId?.takeIf { id -> groups.any { it.id == id && it.profileId == r.profileId } }
+            tab.leftHome = r.id.toString() in leftHome
+            // 3.0: saved (before 3.0) with more than Android 7 can read back, a picture's data: address
+            // or a very long history: it comes back without it, and is saved so.
+            val tooLong = !TabRules.storable(r.url)
+            if (tooLong) {
+                tab.url = "about:blank"
+                tab.title = ""
+            }
+            if (tooLong || r.id in read.repair) {
+                tab.state = null
+                tab.stateLoaded = true
+                repaired += tab
+            }
             tabs.add(tab)
         }
         for (g in groups.filter { g -> tabs.none { it.groupId == g.id } }) {
             groups.remove(g)
-            db.deleteTabGroup(g.id)
+            deleteGroupRow(g.id)
         }
         keepGroupsTogether()
         nextTabId = maxOf(db.lastTabId(), tabs.maxOfOrNull { it.id } ?: 0L) + 1
+        nextGroupId = maxOf(lastGroupId(), groupRows.maxOfOrNull { it.id } ?: 0L) + 1
+        repaired.forEach { scheduleSave(it) }
+        if (repaired.isNotEmpty()) L.w("${repaired.size} saved tabs held more than Swift can read back; they keep only what fits")
         main.postDelayed(idleCheck, 5 * 60_000L)
         L.d("Restored ${tabs.size} tabs, ${groups.size} groups")
+    }
+
+    /** The saved tabs, and those of them that need saving again without what is too long (3.0). */
+    private class ReadTabs(val rows: List<TabRow>, val repair: Set<Long> = emptySet())
+
+    /**
+     * 3.0: the saved tabs, at once if possible; otherwise one at a time, leaving out what Android 7
+     * can't read (a database row over 2 MB: a picture's data: address saved before 3.0). Db.kt can
+     * only read them all at once, and one such row stopped Swift at every start.
+     */
+    private fun readTabs(): ReadTabs = try {
+        ReadTabs(db.tabsWithoutState())
+    } catch (e: Exception) {
+        L.w("Couldn't read the saved tabs at once (${e.javaClass.simpleName}); reading them one at a time")
+        readTabsOneByOne()
+    }
+
+    private fun readTabsOneByOne(): ReadTabs {
+        val rows = ArrayList<TabRow>()
+        val repair = HashSet<Long>()
+        val ids = ArrayList<Long>()
+        val sql = try {
+            db.readableDatabase.also { d ->
+                d.rawQuery("SELECT id FROM tabs ORDER BY position, id", null).use { c -> while (c.moveToNext()) ids.add(c.getLong(0)) }
+            }
+        } catch (e: Exception) {
+            L.w("Couldn't read the saved tabs", e)
+            return ReadTabs(rows)
+        }
+        // The limits are numbers in the query itself: bound as text, SQLite would compare them as text.
+        val query = "SELECT profile_id, CASE WHEN length(url) > ${TabRules.MAX_STORED_URL} THEN NULL ELSE url END, " +
+            "substr(title, 1, ${TabRules.MAX_STORED_TITLE}), " +
+            "CASE WHEN state IS NULL THEN 0 WHEN length(state) > ${TabRules.MAX_STORED_STATE} THEN 2 ELSE 1 END, " +
+            "parent_id, last_used, desktop, group_id FROM tabs WHERE id = ?"
+        for (id in ids) {
+            try {
+                sql.rawQuery(query, arrayOf("$id")).use { c ->
+                    if (!c.moveToFirst()) return@use
+                    val url = if (c.isNull(1)) null else c.getString(1)
+                    val stateKind = c.getInt(3)
+                    if (url == null || stateKind == 2) repair += id
+                    rows += TabRow(
+                        id, c.getLong(0), url ?: "about:blank", if (url == null || c.isNull(2)) "" else c.getString(2),
+                        if (stateKind == 1) "" else null,
+                        if (c.isNull(4)) null else c.getLong(4), c.getLong(5), c.getInt(6) != 0,
+                        if (c.isNull(7)) null else c.getLong(7),
+                    )
+                }
+            } catch (e: Exception) {
+                L.w("Left out a saved tab Swift couldn't read (${e.javaClass.simpleName})")
+            }
+        }
+        return ReadTabs(rows, repair)
+    }
+
+    /** The highest group id handed out so far, deleted groups included (3.0, like Db.lastTabId). */
+    private fun lastGroupId(): Long = try {
+        db.readableDatabase.compileStatement("SELECT seq FROM sqlite_sequence WHERE name = 'tab_groups'").use { it.simpleQueryForLong() }
+    } catch (_: Exception) {
+        0L
     }
 
     fun profileTabs(profileId: Long = Profiles.currentId): List<Tab> =
@@ -132,7 +237,9 @@ object TabManager {
         val id = if (incognito) nextIncognitoId-- else nextTabId++
         if (!incognito) {
             val parentId = parent?.id
-            io.execute { db.insertTab(id, profileId, url, "", null, parentId, now, desktop) }
+            // 3.0: a picture opened from its data: address isn't saved as one (TabRules.storedUrl).
+            val stored = TabRules.storedUrl(url)
+            io.safe("save a new tab") { db.insertTab(id, profileId, stored, "", null, parentId, now, desktop) }
         }
         val tab = Tab(id, profileId, url, "", null, parent?.id, now, desktop, incognito)
         val parentIndex = if (parent != null) tabs.indexOf(parent) else -1
@@ -167,12 +274,24 @@ object TabManager {
 
     fun select(tab: Tab) {
         val previous = current
-        if (previous !== tab) {
-            previous?.session?.let { s ->
+        if (previous != null && previous !== tab) {
+            // 3.0: it was in use until now, not only when it was opened (an idle tab lets go of its
+            // page after 30 minutes, see trimLiveSessions).
+            leftTab(previous)
+            previous.session?.let { s ->
                 if (s.isOpen) {
-                    s.setActive(false)
-                    s.setFocused(false)
-                    Engine.runtime.webExtensionController.setTabActive(s, false)
+                    val rest = {
+                        // Not if it was chosen again meanwhile (its picture takes a moment).
+                        if (current !== previous && previous.session === s && s.isOpen) {
+                            s.setActive(false)
+                            s.setFocused(false)
+                            Engine.runtime.webExtensionController.setTabActive(s, false)
+                        }
+                    }
+                    // 3.0: its picture for the tab grid is taken first, while its page is still drawn
+                    // (not after every page load any more).
+                    val u = ui
+                    if (u != null) u.onLeavingTab(previous, rest) else rest()
                 }
             }
         }
@@ -186,45 +305,81 @@ object TabManager {
         if (!tab.incognito) {
             val id = tab.id
             val used = tab.lastUsed
-            io.execute { db.setTabLastUsed(id, used) }
+            io.safe("save when a tab was used") { db.setTabLastUsed(id, used) }
         }
         if (!tab.isHome) {
             tab.wokeUp = tab.session == null && (tab.sessionState != null || tab.state != null)
             val session = ensureLive(tab)
-            if (session.isOpen) activate(session)
+            if (session.isOpen) activate(tab, session)
         }
         ui?.onTabSelected(tab)
         ui?.onTabsChanged()
         trimLiveSessions()
     }
 
-    private fun activate(session: GeckoSession) {
-        session.setActive(true)
+    private fun activate(tab: Tab, session: GeckoSession) {
+        // 3.0: drawn (and its scripts at full speed) only while it can be seen, not under the home
+        // page or the tab grid, nor with Swift out of sight; for the extensions it's the open tab anyway.
+        if (pageOnScreen(tab)) session.setActive(true)
         session.setFocused(true)
         Engine.runtime.webExtensionController.setTabActive(session, true)
     }
+
+    /** 3.0: [tab]'s page can be seen now (see BrowserUi.pageOnScreen): only then is it made active. */
+    fun pageOnScreen(tab: Tab): Boolean = tab === current && ui?.pageOnScreen == true
+
+    /**
+     * 3.0: [tab] was in use until now: left for another tab, the home page or another app. Its last
+     * use counts for unloading idle tabs (30 minutes) and for Inactive tabs.
+     */
+    fun leftTab(tab: Tab) {
+        tab.lastUsed = System.currentTimeMillis()
+        if (tab.incognito || tab !in tabs) return
+        val id = tab.id
+        val used = tab.lastUsed
+        io.safe("save when a tab was used") { db.setTabLastUsed(id, used) }
+    }
+
+    /** 3.0: [tab]'s page is still to be restored (waiting for the ad blocker at start, or for its history to be read). */
+    fun isRestoring(tab: Tab): Boolean = tab.restoreToken != 0
+
+    /** 3.0: [tab]'s page waits for the ad blocker however long it takes: one Swift restores (not one the user just opened). */
+    fun waitsForAdBlocker(tab: Tab): Boolean = tab.restoreToken != 0 && tab.restoreUntilReady && !AdBlock.ready
 
     /** Returns the tab's session, creating and restoring it if the tab was suspended. */
     fun ensureLive(tab: Tab): GeckoSession {
         tab.session?.let { s ->
             if (s.isOpen) return s
+            // 3.0: a pop-up's, which the engine opens itself in a moment (see openedByEngine).
+            if (tab.sessionOpening) return s
             // Closed behind our back (e.g. its process died): start over.
             detachSession(tab)
         }
         val session = SessionFactory.create(tab)
         session.open(Engine.runtime)
         tab.crashed = false
-        if (tab === current) activate(session)
+        if (tab === current) activate(tab, session)
         val parsed = tab.sessionState
         val text = if (parsed == null) tab.state else null
         if (parsed != null || text != null || !tab.isBlank) {
             // Show progress right away, even while uBlock Origin is still starting.
             tab.loading = true
             tab.progress = 5
+            // 3.0: numbered, so that it runs only if nothing newer was asked of the tab meanwhile: a
+            // page the user opened in the first seconds isn't replaced by the restore (see load).
+            val token = ++restoreCount
+            tab.restoreToken = token
+            val wait = TabRules.adBlockWait(tab.userNavAt, System.currentTimeMillis())
+            tab.restoreUntilReady = wait == 0L
             val restore = { state: GeckoSession.SessionState? ->
-                AdBlock.whenReady(adblockWait(tab)) {
-                    if (tab.session !== session || !session.isOpen) return@whenReady
-                    if (state != null) session.restoreState(state) else session.loadUri(tab.url)
+                AdBlock.whenReady(wait) {
+                    if (TabRules.restoreStillWanted(token, tab.restoreToken)) {
+                        tab.restoreToken = 0
+                        if (tab.session === session && session.isOpen) {
+                            if (state != null) session.restoreState(state) else session.loadUri(tab.url)
+                        }
+                        notifyTabUpdated(tab)
+                    }
                 }
             }
             if (text == null) {
@@ -235,19 +390,27 @@ object TabManager {
                 val loaded = tab.stateLoaded
                 val id = tab.id
                 io.execute {
-                    val stored = if (loaded) text else db.tabState(id)
-                    val state = try {
-                        stored?.takeIf { it.isNotEmpty() }?.let { GeckoSession.SessionState.fromString(it) }
+                    // 3.0: whatever goes wrong reading it (a row too big for Android 7, the database),
+                    // the page still loads, without its history. Only the kind of error is logged:
+                    // its message would quote the history.
+                    var stored: String? = null
+                    var state: GeckoSession.SessionState? = null
+                    try {
+                        stored = if (loaded) text else db.tabState(id)
+                        state = stored?.takeIf { it.isNotEmpty() }?.let { GeckoSession.SessionState.fromString(it) }
                     } catch (e: Exception) {
-                        L.w("Couldn't read a tab's history", e)
-                        null
+                        L.w("Couldn't read a tab's history (${e.javaClass.simpleName})")
+                    } catch (e: OutOfMemoryError) {
+                        L.w("Couldn't read a tab's history: not enough memory")
                     }
+                    val readText = stored
+                    val readState = state
                     main.post {
                         if (!tab.stateLoaded) {
-                            tab.state = stored
+                            tab.state = readText
                             tab.stateLoaded = true
                         }
-                        restore(state)
+                        restore(readState)
                     }
                 }
             }
@@ -258,12 +421,18 @@ object TabManager {
     private fun detachSession(tab: Tab) {
         val session = tab.session ?: return
         ui?.releaseSession(session)
-        try {
-            session.close()
-        } catch (e: Exception) {
-            L.w("close failed", e)
+        if (tab.sessionOpening) {
+            // 3.0: the engine hasn't opened it yet (closing it now does nothing): it's closed once it has, see watchOpening.
+            tab.sessionOpening = false
+        } else {
+            try {
+                session.close()
+            } catch (e: Exception) {
+                L.w("close failed", e)
+            }
         }
         tab.session = null
+        tab.restoreToken = 0
         tab.loading = false
         tab.playing = false
         tab.mediaSession = null
@@ -284,7 +453,8 @@ object TabManager {
         // their scripts would otherwise keep sharing the engine with the page on screen.
         val idleSince = System.currentTimeMillis() - IDLE_UNLOAD_MS
         for (t in others) {
-            if (t.playing) continue
+            // 3.0: nor a pop-up whose window the engine is still to open, nor its opener (see opensPopup).
+            if (t.playing || t.sessionOpening || opensPopup(t)) continue
             val idle = t.lastUsed < idleSince
             if (live <= max && !idle) continue
             L.d("Unloading tab ${t.id} (${if (idle) "not opened for 30 minutes" else "$live loaded, the limit is $max"})")
@@ -303,9 +473,16 @@ object TabManager {
 
     /** Frees a background tab's engine session; it is restored when the tab is opened again. */
     fun suspend(tab: Tab) {
-        if (tab === current) return
+        // 3.0: a pop-up's session the engine is still to open stays (see openedByEngine), and so does its opener's.
+        if (tab === current || tab.sessionOpening || opensPopup(tab)) return
         detachSession(tab)
     }
+
+    /**
+     * 3.0: [tab] opened a pop-up whose window the engine is still to open: the engine opens it from
+     * [tab]'s session (and refuses once that is closed), so it must stay until then.
+     */
+    private fun opensPopup(tab: Tab): Boolean = tabs.any { it.sessionOpening && it.parentId == tab.id }
 
     /** "Keep playing in the background" was switched on or off: pages that are already open follow it. */
     fun applyKeepPlaying(on: Boolean) {
@@ -337,8 +514,12 @@ object TabManager {
     /** Closes [tab]. An [undoable] close (from the tab grid) can be taken back with [undoClose]. */
     fun close(tab: Tab, undoable: Boolean = false) = closeTabs(listOf(tab), undoable)
 
-    /** Closes several tabs at once (a group, the inactive tabs); one undo brings them all back. */
-    fun closeTabs(list: List<Tab>, undoable: Boolean = false) {
+    /**
+     * Closes several tabs at once (a group, the inactive tabs); one undo brings them all back.
+     * [remember] false (3.0): they don't go to the recently closed list either ("When you quit"
+     * with Open tabs ticked, an ad pop-up uBlock Origin closed). Only for closes that can't be undone.
+     */
+    fun closeTabs(list: List<Tab>, undoable: Boolean = false, remember: Boolean = true) {
         val closing = list.filter { it in tabs }.distinct()
         if (closing.isEmpty()) return
         forgetClosed()
@@ -346,7 +527,7 @@ object TabManager {
         val cur = current
         val wasCurrent = cur != null && cur in closing
         // First, while the tabs' rows (and histories not read yet) are still there.
-        rememberClosed(entries)
+        if (remember) rememberClosed(entries)
         for (t in closing) {
             tabs.remove(t)
             detachSession(t)
@@ -354,7 +535,7 @@ object TabManager {
             if (!undoable) Thumbnails.remove(t)
             if (!t.incognito) {
                 val id = t.id
-                io.execute { db.deleteTab(id) }
+                io.safe("delete a closed tab") { db.deleteTab(id) }
             }
         }
         val goneGroups = closing.mapNotNull { group(it.groupId) }.distinct().filter { g -> tabs.none { it.groupId == g.id } }
@@ -389,24 +570,36 @@ object TabManager {
         val newGroupIds = HashMap<Long, Long>()
         for (g in c.groups) {
             if (!g.incognito && g.profileId !in profiles) continue
-            val id = if (g.incognito) nextIncognitoGroupId-- else db.insertTabGroup(g.profileId, g.name, g.color)
-            groups.add(TabGroup(id, g.profileId, g.name, g.color, g.incognito))
+            // 3.0: the id given here, the row written off the main thread (see newGroup).
+            val id = if (g.incognito) nextIncognitoGroupId-- else nextGroupId++
+            val group = TabGroup(id, g.profileId, g.name, g.color, g.incognito)
+            if (!group.incognito) insertGroupRow(group)
+            groups.add(group)
             newGroupIds[g.id] = id
         }
         var restoredCurrent: Tab? = null
         var first: Tab? = null
         val now = System.currentTimeMillis()
+        var leftHome = false
         for (e in c.entries) {
             val old = e.tab
             if (!old.incognito && old.profileId !in profiles) continue
             val id = if (old.incognito) nextIncognitoId-- else nextTabId++
             if (!old.incognito) {
-                // A history that was never read comes back from the recently closed list (2.6).
                 val loaded = old.stateLoaded
                 val state = old.state
-                io.execute {
-                    val history = if (loaded) state else if (e.rowId >= 0) db.closedTabState(e.rowId) else null
-                    db.insertTab(id, old.profileId, old.url, old.title, history, old.parentId, old.lastUsed, old.desktop)
+                val url = old.url
+                val title = old.title
+                io.safe("bring back a closed tab") {
+                    // 3.0: the history saved as it closed (the newest: the engine's, which old.state
+                    // isn't once the tab was open), else what it had. One never read comes back from
+                    // the recently closed list too (2.6).
+                    val history = if (e.rowId >= 0) db.closedTabState(e.rowId) else if (loaded) state else null
+                    val keep = TabRules.storable(url)
+                    db.insertTab(
+                        id, old.profileId, TabRules.storedUrl(url), if (keep) TabRules.storedTitle(title) else "",
+                        if (keep) TabRules.storedState(history) else null, old.parentId, old.lastUsed, old.desktop,
+                    )
                 }
             }
             // It keeps its last use, so an inactive tab stays inactive.
@@ -414,6 +607,8 @@ object TabManager {
             tab.stateLoaded = old.stateLoaded
             tab.sessionState = old.sessionState
             tab.speed = old.speed
+            tab.leftHome = old.leftHome
+            if (tab.leftHome) leftHome = true
             tab.groupId = old.groupId?.let { gid -> newGroupIds[gid] ?: gid.takeIf { group(it) != null } }
             tabs.add(e.index.coerceIn(0, tabs.size), tab)
             Thumbnails.move(old, tab)
@@ -421,8 +616,9 @@ object TabManager {
             if (old === c.wasCurrent) restoredCurrent = tab
             if (first == null) first = tab
         }
+        if (leftHome) saveLeftHome()
         // They are open again, so they leave the recently closed list.
-        io.execute { for (e in c.entries) if (e.rowId >= 0) db.deleteClosedTab(e.rowId) }
+        io.safe("update the recently closed tabs") { for (e in c.entries) if (e.rowId >= 0) db.deleteClosedTab(e.rowId) }
         keepGroupsTogether()
         saveOrder()
         if (restoredCurrent != null) select(restoredCurrent) else ui?.onTabsChanged()
@@ -440,28 +636,55 @@ object TabManager {
     private fun rememberClosed(entries: List<ClosedEntry>) {
         for (e in entries) {
             val t = e.tab
-            if (t.incognito || t.isBlank) continue
+            // 3.0: nor one whose address is too long to keep (a picture opened from its data: address).
+            if (t.incognito || t.isBlank || !TabRules.storable(t.url)) continue
             val pid = t.profileId
             val url = t.url
-            val title = t.title
+            val title = TabRules.storedTitle(t.title)
             val sessionState = t.sessionState
             val state = t.state
             val loaded = t.stateLoaded
             val id = t.id
             // Turning the engine's state into text can take a while; done off the main thread.
-            io.execute {
+            io.safe("remember a closed tab") {
                 val saved = sessionState?.toString() ?: if (loaded) state else db.tabState(id)
-                e.rowId = db.addClosedTab(pid, url, title, saved, CLOSED_KEEP)
+                e.rowId = db.addClosedTab(pid, url, title, TabRules.storedState(saved), CLOSED_KEEP)
             }
         }
     }
 
-    /** Recently closed tabs of [profileId], newest first. Reads the database: call off the main thread. */
-    fun recentlyClosed(profileId: Long): List<ClosedTabRow> = db.closedTabs(profileId, CLOSED_KEEP)
+    /**
+     * Recently closed tabs of [profileId], newest first, without their histories (3.0: read with
+     * db.closedTabState for the one opened again). Reads the database: call off the main thread.
+     * 3.0: when they can't all be read (one too big for Android 7, a picture's data: address closed
+     * before 3.0; this closed Swift), the others, without what is too long to read back.
+     */
+    fun recentlyClosed(profileId: Long): List<ClosedTabRow> = try {
+        db.closedTabList(profileId, CLOSED_KEEP)
+    } catch (e: Exception) {
+        L.w("Couldn't read the recently closed tabs at once (${e.javaClass.simpleName})")
+        try {
+            // The limits are numbers in the query itself (see readTabsOneByOne).
+            db.readableDatabase.rawQuery(
+                "SELECT id, profile_id, url, substr(title, 1, ${TabRules.MAX_STORED_TITLE}), closed_at FROM closed_tabs " +
+                    "WHERE profile_id = ? AND length(url) <= ${TabRules.MAX_STORED_URL} ORDER BY closed_at DESC, id DESC LIMIT $CLOSED_KEEP",
+                arrayOf("$profileId"),
+            ).use { c ->
+                val rows = ArrayList<ClosedTabRow>()
+                while (c.moveToNext()) {
+                    rows += ClosedTabRow(c.getLong(0), c.getLong(1), c.getString(2), if (c.isNull(3)) "" else c.getString(3), null, c.getLong(4))
+                }
+                rows
+            }
+        } catch (e2: Exception) {
+            L.w("Couldn't read the recently closed tabs (${e2.javaClass.simpleName})")
+            emptyList()
+        }
+    }
 
     /** Opens a recently closed tab again, with its back and forward history. */
     fun reopen(row: ClosedTabRow): Tab {
-        io.execute { db.deleteClosedTab(row.id) }
+        io.safe("update the recently closed tabs") { db.deleteClosedTab(row.id) }
         val tab = createTab(row.url, row.profileId, null, false, false)
         tab.title = row.title
         tab.state = row.state
@@ -471,7 +694,7 @@ object TabManager {
     }
 
     fun clearRecentlyClosed(profileId: Long) {
-        io.execute { db.clearClosedTabs(profileId) }
+        io.safe("clear the recently closed tabs") { db.clearClosedTabs(profileId) }
     }
 
     private fun nextAfterClosing(tab: Tab): Tab {
@@ -493,7 +716,7 @@ object TabManager {
     /** Saves the order of the normal tabs and their groups (off the main thread). */
     private fun saveOrder() {
         val order = tabs.filter { !it.incognito }.map { it.id to it.groupId }
-        io.execute { db.saveTabOrder(order) }
+        io.safe("save the order of the tabs") { db.saveTabOrder(order) }
     }
 
     /** Puts each group's tabs right after the group's first tab, keeping the order otherwise. */
@@ -570,11 +793,34 @@ object TabManager {
 
     private fun newGroup(first: Tab): TabGroup {
         val color = nextGroupColor(first)
-        val id = if (first.incognito) nextIncognitoGroupId-- else db.insertTabGroup(first.profileId, "", color)
+        // 3.0: its id given here and its row written off the main thread, as tabs' are (2.6).
+        val id = if (first.incognito) nextIncognitoGroupId-- else nextGroupId++
         val group = TabGroup(id, first.profileId, "", color, first.incognito)
+        if (!group.incognito) insertGroupRow(group)
         groups.add(group)
         first.groupId = group.id
         return group
+    }
+
+    /**
+     * 3.0: a new group's row, with the id Swift gave it, written on [io]. Db.insertTabGroup can't take
+     * an id (it returns the new one, which had to be waited for on the main thread).
+     */
+    private fun insertGroupRow(group: TabGroup) {
+        val id = group.id
+        val pid = group.profileId
+        val name = group.name
+        val color = group.color
+        io.safe("save a tab group") {
+            val done = db.writableDatabase.insertWithOnConflict("tab_groups", null, ContentValues().apply {
+                put("id", id)
+                put("profile_id", pid)
+                put("name", name)
+                put("color", color)
+                put("created", System.currentTimeMillis())
+            }, SQLiteDatabase.CONFLICT_IGNORE)
+            if (done < 0) L.w("Tab group $id wasn't saved: the id is taken")
+        }
     }
 
     /** A colour no other group next to it has yet, starting with blue. */
@@ -651,15 +897,16 @@ object TabManager {
         val id = group.id
         val name = group.name
         val color = group.color
-        io.execute { db.updateTabGroup(id, name, color) }
+        io.safe("save a tab group") { db.updateTabGroup(id, name, color) }
     }
 
     private fun deleteGroup(group: TabGroup) {
         groups.remove(group)
-        if (!group.incognito) {
-            val id = group.id
-            io.execute { db.deleteTabGroup(id) }
-        }
+        if (!group.incognito) deleteGroupRow(group.id)
+    }
+
+    private fun deleteGroupRow(id: Long) {
+        io.safe("delete a tab group") { db.deleteTabGroup(id) }
     }
 
     private fun removeIfEmpty(id: Long?) {
@@ -690,19 +937,32 @@ object TabManager {
         tab.userNavAt = System.currentTimeMillis()
         tab.waitingForConnection = false
         tab.homeShown = false
-        if (tab.isHome) tab.leftHome = true
+        if (tab.isHome && !tab.leftHome) {
+            tab.leftHome = true
+            saveLeftHome()
+        }
         // A blank tab gets an empty session here; the address is set after, so it loads only once.
         val session = ensureLive(tab)
+        // 3.0: what the user asked for wins over a page restore still waiting (for the ad blocker at
+        // start, or for the tab's history to be read): skipped, it can't replace this page later.
+        tab.restoreToken = 0
+        if (tab.isBlank) tab.url = url
         // The home page may have put the page underneath to rest (MainActivity.goHome): the new
         // page must load in an active session, or it isn't drawn, saved or added to history.
-        if (tab === current && session.isOpen) session.setActive(true)
-        if (tab.isBlank) tab.url = url
+        // 3.0: only once it can be seen (after the address is set: a blank tab counts as the home page).
+        if (session.isOpen && pageOnScreen(tab)) session.setActive(true)
         tab.loading = true
         tab.progress = 5
-        AdBlock.whenReady(USER_WAIT_MS) {
+        AdBlock.whenReady(TabRules.USER_WAIT_MS) {
             if (tab.session === session && session.isOpen) session.loadUri(url)
         }
         notifyTabUpdated(tab)
+    }
+
+    /** 3.0: which tabs go back to the home page from their first page (Tab.leftHome), for the next start. */
+    private fun saveLeftHome() {
+        val ids = tabs.filter { it.leftHome && !it.incognito }.mapTo(HashSet()) { it.id.toString() }
+        prefs.sp.edit().putStringSet(LEFT_HOME, ids).apply()
     }
 
     /** Back on the first page of a tab opened from the home page shows the home page again. */
@@ -713,6 +973,7 @@ object TabManager {
         tab.state = null
         tab.sessionState = null
         tab.leftHome = false
+        saveLeftHome()
         tab.canGoBack = false
         tab.canGoForward = false
         tab.progress = 100
@@ -756,6 +1017,17 @@ object TabManager {
         }
     }
 
+    /**
+     * 3.0: the open tab's page process ended while Swift was out of sight (Android closing it for
+     * memory): its page loads again now that Swift is back, not in the background (SessionFactory.onDead).
+     */
+    fun reviveOnReturn(tab: Tab) {
+        if (tab !== current || tab.session != null || tab.isHome || tab.crashed) return
+        L.d("Tab ${tab.id}: its page loads again, now that Swift is back")
+        tab.autoRevivedAt = SystemClock.elapsedRealtime()
+        revive(tab)
+    }
+
     fun setDesktop(tab: Tab, desktop: Boolean) {
         // Remembered for the site, so its other pages and tabs get the same version (not from an
         // incognito tab, which leaves nothing behind, 2.6).
@@ -765,6 +1037,8 @@ object TabManager {
             s.setUserAgentMode(
                 if (desktop) GeckoSessionSettings.USER_AGENT_MODE_DESKTOP else GeckoSessionSettings.USER_AGENT_MODE_MOBILE,
             )
+            // 3.0: with "Tell sites a newer Firefox version", its desktop or mobile kind.
+            s.setUserAgentOverride(com.swiftbrowser.engine.UserAgent.overrideFor(desktop))
             s.setViewportMode(
                 if (desktop) GeckoSessionSettings.VIEWPORT_MODE_DESKTOP else GeckoSessionSettings.VIEWPORT_MODE_MOBILE,
             )
@@ -780,17 +1054,80 @@ object TabManager {
         val tab = createTab(uri, opener.profileId, opener, opener.desktop, opener.incognito)
         tab.approvedUrl = uri
         tab.lastClick = opener.lastClick
-        val session = SessionFactory.create(tab) // Gecko opens it itself
-        select(tab)
-        return session
+        return openedByEngine(tab)
     }
 
     /** An extension (uBlock Origin) opened a page such as its dashboard or logger. */
-    fun openForExtension(url: String?): GeckoSession {
-        val tab = createTab(url ?: "about:blank", Profiles.currentId, current, false, false)
+    fun openForExtension(url: String?): GeckoSession =
+        openedByEngine(createTab(url ?: "about:blank", Profiles.currentId, current, false, false))
+
+    /**
+     * 3.0: a new tab whose session the engine opens itself, as the new window of a page (or an
+     * extension): it gets the session unopened, from onNewSession (onNewTab), and opens it once it
+     * has the answer, a moment later. That window is the real one: it has its opener, the form it was
+     * sent and the referrer. Until then the session is kept as it is ([Tab.sessionOpening]); once
+     * open, it goes on screen as select() puts any live one there. Before 3.0, select() took it for a
+     * dead session and loaded the address again in a second one (fetched twice, without its opener),
+     * and the engine's window stayed open, hidden, for good: its alerts showed over other pages, and
+     * window.close() or uBlock Origin closing an ad pop-up did nothing.
+     */
+    private fun openedByEngine(tab: Tab): GeckoSession {
+        tab.popup = true
         val session = SessionFactory.create(tab)
+        tab.sessionOpening = true
+        // Its progress shows at once, and the engine's first blank page doesn't take its address.
+        if (!tab.isBlank) {
+            tab.loading = true
+            tab.progress = 5
+        }
         select(tab)
+        watchOpening(tab, session, 0)
         return session
+    }
+
+    /** Waits for the engine to open [session] (see [openedByEngine]): a couple of passes, then 50 ms at a time, for 2 s at most. */
+    private fun watchOpening(tab: Tab, session: GeckoSession, tries: Int) {
+        main.postDelayed({
+            when {
+                session.isOpen -> onOpenedByEngine(tab, session)
+                tries < 40 -> watchOpening(tab, session, tries + 1)
+                tab.session === session -> {
+                    // Never opened (its opener closed first, say): the tab loads its address itself.
+                    L.w("Tab ${tab.id}: the engine didn't open its new window; loading it again")
+                    tab.sessionOpening = false
+                    tab.loading = false
+                    if (tab === current) {
+                        val s = ensureLive(tab)
+                        if (s.isOpen) activate(tab, s)
+                        ui?.onTabSelected(tab)
+                    } else {
+                        detachSession(tab)
+                    }
+                }
+            }
+        }, if (tries < 2) 0L else 50L)
+    }
+
+    private fun onOpenedByEngine(tab: Tab, session: GeckoSession) {
+        if (tab.session !== session) {
+            // Closed (or let go of) before the engine had opened it: nobody shows this window.
+            try {
+                session.close()
+            } catch (_: Exception) {
+            }
+            return
+        }
+        tab.sessionOpening = false
+        if (tab === current) {
+            activate(tab, session)
+            ui?.onTabSelected(tab)
+        } else {
+            // Left already (another pop-up came after it): it waits like any tab in the background.
+            session.setActive(false)
+            session.setFocused(false)
+            Engine.runtime.webExtensionController.setTabActive(session, false)
+        }
+        trimLiveSessions()
     }
 
     // ------------------------------------------------------------------ profiles
@@ -817,7 +1154,13 @@ object TabManager {
         }
         groups.removeAll { !it.incognito && it.profileId == id }
         Engine.runtime.storageController.clearDataForSessionContext(Profiles.contextId(id))
-        Profiles.delete(id)
+        // 3.0: its rows (a long history, its bookmarks) are deleted off the main thread; Swift moves
+        // to another profile first, as Profiles.delete would.
+        if (Profiles.currentId == id) Profiles.all().firstOrNull { it.id != id }?.let { Profiles.setCurrent(it.id) }
+        io.safe("delete a profile") {
+            Profiles.delete(id)
+            main.post { ui?.onTabsChanged() }
+        }
         if (current?.let { !it.incognito && it.profileId == id } == true) current = null
         ensureCurrent()
         ui?.onTabsChanged()
@@ -850,13 +1193,13 @@ object TabManager {
     fun recordVisit(tab: Tab, url: String) {
         if (tab.incognito) return
         val pid = tab.profileId
-        io.execute { db.recordVisit(pid, url, "") }
+        io.safe("add a page to the history") { db.recordVisit(pid, url, "") }
     }
 
     fun setHistoryTitle(tab: Tab, url: String, title: String) {
         if (tab.incognito) return
         val pid = tab.profileId
-        io.execute { db.setHistoryTitle(pid, url, title) }
+        io.safe("save a page's title in the history") { db.setHistoryTitle(pid, url, title) }
     }
 
     fun notifyTabUpdated(tab: Tab) {
@@ -882,6 +1225,9 @@ object TabManager {
         }
     }
 
+    /** Tabs whose history was too long to save, said once in the log (only used on [io]). */
+    private val tooLongNoted = HashSet<Long>()
+
     private class SaveRow(
         val id: Long, val url: String, val title: String,
         val sessionState: GeckoSession.SessionState?, val state: String?, val lastUsed: Long, val desktop: Boolean,
@@ -896,12 +1242,33 @@ object TabManager {
             SaveRow(t.id, t.url, t.title, t.sessionState, t.state, t.lastUsed, t.desktop, keepState = !t.stateLoaded && t.sessionState == null)
         }
         dirty.clear()
-        io.execute {
+        io.safe("save the tabs") {
             for (r in rows) {
                 // Turning the engine's state into text can take a while for long histories.
                 val state = r.sessionState?.toString() ?: r.state
-                db.updateTab(r.id, r.url, r.title, state, r.lastUsed, r.desktop, r.keepState)
+                // 3.0: nothing Android 7 couldn't read back at the next start (a row over 2 MB stopped
+                // Swift then): a tab showing a picture from its data: address is saved as a blank one,
+                // and a history too long to keep is left out (the page itself stays open meanwhile).
+                val keep = TabRules.storable(r.url)
+                val stored = if (keep) TabRules.storedState(state) else null
+                if (keep && state != null && stored == null && tooLongNoted.add(r.id)) {
+                    L.w("Tab ${r.id}'s history is too long to keep (${state.length / 1024} KB): only its page is saved")
+                }
+                db.updateTab(
+                    r.id, TabRules.storedUrl(r.url), if (keep) TabRules.storedTitle(r.title) else "", stored,
+                    r.lastUsed, r.desktop, r.keepState && keep,
+                )
             }
+        }
+    }
+
+    /** 3.0: [flushSaves], then waits (at most [timeoutMs]) until it's written: Swift is about to end. */
+    fun flushSavesAndWait(timeoutMs: Long = 2000) {
+        flushSaves()
+        try {
+            io.submit(Runnable {}).get(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+        } catch (e: Exception) {
+            L.w("Saving the tabs took too long", e)
         }
     }
 }

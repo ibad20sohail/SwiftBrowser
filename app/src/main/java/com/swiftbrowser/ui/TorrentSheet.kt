@@ -11,6 +11,9 @@ import android.widget.CheckBox
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
+import androidx.core.view.AccessibilityDelegateCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.accessibility.AccessibilityNodeInfoCompat
 import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.google.android.material.button.MaterialButton
 import com.swiftbrowser.core.UrlUtils
@@ -30,8 +33,13 @@ object TorrentSheet {
     /** Most rows a panel lists: in a huge pack the files after these keep their choice. */
     private const val MAX_ROWS = 400
 
-    /** A magnet link: its file list is asked for first (not while Swift's VPN is on). */
-    fun magnet(a: Activity, link: String, added: ((Downloads.Item) -> Unit)? = null) {
+    /**
+     * A magnet link: its file list is asked for first (not while Swift's VPN is on). 3.0: only after
+     * a tap on "Look up the files" (asking announces the phone's address to the people sharing it,
+     * and a page could open this panel without a tap). [incognito]: from an incognito tab, which the
+     * panel warns about: torrents are kept like other downloads.
+     */
+    fun magnet(a: Activity, link: String, incognito: Boolean = false, added: ((Downloads.Item) -> Unit)? = null) {
         val hash = TorrentFiles.magnetHash(link)
         if (hash == null) {
             Messages.show(a, "This magnet link isn't valid")
@@ -47,39 +55,61 @@ object TorrentSheet {
         val body = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
         col.addView(body)
         val dialog = Sheets.sheet(a, col)
+        if (incognito) body.addView(incognitoWarning(a))
         if (Torrents.blockReason() == Torrents.PAUSED_VPN) {
             body.addView(Sheets.note(a, "Swift's VPN is on, and torrents only download with it off. Add this one now and it starts when you turn the VPN off. Its files are chosen for you then: all but the junk."))
             body.addView(button(a, "Add to downloads") {
                 dialog.dismiss()
                 done(a, Torrents.add(link, null, null), added)
             })
-            dialog.show()
+            dialog.showImmersive()
             return
         }
-        body.addView(progressRow(a, "Getting the file list from the people sharing it…"))
         var open = true
         dialog.setOnDismissListener { open = false }
-        dialog.show()
-        Torrents.fetchFiles(link) { bytes ->
-            if (!open || a.isFinishing) return@fetchFiles
+        body.addView(Sheets.note(a, "Without the VPN, others sharing this torrent can see your internet address."))
+        body.addView(button(a, "Look up the files") {
             body.removeAllViews()
-            val ti = bytes?.let { runCatching { TorrentInfo.bdecode(it) }.getOrNull() }
-            if (ti == null) {
-                body.addView(Sheets.note(a, "No one sharing this torrent answered within a minute. You can add it anyway: it starts once someone shares it."))
-                body.addView(button(a, "Add anyway") {
-                    dialog.dismiss()
-                    done(a, Torrents.add(link, null, null), added)
-                })
-                return@fetchFiles
-            }
-            files(a, dialog, head, body, ti, null) { wanted ->
-                done(a, Torrents.add(link, bytes, wanted), added)
-            }
+            if (incognito) body.addView(incognitoWarning(a))
+            lookUp(a, link, dialog, head, body, { open }, incognito, added)
+        })
+        dialog.showImmersive()
+    }
+
+    /** The file list of [link], asked of the people sharing it (a few seconds, up to a minute). */
+    private fun lookUp(
+        a: Activity, link: String, dialog: BottomSheetDialog, head: Head, body: LinearLayout, open: () -> Boolean,
+        incognito: Boolean, added: ((Downloads.Item) -> Unit)?,
+    ) {
+        body.addView(progressRow(a, "Getting the file list from the people sharing it…"))
+        Torrents.fetchFiles(link) { bytes ->
+            if (!open() || a.isFinishing) return@fetchFiles
+            body.removeAllViews()
+            if (incognito) body.addView(incognitoWarning(a))
+            showFetched(a, link, bytes, dialog, head, body, added)
         }
     }
 
-    /** A .torrent file's [data]. */
-    fun file(a: Activity, data: ByteArray, added: ((Downloads.Item) -> Unit)? = null) {
+    private fun showFetched(
+        a: Activity, link: String, bytes: ByteArray?, dialog: BottomSheetDialog, head: Head, body: LinearLayout,
+        added: ((Downloads.Item) -> Unit)?,
+    ) {
+        val ti = bytes?.let { runCatching { TorrentInfo.bdecode(it) }.getOrNull() }
+        if (ti == null) {
+            body.addView(Sheets.note(a, "No one sharing this torrent answered within a minute. You can add it anyway: it starts once someone shares it."))
+            body.addView(button(a, "Add anyway") {
+                dialog.dismiss()
+                done(a, Torrents.add(link, null, null), added)
+            })
+            return
+        }
+        files(a, dialog, head, body, ti, null) { wanted ->
+            done(a, Torrents.add(link, bytes, wanted), added)
+        }
+    }
+
+    /** A .torrent file's [data]; 3.0: [incognito] as for [magnet]. */
+    fun file(a: Activity, data: ByteArray, incognito: Boolean = false, added: ((Downloads.Item) -> Unit)? = null) {
         val ti = runCatching { TorrentInfo.bdecode(data) }.getOrNull()
         if (ti == null || !ti.isValid) {
             Messages.show(a, "This isn't a torrent file Swift can read")
@@ -95,9 +125,17 @@ object TorrentSheet {
         val body = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
         col.addView(body)
         val dialog = Sheets.sheet(a, col)
+        if (incognito) body.addView(incognitoWarning(a))
         files(a, dialog, head, body, ti, null) { wanted -> done(a, Torrents.add(null, data, wanted), added) }
-        dialog.show()
+        dialog.showImmersive()
     }
+
+    /**
+     * 3.0: torrents take hours and go on after Swift restarts, so one from an incognito tab is kept
+     * like any other download: said before it is added, not found out afterwards.
+     */
+    private fun incognitoWarning(a: Activity): TextView =
+        warning(a, "This tab is incognito, but torrents aren't: this one stays in your Downloads list until you remove it.")
 
     /** Another choice of files for [item] (Files, in its menu in Downloads). */
     fun chooseFiles(a: Activity, item: Downloads.Item) {
@@ -113,7 +151,7 @@ object TorrentSheet {
         col.addView(body)
         val dialog = Sheets.sheet(a, col)
         files(a, dialog, head, body, ti, item) { wanted -> Torrents.setFiles(item, wanted) }
-        dialog.show()
+        dialog.showImmersive()
     }
 
     private fun done(a: Activity, item: Downloads.Item?, added: ((Downloads.Item) -> Unit)?) {
@@ -181,10 +219,11 @@ object TorrentSheet {
             val size = chosen.sumOf { it.size }
             val already = before?.let { b -> entries.filter { it.index in b }.sumOf { it.size } } ?: 0L
             val needed = (size - already).coerceAtLeast(0)
-            val enough = free < 0 || needed <= free
+            // 3.0: the rule that pauses a torrent for space (100 MB to spare), not "just enough".
+            val enough = free < 0 || needed == 0L || Torrents.roomFor(needed, free)
             space.text = when {
                 chosen.isEmpty() -> "Tick the files to download"
-                !enough -> "Not enough space: it needs ${UrlUtils.formatBytes(needed)} and the phone has ${UrlUtils.formatBytes(free)} free"
+                !enough -> "Not enough space: it needs ${UrlUtils.formatBytes(needed)} and some to spare, and the phone has ${UrlUtils.formatBytes(free)} free"
                 free >= 0 -> "${UrlUtils.formatBytes(size)} of ${UrlUtils.formatBytes(totalSize)} · ${UrlUtils.formatBytes(free)} free on the phone"
                 else -> "${UrlUtils.formatBytes(size)} of ${UrlUtils.formatBytes(totalSize)}"
             }
@@ -259,8 +298,17 @@ object TorrentSheet {
             minimumHeight = Ui.dp(a, 52)
             setPadding(Ui.dp(a, 16), 0, Ui.dp(a, 20), 0)
             setBackgroundResource(RowHolder.selectableBackground(a))
-            contentDescription = name
+            contentDescription = if (caption != null) "$name, $caption" else name
             setOnClickListener { box.isChecked = !box.isChecked }
+            // 3.0: TalkBack hears the row as a tick box, ticked or not (the box itself is hidden from it).
+            ViewCompat.setAccessibilityDelegate(this, object : AccessibilityDelegateCompat() {
+                override fun onInitializeAccessibilityNodeInfo(host: View, info: AccessibilityNodeInfoCompat) {
+                    super.onInitializeAccessibilityNodeInfo(host, info)
+                    info.className = CheckBox::class.java.name
+                    info.isCheckable = true
+                    info.isChecked = box.isChecked
+                }
+            })
             addView(box)
             addView(LinearLayout(a).apply {
                 orientation = LinearLayout.VERTICAL

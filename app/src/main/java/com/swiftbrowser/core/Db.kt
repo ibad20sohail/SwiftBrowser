@@ -64,7 +64,7 @@ data class DownloadRow(
  * Small hand-written SQLite layer: profiles, tabs (with their order and groups), recently closed
  * tabs, history, bookmarks, downloads, per-site ad levels and where videos were left off.
  */
-class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 7) {
+class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 8) {
 
     override fun onConfigure(db: SQLiteDatabase) {
         db.enableWriteAheadLogging()
@@ -103,6 +103,7 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 7) {
         addVersion5(db)
         addVersion6(db)
         addVersion7(db)
+        addVersion8(db)
 
         db.insert("profiles", null, ContentValues().apply {
             put("name", "Personal")
@@ -122,6 +123,49 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 7) {
         if (oldVersion < 5) addVersion5(db)
         if (oldVersion < 6) addVersion6(db)
         if (oldVersion < 7) addVersion7(db)
+        // 3.0: from here on each step must be safe to run twice ("IF NOT EXISTS"): a newer Swift's
+        // database kept by onDowngrade is marked with this version, so it comes back through them.
+        if (oldVersion < 8) addVersion8(db)
+    }
+
+    /** 3.0: address completion picks the pages visited most among all of history: an index for that order. */
+    private fun addVersion8(db: SQLiteDatabase) {
+        db.execSQL("CREATE INDEX IF NOT EXISTS history_visits ON history(profile_id, visits DESC, last_visit DESC)")
+    }
+
+    /**
+     * 3.0: an older Swift installed over a newer one (Android allows it with the same key). The newer
+     * database only ever added tables, columns and indexes, which this version leaves alone: kept as
+     * it is when everything this version reads and writes is there. Before, every start crashed.
+     */
+    override fun onDowngrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        val missing = SCHEMA.flatMap { (table, columns) ->
+            val have = db.rawQuery("PRAGMA table_info($table)", null).use { c ->
+                val names = HashSet<String>()
+                while (c.moveToNext()) names += c.getString(1)
+                names
+            }
+            columns.filter { it !in have }.map { "$table.$it" }
+        }
+        if (missing.isNotEmpty()) {
+            // Not this version's shape: left alone for the newer Swift (Android's own error follows).
+            L.e("The database of a newer Swift (version $oldVersion) lacks ${missing.joinToString()}: this version can't use it")
+            super.onDowngrade(db, oldVersion, newVersion)
+        }
+        L.w("The database of a newer Swift (version $oldVersion) is kept as it is: an older Swift (version $newVersion) was installed")
+    }
+
+    /** One transaction around [block] (3.0: restoring a backup, importing bookmarks): all of it, or none if it throws. */
+    fun <T> transaction(block: () -> T): T {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            val result = block()
+            db.setTransactionSuccessful()
+            return result
+        } finally {
+            db.endTransaction()
+        }
     }
 
     /** 2.4: documents opened in Swift's viewer, where each is, and where it was left. */
@@ -389,6 +433,18 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 7) {
                 "ORDER BY closed_at DESC, id DESC LIMIT $limit",
             arrayOf("$profileId"),
         ) { ClosedTabRow(it.getLong(0), it.getLong(1), it.str(2), it.str(3), it.strOrNull(4), it.getLong(5)) }
+
+    /**
+     * 3.0: the same list without the tabs' histories ([ClosedTabRow.state] null), for showing it:
+     * each history can be long, and reading 50 of them only to show names took a while. Read the one
+     * opened again with [closedTabState].
+     */
+    fun closedTabList(profileId: Long, limit: Int): List<ClosedTabRow> =
+        query(
+            "SELECT id, profile_id, url, title, closed_at FROM closed_tabs WHERE profile_id = ? " +
+                "ORDER BY closed_at DESC, id DESC LIMIT $limit",
+            arrayOf("$profileId"),
+        ) { ClosedTabRow(it.getLong(0), it.getLong(1), it.str(2), it.str(3), null, it.getLong(4)) }
 
     /** Remembers a closed tab; only the newest [keep] of the profile are kept. Returns its row id. */
     fun addClosedTab(profileId: Long, url: String, title: String, state: String?, keep: Int): Long {
@@ -678,15 +734,42 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 7) {
             "profile_id=? AND url=?", arrayOf("$profileId", url))
     }
 
-    fun history(profileId: Long, search: String?, limit: Int = 500): List<HistoryRow> {
-        val base = "SELECT id, url, title, last_visit, visits FROM history WHERE profile_id = ?"
-        return if (search.isNullOrBlank()) {
-            query("$base ORDER BY last_visit DESC LIMIT $limit", arrayOf("$profileId")) { rowToHistory(it) }
-        } else {
+    /**
+     * [profileId]'s history, newest first: [limit] pages; with [search], only those with it in their
+     * address or title (in all of history). 3.0: [after] continues the list after that page (the
+     * History screen loads more as it is scrolled); the order is the index's, so no page is sorted.
+     */
+    fun history(profileId: Long, search: String?, limit: Int = 500, after: HistoryRow? = null): List<HistoryRow> {
+        val where = StringBuilder("profile_id = ?")
+        val args = arrayListOf("$profileId")
+        if (!search.isNullOrBlank()) {
             val like = "%${search.trim()}%"
-            query("$base AND (url LIKE ? OR title LIKE ?) ORDER BY last_visit DESC LIMIT $limit",
-                arrayOf("$profileId", like, like)) { rowToHistory(it) }
+            where.append(" AND (url LIKE ? OR title LIKE ?)")
+            args += like
+            args += like
         }
+        if (after != null) {
+            where.append(" AND last_visit <= ? AND (last_visit < ? OR id > ?)")
+            args += "${after.lastVisit}"
+            args += "${after.lastVisit}"
+            args += "${after.id}"
+        }
+        return query("SELECT id, url, title, last_visit, visits FROM history WHERE $where ORDER BY last_visit DESC, id LIMIT $limit", args.toTypedArray()) {
+            rowToHistory(it)
+        }
+    }
+
+    /**
+     * 3.0: blocking, at most once a week: pages last visited over a year ago leave the history of
+     * every profile (it was never pruned, and address completion goes through all of it). How many went.
+     */
+    fun pruneHistoryIfDue(prefs: Prefs): Int {
+        val now = System.currentTimeMillis()
+        if (now - prefs.lastHistoryPrune < WEEK_MS) return 0
+        prefs.lastHistoryPrune = now
+        val n = writableDatabase.delete("history", "last_visit < ?", arrayOf("${now - YEAR_MS}"))
+        if (n > 0) L.d("History: $n pages over a year old removed")
+        return n
     }
 
     /** Best matches for the address bar: frequently and recently visited pages. */
@@ -702,7 +785,7 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 7) {
         ) { rowToHistory(it) }
     }
 
-    /** Pages visited most, for completing addresses as they're typed (2.6). */
+    /** Pages visited most, for completing addresses as they're typed (2.6; 3.0: read through the history_visits index). */
     fun visitedUrls(profileId: Long, limit: Int): List<String> =
         query(
             "SELECT url FROM history WHERE profile_id = ? ORDER BY visits DESC, last_visit DESC LIMIT $limit",
@@ -900,12 +983,15 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 7) {
         writableDatabase.delete("bookmarks", "profile_id=? AND url=?", arrayOf("$profileId", url))
     }
 
-    fun updateBookmark(id: Long, title: String, url: String) {
-        writableDatabase.update("bookmarks", ContentValues().apply {
+    /**
+     * 3.0: false when nothing changed, as when another bookmark of the profile has that address
+     * already (the database allows one per address: before, that crashed Swift).
+     */
+    fun updateBookmark(id: Long, title: String, url: String): Boolean =
+        writableDatabase.updateWithOnConflict("bookmarks", ContentValues().apply {
             put("title", title)
             put("url", url)
-        }, "id=?", arrayOf("$id"))
-    }
+        }, "id=?", arrayOf("$id"), SQLiteDatabase.CONFLICT_IGNORE) > 0
 
     fun deleteBookmark(id: Long) {
         writableDatabase.delete("bookmarks", "id=?", arrayOf("$id"))
@@ -961,6 +1047,20 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 7) {
         writableDatabase.delete("downloads", "id=?", arrayOf("$id"))
     }
 
+    /** 3.0: the downloads [ids] forget the page's cookie and sign-in they kept (Downloads.forgetHeaders). */
+    fun clearDownloadHeaders(ids: Collection<Long>) {
+        if (ids.isEmpty()) return
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            val v = ContentValues().apply { put("headers", "{}") }
+            for (id in ids) db.update("downloads", v, "id=? AND headers IS NOT NULL AND headers != '{}'", arrayOf("$id"))
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
     // ---------------------------------------------------------------- per-site ad levels
 
     fun siteLevels(): Map<String, String> =
@@ -975,5 +1075,30 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 7) {
                 put("level", level)
             }, SQLiteDatabase.CONFLICT_REPLACE)
         }
+    }
+
+    private companion object {
+        const val WEEK_MS = 7L * 24 * 3600 * 1000
+        const val YEAR_MS = 365L * 24 * 3600 * 1000
+
+        /** 3.0: the tables and columns this version uses (onDowngrade keeps a newer database that has them all). */
+        val SCHEMA = mapOf(
+            "profiles" to listOf("id", "name", "color", "created"),
+            "tabs" to listOf("id", "profile_id", "url", "title", "state", "parent_id", "last_used", "desktop", "position", "group_id"),
+            "history" to listOf("id", "profile_id", "url", "title", "last_visit", "visits"),
+            "bookmarks" to listOf("id", "profile_id", "url", "title", "created", "folder"),
+            "downloads" to listOf(
+                "id", "profile_id", "kind", "url", "file_path", "file_name", "mime", "total", "done", "status", "error",
+                "headers", "page_url", "extra", "created",
+            ),
+            "site_levels" to listOf("site", "level"),
+            "tab_groups" to listOf("id", "profile_id", "name", "color", "created"),
+            "closed_tabs" to listOf("id", "profile_id", "url", "title", "state", "closed_at"),
+            "video_positions" to listOf("page", "position", "duration", "updated", "image"),
+            "reading_positions" to listOf("page", "title", "share", "updated", "image"),
+            "documents" to listOf("id", "uri", "name", "kind", "size", "web", "profile_id", "place", "progress", "total", "opened", "updated"),
+            "starred_documents" to listOf("uri", "profile_id", "name", "kind", "size", "added"),
+            "logins" to listOf("guid", "profile_id", "origin", "form_action", "realm", "username", "password", "created", "used", "times"),
+        )
     }
 }

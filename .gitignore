@@ -15,3 +15,6 @@ private/
 
 # Agent working copies.
 .claude/
+
+# 3.0: the build helper's log.
+build-last.log

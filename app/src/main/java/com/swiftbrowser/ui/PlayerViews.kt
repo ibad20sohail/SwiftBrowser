@@ -2,14 +2,60 @@ package com.swiftbrowser.ui
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.Intent
 import android.graphics.Rect
+import android.net.Uri
 import android.view.GestureDetector
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
 import android.view.ViewGroup
+import com.swiftbrowser.core.AppFiles
+import com.swiftbrowser.files.PrivateFolder
+import java.io.File
 import kotlin.math.abs
 import kotlin.math.roundToInt
+
+/**
+ * 3.0: what Swift's player and picture viewer may show. Other apps can open both (they are
+ * exported), so a link or a path that reaches Swift's own private storage (its data folder: the
+ * Private folder, saved sign-ins, the engine's profile) is refused unless Swift itself asked: its
+ * own opens carry a mark only this run of Swift knows, which another app can't copy. Without that
+ * check, another app could have them show such a file, then share or copy it out.
+ */
+object ViewerAccess {
+    private const val EXTRA_OWN = "com.swiftbrowser.extra.OWN"
+    private val token = java.util.UUID.randomUUID().toString()
+
+    const val REFUSED = "Swift can't open this file"
+
+    /** [i] opens a viewer for Swift itself (Files, Downloads, the notification of a download). */
+    fun mark(i: Intent): Intent = i.putExtra(EXTRA_OWN, token)
+
+    /** [i] came from Swift itself (this run of it). */
+    fun isOwn(i: Intent?): Boolean = runCatching { i?.getStringExtra(EXTRA_OWN) == token }.getOrDefault(false)
+
+    /** A link another app sent (Open with): refused when it reaches Swift's own files. */
+    fun refused(ctx: Context, uri: Uri): Boolean = AppFiles.refusedFromOutside(ctx, uri)
+
+    /**
+     * File [f] asked for by its path: one in Swift's private storage only when Swift asked (or from
+     * Private while it is open in Files, however Files opened it).
+     */
+    fun mayOpen(ctx: Context, i: Intent?, f: File): Boolean {
+        if (!AppFiles.isPrivate(ctx, f)) return true
+        if (isOwn(i)) return true
+        if (!PrivateFolder.isUnlocked) return false
+        // Both resolved (/data/user/0 and /data/data are the same folder).
+        val real = runCatching { f.canonicalPath }.getOrNull() ?: return false
+        val root = runCatching { PrivateFolder.root(ctx).canonicalPath }.getOrNull() ?: return false
+        return real == root || real.startsWith("$root/")
+    }
+
+    /** It must be kept out of screenshots: asked for (AppFiles.EXTRA_SECURE), or a file of Private. */
+    fun secure(ctx: Context, i: Intent?, f: File?): Boolean =
+        runCatching { i?.getBooleanExtra(AppFiles.EXTRA_SECURE, false) == true }.getOrDefault(false) || (f != null && AppFiles.isPrivate(ctx, f))
+}
 
 /**
  * 2.9: the player's video area: its one child (the video's SurfaceView) sized to the chosen shape,

@@ -61,10 +61,26 @@ object AdStats {
         return (n * times).toInt()
     }
 
+    /**
+     * 3.0: a small file of its own ([KEY], the same name) rather than the settings, which were all
+     * written again with every save.
+     */
+    private val sp: android.content.SharedPreferences?
+        get() = SwiftApp.instance?.getSharedPreferences(KEY, android.content.Context.MODE_PRIVATE)
+
+    private const val DAYS_KEY = "days"
+
     private fun load(): MutableMap<Long, Int> {
         counts?.let { return it }
         val map = HashMap<Long, Int>()
-        SwiftApp.prefs.sp.getString(KEY, null)?.split(',')?.forEach { entry ->
+        val own = sp
+        // 3.0: the counts move out of the settings once (or again after an old backup put them back).
+        val settings = SwiftApp.prefs.sp
+        if (own != null) settings.getString(KEY, null)?.let { old ->
+            if (!own.contains(DAYS_KEY)) own.edit { putString(DAYS_KEY, old) }
+            settings.edit { remove(KEY) }
+        }
+        own?.getString(DAYS_KEY, null)?.split(',')?.forEach { entry ->
             val day = entry.substringBefore(':').toLongOrNull() ?: return@forEach
             val n = entry.substringAfter(':').toIntOrNull() ?: return@forEach
             map[day] = n
@@ -77,6 +93,6 @@ object AdStats {
         val map = load()
         val oldest = today() - (DAYS - 1)
         map.keys.removeAll { it < oldest }
-        SwiftApp.prefs.sp.edit { putString(KEY, map.entries.sortedBy { it.key }.joinToString(",") { "${it.key}:${it.value}" }) }
+        sp?.edit { putString(DAYS_KEY, map.entries.sortedBy { it.key }.joinToString(",") { "${it.key}:${it.value}" }) }
     }
 }

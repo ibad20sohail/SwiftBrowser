@@ -44,6 +44,7 @@ import com.google.android.material.button.MaterialButton
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.swiftbrowser.R
 import com.swiftbrowser.SwiftApp
+import com.swiftbrowser.core.AppFiles
 import com.swiftbrowser.core.L
 import com.swiftbrowser.core.Profiles
 import com.swiftbrowser.core.UrlUtils
@@ -62,6 +63,7 @@ import com.swiftbrowser.files.FileOps
 import com.swiftbrowser.files.FileProblem
 import com.swiftbrowser.files.FileThumbs
 import com.swiftbrowser.files.FilesSettings
+import com.swiftbrowser.files.Parts
 import com.swiftbrowser.files.PlainAccess
 import com.swiftbrowser.files.PrivateFolder
 import com.swiftbrowser.files.RecycleBin
@@ -295,15 +297,16 @@ class FilesActivity : ListActivity() {
     /** Asking Android for the right to change files and the SD card (2.9: shared with the cleaner). */
     private val changes = ChangeAccess(this) { say(it, long = true) }
 
-    /** Android's own screen-lock question, before Private opens (2.9). */
+    /**
+     * Android's own screen-lock question, before Private opens (2.9). 3.0: it no longer removes a PIN
+     * Private has (a PIN keeps Private once chosen); only a reset of a forgotten PIN, after its day's
+     * wait, does that, in [afterUnlock].
+     */
     private val askUnlock = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
         val run = afterUnlock
         afterUnlock = null
         if (r.resultCode == RESULT_OK) {
             PrivateFolder.unlock()
-            // The screen lock keeps Private now: a PIN chosen while the phone had none isn't needed any more
-            // (one forgotten is reset this way, as "Forgot PIN" says).
-            if (PrivateFolder.hasPin()) PrivateFolder.clearPin()
             run?.invoke()
         }
     }
@@ -391,14 +394,55 @@ class FilesActivity : ListActivity() {
         needAccess = !hasAccess()
         // 2.9: things in the recycle bin past their time go for good (a quick look at its index).
         if (!needAccess) RecycleBin.purgeSoon(this, force = true)
+        // 3.0: unfinished copies a closed Swift left go (said once).
+        if (!needAccess && savedInstanceState == null) clearLeftParts()
         // Turned sideways: the same place. Otherwise the folder asked for, or where Files was left
-        // (2.9: or the start page, as chosen in Settings).
-        val place = savedInstanceState?.getString(STATE_PLACE) ?: intent.getStringExtra(EXTRA_FOLDER)
+        // (2.9: or the start page, as chosen in Settings). 3.0: a folder asked for by another app only
+        // when it may be shown (trustedPlace), otherwise the start page.
+        val asked = intent.getStringExtra(EXTRA_FOLDER)?.let { trustedPlace(it) ?: PLACE_HOME }
+        val place = savedInstanceState?.getString(STATE_PLACE) ?: asked
             ?: if (FilesSettings.startAt == FilesSettings.START_LAST) sp.getString(PREF_LAST, null) else null
         // Without access Android hides the folders (they can't even be checked): there once it is given.
         if (needAccess) wanted = place
         goTo(place)
         if (needAccess && Build.VERSION.SDK_INT < 30) requestAccess()
+    }
+
+    /**
+     * 3.0: a place another app asked Files to open (Files' own icon can be started by any app, with
+     * any folder): only on the phone's storage or a card, in Swift's download folder, or in Private
+     * (which still asks to be unlocked). Never Swift's own data (its settings with Private's PIN, the
+     * engine's profile), which Files could then copy or share; null for anything else.
+     */
+    private fun trustedPlace(raw: String): String? {
+        if (!raw.startsWith("/")) return raw.takeIf { it == PLACE_HOME || it == PLACE_BIN || it.startsWith(CATEGORY) }
+        val f = runCatching { File(raw).canonicalFile }.getOrNull() ?: return null
+        // Private and Swift's downloads as Files knows them (their real paths may be named otherwise).
+        fun within(root: File): String? {
+            val r = runCatching { root.canonicalPath }.getOrNull() ?: return null
+            return when {
+                f.path == r -> root.path
+                f.path.startsWith("$r/") -> File(root, f.path.removePrefix("$r/")).path
+                else -> null
+            }
+        }
+        within(PrivateFolder.root(this))?.let { return it }
+        within(swiftDownloads)?.let { return it }
+        return when {
+            AppFiles.isPrivate(this, f) -> null
+            Volumes.of(this, f) != null -> f.path
+            else -> null
+        }
+    }
+
+    /** 3.0: unfinished copies a closed Swift left behind (see Parts) go, and that is said once. */
+    private fun clearLeftParts() {
+        if (FileJobs.active.isNotEmpty()) return
+        val app = applicationContext
+        lifecycleScope.launch {
+            val n = withContext(Dispatchers.IO) { runCatching { Parts.clearLeftovers(app) }.getOrDefault(0) }
+            if (n > 0) say("A copy was cut off when Swift closed. Its unfinished file was cleared away; the original wasn't touched.", long = true)
+        }
     }
 
     /** Where to go once access to the files is given. */
@@ -408,6 +452,7 @@ class FilesActivity : ListActivity() {
     private fun accessGiven() {
         needAccess = false
         Volumes.refresh(this)
+        clearLeftParts()
         val place = wanted ?: placeKey()
         wanted = null
         goTo(place)
@@ -634,6 +679,8 @@ class FilesActivity : ListActivity() {
         override fun handleOnBackPressed() {
             val idx = index
             when {
+                // 3.0: an archive being read (a big tar.gz takes a while): the reading stops.
+                archiveReading != null -> stopReadingArchive()
                 search.text.isNotEmpty() -> search.setText("")
                 selected.isNotEmpty() -> clearSelection()
                 idx != null && inArchive.isNotEmpty() -> showArchiveFolder(inArchive.substringBeforeLast('/', ""))
@@ -803,6 +850,7 @@ class FilesActivity : ListActivity() {
         binItems = emptyMap()
         index = null
         inArchive = ""
+        archiveReading = null
         focusPath = null
         selected.clear()
         searchRows = null
@@ -1111,17 +1159,36 @@ class FilesActivity : ListActivity() {
     private val showLoading = Runnable {
         if (loading) {
             empty.removeAllViews()
+            val label = Ui.text(this@FilesActivity, Ui.Type.BODY_SECONDARY, loadingText).apply { setPadding(0, Ui.dp(this@FilesActivity, 12), 0, 0) }
             empty.addView(LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 gravity = Gravity.CENTER_HORIZONTAL
                 addView(ProgressBar(this@FilesActivity).apply { indeterminateTintList = ColorStateList.valueOf(Ui.accent(this@FilesActivity)) })
-                addView(Ui.text(this@FilesActivity, Ui.Type.BODY_SECONDARY, loadingText).apply { setPadding(0, Ui.dp(this@FilesActivity, 12), 0, 0) })
+                addView(label)
             }, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
             empty.visibility = View.VISIBLE
             adapter.set(emptyList())
+            loadingLabel = label
         }
     }
     private var loadingText = ""
+
+    /** 3.0: the loading screen's words, while it shows (a tar.gz's reading says how far it is). */
+    private var loadingLabel: TextView? = null
+
+    private fun setLoadingText(text: String) {
+        loadingText = text
+        loadingLabel?.takeIf { loading && it.isAttachedToWindow }?.text = text
+    }
+
+    /** 3.0: Back while an archive is read: the reading stops, and the folder stays. */
+    private fun stopReadingArchive() {
+        archiveReading = null
+        loadJob?.cancel()
+        loading = false
+        render()
+        restorePosition()
+    }
 
     private fun showLoadingSoon(text: String) {
         loadingText = text
@@ -1318,7 +1385,35 @@ class FilesActivity : ListActivity() {
 
     private fun filesText(n: Int) = if (n == 1) "1 file" else "${number(n)} files"
 
+    /** 3.0: the screen is kept out of screenshots and the recent-apps picture now (Private on show). */
+    private var secured = false
+
+    /** 3.0: while Private's files are on show, the screen stays out of screenshots and recent apps. */
+    private fun updateSecure() {
+        val want = inPrivate
+        if (want == secured) return
+        secured = want
+        SecureScreen.set(this, want)
+    }
+
+    /**
+     * 3.0: a copy or move (or an extraction) waiting from Private goes once Private locks: it mustn't
+     * take Private's files out unseen. True when one went.
+     */
+    private fun dropLockedClip(): Boolean {
+        if (PrivateFolder.isUnlocked) return false
+        val fromPrivate = when (val c = clip) {
+            is Clip.Files -> c.files.any { PrivateFolder.isInside(this, it) }
+            is Clip.Extract -> PrivateFolder.isInside(this, c.archive)
+            null -> false
+        }
+        if (fromPrivate) clip = null
+        return fromPrivate
+    }
+
     private fun updateChrome() {
+        updateSecure()
+        dropLockedClip()
         val idx = index
         val cat = category
         val selecting = selected.isNotEmpty()
@@ -1634,8 +1729,9 @@ class FilesActivity : ListActivity() {
                     Dialogs.info(
                         this, "Private",
                         "Files here are kept inside Swift: other apps, the Gallery and computers (Wi-Fi transfer too) can't see them. " +
-                            (if (PrivateLock.hasScreenLock(this)) "Opening Private asks for your screen lock." else "Opening Private asks for its PIN (Swift's Settings can change it).") +
-                            " It locks when you leave Files, or after a minute away.\n\n" + PrivateLock.UNINSTALL_TEXT,
+                            // 3.0: a PIN, once chosen, is Private's lock even on a phone with a screen lock.
+                            (if (!PrivateFolder.hasPin() && PrivateLock.hasScreenLock(this)) "Opening Private asks for your screen lock." else "Opening Private asks for its PIN (Swift's Settings can change it).") +
+                            " It locks when you leave Files, or after a minute away, and the phone takes no screenshots of it.\n\n" + PrivateLock.UNINSTALL_TEXT,
                     )
                 }
                 actions += settingsAction()
@@ -1687,14 +1783,27 @@ class FilesActivity : ListActivity() {
 
     // ------------------------------------------------------------------ archives
 
+    /** 3.0: the archive being read now (Back stops it), or null. */
+    private var archiveReading: File? = null
+
     private fun openArchive(f: File, password: String? = null) {
         loadJob?.cancel()
         rememberPosition()
         loading = true
-        showLoadingSoon("Reading “${f.name}”…")
+        archiveReading = f
+        val reading = "Reading “${f.name}”…"
+        showLoadingSoon(reading)
         loadJob = lifecycleScope.launch {
-            val result = withContext(Dispatchers.IO) { runCatching { Archives.read(f, password) { !isActive } } }
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    // 3.0: a tar.gz is read through to be listed: how far, on the loading screen.
+                    Archives.read(f, password, { !isActive }) { fraction ->
+                        list.post { if (archiveReading === f) setLoadingText("$reading ${(fraction * 100).toInt()}%") }
+                    }
+                }
+            }
             loading = false
+            archiveReading = null
             result.onSuccess { idx ->
                 L.d("Opened an archive (${idx.format.label}, ${idx.entries.size} entries)")
                 placeGen++
@@ -1710,7 +1819,11 @@ class FilesActivity : ListActivity() {
                 render()
                 list.scrollToPosition(0)
                 showPageTop()
-                if (idx.unsafe > 0) say("${idx.unsafe} files in it have names that point outside its folder: Swift leaves them out", long = true)
+                when {
+                    idx.unsafe > 0 -> say("${idx.unsafe} files in it have names that point outside its folder: Swift leaves them out", long = true)
+                    // 3.0: a very big archive lists only its first entries.
+                    idx.capped -> say("This archive holds ${number(idx.total)} files and folders: only the first ${number(Archives.MAX_LISTED)} show here. Extract all still takes out every one.", long = true)
+                }
             }.onFailure { e ->
                 render()
                 restorePosition()
@@ -1798,7 +1911,7 @@ class FilesActivity : ListActivity() {
         opening = null
         val f = job.result
         when {
-            job.message == "Cancelled" -> {}
+            job.cancelled -> {}
             job.failed || f == null -> say(job.message ?: "Swift couldn't open this file", long = true)
             Archives.formatOf(f.name) != null -> openArchive(f)
             inPrivate -> openPrivateFile(Row(f.path, f.name, false, f.length(), f.lastModified(), -1, FileKind.of(f.name), f, null, null), f)
@@ -1954,14 +2067,14 @@ class FilesActivity : ListActivity() {
         keepPrivateOpen()
         when {
             r.kind == FileKind.APK -> FileOpener.install(this, f)
+            // 3.0: Swift's viewers are told it is Private's (kept out of screenshots and recent apps).
             Docs.kindOf(name, null) != null -> {
-                val uri = Docs.shareUri(this, f)
-                if (uri == null || !Docs.open(this, uri, name, incognito = true)) {
+                if (!FileOpener.openDocumentSecurely(this, f, name)) {
                     privateGraceUntil = 0L
                     say("Swift can't show “$name”")
                 }
             }
-            MediaViewerActivity.kindOf(name) != null -> FileOpener.open(this, f)
+            MediaViewerActivity.kindOf(name) != null -> FileOpener.open(this, f, secure = true)
             else -> FileOpener.openWith(this, f)
         }
     }
@@ -2068,6 +2181,12 @@ class FilesActivity : ListActivity() {
     // ------------------------------------------------------------------ changing files
 
     private fun paste() {
+        // 3.0: Private locked meanwhile: what waited from it goes.
+        if (dropLockedClip()) {
+            updateChrome()
+            say("Private is locked, so that was called off. Open Private to copy from it again.", long = true)
+            return
+        }
         when (val c = clip) {
             is Clip.Files -> {
                 val dest = dir
@@ -2108,7 +2227,8 @@ class FilesActivity : ListActivity() {
             erase(files)
             return
         }
-        withChanges(files) {
+        // 3.0: the bin at a card's top may need the card's access even when the files don't (Swift's own folder there).
+        withChanges(files + RecycleBin.binsFor(this, files)) {
             clearSelection()
             // Off the list at once: the move itself is a rename, but a big folder is counted first.
             dropRows(files)
@@ -2123,11 +2243,15 @@ class FilesActivity : ListActivity() {
         list.postDelayed({ if (!isFinishing) reload() }, if (animationsOn) Motion.SHORT + 100 else 0L)
         if (b.items.isNotEmpty()) {
             say("Moved ${RecycleBin.movedText(b.items)} to the recycle bin", "Undo") {
-                RecycleBin.restore(this, b.items) { _, failed ->
+                RecycleBin.restore(this, b.items) { back, failed ->
                     homeDirty = true
                     // A category and the start page read Android's media index, which learns of them a moment later.
                     if (!isFinishing) list.postDelayed({ if (!isFinishing) reload() }, if (home || category != null) 900L else 0L)
-                    if (failed > 0) say("$failed couldn't be put back: they're still in the recycle bin", long = true)
+                    when {
+                        failed > 0 -> say("$failed couldn't be put back: they're still in the recycle bin", long = true)
+                        // 3.0: put back under another name (the old one was taken meanwhile): said.
+                        else -> RecycleBin.renamedText(b.items, back)?.let { say(it, long = true) }
+                    }
                 }
             }
         }
@@ -2212,10 +2336,12 @@ class FilesActivity : ListActivity() {
                 if (isFinishing) return@restore
                 if (inBin) loadBin(keepScroll = true)
                 val first = back.firstOrNull()
+                // 3.0: one that came back under a new name (the old one was taken) says so.
+                val renamed = RecycleBin.renamedText(items, back)
                 when {
                     first == null -> say("Swift couldn't restore " + if (items.size == 1) "“${items[0].name}”" else "them", long = true)
                     failed > 0 -> say("Restored ${FileJobs.items(back.size)}. $failed couldn't be.", long = true)
-                    else -> say("Restored " + (if (back.size == 1) "“${first.name}”" else FileJobs.items(back.size)), "Show") {
+                    else -> say(renamed?.let { if (back.size == 1) it else "Restored ${FileJobs.items(back.size)}. $it" } ?: ("Restored " + (if (back.size == 1) "“${first.name}”" else FileJobs.items(back.size))), "Show") {
                         if (first.isDirectory) openFolder(first) else showInFolder(first)
                     }
                 }
@@ -2273,7 +2399,9 @@ class FilesActivity : ListActivity() {
 
     /**
      * Unlocks Private: the phone's screen lock (Android asks), or on a phone without one Swift's own
-     * PIN (chosen the first time). What Private is, is said once before.
+     * PIN (chosen the first time). What Private is, is said once before. 3.0: a PIN, once chosen,
+     * keeps Private even after the phone gets a screen lock; the screen lock may then reset a
+     * forgotten PIN, once its day's wait is over.
      */
     private fun unlockPrivate(then: () -> Unit) {
         if (PrivateFolder.isUnlocked) {
@@ -2281,24 +2409,42 @@ class FilesActivity : ListActivity() {
             return
         }
         PrivateLock.introThen(this) {
-            val intent = if (PrivateLock.hasScreenLock(this)) PrivateLock.credentialIntent(this) else null
-            if (intent != null) {
-                try {
-                    afterUnlock = then
-                    keepPrivateOpen()
-                    askUnlock.launch(intent)
-                    return@introThen
-                } catch (e: Exception) {
-                    L.w("Private: Android's lock question couldn't be shown", e)
-                    afterUnlock = null
-                    privateGraceUntil = 0L
-                }
-            }
             val ok = {
                 PrivateFolder.unlock()
                 then()
             }
-            if (PrivateFolder.hasPin()) PrivateLock.askPin(this) { ok() } else PrivateLock.setUpPin(this) { ok() }
+            when {
+                PrivateFolder.hasPin() -> PrivateLock.askPin(
+                    this,
+                    onScreenLock = {
+                        // The reset's wait is over: from now on the screen lock opens Private, not the PIN.
+                        val asked = askScreenLock {
+                            PrivateFolder.clearPin()
+                            say("Private opens with your phone's screen lock now")
+                            then()
+                        }
+                        if (!asked) say("Android's screen-lock question couldn't be shown. Choose a new PIN instead.", long = true)
+                    },
+                ) { ok() }
+                askScreenLock(then) -> {}
+                else -> PrivateLock.setUpPin(this) { ok() }
+            }
+        }
+    }
+
+    /** Android's screen-lock question, then [then] (Private unlocked); false when the phone can't ask it. */
+    private fun askScreenLock(then: () -> Unit): Boolean {
+        val question = (if (PrivateLock.hasScreenLock(this)) PrivateLock.credentialIntent(this) else null) ?: return false
+        return try {
+            afterUnlock = then
+            keepPrivateOpen()
+            askUnlock.launch(question)
+            true
+        } catch (e: Exception) {
+            L.w("Private: Android's lock question couldn't be shown", e)
+            afterUnlock = null
+            privateGraceUntil = 0L
+            false
         }
     }
 
@@ -2378,7 +2524,9 @@ class FilesActivity : ListActivity() {
             val ext = FileKind.extension(f.name)
             if (f.isFile && ext.isNotEmpty() && !name.contains('.')) name = "$name.$ext"
             val to = File(f.parentFile, name)
-            if (to.exists() && !to.path.equals(f.path, ignoreCase = true)) {
+            // 3.0: only the same file in other capitals may have the name already (on the phone's storage
+            // and cards, which ignore capitals); in Private "Photo.jpg" may be another file, never written over.
+            if (to.exists() && !FileOps.sameFile(f, to)) {
                 say("There's already something called “$name” here")
                 return@askText
             }
@@ -2391,12 +2539,14 @@ class FilesActivity : ListActivity() {
                             // 2.9: Private's files were never in Android's media index, and mustn't be.
                             if (done && !PrivateFolder.isInside(this@FilesActivity, f)) {
                                 FileOps.forget(this@FilesActivity, f)
-                                FileOps.scan(this@FilesActivity, listOf(to.path))
+                                // 3.0: every file of a renamed folder back in the Gallery, not the folder alone.
+                                FileOps.scanTree(this@FilesActivity, to)
                             }
                         }
                     }
                     if (ok) {
-                        say("Renamed to “$name”")
+                        // 3.0: a name with a dot first is hidden: said, so it doesn't seem to vanish.
+                        say(if (name.startsWith(".") && !showHidden) "Renamed to “$name”. Names starting with a dot are hidden: ⋮ → Show hidden files shows them." else "Renamed to “$name”", long = name.startsWith("."))
                         renamed(f, to)
                     } else {
                         say("Swift couldn't rename “${f.name}”")
@@ -2449,7 +2599,7 @@ class FilesActivity : ListActivity() {
                     val ok = withContext(Dispatchers.IO) { Volumes.accessFor(this@FilesActivity, f)?.mkdir(f) == true }
                     if (ok) {
                         load(keepScroll = true)
-                        say("Made the folder “$name”")
+                        say(if (name.startsWith(".") && !showHidden) "Made the hidden folder “$name”. ⋮ → Show hidden files shows it." else "Made the folder “$name”", long = name.startsWith("."))
                     } else {
                         say("Swift couldn't make a folder here")
                     }
@@ -2510,9 +2660,9 @@ class FilesActivity : ListActivity() {
                     clearSelection()
                     val access = Volumes.accessFor(this, dest) ?: return@withChanges
                     val chosen = output
+                    // 3.0: Archives.compress chooses the name: never one of the files being packed (see there).
                     val job = FileJobs.start(this, FileJobs.Kind.COMPRESS, "Compressing into $full", onDone = ::doneHere) { w ->
-                        val target = w.resolve(dest, false) ?: return@start
-                        Archives.compress(w, files, target, chosen, pw, access)
+                        Archives.compress(w, files, dest, chosen, pw, access)
                     }
                     showProgress(job)
                 }

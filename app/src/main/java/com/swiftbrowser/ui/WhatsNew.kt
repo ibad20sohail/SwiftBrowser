@@ -24,6 +24,14 @@ object WhatsNew {
     private class Item(val icon: Int, val title: String, val text: String, val version: Int = 19)
 
     private val NEW = listOf(
+        Item(R.drawable.ic_tab, "Lighter pop-ups and tabs", "Links that open a new tab load once, not twice: the hidden copy that kept using memory is gone, and sign-in pop-ups work again. A tab you used for a long time stays loaded when you switch away.", version = 22),
+        Item(R.drawable.ic_shield, "Ads blocked from the first page", "After a restart, pages wait for the ad blocker (or tap Load now). If a page loaded before it was ready, Swift offers to reload it.", version = 22),
+        Item(R.drawable.ic_lock, "Safer browsing", "Pages can't fake Google in the address bar, long addresses show their real ending, QR codes show where they lead first, and a page can't trap you with endless messages. Incognito and saved passwords stay out of screenshots.", version = 22),
+        Item(R.drawable.ic_folder, "Your files are safer", "Removing a download from the list keeps its files, Compress can't empty the file it packs, a copy cut short never looks complete, and the Private folder's PIN stays in charge.", version = 22),
+        Item(R.drawable.ic_documents, "Documents", "Password-protected PDFs open again, scanned PDFs show their pages, and Word files that are really another format still open.", version = 22),
+        Item(R.drawable.ic_download, "Downloads and the player", "Videos whose sound comes separately download with sound, downloads open in Swift's player, torrents stay quieter on Wi-Fi, and Urdu or Arabic subtitles read correctly.", version = 22),
+        Item(R.drawable.ic_vpn, "VPN, backups and settings", "If the VPN was on, it comes back by itself after a restart, with pages waiting. Backups leave out the Private folder's secrets, settings search finds what you type, and About lists the open-source parts.", version = 22),
+        Item(R.drawable.ic_person, "Your Google account on each profile", "The profiles list, the profile button and the home page show the Google account signed in to each profile, with its name and photo. Swift sees it on Google's own pages, never in incognito.", version = 22),
         Item(R.drawable.ic_torrent, "Torrents", "Tap a magnet link or open a .torrent file, choose its files (junk is left unticked) and it downloads in Downloads. Torrents pause while Swift's VPN is on and stop sharing once they are done.", version = 21),
         Item(R.drawable.ic_volume, "Dolby and DTS sound", "Films with Dolby or DTS sound now play with sound in Swift's player. A 10-bit HEVC video, which this phone can't play, says so.", version = 21),
         Item(R.drawable.ic_play, "Player", "Swipe up past the loudest for a volume boost up to 200%. Subtitles in white or yellow, with or without a box, also from a torrent's Subs folder. Screenshots from the ⋮ menu.", version = 21),
@@ -160,7 +168,15 @@ object WhatsNew {
         column.addView(View(a), LinearLayout.LayoutParams(1, 0, 1f))
         column.addView(dots, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = Ui.dp(a, 24) })
         column.addView(buttons)
-        box.addView(column, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        // 3.0: it scrolls when taller than the screen (a turned phone cut off Next and Skip); when it
+        // fits, it fills the screen as before, the card in the middle.
+        val scroller = android.widget.ScrollView(a).apply {
+            isFillViewport = true
+            isVerticalScrollBarEnabled = false
+            overScrollMode = View.OVER_SCROLL_NEVER
+            addView(column, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        }
+        box.addView(scroller, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         overlay.addView(box, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
 
         fun bind(animate: Int) {
@@ -224,6 +240,12 @@ object WhatsNew {
             }
         })
         overlay.setOnTouchListener { _, ev -> swipes.onTouchEvent(ev) }
+        // The scrolling box takes the touches on the card now: it hears the sideways swipes too, and
+        // still scrolls.
+        scroller.setOnTouchListener { _, ev ->
+            swipes.onTouchEvent(ev)
+            false
+        }
         bind(0)
         root.addView(overlay, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         Motion.fadeIn(card, fromDy = 24, duration = Motion.LONG)

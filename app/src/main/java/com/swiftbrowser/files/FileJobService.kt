@@ -153,7 +153,8 @@ class FileJobService : Service() {
 
         /** The outcome, when no Files screen was on show to say it. */
         fun notifyDone(ctx: Context, job: FileJobs.Job) {
-            if (job.message == "Cancelled") return
+            // The user cancelled it (3.0: its message may say how far it got).
+            if (job.cancelled) return
             ensureChannels(ctx)
             val folder = job.result?.let { if (it.isDirectory) it else it.parentFile } ?: job.touched.firstOrNull()?.let { java.io.File(it) }
             val open = PendingIntent.getActivity(

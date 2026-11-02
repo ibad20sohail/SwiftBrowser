@@ -7,9 +7,9 @@ import android.graphics.BitmapRegionDecoder
 import android.graphics.Matrix
 import android.graphics.Rect
 import android.graphics.RectF
-import android.media.ExifInterface
 import android.net.Uri
 import android.provider.OpenableColumns
+import androidx.exifinterface.media.ExifInterface
 import com.swiftbrowser.core.L
 import java.io.File
 import java.io.FileInputStream
@@ -49,8 +49,11 @@ object Pictures {
         }
     }
 
-    /** A picture's stored size and type, and which way up it is meant to be shown (EXIF). */
-    class Info(val rawWidth: Int, val rawHeight: Int, val mime: String?, val orientation: Int) {
+    /**
+     * A picture's stored size and type, and which way up it is meant to be shown (EXIF). 3.0:
+     * [lossless] for a WebP picture stored without loss (an edit must not lose quality).
+     */
+    class Info(val rawWidth: Int, val rawHeight: Int, val mime: String?, val orientation: Int, val lossless: Boolean = false) {
         /** Stored on its side (a photo taken with the phone upright): width and height swap when shown. */
         private val sideways: Boolean get() = orientation in 5..8
         val width: Int get() = if (sideways) rawHeight else rawWidth
@@ -70,14 +73,53 @@ object Pictures {
         } else {
             ExifInterface.ORIENTATION_NORMAL
         }
-        return Info(o.outWidth, o.outHeight, o.outMimeType, orientation)
+        val lossless = o.outMimeType == "image/webp" && runCatching { src.open(ctx).use { webpLossless(it) } }.getOrDefault(false)
+        return Info(o.outWidth, o.outHeight, o.outMimeType, orientation, lossless)
     }
 
-    /** [src]'s camera details (EXIF, in JPEGs), or null. */
+    /**
+     * [src]'s camera details (EXIF, in JPEGs), or null. 3.0: AndroidX's reader, the same on every
+     * Android version (Android 7's own misreads some phones' photos).
+     */
     fun exif(ctx: Context, src: Source): ExifInterface? = try {
         if (src.file != null) ExifInterface(src.file.path) else src.open(ctx).use { ExifInterface(it) }
     } catch (e: Exception) {
         null
+    }
+
+    /**
+     * 3.0: a WebP picture stored without loss (its picture is a "VP8L" chunk; a lossy one's "VP8 "),
+     * read from its first chunks.
+     */
+    fun webpLossless(input: InputStream): Boolean {
+        val head = ByteArray(12)
+        if (readFully(input, head) < 12 || String(head, 0, 4, Charsets.US_ASCII) != "RIFF" || String(head, 8, 4, Charsets.US_ASCII) != "WEBP") return false
+        val chunk = ByteArray(8)
+        repeat(16) {
+            if (readFully(input, chunk) < 8) return false
+            when (String(chunk, 0, 4, Charsets.US_ASCII)) {
+                "VP8L" -> return true
+                "VP8 " -> return false
+            }
+            val size = (chunk[4].toLong() and 0xFF) or ((chunk[5].toLong() and 0xFF) shl 8) or ((chunk[6].toLong() and 0xFF) shl 16) or ((chunk[7].toLong() and 0xFF) shl 24)
+            var skip = size + (size and 1)
+            while (skip > 0) {
+                val n = input.skip(skip)
+                if (n <= 0) return false
+                skip -= n
+            }
+        }
+        return false
+    }
+
+    private fun readFully(input: InputStream, buf: ByteArray): Int {
+        var n = 0
+        while (n < buf.size) {
+            val r = input.read(buf, n, buf.size - n)
+            if (r < 0) break
+            n += r
+        }
+        return n
     }
 
     /**

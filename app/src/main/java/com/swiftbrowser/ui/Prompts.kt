@@ -5,6 +5,7 @@ import android.app.TimePickerDialog
 import android.content.Context
 import android.content.Intent
 import android.graphics.Color
+import android.os.SystemClock
 import android.text.InputType
 import android.view.View
 import android.view.ViewGroup
@@ -48,14 +49,21 @@ import java.util.Locale
 class Prompts : PromptDelegate {
 
     private val context: Context? get() = TabManager.ui?.activity
+    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
-    private class Waiting(val session: GeckoSession, val open: () -> Unit)
+    /** [cancel]: answers no, for a question whose page has gone (3.0). */
+    private class Waiting(val session: GeckoSession, val open: () -> Unit, val cancel: (() -> Unit)? = null)
 
     /** Dialogs of tabs that aren't on screen (2.6): they wait until their tab is chosen. */
     private val waiting = ArrayList<Waiting>()
 
     /** [session]'s tab is on screen now: what its page asked for meanwhile shows. */
     fun showWaiting(session: GeckoSession) {
+        // 3.0: questions of tabs closed meanwhile are answered no (and let go).
+        waiting.filter { !it.session.isOpen }.forEach {
+            waiting.remove(it)
+            it.cancel?.invoke()
+        }
         val now = waiting.filter { it.session === session }
         waiting.removeAll(now)
         now.forEach { it.open() }
@@ -64,16 +72,18 @@ class Prompts : PromptDelegate {
     /**
      * Shows [prompt] for [session]'s page. A page in a tab that isn't on screen can't put a dialog
      * over another site's page (it would look as if that site asked): it waits for its tab.
+     * [onClosed]: the dialog has gone (3.0, see [DialogRun]).
      */
     private fun <T : BasePrompt> show(
         session: GeckoSession,
         prompt: T,
+        onClosed: (() -> Unit)? = null,
         build: (Context, GeckoResult<PromptResponse>) -> AlertDialog?,
     ): GeckoResult<PromptResponse> {
         val result = GeckoResult<PromptResponse>()
         val tab = TabManager.bySession(session)
         if (tab != null && tab !== TabManager.current) {
-            val w = Waiting(session) { open(prompt, result, build) }
+            val w = Waiting(session, { open(prompt, result, onClosed, build) })
             waiting += w
             prompt.setDelegate(object : PromptDelegate.PromptInstanceDelegate {
                 override fun onPromptDismiss(prompt: BasePrompt) {
@@ -82,13 +92,14 @@ class Prompts : PromptDelegate {
             })
             return result
         }
-        open(prompt, result, build)
+        open(prompt, result, onClosed, build)
         return result
     }
 
     private fun <T : BasePrompt> open(
         prompt: T,
         result: GeckoResult<PromptResponse>,
+        onClosed: (() -> Unit)?,
         build: (Context, GeckoResult<PromptResponse>) -> AlertDialog?,
     ) {
         val ctx = context
@@ -104,8 +115,73 @@ class Prompts : PromptDelegate {
         })
         dialog.setOnDismissListener {
             if (!prompt.isComplete) result.complete(prompt.dismiss())
+            onClosed?.invoke()
         }
         dialog.showImmersive()
+    }
+
+    /**
+     * 3.0: a page's alerts, confirms and prompts in a row, for an end to endless ones (scam pages
+     * loop "Your phone has a virus!" so the page can't be left): from the third in a short time the
+     * dialog offers "Block dialogs from this page". Gecko's own "stop this page's dialogs" isn't
+     * reachable through GeckoView. Per tab, for one site until the user reloads, types an address
+     * or goes back or forward (a page can change its address itself, but not those).
+     */
+    private class DialogRun(val site: String?, val userNavAt: Long) {
+        var inARow = 0
+        var lastClosedAt = -1L
+        var blocked = false
+    }
+
+    private val runs = java.util.WeakHashMap<GeckoSession, DialogRun>()
+
+    private fun runOf(session: GeckoSession): DialogRun? {
+        val tab = TabManager.bySession(session) ?: return null
+        val site = UrlUtils.site(tab.url)
+        runs[session]?.let { if (it.site == site && it.userNavAt == tab.userNavAt) return it }
+        return DialogRun(site, tab.userNavAt).also { runs[session] = it }
+    }
+
+    /**
+     * An alert, confirm or prompt of a page (see [DialogRun]). [build] gets the "Block dialogs from
+     * this page" action when the dialog should offer it: it answers the dialog like Cancel.
+     */
+    private fun <T : BasePrompt> pageDialog(
+        session: GeckoSession,
+        prompt: T,
+        build: (Context, GeckoResult<PromptResponse>, (() -> Unit)?) -> AlertDialog?,
+    ): GeckoResult<PromptResponse> {
+        val run = runOf(session)
+        if (run?.blocked == true) {
+            // Answered after a moment: a page asking in an endless loop then turns slowly, not the phone.
+            val result = GeckoResult<PromptResponse>()
+            mainHandler.postDelayed({ result.complete(prompt.dismiss()) }, 500)
+            return result
+        }
+        return show(session, prompt, onClosed = { run?.lastClosedAt = SystemClock.elapsedRealtime() }) { ctx, result ->
+            build(ctx, result, if (run != null && countShown(run)) ({ block(run) }) else null)
+        }
+    }
+
+    /** [run]'s page shows a dialog now: true when it should offer to block the page's dialogs. */
+    private fun countShown(run: DialogRun): Boolean {
+        run.inARow = DialogLoop.inARow(run.inARow, run.lastClosedAt, SystemClock.elapsedRealtime())
+        return DialogLoop.offers(run.inARow)
+    }
+
+    private fun block(run: DialogRun) {
+        if (run.blocked) return
+        run.blocked = true
+        TabManager.ui?.showMessage("This page can't show more dialogs. Reload it to allow them again.", long = true)
+    }
+
+    /** "Block dialogs from this page" as the dialog's third button. */
+    private fun MaterialAlertDialogBuilder.blockButton(block: (() -> Unit)?, answer: () -> Unit): MaterialAlertDialogBuilder {
+        if (block != null) setNeutralButton("Block dialogs from this page") { _, _ ->
+            block()
+            answer()
+        }
+        return this
     }
 
     /** In the app's colours (2.6), like Swift's own dialogs. */
@@ -120,15 +196,16 @@ class Prompts : PromptDelegate {
     }
 
     override fun onAlertPrompt(session: GeckoSession, prompt: AlertPrompt): GeckoResult<PromptResponse> =
-        show(session, prompt) { ctx, result ->
+        pageDialog(session, prompt) { ctx, result, block ->
             builder(ctx, says(session, prompt.title))
                 .setMessage(prompt.message ?: "")
                 .setPositiveButton(android.R.string.ok) { _, _ -> result.complete(prompt.dismiss()) }
+                .blockButton(block) { result.complete(prompt.dismiss()) }
                 .create()
         }
 
     override fun onButtonPrompt(session: GeckoSession, prompt: ButtonPrompt): GeckoResult<PromptResponse> =
-        show(session, prompt) { ctx, result ->
+        pageDialog(session, prompt) { ctx, result, block ->
             builder(ctx, says(session, prompt.title))
                 .setMessage(prompt.message ?: "")
                 .setPositiveButton(android.R.string.ok) { _, _ ->
@@ -137,11 +214,12 @@ class Prompts : PromptDelegate {
                 .setNegativeButton(android.R.string.cancel) { _, _ ->
                     result.complete(prompt.confirm(ButtonPrompt.Type.NEGATIVE))
                 }
+                .blockButton(block) { result.complete(prompt.confirm(ButtonPrompt.Type.NEGATIVE)) }
                 .create()
         }
 
     override fun onTextPrompt(session: GeckoSession, prompt: TextPrompt): GeckoResult<PromptResponse> =
-        show(session, prompt) { ctx, result ->
+        pageDialog(session, prompt) { ctx, result, block ->
             val input = EditText(ctx).apply {
                 setText(prompt.defaultValue ?: "")
                 setSingleLine()
@@ -154,6 +232,7 @@ class Prompts : PromptDelegate {
                     result.complete(prompt.confirm(input.text.toString()))
                 }
                 .setNegativeButton(android.R.string.cancel, null)
+                .blockButton(block) { result.complete(prompt.dismiss()) }
                 .create()
         }
 
@@ -453,18 +532,33 @@ class Prompts : PromptDelegate {
                 .create()
         }
 
-    override fun onBeforeUnloadPrompt(session: GeckoSession, prompt: BeforeUnloadPrompt): GeckoResult<PromptResponse> =
-        show(session, prompt) { ctx, result ->
+    override fun onBeforeUnloadPrompt(session: GeckoSession, prompt: BeforeUnloadPrompt): GeckoResult<PromptResponse> {
+        // 3.0: a page whose dialogs were blocked can't hold you back from leaving it either.
+        if (runs[session]?.blocked == true) return GeckoResult.fromValue(prompt.confirm(AllowOrDeny.ALLOW))
+        return show(session, prompt) { ctx, result ->
             builder(ctx, "Leave this page?")
                 .setMessage("Changes you made may not be saved.")
                 .setPositiveButton("Leave") { _, _ -> result.complete(prompt.confirm(AllowOrDeny.ALLOW)) }
                 .setNegativeButton("Stay") { _, _ -> result.complete(prompt.confirm(AllowOrDeny.DENY)) }
                 .create()
         }
+    }
 
-    /** Allow/Block question for a site permission (location). */
-    fun askPermission(message: String): GeckoResult<Int> {
-        val ctx = context ?: return GeckoResult.fromValue(ContentPermission.VALUE_DENY)
+    /**
+     * Allow/Block question for a site permission (location, a site inside the page wanting its
+     * cookies). 3.0: it waits for its tab like the page's own dialogs, so a tab in the background
+     * can't ask over another site; if that tab has moved on to another site meanwhile, the answer is
+     * no. [rememberable]: with a "Remember for this site" box. [onAnswer] hears a button's answer
+     * (true: allowed) and whether the box was ticked; going away without one is a no, not told.
+     */
+    fun askPermission(
+        session: GeckoSession,
+        message: String,
+        allow: String = "Allow",
+        deny: String = "Block",
+        rememberable: Boolean = false,
+        onAnswer: ((allowed: Boolean, remember: Boolean) -> Unit)? = null,
+    ): GeckoResult<Int> {
         val result = GeckoResult<Int>()
         var answered = false
         val answer = { value: Int ->
@@ -473,13 +567,36 @@ class Prompts : PromptDelegate {
                 result.complete(value)
             }
         }
-        val dialog = MaterialAlertDialogBuilder(ctx)
-            .setMessage(message)
-            .setPositiveButton("Allow") { _, _ -> answer(ContentPermission.VALUE_ALLOW) }
-            .setNegativeButton("Block") { _, _ -> answer(ContentPermission.VALUE_DENY) }
-            .create()
-        dialog.setOnDismissListener { answer(ContentPermission.VALUE_DENY) }
-        dialog.showImmersive()
+        val tab = TabManager.bySession(session)
+        val site = tab?.let { UrlUtils.site(it.url) }
+        val ask = ask@{
+            val ctx = context
+            if (ctx == null || (tab != null && UrlUtils.site(tab.url) != site)) {
+                answer(ContentPermission.VALUE_DENY)
+                return@ask
+            }
+            val remember = if (!rememberable) null else android.widget.CheckBox(ctx).apply {
+                text = "Remember for this site"
+                setPadding(Ui.dp(ctx, 4), 0, 0, 0)
+            }
+            val reply = { allowed: Boolean ->
+                onAnswer?.invoke(allowed, remember?.isChecked == true)
+                answer(if (allowed) ContentPermission.VALUE_ALLOW else ContentPermission.VALUE_DENY)
+            }
+            val dialog = builder(ctx, null)
+                .setMessage(message)
+                .apply { if (remember != null) setView(padded(ctx, remember)) }
+                .setPositiveButton(allow) { _, _ -> reply(true) }
+                .setNegativeButton(deny) { _, _ -> reply(false) }
+                .create()
+            dialog.setOnDismissListener { answer(ContentPermission.VALUE_DENY) }
+            dialog.showImmersive()
+        }
+        if (tab != null && tab !== TabManager.current) {
+            waiting += Waiting(session, ask) { answer(ContentPermission.VALUE_DENY) }
+        } else {
+            ask()
+        }
         return result
     }
 
@@ -490,4 +607,19 @@ class Prompts : PromptDelegate {
             addView(v, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
         }
     }
+}
+
+/** 3.0: when a page's dialogs come one after another (see Prompts.DialogRun). Plain, for tests. */
+internal object DialogLoop {
+    /** A dialog that comes this soon after the one before it closed is the next in a row. */
+    const val GAP_MS = 10_000L
+
+    /** From this dialog in a row on, "Block dialogs from this page" is offered. */
+    const val OFFER_FROM = 3
+
+    /** The place in a row of a dialog coming at [now], after [before] in a row, the last one closed at [lastClosedAt] (-1: none). */
+    fun inARow(before: Int, lastClosedAt: Long, now: Long): Int =
+        if (lastClosedAt >= 0 && now - lastClosedAt <= GAP_MS) before + 1 else 1
+
+    fun offers(inARow: Int): Boolean = inARow >= OFFER_FROM
 }

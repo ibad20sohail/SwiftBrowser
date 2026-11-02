@@ -5,9 +5,10 @@ ad-heavy sites on an old phone (Moto E4, Android 7.1.2).
 
 ## Download
 
-**[Download Swift 2.9.2 (APK)](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v2.9.2/Swift-2.9.2.apk)**
-for Android 7 and newer (32-bit ARM, about 150 MB). It installs over an earlier Swift and keeps
-tabs and settings. From 1.4 on, Swift can also update itself: Settings → Check for updates.
+**[Download Swift 3.0 (APK)](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v3.0/Swift-3.0.apk)**
+for Android 7 and newer (32-bit ARM, about 172 MB). It installs over an earlier Swift and keeps
+tabs and settings. From 1.4 on, Swift can also update itself: Settings → About Swift → Check for
+updates.
 
 Older versions: [all releases](https://github.com/ibad20sohail/SwiftBrowser/releases). The APKs
 are attached to the releases because GitHub doesn't accept files over 100 MB in the repository.
@@ -30,6 +31,49 @@ ones, and a short welcome on the first start.
 - **Night light** (2.3, Settings → Look & screen): a warm layer over Swift, pages and videos too,
   from 7 pm to 7 am or always, in three strengths. Taps go through it.
 
+- **New in 3.0** (a full check of the app: bugs, safety and privacy fixes across every screen):
+  - **Pop-ups and tabs**: links that open a new tab load once in the engine's own window (before,
+    a hidden second copy kept running and using memory, and sign-in pop-ups couldn't report back);
+    a tab used for a long time stays loaded when you switch away; links from other apps reuse a
+    tab already showing them, and Back returns to that app.
+  - **Ad blocking from the first page**: after a restart, restored pages wait for uBlock Origin
+    (with Load now after 8 s); a page that loaded before it was ready offers a reload, and the menu
+    says "Reload to block" instead of "! blocked".
+  - **Safety**: the address bar can't be faked by pages posing as a search engine and shows the
+    real end of long addresses; lookalike Unicode names show as punycode; QR codes show where they
+    lead first; "Open in app" links can't hand Swift's files to other apps; a page can't trap you
+    in endless messages (Block dialogs from this page); sites ask before using cross-site cookies;
+    Safer browsing (Settings → Privacy & security: no JavaScript JIT or WebAssembly) and "Tell
+    sites a newer Firefox version" for the engine that no longer gets updates.
+  - **Privacy**: incognito pages, the Private folder and saved passwords stay out of screenshots
+    and recent apps (incognito can allow them); no search suggestions in incognito; incognito
+    downloads, saved pages and their notifications stay private; logs and problem reports name no
+    addresses or files (a preview, sites left out unless you choose); backups never carry the
+    Private folder's PIN or file list.
+  - **Files**: Compress can't empty the file it packs; moves delete only what was copied; a copy
+    cut short never looks complete; the Cleaner always keeps one copy of duplicates; a shorter
+    recycle bin time asks first; moved photos stay in the Gallery; booby-trapped archives can't
+    hang Files; Wi-Fi transfer goes on in the background and locks out code guessing.
+  - **Private folder**: a PIN stays in charge (adding a screen lock no longer opens or replaces
+    it); Forgot PIN starts a 24-hour wait; wrong PINs wait longer each time.
+  - **Documents**: password-protected PDFs open again (the password box, Go to page and Details
+    work on the document screen), scanned PDFs (JPEG 2000, JBIG2) show their pages, Word files
+    that are really RTF or HTML open, big sheets show their first rows, and documents can't load
+    anything from the web.
+  - **Downloads and torrents**: "Remove from list" keeps the files; HLS videos with separate sound
+    download with sound; converting to MP4 never loses the only copy; downloads open in Swift's
+    player; torrents don't announce themselves on the local network, can use encrypted
+    connections only, and look up a magnet's files only after a tap.
+  - **Player**: website videos load through the engine (newer certificates, the page's cookies);
+    Urdu, Arabic and other subtitles are read in the right encoding (or choose one); the volume
+    boost shows a badge, resets for each file and stays gentler with headphones.
+  - **VPN**: if it was on, it comes back by itself after an update or restart, with pages waiting.
+  - **Google account on each profile**: the profiles list, the profile button and the home page
+    show the Google account signed in to each profile, with its name and photo (read from
+    Google's own pages, never in incognito).
+  - **Settings**: search matches whole words, history shows everything (more as you scroll),
+    Clear browsing data remembers its time range and asks before clearing all time, update
+    downloads are checked to be signed by Swift, and About lists every open-source part.
 - **New in 2.9.2**:
   - **Torrents** (libtorrent): magnet links on pages, .torrent files and "Open with Swift" open a panel
     with the torrent's files (junk such as samples, .txt and .exe unticked, a warning for Windows
@@ -424,15 +468,26 @@ signed with the same key.
 | `.../helper/docs` | The document viewer, with pdf.js, docx-preview, SheetJS, pptx-preview, epub.js and JSZip (`lib/LICENSES.txt`) |
 | `.../docs` (Kotlin) | Opening documents, the viewer's file channel, page previews |
 | `tools/` | uBlock Origin update and patch script |
+| `app/src/test` | Tests of the plain logic (3.0), run on the PC: `gradle :app:testEmuDebugUnitTest` |
 
-To update uBlock Origin, run `python tools/update_ublock.py --version X.Y.Z`. If
-`tools/ublock-patch/swift-bridge.js` changes, also bump `UBO_BRIDGE_REV` in `Engine.kt`.
+To update uBlock Origin, run `python tools/update_ublock.py --version X.Y.Z`. Since 3.0 it stops
+unless the download matches the hash addons.mozilla.org publishes (`--skip-amo-check` to override).
+If `tools/ublock-patch/swift-bridge.js` changes, also bump `UBO_BRIDGE_REV` in `Engine.kt`.
 
 ## Licenses
 
+The app lists every part with its licence and home page under About Swift → Open-source licences
+(`ui/LicencesData.kt`). In short:
+
 - GeckoView is MPL 2.0.
-- The WireGuard tunnel library (`com.wireguard.android:tunnel`) is Apache 2.0.
-- The QR scanner (`com.journeyapps:zxing-android-embedded`, with ZXing) is Apache 2.0.
 - uBlock Origin is GPLv3; the bundled copy is modified by adding `js/swift-bridge.js`, two
   permissions and one web-accessible page (its "page blocked" screen) to its manifest, and the
   storage and picker tweaks listed in `tools/update_ublock.py`.
+- Jellyfin's Media3 FFmpeg decoder (Dolby and DTS sound) is GPLv3; desugar_jdk_libs is GPLv2 with
+  the Classpath Exception.
+- Apache 2.0: AndroidX and Media3, Material Components, Kotlin and kotlinx, the WireGuard tunnel
+  library, ZXing and ZXing Android Embedded, Apache POI, Commons Compress/Codec/Collections/Math,
+  Zip4j, Guava, SnakeYAML, SparseBitSet, pdf.js, docx-preview, SheetJS, Readability.
+- MIT: libtorrent4j, JSZip, SLF4J. ISC: pptx-preview. BSD 2-Clause: epub.js. XZ for Java is
+  public domain; Junrar follows the UnRAR licence.
+- Google Play services (brought in by GeckoView) is under the Android SDK licence.

@@ -44,27 +44,38 @@ object TopSites {
         SwiftApp.prefs.sp.edit { putString(pinnedKey(profileId), arr.toString()) }
     }
 
-    fun addPinned(profileId: Long, url: String, label: String) {
-        val host = Uri.parse(url).host ?: return
-        setPinned(profileId, pinned(profileId).filter { it.url != url } + Tile(key(host), url, label.ifBlank { label(key(host)) }, true))
+    /**
+     * Adds a shortcut at the end; false when there are [MAX] already (3.0: a 16th was kept but never
+     * shown, so it seemed to vanish; the home page says the limit instead of offering Add).
+     */
+    fun addPinned(profileId: Long, url: String, label: String): Boolean {
+        val host = Uri.parse(url).host ?: return false
+        val others = pinned(profileId).filter { it.url != url }
+        if (others.size >= MAX) return false
+        setPinned(profileId, others + Tile(key(host), url, label.ifBlank { label(key(host)) }, true))
+        return true
     }
 
-    /** Replaces [old] (pinned or not) with a pinned shortcut to [url] named [label], in the same place. */
-    fun editPinned(profileId: Long, old: Tile, url: String, label: String) {
-        val host = Uri.parse(url).host ?: return
+    /** Replaces [old] (pinned or not) with a pinned shortcut to [url] named [label], in the same place; false when that would be one too many. */
+    fun editPinned(profileId: Long, old: Tile, url: String, label: String): Boolean {
+        val host = Uri.parse(url).host ?: return false
         val tile = Tile(key(host), url, label.ifBlank { label(key(host)) }, true)
         val list = pinned(profileId).toMutableList()
         val i = list.indexOfFirst { it.url == old.url }
-        if (i >= 0) list[i] = tile else list += tile
+        if (i >= 0) list[i] = tile else if (list.size < MAX) list += tile else return false
         setPinned(profileId, list)
+        return true
     }
 
     fun unpin(profileId: Long, tile: Tile) = setPinned(profileId, pinned(profileId).filter { it.url != tile.url })
 
-    /** Puts [tile] first among the pinned shortcuts (pinning it if it wasn't). */
-    fun moveToStart(profileId: Long, tile: Tile) {
-        val rest = pinned(profileId).filter { it.url != tile.url }
+    /** Puts [tile] first among the pinned shortcuts (pinning it if it wasn't, while there is room). */
+    fun moveToStart(profileId: Long, tile: Tile): Boolean {
+        val all = pinned(profileId)
+        val rest = all.filter { it.url != tile.url }
+        if (rest.size == all.size && rest.size >= MAX) return false
         setPinned(profileId, listOf(tile.copy(pinned = true)) + rest)
+        return true
     }
 
     private val DEFAULTS = listOf(

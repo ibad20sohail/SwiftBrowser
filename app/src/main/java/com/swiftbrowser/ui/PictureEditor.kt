@@ -14,7 +14,6 @@ import android.graphics.Paint
 import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.drawable.RippleDrawable
-import android.media.ExifInterface
 import android.os.Build
 import android.view.Gravity
 import android.view.MotionEvent
@@ -24,6 +23,7 @@ import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
+import androidx.exifinterface.media.ExifInterface
 import com.swiftbrowser.R
 import com.swiftbrowser.core.L
 import com.swiftbrowser.files.FileOps
@@ -494,8 +494,21 @@ object PictureEdit {
      */
     private fun budget(): Long = (Runtime.getRuntime().maxMemory() / 6).coerceIn(16L shl 20, 64L shl 20)
 
-    /** JPEG, PNG and WebP pictures are written back as they were (so they can replace the original); others become PNG copies. */
-    fun keepsKind(info: Pictures.Info) = info.mime == "image/jpeg" || info.mime == "image/png" || info.mime == "image/webp"
+    /**
+     * JPEG, PNG and WebP pictures are written back as they were (so they can replace the original);
+     * others become PNG copies. 3.0: a lossless WebP picture too, but only where Android writes
+     * lossless WebP (10 and later): on Android 7 it would come out lossy, so it becomes a PNG copy.
+     */
+    fun keepsKind(info: Pictures.Info) = info.mime == "image/jpeg" || info.mime == "image/png" ||
+        (info.mime == "image/webp" && (!info.lossless || Build.VERSION.SDK_INT >= 29))
+
+    /** 3.0: a lossless WebP picture that this phone can only save without loss as a PNG. */
+    fun pngForLossless(info: Pictures.Info) = info.mime == "image/webp" && info.lossless && Build.VERSION.SDK_INT < 29
+
+    /** Why [info]'s picture can't be turned in place (it is saved as a turned copy instead). */
+    fun whyNotInPlace(info: Pictures.Info): String =
+        if (pngForLossless(info)) "This WebP picture has no loss of quality, which this phone can only keep in a PNG. Edit can save a turned PNG copy."
+        else "Swift can turn JPEG, PNG and WebP pictures. Edit can save a turned copy of this one."
 
     private fun kindOut(info: Pictures.Info) = if (keepsKind(info)) info.mime!! else "image/png"
 
@@ -531,7 +544,7 @@ object PictureEdit {
         val w = out.bitmap.width
         val h = out.bitmap.height
         var temp = try {
-            encode(ctx, out.bitmap, kindOut(info))
+            encode(ctx, out.bitmap, kindOut(info), info.lossless)
         } finally {
             // Never drawn on screen: freed at once for the next step.
             out.bitmap.recycle()
@@ -570,11 +583,12 @@ object PictureEdit {
                 FileOps.scan(ctx, listOf(file.path))
             }
             "image/png", "image/webp" -> try {
+                if (!keepsKind(info)) throw Problem(whyNotInPlace(info))
                 save(ctx, src, info, turns, RectF(0f, 0f, 1f, 1f), file, fullSizeOnly = true)
             } catch (e: Problem) {
                 throw if (e.message == TOO_BIG) Problem("This picture is too big for this phone to turn at full size. Edit can save a turned copy.") else e
             }
-            else -> throw Problem("Swift can turn JPEG, PNG and WebP pictures. Edit can save a turned copy of this one.")
+            else -> throw Problem(whyNotInPlace(info))
         }
     }
 
@@ -674,20 +688,26 @@ object PictureEdit {
 
     private fun workDir(ctx: android.content.Context) = File(ctx.cacheDir, "edit").apply { mkdirs() }
 
-    private fun encode(ctx: android.content.Context, bmp: Bitmap, mime: String): File {
+    private fun encode(ctx: android.content.Context, bmp: Bitmap, mime: String, lossless: Boolean): File {
+        // 3.0: a lossless WebP stays lossless where Android can write it so (10 and later).
+        val keepAll = mime == "image/webp" && lossless && Build.VERSION.SDK_INT >= 29
         val (format, ext) = when (mime) {
             "image/jpeg" -> Bitmap.CompressFormat.JPEG to "jpg"
-            "image/webp" -> webp() to "webp"
+            "image/webp" -> webp(keepAll) to "webp"
             else -> Bitmap.CompressFormat.PNG to "png"
         }
         val f = File(workDir(ctx), "edited.$ext")
-        FileOutputStream(f).use { if (!bmp.compress(format, QUALITY, it)) throw IOException("The picture couldn't be written") }
+        FileOutputStream(f).use { if (!bmp.compress(format, if (keepAll) 100 else QUALITY, it)) throw IOException("The picture couldn't be written") }
         return f
     }
 
     // 2.9: WEBP is lossy below quality 100 on every Android; Android 11 only renamed it WEBP_LOSSY.
+    // 3.0: at 100 it is lossless from Android 10 (WEBP_LOSSLESS from 11); on Android 7 still lossy.
     @Suppress("DEPRECATION")
-    private fun webp(): Bitmap.CompressFormat = if (Build.VERSION.SDK_INT >= 30) Bitmap.CompressFormat.WEBP_LOSSY else Bitmap.CompressFormat.WEBP
+    private fun webp(lossless: Boolean): Bitmap.CompressFormat = when {
+        Build.VERSION.SDK_INT >= 30 -> if (lossless) Bitmap.CompressFormat.WEBP_LOSSLESS else Bitmap.CompressFormat.WEBP_LOSSY
+        else -> Bitmap.CompressFormat.WEBP
+    }
 
     /** The camera's details worth keeping (not its size or orientation, which change). */
     private val KEPT = arrayOf(

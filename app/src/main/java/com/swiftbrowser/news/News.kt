@@ -98,19 +98,34 @@ object News {
 
     private fun file(ctx: Context, key: String) = File(File(ctx.filesDir, "news").apply { mkdirs() }, "$key.json")
 
-    /** Stories kept for [topic] (memory or file), without the hidden sources; null when there are none yet. */
-    fun cached(ctx: Context, topic: String): List<Story>? {
+    /** Stories kept in memory for [topic], without the hidden sources; null when not read yet (see [loadKept]). */
+    fun cached(topic: String): List<Story>? = memory[cacheKey(topic)]?.let { visible(it.second) }
+
+    /**
+     * Stories kept on the phone for [topic], without the hidden sources: [done] gets them on the main
+     * thread, or null when there are none yet. 3.0: the file is read on the news thread (it was read,
+     * and its JSON taken apart, on the main thread when the home page first showed and on every
+     * topic switch).
+     */
+    fun loadKept(ctx: Context, topic: String, done: (List<Story>?) -> Unit) {
         val key = cacheKey(topic)
-        memory[key]?.let { return visible(it.second) }
-        val f = file(ctx, key)
-        if (!f.exists()) return null
-        return try {
-            val o = JSONObject(f.readText())
-            val stories = fromJson(o.getJSONArray("stories"))
-            memory[key] = o.getLong("time") to stories
-            visible(stories)
-        } catch (_: Exception) {
-            null
+        memory[key]?.let {
+            done(visible(it.second))
+            return
+        }
+        val app = ctx.applicationContext
+        io.execute {
+            val read = try {
+                val f = file(app, key)
+                if (!f.exists()) null else JSONObject(f.readText()).let { o -> o.getLong("time") to fromJson(o.getJSONArray("stories")) }
+            } catch (_: Exception) {
+                null
+            }
+            main.post {
+                // Fetched meanwhile: the fresh ones stay.
+                if (read != null && memory[key] == null) memory[key] = read
+                done(memory[key]?.let { visible(it.second) })
+            }
         }
     }
 

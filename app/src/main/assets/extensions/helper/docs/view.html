@@ -2,6 +2,11 @@
 <html>
 <head>
 <meta charset="utf-8">
+<!-- 3.0: nothing a document holds loads from the web (an e-book's pictures, fonts or styles, a Word
+     file's style names): reading it can't tell anyone your address or when you read it. Pictures,
+     fonts and styles come from the viewer itself or from the document (data: and blob: addresses);
+     pdf.js decodes JPEG 2000 and JBIG2 pictures with WebAssembly (wasm-unsafe-eval). -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; img-src 'self' data: blob:; font-src 'self' data: blob:; style-src 'self' 'unsafe-inline' blob:; media-src 'self' blob: data:; frame-src 'self' blob:; connect-src 'self' blob: data:; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Document</title>
 <link rel="stylesheet" href="view.css">

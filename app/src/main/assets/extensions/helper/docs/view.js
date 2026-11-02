@@ -63,7 +63,10 @@ function onMessage(msg) {
 
 function action(name, extra) { send(Object.assign({ type: 'doc-action', id, action: name }, extra || {})); }
 
+// 3.0: the engine's own base64 (Firefox 133 and later) when it has it: many times faster than atob
+// and a loop, on the thread uBlock Origin shares with this page.
 function b64(s) {
+  if (typeof Uint8Array.fromBase64 === 'function') { return Uint8Array.fromBase64(s); }
   const bin = atob(s);
   const out = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) { out[i] = bin.charCodeAt(i); }
@@ -71,6 +74,7 @@ function b64(s) {
 }
 
 function toB64(bytes) {
+  if (typeof bytes.toBase64 === 'function') { return bytes.toBase64(); }
   let s = '';
   for (let i = 0; i < bytes.length; i += 32768) { s += String.fromCharCode.apply(null, bytes.subarray(i, i + 32768)); }
   return btoa(s);
@@ -151,7 +155,8 @@ function problem(text, actions) {
   for (const a of actions) {
     const b = document.createElement('button');
     b.textContent = a.label;
-    b.addEventListener('click', () => action(a.action));
+    // 3.0: a button can also act in the page itself (type a PDF's password again).
+    b.addEventListener('click', () => (a.run ? a.run() : action(a.action)));
     box.appendChild(b);
   }
 }
@@ -345,6 +350,84 @@ function ask(text, buttons) {
   document.body.appendChild(box);
 }
 
+/**
+ * 3.0: a box inside the page asking for something typed (a PDF's password, a page number): the
+ * viewer's own screen has no browser dialogs (prompt() answered nothing there). [check] gets what was
+ * typed and returns what is wrong with it, or nothing when it is fine; Back or Cancel run [cancel].
+ * The returned box can say an answer was wrong ([wrong]) and closes with [close].
+ */
+function askFor({ text, type, value, placeholder, ok, check, cancel, showable }) {
+  const box = document.createElement('div');
+  box.id = 'ask';
+  box.className = 'input';
+  const card = document.createElement('div');
+  card.className = 'card';
+  const p = document.createElement('p');
+  p.textContent = text;
+  const input = document.createElement('input');
+  input.type = type || 'text';
+  input.autocomplete = 'off';
+  input.spellcheck = false;
+  if (type === 'number') { input.inputMode = 'numeric'; }
+  if (value != null) { input.value = value; }
+  if (placeholder) { input.placeholder = placeholder; }
+  const err = document.createElement('p');
+  err.className = 'error';
+  err.hidden = true;
+  const row = document.createElement('div');
+  row.className = 'row';
+  const button = (label, run, main) => {
+    const b = document.createElement('button');
+    b.textContent = label;
+    if (main) { b.className = 'main'; }
+    b.addEventListener('click', run);
+    row.appendChild(b);
+    return b;
+  };
+  let open = true;
+  const remove = () => { open = false; box.remove(); };
+  // Back closes it as Cancel does.
+  const byBack = () => { remove(); if (cancel) { cancel(); } };
+  const close = () => { if (open) { remove(); closed(byBack); } };
+  const submit = () => {
+    const problemText = check(input.value);
+    if (problemText) { wrong(problemText); } else if (open && box.dataset.wait !== '1') { close(); }
+  };
+  const wrong = t => {
+    err.textContent = t;
+    err.hidden = false;
+    box.dataset.wait = '';
+    go.disabled = false;
+    input.disabled = false;
+    input.select();
+    input.focus();
+  };
+  if (showable) {
+    // A password can be shown while typed (no one is looking over the phone).
+    button('Show', e => {
+      const shown = input.type === 'text';
+      input.type = shown ? 'password' : 'text';
+      e.target.textContent = shown ? 'Show' : 'Hide';
+      input.focus();
+    }).classList.add('aside');
+  }
+  button('Cancel', () => { close(); if (cancel) { cancel(); } });
+  const go = button(ok || 'OK', submit, true);
+  input.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
+  card.append(p, input, err, row);
+  box.appendChild(card);
+  document.body.appendChild(box);
+  opened(byBack);
+  setTimeout(() => { input.focus(); input.select(); }, 50);
+  return {
+    wrong,
+    close,
+    /** Waiting for the answer to be checked elsewhere (a password): the box stays until [close] or [wrong]. */
+    wait() { box.dataset.wait = '1'; go.disabled = true; input.disabled = true; err.hidden = true; },
+    get open() { return open; },
+  };
+}
+
 // ------------------------------------------------------------------ reading mode (2.5)
 
 // While reading, Swift's toolbar and the viewer's bar go away; scrolling up or a tap brings them back.
@@ -391,7 +474,7 @@ addEventListener('touchend', e => {
 
 function interactive(el) {
   return !!(el && el.closest && el.closest('a, button, input, select, textarea, label, summary, [contenteditable], #bar, #findbar, ' +
-    '#menu, #panel, #sheets, #tts, #note, #status, #editbar, #pagepill, #fastscroll, #show, #pages, #pageshead, .annotationLayer section, .annotationEditorLayer'));
+    '#menu, #panel, #sheets, #tts, #note, #status, #editbar, #pagepill, #fastscroll, #show, #pages, #pageshead, #ask, .sheetmore, .annotationLayer section, .annotationEditorLayer'));
 }
 
 function onTap(x, y) {
@@ -630,53 +713,86 @@ function fixBullets() {
 
 // ------------------------------------------------------------------ spreadsheets
 
-/** What SheetJS leaves out of an .xlsx: bold, italic and font colours, and frozen rows and columns. */
-async function xlsxBook(buf) {
-  await loadScript('lib/jszip.min.js');
-  const zip = await JSZip.loadAsync(buf);
-  const read = async p => { const f = zip.file(p); return f ? f.async('string') : ''; };
-  const attr = (tag, name) => { const m = new RegExp('\\s' + name + '="([^"]*)"').exec(tag); return m ? m[1] : null; };
-  const rels = {};
-  for (const m of (await read('xl/_rels/workbook.xml.rels')).matchAll(/<Relationship\s[^>]*>/g)) { rels[attr(m[0], 'Id')] = attr(m[0], 'Target'); }
-  const paths = [];
-  for (const m of (await read('xl/workbook.xml')).matchAll(/<sheet\s[^>]*>/g)) {
-    const t = rels[attr(m[0], 'r:id')] || '';
-    paths.push(t.startsWith('/') ? t.slice(1) : 'xl/' + t.replace(/^\.\//, ''));
-  }
-  const styles = await read('xl/styles.xml');
-  const section = name => { const m = new RegExp('<' + name + '[\\s>][\\s\\S]*?</' + name + '>').exec(styles); return m ? m[0] : ''; };
-  const fonts = [];
-  for (const m of section('fonts').matchAll(/<font(?:\s[^>]*)?>([\s\S]*?)<\/font>|<font\s[^>]*\/>/g)) {
-    const body = m[1] || '';
-    const color = /<color\s[^>]*rgb="([0-9A-Fa-f]{6,8})"/.exec(body);
-    fonts.push({
-      b: /<b\/>|<b\s+val="(1|true)"\s*\/>/.test(body),
-      i: /<i\/>|<i\s+val="(1|true)"\s*\/>/.test(body),
-      color: color ? color[1].slice(-6) : null,
-    });
-  }
-  const xfs = [];
-  for (const m of section('cellXfs').matchAll(/<xf\s[^>]*>/g)) { xfs.push(parseInt(attr(m[0], 'fontId') || '0', 10)); }
-  return {
-    fonts, xfs,
-    async sheet(i) {
-      const xml = paths[i] ? await read(paths[i]) : '';
-      const styleOf = new Map();
-      for (const m of xml.matchAll(/<c\s([^>]*?)\/?>/g)) {
-        const s = /\bs="(\d+)"/.exec(m[1]);
-        if (!s || s[1] === '0') { continue; }
-        const r = /\br="([A-Z]+\d+)"/.exec(m[1]);
-        if (r) { styleOf.set(r[1], parseInt(s[1], 10)); }
+// 3.0: spreadsheets (and OpenDocument files' text) are read by docs/work.js in a Worker: SheetJS
+// works through a whole workbook in one go, and on this page that held up uBlock Origin, whose
+// checks of every tab's requests run on the same thread. Where a Worker can't start or load its
+// libraries, the same work runs here, as before.
+let worker = null;
+function startWorker() {
+  if (worker) { return worker; }
+  worker = new Promise(resolve => {
+    let w;
+    try { w = new Worker('work.js'); } catch (e) { resolve(null); return; }
+    const calls = new Map();
+    let next = 1;
+    let up = false;
+    const giveUp = () => {
+      for (const c of calls.values()) { c.reject(new Error('The worker stopped')); }
+      calls.clear();
+      if (!up) { try { w.terminate(); } catch (e) { /* gone */ } resolve(null); }
+    };
+    const wait = setTimeout(giveUp, 10000);
+    w.onmessage = e => {
+      const m = e.data || {};
+      if (m.ready) {
+        up = true;
+        clearTimeout(wait);
+        resolve({
+          call(op, args, transfer) {
+            return new Promise((res, rej) => {
+              const n = next++;
+              calls.set(n, { resolve: res, reject: rej });
+              w.postMessage({ n, op, args }, transfer || []);
+            });
+          },
+        });
+        return;
       }
-      const pane = /<pane\s[^>]*>/.exec(xml);
-      const frozen = pane && /state="frozen"/.test(pane[0]);
-      return {
-        styleOf,
-        rows: frozen ? Math.min(20, parseInt(attr(pane[0], 'ySplit') || '0', 10)) : 0,
-        cols: frozen ? Math.min(10, parseInt(attr(pane[0], 'xSplit') || '0', 10)) : 0,
-      };
-    },
+      if (m.failed) { clearTimeout(wait); giveUp(); return; }
+      const c = calls.get(m.n);
+      if (!c) { return; }
+      calls.delete(m.n);
+      if (m.error) { c.reject(new Error(m.error)); } else { c.resolve(m.ok); }
+    };
+    w.onerror = e => {
+      if (e && e.preventDefault) { e.preventDefault(); }
+      clearTimeout(wait);
+      giveUp();
+    };
+  });
+  return worker;
+}
+
+/**
+ * Runs [op] of docs/work.js with [args]: in the Worker, or on this page when there is none. [transfer]:
+ * buffers handed over to the Worker (no copy; this page can't use them afterwards).
+ */
+async function work(op, args, transfer) {
+  const w = await startWorker();
+  if (w) { return w.call(op, args, transfer); }
+  await loadScript('lib/xlsx.full.min.js');
+  await loadScript('lib/jszip.min.js');
+  await loadScript('work.js');
+  return SwiftWork[op](...args);
+}
+
+// A very big sheet shows this many rows first, then more on request (each step reads it again; the
+// rows handed over from the Worker are unpacked on this page, so not too many at once).
+const SHEET_ROWS = [3000, 12000, 40000];
+
+/** "B2:D40" as { s: { r, c }, e: { r, c } }, counted from 0 (as SheetJS's decode_range, which isn't loaded here). */
+function decodeRange(ref) {
+  const cell = a => {
+    const m = /^\$?([A-Z]+)\$?(\d+)$/.exec(a || '');
+    if (!m) { return null; }
+    let c = 0;
+    for (const ch of m[1]) { c = c * 26 + (ch.charCodeAt(0) - 64); }
+    return { r: parseInt(m[2], 10) - 1, c: c - 1 };
   };
+  const [a, b] = String(ref).split(':');
+  const s = cell(a);
+  const e = b ? cell(b) : s;
+  return s && e ? { s, e } : null;
 }
 
 function lum(hex) {
@@ -685,14 +801,10 @@ function lum(hex) {
 }
 
 RENDER.sheet = async buf => {
-  await loadScript('lib/xlsx.full.min.js');
-  const bytes = new Uint8Array(buf, 0, Math.min(4, buf.byteLength));
   // Only the sheet on screen is read (2.5): a big workbook opens as fast as its first sheet.
-  const names = XLSX.read(buf, { type: 'array', bookSheets: true }).SheetNames;
-  let book = null;
-  if (bytes[0] === 0x50 && bytes[1] === 0x4B && /\.(xlsx|xlsm)$/i.test(info.name)) {
-    try { book = await xlsxBook(buf); } catch (e) { book = null; }
-  }
+  // 3.0: in the Worker, which keeps the file (handed over, not copied) for the other sheets.
+  const names = (await work('sheetOpen', [buf, info.name], [buf])).names || [];
+  if (!names.length) { throw new Error('No sheets'); }
   document.body.classList.add('sheet');
   document.body.classList.toggle('onesheet', names.length < 2);
   const pane = document.createElement('div');
@@ -705,6 +817,9 @@ RENDER.sheet = async buf => {
   let current = Math.min(Math.max(0, parseInt(info.place, 10) || 0), names.length - 1);
   let s = null;
   const BATCH = 300;
+  // How many of a very big sheet's rows each sheet shows (3.0: SHEET_ROWS, "Show more" for the next step).
+  const step = new Map();
+  viewer.amount = () => names.length + (names.length === 1 ? ' sheet' : ' sheets');
 
   // Found cells (see viewer.find below).
   let hits = [];
@@ -716,13 +831,15 @@ RENDER.sheet = async buf => {
     hitEl = null;
   }
 
-  function sheetAt(i) {
-    let ws = parsed.get(i);
+  /** Sheet [i] as the Worker read it: its first rows (more of a big one after "Show more"). */
+  async function sheetAt(i) {
+    const rows = SHEET_ROWS[step.get(i) || 0];
+    const key = i + ':' + rows;
+    let ws = parsed.get(key);
     if (!ws) {
-      const wb = XLSX.read(buf, { type: 'array', sheets: names[i], dense: true, cellDates: true, cellStyles: true });
-      ws = wb.Sheets[names[i]] || {};
+      ws = await work('sheetRead', [i, rows]);
       if (parsed.size >= 2) { parsed.delete(parsed.keys().next().value); }
-      parsed.set(i, ws);
+      parsed.set(key, ws);
     }
     return ws;
   }
@@ -732,7 +849,8 @@ RENDER.sheet = async buf => {
     for (n += 1; n > 0; n = Math.floor((n - 1) / 26)) { t = String.fromCharCode(65 + (n - 1) % 26) + t; }
     return t;
   };
-  const cellText = cell => (cell == null ? '' : cell.w != null ? String(cell.w) : cell.v != null ? String(cell.v) : '');
+  // 3.0: cells come from the Worker as { x: text, n: number, f: fill, b, i: bold, italic, c: colour }.
+  const cellText = cell => (cell == null ? '' : cell.x);
 
   function cellEl(r, c) {
     const key = r * 16384 + c;
@@ -742,25 +860,16 @@ RENDER.sheet = async buf => {
     td.dataset.c = c;
     const text = cellText(cell);
     td.textContent = text;
-    if (cell && (cell.t === 'n' || cell.t === 'd')) { td.className = 'num'; }
-    let fill = cell && cell.s && cell.s.patternType === 'solid' && cell.s.fgColor && cell.s.fgColor.rgb;
-    fill = fill ? String(fill).slice(-6) : null;
-    if (fill && /^[0-9A-Fa-f]{6}$/.test(fill)) {
+    if (cell && cell.n) { td.className = 'num'; }
+    const fill = cell && cell.f && /^[0-9A-Fa-f]{6}$/.test(cell.f) ? cell.f : null;
+    if (fill) {
       td.style.background = '#' + fill;
       td.style.color = lum(fill) > 0.55 ? '#1c1d21' : '#f4f4f6';
-    } else {
-      fill = null;
     }
-    if (s.extra && text !== '') {
-      const xf = s.extra.styleOf.get(colName(c) + (r + 1));
-      const font = xf != null ? book.fonts[book.xfs[xf]] : null;
-      if (font) {
-        if (font.b) { td.style.fontWeight = '700'; }
-        if (font.i) { td.style.fontStyle = 'italic'; }
-        if (font.color && /^[0-9A-Fa-f]{6}$/.test(font.color)) {
-          td.style.color = '#' + font.color;
-        }
-      }
+    if (cell && text !== '') {
+      if (cell.b) { td.style.fontWeight = '700'; }
+      if (cell.i) { td.style.fontStyle = 'italic'; }
+      if (cell.c && /^[0-9A-Fa-f]{6}$/.test(cell.c)) { td.style.color = '#' + cell.c; }
     }
     const m = s.merges.get(key);
     if (m) {
@@ -813,16 +922,18 @@ RENDER.sheet = async buf => {
     }
   }
 
-  async function show(i) {
+  /** Shows sheet [i]; [keep]: rows drawn at once (as many as before "Show more"). */
+  async function show(i, keep) {
     current = i;
     Array.from(tabs.children).forEach((b, j) => b.classList.toggle('on', j === i));
-    pane.textContent = '';
     clearHit();
     hits = [];
     let ws;
     try {
-      ws = sheetAt(i);
+      ws = await sheetAt(i);
     } catch (e) {
+      if (current !== i) { return; }
+      pane.textContent = '';
       const p = document.createElement('p');
       p.className = 'flow';
       p.textContent = /password|encrypt/i.test(String(e && e.message)) ? PROTECTED : "Swift couldn't read this sheet.";
@@ -830,23 +941,21 @@ RENDER.sheet = async buf => {
       s = null;
       return;
     }
-    const range = ws['!ref'] ? XLSX.utils.decode_range(ws['!ref']) : null;
-    const extra = book ? await book.sheet(i).catch(() => null) : null;
-    const colsInfo = ws['!cols'] || [];
-    const rowInfo = ws['!rows'] || [];
-    const cols = [];
-    if (range) {
-      for (let c = range.s.c; c <= range.e.c && cols.length < 200; c++) { if (!(colsInfo[c] && colsInfo[c].hidden)) { cols.push(c); } }
-    }
+    // Another sheet was chosen while this one was read.
+    if (current !== i) { return; }
+    pane.textContent = '';
+    const range = ws.ref ? decodeRange(ws.ref) : null;
+    const rowInfo = ws.rowInfo || [];
+    const cols = ws.cols || [];
     const merges = new Map();
     const covered = new Set();
-    for (const m of (ws['!merges'] || []).slice(0, 5000)) {
+    for (const m of ws.merges || []) {
       merges.set(m.s.r * 16384 + m.s.c, { rs: m.e.r - m.s.r + 1, cs: m.e.c - m.s.c + 1 });
       for (let r = m.s.r; r <= m.e.r && covered.size < 300000; r++) {
         for (let c = m.s.c; c <= m.e.c; c++) { if (r !== m.s.r || c !== m.s.c) { covered.add(r * 16384 + c); } }
       }
     }
-    const frozenRows = extra ? extra.rows : 0;
+    const frozenRows = ws.frozenRows || 0;
     const rows = [];
     const frozen = [];
     if (range) {
@@ -856,8 +965,8 @@ RENDER.sheet = async buf => {
       }
     }
     s = {
-      ws, data: ws['!data'] || [], cols, rows, rowInfo, merges, covered, extra,
-      frozenCols: extra ? extra.cols : 0, lefts: new Map(), rowEls: new Map(), shown: 0, table: null, head: null, body: null,
+      data: ws.data || [], cols, rows, rowInfo, merges, covered,
+      frozenCols: ws.frozenCols || 0, lefts: new Map(), rowEls: new Map(), shown: 0, table: null, head: null, body: null,
     };
     if (!range || (rows.length === 0 && frozen.length === 0)) {
       const p = document.createElement('p');
@@ -879,9 +988,9 @@ RENDER.sheet = async buf => {
       const th = document.createElement('th');
       th.textContent = colName(c);
       th.dataset.c = c;
-      if (extra && c < extra.cols) { th.className = 'frozen'; }
+      if (c < s.frozenCols) { th.className = 'frozen'; }
       // The column widths the sheet was made with.
-      const w = colsInfo[c] && (colsInfo[c].wpx || (colsInfo[c].wch ? colsInfo[c].wch * 7 + 5 : 0));
+      const w = (ws.widths || {})[c];
       if (w > 0) {
         const px = Math.max(36, Math.min(480, Math.round(w)));
         th.style.minWidth = th.style.maxWidth = th.style.width = px + 'px';
@@ -897,10 +1006,42 @@ RENDER.sheet = async buf => {
     pane.appendChild(table);
     for (const r of frozen) { head.appendChild(rowEl(r)); }
     more();
+    // 3.0: the rows shown before "Show more" are drawn again at once, so the place stays.
+    while (s.shown < Math.min(keep || 0, s.rows.length)) { more(); }
+    if (ws.more) { pane.appendChild(sheetMore(i)); }
     requestAnimationFrame(pin);
     pane.scrollTo(0, 0);
     // Which sheet was open, for reopening; a sheet's number isn't how far it was read (2.6).
     savePlace(i, 0, names.length);
+  }
+
+  /** 3.0: under a very big sheet's first rows: how many are shown, and "Show more" for the next step. */
+  function sheetMore(i) {
+    const box = document.createElement('div');
+    box.className = 'sheetmore';
+    const k = step.get(i) || 0;
+    const p = document.createElement('p');
+    const shown = SHEET_ROWS[k].toLocaleString('en');
+    box.appendChild(p);
+    if (k + 1 >= SHEET_ROWS.length) {
+      p.textContent = 'This sheet is very big: Swift shows its first ' + shown + ' rows. Open it with another app to see all of it.';
+      return box;
+    }
+    p.textContent = 'This sheet is very big: Swift shows its first ' + shown + ' rows.';
+    const b = document.createElement('button');
+    b.className = 'showmore';
+    b.textContent = 'Show more';
+    b.addEventListener('click', async () => {
+      b.disabled = true;
+      b.textContent = 'Opening…';
+      const top = pane.scrollTop;
+      const had = s ? s.shown : 0;
+      step.set(i, k + 1);
+      await show(i, had);
+      pane.scrollTop = top;
+    });
+    box.appendChild(b);
+    return box;
   }
 
   names.forEach((name, i) => {
@@ -1062,6 +1203,7 @@ RENDER.slides = async buf => {
   };
   if (slides.length > 1) { viewer.pageLabel = () => 'Slide ' + (firstSlide() + 1) + ' of ' + slides.length; }
   if (slides.length) { viewer.slideshow = () => slideshow(slides, notes, firstSlide()); }
+  viewer.amount = () => slides.length + (slides.length === 1 ? ' slide' : ' slides');
 };
 
 /** The slideshow (2.5): one slide at a time, filling the screen; swipe, or tap the sides. */
@@ -1166,6 +1308,34 @@ function slideshow(slides, notes, at) {
 
 // ------------------------------------------------------------------ e-books (.epub)
 
+// 3.0: an e-book's locations (how far through it each place is) are kept per document in the
+// extension's storage: working them out reads every chapter. The last 30 books; none for incognito.
+const LOC_KEY = 'epub-loc:';
+const LOC_LIST = 'epub-locs';
+
+async function keptLocations(doc) {
+  if (doc.incognito) { return null; }
+  try {
+    const r = await browser.storage.local.get(LOC_KEY + id);
+    const k = r && r[LOC_KEY + id];
+    return k && k.size === doc.size && typeof k.list === 'string' ? k.list : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+async function keepLocations(doc, list) {
+  if (doc.incognito || typeof list !== 'string' || list.length > 2000000) { return; }
+  try {
+    const r = await browser.storage.local.get(LOC_LIST);
+    const ids = ((r && r[LOC_LIST]) || []).filter(x => x !== id);
+    ids.push(id);
+    const gone = ids.splice(0, Math.max(0, ids.length - 30));
+    await browser.storage.local.set({ [LOC_LIST]: ids, [LOC_KEY + id]: { size: doc.size, list, at: Date.now() } });
+    if (gone.length) { await browser.storage.local.remove(gone.map(x => LOC_KEY + x)); }
+  } catch (e) { /* not kept: worked out again next time */ }
+}
+
 const BOOK_STYLE = 'swift-book-style';
 function bookStyle() {
   let st = null;
@@ -1269,7 +1439,24 @@ RENDER.epub = async buf => {
     applyStyle();
     rendition.on('relocated', relocated);
     hookInput();
+    hookLinks();
     await rendition.display(where);
+  }
+
+  // 3.0: links to websites in a book did nothing (epub.js opens them in a new window, which its
+  // frames may not open): a tap opens them in a new tab of Swift; e-mail and phone links go to the
+  // phone's apps. Links within the book still turn to their page.
+  function hookLinks() {
+    rendition.hooks.content.register(contents => {
+      contents.document.addEventListener('click', e => {
+        const a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
+        const href = a ? (a.getAttribute('href') || '').trim() : '';
+        if (!/^(https?:|mailto:|tel:)/i.test(href)) { return; }
+        e.preventDefault();
+        e.stopPropagation();
+        action('link', { url: href });
+      }, true);
+    });
   }
 
   await make();
@@ -1284,11 +1471,19 @@ RENDER.epub = async buf => {
     }
   }
   // How far through the book, for the home page and the bar: worked out when the phone has a moment.
-  setTimeout(() => {
-    book.locations.generate(1600).then(() => {
+  // 3.0: once per book, then kept (it reads every chapter, on the thread uBlock Origin shares).
+  setTimeout(async () => {
+    try {
+      const kept = await keptLocations(info);
+      if (kept) {
+        book.locations.load(kept);
+      } else {
+        await book.locations.generate(1600);
+        keepLocations(info, book.locations.save());
+      }
       const loc = rendition.currentLocation();
       if (loc && loc.start) { relocated(loc); }
-    }).catch(() => {});
+    } catch (e) { /* the place shows by chapter instead */ }
   }, 4000);
   viewer.size = f => rendition.themes.fontSize(Math.round(f * 100) + '%');
   viewer.chapters = () => book.navigation.toc.map(t => ({ label: t.label.trim(), go: () => rendition.display(t.href) }));
@@ -1423,29 +1618,90 @@ RENDER.text = async buf => {
 let convertWait = null;
 let convertParts = [];
 
+// 3.0: how long Swift may take to lay out an old file before the page shows its text instead (a
+// damaged file can keep Swift's converter busy for ever). Each piece that arrives waits again.
+const CONVERT_WAIT = 45000;
+let convertTimer = 0;
+
 function onConverted(msg) {
   const w = convertWait;
   if (!w) { return; }
   if (msg.error) {
     convertWait = null;
-    w.reject(new Error(msg.error));
+    clearTimeout(convertTimer);
+    // 3.0: "format": the file is really another kind, which [looksLike] names (rtf, docx, html…).
+    const e = new Error(msg.error);
+    e.looksLike = msg.looksLike || null;
+    w.reject(e);
     return;
   }
   convertParts.push(msg.data || '');
   if (msg.last) {
     convertWait = null;
+    clearTimeout(convertTimer);
     const html = convertParts.join('');
     convertParts = [];
     w.resolve({ html, note: msg.note || null });
+  } else {
+    waitForConversion();
   }
+}
+
+function waitForConversion() {
+  clearTimeout(convertTimer);
+  convertTimer = setTimeout(() => {
+    const w = convertWait;
+    if (!w) { return; }
+    convertWait = null;
+    convertParts = [];
+    w.reject(new Error('timeout'));
+  }, CONVERT_WAIT);
 }
 
 function converted() {
   return new Promise((resolve, reject) => {
     convertParts = [];
     convertWait = { resolve, reject };
+    waitForConversion();
     send({ type: 'doc-convert', id });
   });
+}
+
+/** 3.0: why an old file shows its text alone when laying it out didn't work in time. */
+function slowNote(what) {
+  note('Swift took too long to lay out this ' + what + ' file, so it shows only its text.', 'Open with another app', () => action('open-with'));
+}
+
+/**
+ * 3.0: a file named like an old Word or PowerPoint file that is really another kind (Swift's
+ * converter said which): shown as what it is. False when Swift has nothing better than the text.
+ */
+async function showAs(kind, buf) {
+  if (kind === 'rtf') { await RENDER.rtf(buf); return true; }
+  if (kind === 'docx') { await RENDER.word(buf); return true; }
+  if (kind === 'pptx') { await RENDER.slides(buf); return true; }
+  if (kind === 'xlsx' || kind === 'xls') { await RENDER.sheet(buf); return true; }
+  if (kind === 'html') { await RENDER.html(buf); return true; }
+  if (kind === 'pdf') { await openPdf(buf); return true; }
+  return false;
+}
+
+/** An Office 97–2003 file starts with D0 CF 11 E0 (its "compound file" container). */
+function compound(buf) {
+  const a = new Uint8Array(buf, 0, Math.min(4, buf.byteLength));
+  return a.length === 4 && a[0] === 0xD0 && a[1] === 0xCF && a[2] === 0x11 && a[3] === 0xE0;
+}
+
+/**
+ * 3.0: what the converter says a file named like an old [what] file really is: shown as that, or,
+ * when it isn't an old Office file at all, as plain text. False: read its text as an old file.
+ */
+async function otherKind(kind, buf, what) {
+  if (await showAs(kind, buf)) { return true; }
+  if (compound(buf)) { return false; }
+  note('This file isn\'t really an old ' + what + ' file, so Swift shows it as plain text.', 'Open with another app', () => action('open-with'));
+  await RENDER.text(buf);
+  return true;
 }
 
 async function showConverted() {
@@ -1472,6 +1728,17 @@ function oldNote(what) {
 }
 
 RENDER.oldword = async buf => {
+  // 3.0: Swift's converter first: it also tells a file that is really another kind (RTF, a web
+  // page, a newer Word file), which is then shown as that; after 45 seconds, the text alone.
+  let slow = false;
+  try {
+    await showConverted();
+    return;
+  } catch (e) {
+    if (e && e.message === 'password') { throw e; }
+    if (e && e.message === 'format' && await otherKind(e.looksLike, buf, 'Word')) { return; }
+    slow = !!(e && e.message === 'timeout');
+  }
   await loadScript('lib/xlsx.full.min.js');
   const cfb = XLSX.CFB.read(new Uint8Array(buf), { type: 'array' });
   const wd = XLSX.CFB.find(cfb, 'WordDocument');
@@ -1479,15 +1746,9 @@ RENDER.oldword = async buf => {
   const content = bytesOf(wd.content);
   // fEncrypted: the text can't be read without the password.
   if (u16(content, 0x0A) & 0x0100) { throw new Error('password'); }
-  try {
-    await showConverted();
-    return;
-  } catch (e) {
-    if (e && e.message === 'password') { throw e; }
-  }
   let text;
   try { text = wordText(cfb, content); } catch (e) { text = looseText(content); }
-  oldNote('Word');
+  if (slow) { slowNote('Word'); } else { oldNote('Word'); }
   paragraphs(wordParagraphs(text));
 };
 
@@ -1505,23 +1766,44 @@ function wordText(cfb, wd) {
   if (clx[i] !== 0x02) { throw new Error('Bad piece table'); }
   const lcb = u32(clx, i + 1);
   i += 5;
-  const n = (lcb - 4) / 12;
+  // 3.0: as many pieces as the table really holds (a damaged length said hundreds of millions):
+  // each takes 12 bytes, 4 for where it starts and 8 for where its text is.
+  const n = Math.floor((Math.min(lcb, clx.length - i) - 4) / 12);
+  if (!(n > 0)) { throw new Error('Bad piece table'); }
   const cps = [];
   for (let k = 0; k <= n; k++) { cps.push(u32(clx, i + 4 * k)); }
   const pcd = i + 4 * (n + 1);
-  let out = '';
-  for (let k = 0; k < n && out.length < 5000000; k++) {
+  const parts = [];
+  let got = 0;
+  for (let k = 0; k < n && got < WORD_TEXT_MAX; k++) {
     const raw = u32(clx, pcd + 8 * k + 2);
-    const len = cps[k + 1] - cps[k];
+    // 3.0: no piece longer than the text left to take, nor past the end of the file.
+    const len = Math.min(cps[k + 1] - cps[k], WORD_TEXT_MAX - got);
+    if (!(len > 0)) { continue; }
+    let piece;
     if (raw & 0x40000000) {
       const fc = (raw & 0x3FFFFFFF) / 2;
-      for (let j = 0; j < len; j++) { out += String.fromCharCode(wd[fc + j]); }
+      piece = latin1(wd.subarray(fc, Math.min(wd.length, fc + len)));
     } else {
       const fc = raw & 0x3FFFFFFF;
-      for (let j = 0; j < len; j++) { out += String.fromCharCode(u16(wd, fc + 2 * j)); }
+      const end = Math.min(wd.length, fc + 2 * len);
+      piece = fc < end ? new TextDecoder('utf-16le').decode(wd.subarray(fc, end - ((end - fc) % 2))) : '';
     }
+    parts.push(piece);
+    got += piece.length;
   }
+  const out = parts.join('');
   return ccpText > 0 && ccpText <= out.length ? out.slice(0, ccpText) : out;
+}
+
+// The most text read from an old Word file (5 million characters, some 2,500 pages).
+const WORD_TEXT_MAX = 5000000;
+
+/** Bytes as the characters 0–255 (an old Word file's "compressed" text), a slice at a time. */
+function latin1(bytes) {
+  let s = '';
+  for (let i = 0; i < bytes.length; i += 8192) { s += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192)); }
+  return s;
 }
 
 /** When the piece table can't be read: runs of readable text. */
@@ -1546,11 +1828,15 @@ function wordParagraphs(text) {
 }
 
 RENDER.oldslides = async buf => {
+  let slow = false;
   try {
     await showConverted();
     return;
   } catch (e) {
     if (e && e.message === 'password') { throw e; }
+    // 3.0: as for Word files above.
+    if (e && e.message === 'format' && await otherKind(e.looksLike, buf, 'PowerPoint')) { return; }
+    slow = !!(e && e.message === 'timeout');
   }
   await loadScript('lib/xlsx.full.min.js');
   const cfb = XLSX.CFB.read(new Uint8Array(buf), { type: 'array' });
@@ -1566,13 +1852,16 @@ RENDER.oldslides = async buf => {
   const stack = [];
   const inside = type => stack.some(c => c.type === type);
   let pos = 0;
-  while (pos + 8 <= s.length) {
+  // 3.0: no more records, nor text, than a real file has (a damaged length was read as up to 4 GB).
+  let records = 0;
+  let textLeft = 5000000;
+  while (pos + 8 <= s.length && records++ < 3000000 && textLeft > 0) {
     while (stack.length && pos >= stack[stack.length - 1].end) { stack.pop(); }
     const verInst = u16(s, pos);
     const type = u16(s, pos + 2);
     const len = u32(s, pos + 4);
     if ((verInst & 0xF) === 0xF) {
-      stack.push({ type, inst: verInst >> 4, end: pos + 8 + len });
+      if (stack.length < 64) { stack.push({ type, inst: verInst >> 4, end: pos + 8 + len }); }
       if (type === 0x03EE) { boxCur = []; boxed.push(boxCur); }
       pos += 8;
       continue;
@@ -1582,36 +1871,33 @@ RENDER.oldslides = async buf => {
       listCur = [];
       listed.push(listCur);
     } else if ((type === 0x0FA0 || type === 0x0FA8) && !inside(0x03F8) && !inside(0x03F0) && !inside(0x0FC9)) {
-      let text = '';
-      for (let j = 0; j < len; j += type === 0x0FA0 ? 2 : 1) {
-        text += String.fromCharCode(type === 0x0FA0 ? u16(s, pos + 8 + j) : s[pos + 8 + j]);
-      }
+      const wide = type === 0x0FA0;
+      const from = pos + 8;
+      const to = Math.min(s.length, from + len, from + (wide ? 2 : 1) * textLeft);
+      const text = wide ? new TextDecoder('utf-16le').decode(s.subarray(from, to - ((to - from) % 2))) : latin1(s.subarray(from, to));
+      textLeft -= text.length;
       const lines = text.split(/[\r\x0B]/).filter(l => l.trim() && l.trim() !== '*');
-      if (list) {
-        if (list.inst === 0 && listCur) { listCur.push(...lines); }
-      } else if (inside(0x03EE) && boxCur) {
-        boxCur.push(...lines);
-      }
+      const into = list ? (list.inst === 0 ? listCur : null) : (inside(0x03EE) ? boxCur : null);
+      if (into) { for (const l of lines) { into.push(l); } }
     }
     pos += 8 + len;
   }
   const slides = [];
   for (let i = 0; i < Math.max(listed.length, boxed.length); i++) {
-    const lines = [];
-    for (const l of (listed[i] || []).concat(boxed[i] || [])) { if (!lines.includes(l)) { lines.push(l); } }
-    if (lines.length) { slides.push(lines); }
+    const lines = new Set();
+    for (const l of (listed[i] || []).concat(boxed[i] || [])) { lines.add(l); }
+    if (lines.size) { slides.push(Array.from(lines)); }
   }
-  oldNote('PowerPoint');
+  if (slow) { slowNote('PowerPoint'); } else { oldNote('PowerPoint'); }
   paragraphs(slides.map((lines, i) => ({ heading: 'Slide ' + (i + 1), lines })));
 };
 
 // ------------------------------------------------------------------ OpenDocument and RTF: their text
 
 async function openDocumentXml(buf) {
-  await loadScript('lib/jszip.min.js');
-  const zip = await JSZip.loadAsync(buf);
-  if (!zip.file('content.xml')) { throw new Error('encrypted or not an OpenDocument file'); }
-  const xml = await zip.file('content.xml').async('string');
+  // 3.0: unpacked in the Worker (a big document's text is tens of megabytes).
+  const xml = await work('zipText', [buf, 'content.xml'], [buf]);
+  if (xml == null) { throw new Error('encrypted or not an OpenDocument file'); }
   return new DOMParser().parseFromString(xml, 'application/xml');
 }
 
@@ -1641,6 +1927,23 @@ RENDER.odp = async buf => {
 
 RENDER.rtf = async buf => {
   paragraphs(rtfText(new TextDecoder('windows-1252').decode(buf)).split('\n'));
+};
+
+/**
+ * 3.0: a web page saved as a Word file (Word's "Web Page" .doc): its text, paragraph by paragraph.
+ * Read as data only: nothing in it runs or loads.
+ */
+RENDER.html = async buf => {
+  const doc = new DOMParser().parseFromString(decodeText(buf), 'text/html');
+  doc.querySelectorAll('script, style, noscript, template, head, object, iframe').forEach(e => e.remove());
+  const BLOCKS = 'h1, h2, h3, h4, h5, h6, p, li, td, th, pre, blockquote, dt, dd, div';
+  const out = [];
+  for (const el of doc.body ? doc.body.querySelectorAll(BLOCKS) : []) {
+    if (el.querySelector(BLOCKS)) { continue; }
+    out.push(el.textContent);
+  }
+  if (!out.length && doc.body) { out.push(...doc.body.textContent.split(/\n+/).slice(0, 100000)); }
+  paragraphs(out);
 };
 
 /** The text of an RTF file: groups that aren't text (fonts, colours, pictures) are skipped. */
@@ -1682,7 +1985,10 @@ RENDER.zip = async () => {
     setTimeout(() => reject(new Error('No answer')), 60000);
   });
   if (list.error) {
-    problem(list.error, [{ label: 'Open with another app', action: 'open-with' }]);
+    // 3.0: a ZIP locked with a password isn't "damaged": Files opens it with its password (a ZIP
+    // that isn't a file on the phone yet is saved first).
+    const actions = !list.locked ? [] : info.copy ? [{ label: 'Save a copy', action: 'save-copy' }] : [{ label: 'Open in Files', action: 'files' }];
+    problem(list.error, actions.concat([{ label: 'Open with another app', action: 'open-with' }]));
     return;
   }
   const box = document.createElement('div');
@@ -1717,7 +2023,9 @@ RENDER.zip = async () => {
     size.className = 'zsize';
     size.textContent = e.size >= 0 ? formatSize(e.size) : '';
     b.append(badge, name, size);
+    if (e.locked) { b.classList.add('off'); }
     b.addEventListener('click', () => {
+      if (e.locked) { toast('This file is locked with a password. Open the ZIP in Files to take it out with its password.', 5000); return; }
       if (!k) { toast("Swift can't show this kind of file."); return; }
       toast('Opening ' + name.textContent + '…');
       action('open-entry', { entry: e.name });
@@ -1738,7 +2046,8 @@ RENDER.zip = async () => {
 
 // ------------------------------------------------------------------ PDF (pdf.js)
 
-async function openPdf() {
+/** [given]: the file already read (3.0: a PDF named like an old Word file); else pdf.js asks for its pieces. */
+async function openPdf(given) {
   const lib = await import('./lib/pdf.min.mjs');
   globalThis.pdfjsLib = lib;
   lib.GlobalWorkerOptions.workerSrc = 'lib/pdf.worker.min.mjs';
@@ -1772,12 +2081,18 @@ async function openPdf() {
     cMapUrl: 'lib/cmaps/',
     cMapPacked: true,
     standardFontDataUrl: 'lib/standard_fonts/',
+    // 3.0: JPEG 2000, JBIG2 and fax pictures (scanned pages) are decoded by pdf.js's WebAssembly
+    // decoders in lib/wasm (without them they stayed blank). A full address: pdf.js's worker loads
+    // their fallback from it, and relative to itself it would look in the wrong folder.
+    wasmUrl: new URL('lib/wasm/', location.href).href,
     isEvalSupported: false,
     disableAutoFetch: true,
     disableStream: true,
     rangeChunkSize: 196608,
   };
-  if (info.size > 0 && info.ranges) {
+  if (given) {
+    params.data = new Uint8Array(given);
+  } else if (info.size > 0 && info.ranges) {
     // Only the pieces needed for the pages on screen: a big PDF opens quickly and stays light.
     pdfRange = new lib.PDFDataRangeTransport(info.size, null);
     pdfRange.requestDataRange = (begin, end) => {
@@ -1795,11 +2110,41 @@ async function openPdf() {
     params.data = new Uint8Array(await readAll());
   }
   const task = lib.getDocument(params);
+  // 3.0: the password is asked for in the page (prompt() answered nothing on the viewer's own screen,
+  // so these PDFs couldn't be opened). pdf.js asks again when it was wrong.
+  let pwBox = null;
+  let pwUpdate = null;
+  const askPassword = wrong => {
+    if (pwBox && pwBox.open) {
+      if (wrong) { pwBox.wrong('That password isn\'t right. Try again.'); }
+      return;
+    }
+    pwBox = askFor({
+      text: 'This PDF is locked with a password. Type its password to open it.',
+      type: 'password',
+      placeholder: 'Password',
+      ok: 'Open',
+      showable: true,
+      check: pw => {
+        if (!pw) { return 'Type the password first.'; }
+        pwBox.wait();
+        status('Opening…');
+        pwUpdate(pw);
+        return null;
+      },
+      cancel: () => problem('This PDF is locked with a password. Swift can open it once you type its password.', [
+        { label: 'Type the password', run: () => askPassword(false) },
+        { label: 'Open with another app', action: 'open-with' },
+      ]),
+    });
+    if (wrong) { pwBox.wrong('That password isn\'t right. Try again.'); }
+  };
   task.onPassword = (update, reason) => {
-    const pw = prompt(reason === lib.PasswordResponses.INCORRECT_PASSWORD ? 'Wrong password. Try again:' : 'This PDF is protected. Its password:');
-    if (pw === null) { problem('This PDF needs its password.', []); } else { update(pw); }
+    pwUpdate = update;
+    askPassword(reason === lib.PasswordResponses.INCORRECT_PASSWORD);
   };
   const pdf = await task.promise;
+  if (pwBox && pwBox.open) { pwBox.close(); }
   pdfViewer.setDocument(pdf);
   linkService.setDocument(pdf, null);
   let fit = 1;
@@ -1809,6 +2154,7 @@ async function openPdf() {
     const page = parseInt(info.place, 10);
     if (page > 1) { pdfViewer.currentPageNumber = Math.min(page, pdf.numPages); }
     ready();
+    if (info.thumb) { setTimeout(() => sendThumb(pdf), 2500); }
   });
   eventBus.on('pagechanging', e => {
     savePlace(e.pageNumber, pdf.numPages > 1 ? e.pageNumber / pdf.numPages : 1, pdf.numPages);
@@ -1823,10 +2169,20 @@ async function openPdf() {
   viewer.scroller = pane;
   watchScroll(pane);
   viewer.pageLabel = () => 'Page ' + pdfViewer.currentPageNumber + ' of ' + pdf.numPages;
-  viewer.goTo = () => {
-    const n = parseInt(prompt('Go to page (1–' + pdf.numPages + ')', String(pdfViewer.currentPageNumber)) || '', 10);
-    if (n >= 1 && n <= pdf.numPages) { pdfViewer.currentPageNumber = n; }
-  };
+  viewer.amount = () => pdf.numPages + (pdf.numPages === 1 ? ' page' : ' pages');
+  // 3.0: asked in the page (prompt() answered nothing here).
+  viewer.goTo = () => askFor({
+    text: 'Go to page (1–' + pdf.numPages + ')',
+    type: 'number',
+    value: String(pdfViewer.currentPageNumber),
+    ok: 'Go',
+    check: v => {
+      const n = parseInt(v, 10);
+      if (!(n >= 1 && n <= pdf.numPages)) { return 'Type a page number from 1 to ' + pdf.numPages + '.'; }
+      pdfViewer.currentPageNumber = n;
+      return null;
+    },
+  });
 
   // Zoom: two fingers, or a double tap; pdf.js draws the pages again at the new size, so text stays sharp.
   const zoomTo = (target, x, y) => {
@@ -1988,6 +2344,27 @@ async function openPdf() {
   viewer.texts = () => pageTexts(pdfViewer.currentPageNumber);
 }
 
+/**
+ * 3.0: the first page, small, for the PDF's picture in Files and on the home page's Continue: drawn
+ * here once (Swift asks only when it has none), so Android's own PDF renderer, years behind on fixes,
+ * needn't read the file inside Swift.
+ */
+async function sendThumb(pdf) {
+  try {
+    const page = await pdf.getPage(1);
+    const vp1 = page.getViewport({ scale: 1 });
+    const vp = page.getViewport({ scale: 360 / vp1.width });
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(vp.width);
+    canvas.height = Math.min(1000, Math.round(vp.height));
+    // On white paper (a see-through page would turn black in a JPEG).
+    await page.render({ canvas, viewport: vp, background: '#ffffff' }).promise;
+    const data = canvas.toDataURL('image/jpeg', 0.82).split(',')[1] || '';
+    canvas.width = canvas.height = 0;
+    if (data) { send({ type: 'doc-thumb', id, data }); }
+  } catch (e) { /* no picture: Swift keeps the PDF's mark */ }
+}
+
 /** Small pictures of every page (2.5): tap one to go there. Drawn only as they come into view. */
 function pagePreviews(pdf, pdfViewer) {
   const wrap = document.createElement('div');
@@ -2001,36 +2378,66 @@ function pagePreviews(pdf, pdfViewer) {
   close.setAttribute('aria-label', 'Close');
   close.innerHTML = '<svg viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>';
   head.append(title, close);
-  const remove = () => { io.disconnect(); wrap.remove(); head.remove(); };
+  const remove = () => { io.disconnect(); far.disconnect(); wrap.remove(); head.remove(); };
   const done = () => { remove(); closed(remove); };
   close.addEventListener('click', done);
+  // Each page's state: '' blank, 'queued', 'drawn'.
   const queue = [];
   let busy = false;
   const drawNext = async () => {
-    if (busy || !queue.length || !wrap.isConnected) { return; }
+    if (busy || !wrap.isConnected) { return; }
+    let t = queue.shift();
+    while (t && t.dataset.state !== 'queued') { t = queue.shift(); }
+    if (!t) { return; }
     busy = true;
-    const { n, blank } = queue.shift();
     try {
-      const page = await pdf.getPage(n);
+      const page = await pdf.getPage(parseInt(t.dataset.n, 10));
       const vp1 = page.getViewport({ scale: 1 });
       const vp = page.getViewport({ scale: 220 / vp1.width });
       const canvas = document.createElement('canvas');
       canvas.width = Math.round(vp.width);
       canvas.height = Math.round(vp.height);
       await page.render({ canvas, viewport: vp }).promise;
-      if (blank.isConnected) { blank.replaceWith(canvas); }
-    } catch (e) { /* stays blank */ }
+      const blank = t.querySelector('.blank');
+      if (blank && t.dataset.state === 'queued') {
+        blank.replaceWith(canvas);
+        t.dataset.state = 'drawn';
+      } else {
+        canvas.width = canvas.height = 0;
+      }
+    } catch (e) {
+      // Stays blank.
+      t.dataset.state = '';
+    }
     busy = false;
     drawNext();
   };
   const io = new IntersectionObserver(entries => {
     for (const en of entries) {
-      if (!en.isIntersecting) { continue; }
-      io.unobserve(en.target);
-      queue.push({ n: parseInt(en.target.dataset.n, 10), blank: en.target.querySelector('.blank') });
+      const t = en.target;
+      if (!en.isIntersecting || t.dataset.state) { continue; }
+      t.dataset.state = 'queued';
+      queue.push(t);
     }
     drawNext();
   }, { root: wrap, rootMargin: '400px' });
+  // 3.0: pages scrolled well out of view give their picture back (about 270 KB each), and are drawn
+  // again if they come back: a long PDF's previews no longer fill the memory.
+  const far = new IntersectionObserver(entries => {
+    for (const en of entries) {
+      const t = en.target;
+      if (en.isIntersecting || !t.dataset.state) { continue; }
+      const canvas = t.querySelector('canvas');
+      if (canvas) {
+        const blank = document.createElement('div');
+        blank.className = 'blank';
+        blank.style.aspectRatio = (canvas.width / Math.max(1, canvas.height)).toFixed(3);
+        canvas.replaceWith(blank);
+        canvas.width = canvas.height = 0;
+      }
+      t.dataset.state = '';
+    }
+  }, { root: wrap, rootMargin: '1200px' });
   const current = pdfViewer.currentPageNumber;
   let currentEl = null;
   for (let n = 1; n <= pdf.numPages; n++) {
@@ -2046,6 +2453,7 @@ function pagePreviews(pdf, pdfViewer) {
     t.addEventListener('click', () => { pdfViewer.currentPageNumber = n; done(); });
     wrap.appendChild(t);
     io.observe(t);
+    far.observe(t);
     if (n === current) { currentEl = t; }
   }
   document.body.append(wrap, head);
@@ -2113,9 +2521,15 @@ function hideMenu() {
 function openMenu() {
   const menu = $('#menu');
   menu.textContent = '';
-  const item = (label, run) => {
+  const item = (label, run, hint) => {
     const b = document.createElement('button');
     b.textContent = label;
+    if (hint) {
+      const h = document.createElement('span');
+      h.className = 'hint';
+      h.textContent = hint;
+      b.appendChild(h);
+    }
     b.addEventListener('click', () => { run(); hideMenu(); });
     menu.appendChild(b);
   };
@@ -2150,15 +2564,51 @@ function openMenu() {
   if (shown && info.kind !== 'pdf' && info.kind !== 'epub' && info.kind !== 'zip') { item('Save as PDF', () => printOut('save-pdf')); }
   if (shown && info.kind !== 'epub' && info.kind !== 'zip') { item('Print', () => printOut('print')); }
   if (info && info.web && ['word', 'sheet', 'slides', 'oldword', 'oldslides'].includes(info.kind)) {
-    item('Exact view (online)', () => action('exact'));
+    // 3.0: it says what it does: the file's web address goes to Microsoft, whose viewer shows it.
+    item('Exact view online', () => action('exact'), "Sends this file's web address to Microsoft's online viewer");
   }
   if (info) { item('Add to home screen', () => action('shortcut')); }
-  if (info) {
-    item('Details', () => alert(info.name + '\n' + (info.size > 0 ? formatSize(info.size) + '\n' : '') + (info.where || '')));
-  }
+  // 3.0: in the page (alert() showed nothing on the viewer's own screen).
+  if (info) { item('Details', showDetails); }
   menu.style.maxHeight = '';
   menu.hidden = false;
   opened(menuOverlay);
+}
+
+/** 3.0: the document's name, kind, size, length and where it is, in a panel like Text style's. */
+function showDetails() {
+  const panel = $('#panel');
+  panel.textContent = '';
+  const h = document.createElement('h3');
+  h.textContent = 'Details';
+  panel.appendChild(h);
+  const list = document.createElement('dl');
+  list.className = 'details';
+  const row = (term, value) => {
+    if (!value) { return; }
+    const dt = document.createElement('dt');
+    dt.textContent = term;
+    const dd = document.createElement('dd');
+    dd.textContent = value;
+    list.append(dt, dd);
+  };
+  row('Name', info.name);
+  row('Kind', info.label || (KINDS[info.kind] || KINDS.text)[0]);
+  row('Size', info.size > 0 ? formatSize(info.size) : '');
+  row('Length', viewer.amount ? viewer.amount() : '');
+  row('Where', info.where || '');
+  panel.appendChild(list);
+  const done = document.createElement('button');
+  done.className = 'done';
+  done.textContent = 'Done';
+  const panelOverlay = () => { panel.hidden = true; };
+  done.addEventListener('click', () => {
+    panel.hidden = true;
+    closed(panelOverlay);
+  });
+  panel.appendChild(done);
+  panel.hidden = false;
+  opened(panelOverlay);
 }
 
 function showChapters() {

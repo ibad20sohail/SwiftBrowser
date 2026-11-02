@@ -307,7 +307,7 @@ object ColorPicker {
             val u = used(picked)
             previewBox.addView(previewOf(a, kind, u))
             val nudged = when (kind) {
-                Kind.ACCENT -> Palette.customAccent(picked, false).first != picked || Palette.customAccent(picked, true).first != picked
+                Kind.ACCENT -> listOf(false, true).any { night -> Palette.customAccent(picked, night, Palette.textBackgrounds(a, night)).first != picked }
                 else -> u != picked
             }
             note.text = when {
@@ -319,10 +319,18 @@ object ColorPicker {
         }
         col.addView(previewBox, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         col.addView(note.apply { setPadding(0, dp(6), 0, dp(4)) })
-        // The colour maker (2.5): any colour, made with a finger. The preview follows at once.
+        // The colour maker (2.5): any colour, made with a finger. The preview follows at once: 3.0, at
+        // most once a frame (it was built again for every finger move, faster than the screen shows).
+        var refreshing = false
         col.addView(ColorMaker(a, picked) { c ->
             picked = c
-            refresh()
+            if (!refreshing) {
+                refreshing = true
+                previewBox.postOnAnimation {
+                    refreshing = false
+                    refresh()
+                }
+            }
         }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         refresh()
         val title = when (kind) {
@@ -348,14 +356,16 @@ object ColorPicker {
             Kind.ACCENT -> LinearLayout(ctx).apply {
                 orientation = LinearLayout.HORIZONTAL
                 for (night in listOf(false, true)) {
-                    // Exactly as Swift will use it (Palette.customAccent).
-                    val tones = Palette.customAccent(color, night).toList()
+                    // Exactly as Swift will use it (Palette.customAccent), on the backgrounds chosen.
+                    val tones = Palette.customAccent(color, night, Palette.textBackgrounds(ctx, night)).toList()
                     addView(ColoursPanel.mock(ctx, night, current = false, overrides = mapOf(R.color.accent to tones[0], R.color.on_accent to tones[1])),
                         LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { setMargins(Ui.dp(ctx, 3), 0, Ui.dp(ctx, 3), 0) })
                 }
             }
-            Kind.LIGHT_BACKGROUND -> ColoursPanel.mock(ctx, night = false, current = false, overrides = Palette.lightRoles(color))
-            Kind.DARK_BACKGROUND -> ColoursPanel.mock(ctx, night = true, current = false, overrides = Palette.darkRoles(color))
+            Kind.LIGHT_BACKGROUND -> ColoursPanel.mock(ctx, night = false, current = false,
+                overrides = Palette.lightRoles(color, Palette.stockColor(ctx, false, R.color.text_secondary)))
+            Kind.DARK_BACKGROUND -> ColoursPanel.mock(ctx, night = true, current = false,
+                overrides = Palette.darkRoles(color, Palette.stockColor(ctx, true, R.color.text_secondary)))
         }
     }
 }

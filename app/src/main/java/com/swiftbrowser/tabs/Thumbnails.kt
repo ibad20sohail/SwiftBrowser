@@ -15,8 +15,10 @@ import java.io.File
 import java.io.FileOutputStream
 
 /**
- * Small pictures of tabs for the tab switcher. Taken from the screen when the switcher opens and
- * when the app goes to the background; kept in memory and, for normal tabs, on disk.
+ * Small pictures of tabs for the tab switcher. Taken from the screen when the switcher opens, when
+ * the app goes to the background and (3.0) when a tab is left for another tab or the home page, no
+ * longer after every page load (a full-screen read-back, slow on the phone's graphics chip); kept in
+ * memory and, for normal tabs, on disk.
  */
 object Thumbnails {
     /** Width of a stored picture in pixels; height follows [ASPECT]. */
@@ -89,15 +91,19 @@ object Thumbnails {
 
     /**
      * Takes a picture of [tab] as [view] shows it now. [visibleHeight] is how much of the view is on
-     * screen (the rest is under the bottom edge while the toolbar is shown).
+     * screen (the rest is under the bottom edge while the toolbar is shown). [done] once the picture
+     * is ready; [taken] (3.0) as soon as the engine has handed over the pixels, when the view may show
+     * another page (shrinking and saving the picture go on meanwhile).
      */
-    fun capture(view: GeckoView, tab: Tab, visibleHeight: Int, done: (() -> Unit)? = null) {
+    fun capture(view: GeckoView, tab: Tab, visibleHeight: Int, done: (() -> Unit)? = null, taken: (() -> Unit)? = null) {
         val session = tab.session
         if (session == null || view.session !== session || !session.isOpen || tab.isHome) {
+            taken?.invoke()
             done?.invoke()
             return
         }
         view.capturePixels().accept({ full ->
+            taken?.invoke()
             if (full == null) {
                 done?.invoke()
                 return@accept
@@ -126,7 +132,10 @@ object Thumbnails {
                     done?.invoke()
                 }
             }
-        }, { _ -> done?.invoke() })
+        }, { _ ->
+            taken?.invoke()
+            done?.invoke()
+        })
     }
 
     private fun shrink(full: Bitmap, visibleHeight: Int): Bitmap {

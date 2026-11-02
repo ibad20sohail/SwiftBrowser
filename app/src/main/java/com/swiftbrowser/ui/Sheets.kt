@@ -33,6 +33,7 @@ import com.swiftbrowser.adblock.AdBlock
 import com.swiftbrowser.adblock.AdLevel
 import com.swiftbrowser.core.ClosedTabRow
 import com.swiftbrowser.core.Favicons
+import com.swiftbrowser.core.GoogleAccounts
 import com.swiftbrowser.core.ProfileRow
 import com.swiftbrowser.core.SiteSettings
 import com.swiftbrowser.core.Profiles
@@ -396,7 +397,12 @@ object Sheets {
         val week = com.swiftbrowser.adblock.AdStats.week()
         val sub = when {
             AdBlock.extension == null || !AdBlock.ready -> "uBlock Origin is getting ready…"
-            blocked != null -> "$blocked blocked on this page" + if (week > 0) " · ${java.text.NumberFormat.getIntegerInstance().format(week)} this week" else ""
+            // 3.0: uBlock Origin's "!" is no count: it says the page got past it.
+            blocked == "!" && AdBlock.levelFor(tab.url) != AdLevel.OFF ->
+                "This page loaded before the ad blocker was ready. Reload it to block its ads."
+            blocked != null && blocked != "!" ->
+                "$blocked blocked on this page" + if (week > 0) " · ${java.text.NumberFormat.getIntegerInstance().format(week)} this week" else ""
+            week == 1 -> "1 ad or tracker blocked this week"
             week > 0 -> "${java.text.NumberFormat.getIntegerInstance().format(week)} ads and trackers blocked this week"
             else -> "uBlock Origin ${AdBlock.uboVersion}"
         }
@@ -465,8 +471,14 @@ object Sheets {
             bind = { h, p ->
                 val current = p.id == Profiles.currentId
                 val count = TabManager.profileTabs(p.id).size
-                h.set(R.drawable.ic_person, p.name, (if (current) "Current · " else "") + "$count ${if (count == 1) "tab" else "tabs"}")
+                val tabs = (if (current) "Current · " else "") + "$count ${if (count == 1) "tab" else "tabs"}"
+                h.set(R.drawable.ic_person, p.name, tabs)
                 h.icon.imageTintList = ColorStateList.valueOf(p.color)
+                // The Google account signed in to it (3.0): its photo, and its name and address above the tabs.
+                GoogleAccounts.get(p.id)?.let { account ->
+                    h.setSubtitleLines(if (account.name.isBlank()) account.email else "${account.name} · ${account.email}", tabs)
+                    GoogleAccounts.picture(a, p.id)?.let { h.setPicture(it) }
+                }
                 // In the accent chosen (2.6), your own included.
                 if (current) h.itemView.background = Ui.shape(a, Ui.accentContainer(a), 14)
                 h.setAction(R.drawable.ic_edit, "Manage") {
@@ -489,6 +501,9 @@ object Sheets {
         adapter.items = Profiles.all()
         list.adapter = adapter
         col.addView(list)
+        // An account's photo can arrive while the list is open (3.0).
+        val accountsChanged: () -> Unit = { adapter.notifyDataSetChanged() }
+        GoogleAccounts.addListener(accountsChanged)
         col.addView(row(a, R.drawable.ic_add, "Add profile") {
             dialog.dismiss()
             askText(a, "New profile", "Name (for example your email or \"Movies\")", "") { name ->
@@ -497,11 +512,14 @@ object Sheets {
                 a.snack("Created ${p.name}. Sign in to Google from the profile menu if you like.")
             }
         })
-        col.addView(row(a, R.drawable.ic_person, "Sign in to Google in ${Profiles.current().name}") {
+        // Signed in already (3.0): the Google account's own page instead of signing in again.
+        val signedIn = GoogleAccounts.get(Profiles.currentId) != null
+        col.addView(row(a, R.drawable.ic_person, if (signedIn) "Manage Google account" else "Sign in to Google in ${Profiles.current().name}") {
             dialog.dismiss()
-            TabManager.newTab("https://accounts.google.com/", incognito = false)
+            TabManager.newTab(if (signedIn) "https://myaccount.google.com/" else "https://accounts.google.com/", incognito = false)
         })
         dialog = sheet(a, col)
+        dialog.setOnDismissListener { GoogleAccounts.removeListener(accountsChanged) }
         dialog.showImmersive()
     }
 
@@ -516,6 +534,8 @@ object Sheets {
         list += Action(R.drawable.ic_cookie, "Sign out of all sites", danger = true) {
             Dialogs.confirm(a, "Sign out of all sites?", "Cookies and everything sites stored in ${p.name} are deleted.", "Sign out", danger = true) {
                 Engine.runtime.storageController.clearDataForSessionContext(Profiles.contextId(p.id))
+                // Out of Google too, so the profile stops showing its account (3.0).
+                GoogleAccounts.forget(p.id)
                 a.snack("Signed out of all sites in ${p.name}")
             }
         }
@@ -527,7 +547,8 @@ object Sheets {
                 }
             }
         }
-        actions(a, p.name, "Profile", list)
+        // The Google account's address when one is signed in (3.0).
+        actions(a, p.name, GoogleAccounts.get(p.id)?.email ?: "Profile", list, iconRes = R.drawable.ic_person)
     }
 
     /**
@@ -609,7 +630,7 @@ object Sheets {
         if (unchecked.isNotEmpty()) {
             a.lifecycleScope.launch {
                 for (m in unchecked) {
-                    streamInfo[m.url] = withContext(Dispatchers.IO) { inspectStream(m) }
+                    streamInfo[m.url] = withContext(Dispatchers.IO) { inspectStream(m, tab.incognito) }
                     adapter.items = visibleItems()
                 }
             }
@@ -630,9 +651,9 @@ object Sheets {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, StreamInfo>?) = size > 60
     }
 
-    /** Blocking; reads the playlist to describe it. */
-    private fun inspectStream(m: MediaItem): StreamInfo = try {
-        val text = Downloads.fetchText(m.url, m.headers)
+    /** Blocking; reads the playlist to describe it (3.0: an incognito tab's through its private session). */
+    private fun inspectStream(m: MediaItem, private: Boolean): StreamInfo = try {
+        val text = Downloads.fetchText(m.url, m.headers, private)
         when {
             !Hls.isPlaylist(text) -> StreamInfo("unknown format", emptyList())
             Hls.isMaster(text) -> {
@@ -679,7 +700,7 @@ object Sheets {
         a.lifecycleScope.launch {
             val result = withContext(Dispatchers.IO) {
                 runCatching {
-                    val text = Downloads.fetchText(url, headers)
+                    val text = Downloads.fetchText(url, headers, tab.incognito)
                     require(Hls.isPlaylist(text)) { "Not a video playlist" }
                     if (Hls.isMaster(text)) {
                         Hls.parseMaster(text, url) to null
@@ -695,7 +716,7 @@ object Sheets {
                     media != null && media.unsupportedKey -> a.snack("This video is copy-protected and can't be saved")
                     media != null -> a.startHlsDownload(tab, url, headers, null)
                     variants.isEmpty() -> a.snack("No video found here")
-                    variants.size == 1 -> a.startHlsDownload(tab, variants[0].url, headers, shortQuality(variants[0]))
+                    variants.size == 1 -> a.startHlsDownload(tab, variants[0].url, headers, shortQuality(variants[0]), variants[0].audio)
                     else -> chooseQuality(a, tab, variants, headers)
                 }
             }
@@ -713,20 +734,21 @@ object Sheets {
             val seconds = withContext(Dispatchers.IO) {
                 runCatching {
                     val smallest = variants.minByOrNull { if (it.bandwidth > 0) it.bandwidth else Long.MAX_VALUE } ?: variants.last()
-                    Hls.parseMedia(Downloads.fetchText(smallest.url, headers), smallest.url).duration
+                    Hls.parseMedia(Downloads.fetchText(smallest.url, headers, tab.incognito), smallest.url).duration
                 }.getOrDefault(0.0)
             }
             val labels = variants.map { v ->
                 val quality = shortQuality(v) ?: v.label
                 val size = if (seconds > 0 && v.bandwidth > 0) " · about ${UrlUtils.formatBytes((v.bandwidth * seconds / 8).toLong())}" else ""
-                quality + size
+                // 3.0: its sound is a stream of its own, saved with it.
+                quality + size + if (v.audio != null) " · sound comes separately" else ""
             }
             val minutes = if (seconds > 0) " (${(seconds / 60).toInt().coerceAtLeast(1)} min)" else ""
             MaterialAlertDialogBuilder(a)
                 .setTitle("Choose quality$minutes")
                 .setItems(labels.toTypedArray()) { _, which ->
                     val v = variants[which]
-                    a.startHlsDownload(tab, v.url, headers, shortQuality(v))
+                    a.startHlsDownload(tab, v.url, headers, shortQuality(v), v.audio)
                 }
                 .setNegativeButton(android.R.string.cancel, null)
                 .showImmersive()
@@ -874,26 +896,36 @@ object Sheets {
         dialog.showImmersive()
     }
 
+    /**
+     * The group colours to pick from. 3.0: each 34 dp dot in a finger-sized place (48 dp), so they
+     * come in two rows of four (eight such places don't fit a phone's width).
+     */
     private fun colorPicker(a: MainActivity, selected: Int, onPick: (Int) -> Unit): View = LinearLayout(a).apply {
-        orientation = LinearLayout.HORIZONTAL
-        setPadding(a.dp(18), a.dp(4), a.dp(12), a.dp(10))
+        orientation = LinearLayout.VERTICAL
+        // The dots line up with the sheet's text (24 dp in), as the 7 dp round each dot is empty.
+        setPadding(a.dp(17), 0, a.dp(12), a.dp(6))
         val dots = ArrayList<View>()
-        fun dot(index: Int, chosen: Boolean) = GradientDrawable().apply {
+        fun dot(index: Int, chosen: Boolean) = android.graphics.drawable.InsetDrawable(GradientDrawable().apply {
             shape = GradientDrawable.OVAL
             setColor(a.color(TabGroup.colorRes(index)))
             if (chosen) setStroke(a.dp(3), a.color(R.color.text_primary))
-        }
-        for (i in TabGroup.COLORS.indices) {
-            val v = View(a).apply {
-                contentDescription = TabGroup.COLOR_NAMES[i]
-                background = dot(i, i == selected)
-                setOnClickListener {
-                    dots.forEachIndexed { j, d -> d.background = dot(j, j == i) }
-                    onPick(i)
+        }, a.dp(7))
+        for (row in TabGroup.COLORS.indices.chunked(4)) {
+            addView(LinearLayout(a).apply {
+                orientation = LinearLayout.HORIZONTAL
+                for (i in row) {
+                    val v = View(a).apply {
+                        contentDescription = TabGroup.COLOR_NAMES[i]
+                        background = dot(i, i == selected)
+                        setOnClickListener {
+                            dots.forEachIndexed { j, d -> d.background = dot(j, j == i) }
+                            onPick(i)
+                        }
+                    }
+                    dots += v
+                    addView(v, LinearLayout.LayoutParams(a.dp(48), a.dp(48)))
                 }
-            }
-            dots += v
-            addView(v, LinearLayout.LayoutParams(a.dp(34), a.dp(34)).apply { marginEnd = a.dp(6) })
+            })
         }
     }
 
@@ -931,7 +963,12 @@ object Sheets {
                 },
                 onClick = { r ->
                     dialog.dismiss()
-                    TabManager.reopen(r)
+                    // 3.0: the list came without the histories; this tab's is read now, off the main thread.
+                    a.lifecycleScope.launch {
+                        // A history too big for Android 7 to read back (saved by 2.9) reopens without it.
+                        val state = withContext(Dispatchers.IO) { runCatching { SwiftApp.db.closedTabState(r.id) }.getOrNull() }
+                        TabManager.reopen(r.copy(state = state))
+                    }
                 },
             )
             adapter.items = rows
@@ -1064,6 +1101,8 @@ object Sheets {
                 .setMessage("Its cookies, saved logins and stored data are deleted, so you're signed out of it.")
                 .setPositiveButton("Clear") { _, _ ->
                     Engine.runtime.storageController.clearDataFromBaseDomain(site, org.mozilla.geckoview.StorageController.ClearFlags.ALL)
+                    // In every profile: signed out of Google in all of them (3.0).
+                    if (GoogleAccounts.isGoogleHost(site)) GoogleAccounts.forgetAll()
                     if (onThisSite && tab != null) TabManager.reload(tab)
                 }
                 .setNegativeButton(android.R.string.cancel, null)

@@ -151,9 +151,41 @@ object Volumes {
         return CardAccess(ctx.applicationContext, v, tree)
     }
 
-    /** The card that [files] need access to (the first one without it), if any. */
-    fun cardWithoutAccess(ctx: Context, files: Collection<File>): Volume? =
-        files.firstOrNull { needsAccess(ctx, it) && treeFor(ctx, of(ctx, it)!!) == null }?.let { of(ctx, it) }
+    /**
+     * The card that [files] need access to (the first one without it), if any. 3.0: asked once for
+     * each storage, not for each file (Select all → Delete on thousands of card photos froze the
+     * screen with a question to Android for each).
+     */
+    fun cardWithoutAccess(ctx: Context, files: Collection<File>): Volume? {
+        for ((v, list) in files.groupBy { of(ctx, it) }) {
+            if (v == null || !v.removable) continue
+            val own = ownFolder(ctx, v)
+            if (list.all { it.path == own.path || it.path.startsWith(own.path + "/") }) continue
+            if (!v.root.canWrite() && treeFor(ctx, v) == null) return v
+        }
+        return null
+    }
+
+    private val fat32 = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+
+    /**
+     * 3.0: whether [v] is a memory card formatted as FAT32, which can't hold a file over 4 GB, as far
+     * as the system says (false when it can't tell: the copy then finds out when it gets there).
+     */
+    fun isFat32(v: Volume): Boolean {
+        if (!v.removable) return false
+        fat32[v.uuid]?.let { return it }
+        val yes = try {
+            File("/proc/mounts").readLines().any { line ->
+                val p = line.split(' ')
+                p.size > 2 && p[1].endsWith("/" + v.uuid) && (p[2] == "vfat" || p[2] == "msdos")
+            }
+        } catch (_: Exception) {
+            false
+        }
+        fat32[v.uuid] = yes
+        return yes
+    }
 }
 
 /** How files are changed (2.7): plain file access, or a memory card's document access. */
@@ -178,6 +210,9 @@ abstract class FileAccess {
     /** Sets a copy's date to the original's (not possible on a card through document access). */
     open fun setTime(f: File, time: Long) {}
 
+    /** 3.0: deletes [dir] only if it is empty (a move takes away the folders it left empty, nothing more). */
+    open fun deleteEmptyFolder(dir: File): Boolean = dir.list()?.isEmpty() == true && delete(dir)
+
     fun mkdirs(dir: File): Boolean {
         if (dir.isDirectory) return true
         val parent = dir.parentFile ?: return false
@@ -199,9 +234,22 @@ object PlainAccess : FileAccess() {
 
     override fun delete(f: File): Boolean = if (f.isDirectory) f.deleteRecursively() else f.delete() || !f.exists()
 
-    override fun rename(f: File, name: String) = f.renameTo(File(f.parentFile, name))
+    // 3.0: the system's own way, which refuses a folder that isn't empty (nothing put there meanwhile goes).
+    override fun deleteEmptyFolder(dir: File): Boolean = dir.isDirectory && dir.delete()
 
-    override fun moveInto(f: File, dir: File) = f.renameTo(File(dir, f.name))
+    // 3.0: never over another file already there (renaming writes over it silently); only the same
+    // file in other capitals, on a storage that ignores them.
+    override fun rename(f: File, name: String): Boolean {
+        val to = File(f.parentFile, name)
+        if (to.exists() && !FileOps.sameFile(f, to)) return false
+        return f.renameTo(to)
+    }
+
+    override fun moveInto(f: File, dir: File): Boolean {
+        val to = File(dir, f.name)
+        if (to.exists() && !FileOps.sameFile(f, to)) return false
+        return f.renameTo(to)
+    }
 
     override fun setTime(f: File, time: Long) {
         if (time > 0) f.setLastModified(time)
@@ -261,7 +309,21 @@ class CardAccess(private val ctx: Context, private val volume: Volumes.Volume, p
     }
 
     override fun rename(f: File, name: String): Boolean = try {
-        DocumentsContract.renameDocument(resolver, doc(f), name) != null && File(f.parentFile, name).exists()
+        if (name != f.name && name.equals(f.name, ignoreCase = true)) {
+            // 3.0: only the capitals change: the card's provider sees the name as taken and would make
+            // "Photo (1).jpg", so it goes through a hidden name on the way (and back if the last step fails).
+            val via = File(f.parentFile, Parts.PREFIX + "rename-" + System.nanoTime())
+            when {
+                DocumentsContract.renameDocument(resolver, doc(f), via.name) == null -> false
+                DocumentsContract.renameDocument(resolver, doc(via), name) != null -> File(f.parentFile, name).exists()
+                else -> {
+                    runCatching { DocumentsContract.renameDocument(resolver, doc(via), f.name) }
+                    false
+                }
+            }
+        } else {
+            DocumentsContract.renameDocument(resolver, doc(f), name) != null && File(f.parentFile, name).exists()
+        }
     } catch (e: Exception) {
         L.w("Couldn't rename on the card", e)
         false

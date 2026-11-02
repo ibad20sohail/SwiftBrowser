@@ -4,6 +4,7 @@ import android.net.Uri
 import com.swiftbrowser.R
 import com.swiftbrowser.SwiftApp
 import java.net.URLEncoder
+import java.util.Locale
 
 /** Where searches from the address bar and the home page go (Settings → Browsing & tabs). */
 enum class SearchEngine(
@@ -53,24 +54,57 @@ enum class SearchEngine(
 
         val current: SearchEngine get() = fromKey(SwiftApp.prefs.searchEngine)
 
-        /** The search terms if [url] is a results page of any of these engines, to show in the address bar. */
-        fun queryOf(url: String?): String? {
+        /** Google's own sites: google.com, google.de, google.co.uk, google.com.pk, with or without www. */
+        private val GOOGLE_HOST = Regex("^(www\\.)?google\\.(com|cat|[a-z]{2}|(co|com)\\.[a-z]{2})$")
+
+        /**
+         * 3.0: the engine whose own site [host] is, matched exactly: "google.github.io" or
+         * "google.example.com" isn't Google, so a page there can't put words next to Google's logo in
+         * the address bar as if they were a search.
+         */
+        fun ofHost(host: String?): SearchEngine? {
+            val h = host?.lowercase(Locale.ROOT)?.trimEnd('.') ?: return null
+            fun on(site: String) = h == site || h.endsWith(".$site")
+            return when {
+                GOOGLE_HOST.matches(h) -> GOOGLE
+                on("duckduckgo.com") -> DUCKDUCKGO
+                on("bing.com") -> BING
+                on("startpage.com") -> STARTPAGE
+                else -> null
+            }
+        }
+
+        /**
+         * 3.0: the names of the address parts that hold the search words when [host] and [path] are
+         * a results page of one of these engines; null for any other page.
+         */
+        fun wordsParams(host: String?, path: String): List<String>? = when (ofHost(host)) {
+            GOOGLE, BING -> if (path == "/search") listOf("q") else null
+            DUCKDUCKGO -> if (path == "/" || path.isEmpty()) listOf("q") else null
+            STARTPAGE -> if (path.startsWith("/sp/search") || path.startsWith("/do/search")) listOf("query", "q") else null
+            else -> null
+        }
+
+        /** The search words if [url] is a results page of any of these engines, whatever they are. */
+        fun wordsOf(url: String?): String? {
             if (url == null || !UrlUtils.isHttp(url)) return null
             val u = try {
                 Uri.parse(url)
             } catch (_: Exception) {
                 return null
             }
-            val host = u.host?.lowercase() ?: return null
-            val path = u.path ?: ""
-            return when {
-                host.contains("google.") && path == "/search" -> u.getQueryParameter("q")
-                (host == "duckduckgo.com" || host.endsWith(".duckduckgo.com")) && (path == "/" || path.isEmpty()) -> u.getQueryParameter("q")
-                (host == "bing.com" || host.endsWith(".bing.com")) && path == "/search" -> u.getQueryParameter("q")
-                host.endsWith("startpage.com") && (path.startsWith("/sp/search") || path.startsWith("/do/search")) ->
-                    u.getQueryParameter("query") ?: u.getQueryParameter("q")
-                else -> null
-            }
+            val params = wordsParams(u.host, u.path ?: "") ?: return null
+            return params.firstNotNullOfOrNull { u.getQueryParameter(it) }
         }
+
+        /**
+         * The search terms if [url] is a results page of any of these engines, to show in the address
+         * bar. 3.0: not when they read like an address ("accounts.google.com"): the bar shows the
+         * site then, so a link to such a search can't pass for that site.
+         */
+        fun queryOf(url: String?): String? = wordsOf(url)?.takeIf { it.isNotBlank() && !UrlUtils.looksLikeAddress(it) }
+
+        /** 3.0: the engine whose results page [url] is, for its logo next to the words. */
+        fun ofResults(url: String?): SearchEngine? = if (wordsOf(url) != null) ofHost(UrlUtils.host(url)) else null
     }
 }

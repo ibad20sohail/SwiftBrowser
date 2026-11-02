@@ -162,20 +162,21 @@
                     android:background="@color/toolbar_bg"
                     android:gravity="center_vertical"
                     android:orientation="horizontal"
-                    android:paddingStart="8dp"
+                    android:paddingStart="4dp"
                     android:paddingEnd="2dp">
 
+                    <!-- 3.0: the toolbar's buttons are 48 dp to tap (they were 40, the profile 30);
+                         what they draw is the same size. -->
                     <FrameLayout
-                        android:layout_width="36dp"
-                        android:layout_height="36dp"
-                        android:layout_marginEnd="4dp">
+                        android:layout_width="48dp"
+                        android:layout_height="48dp">
 
                         <TextView
                             android:id="@+id/profile_chip"
-                            android:layout_width="30dp"
-                            android:layout_height="30dp"
+                            android:layout_width="48dp"
+                            android:layout_height="48dp"
                             android:layout_gravity="center"
-                            android:background="@drawable/bg_circle"
+                            android:background="@drawable/bg_profile_chip"
                             android:gravity="center"
                             android:textColor="#FFFFFFFF"
                             android:textSize="14sp"
@@ -280,8 +281,8 @@
 
                     <FrameLayout
                         android:id="@+id/video_btn"
-                        android:layout_width="40dp"
-                        android:layout_height="40dp"
+                        android:layout_width="48dp"
+                        android:layout_height="48dp"
                         android:background="?attr/selectableItemBackgroundBorderless"
                         android:contentDescription="Videos on this page"
                         android:visibility="gone">
@@ -297,8 +298,8 @@
 
                     <FrameLayout
                         android:id="@+id/tabs_btn"
-                        android:layout_width="40dp"
-                        android:layout_height="40dp"
+                        android:layout_width="48dp"
+                        android:layout_height="48dp"
                         android:background="?attr/selectableItemBackgroundBorderless"
                         android:contentDescription="Tabs">
 

@@ -12,3 +12,7 @@ epub.js 0.3.93
   FuturePress - BSD 2-Clause License - https://github.com/futurepress/epub.js
 JSZip 3.10.2
   Stuart Knightley and contributors - MIT License (dual MIT / GPLv3, used under MIT) - https://github.com/Stuk/jszip
+pdf.js 6.4.299 image decoders (wasm/: openjpeg.wasm, jbig2.wasm and their no-WebAssembly fallbacks), added in Swift 3.0
+  for JPEG 2000 (OpenJPEG - BSD 2-Clause License, LICENSE_OPENJPEG) and JBIG2 and CCITT fax pictures (PDFium's decoder -
+  BSD-style license, LICENSE_JBIG2); pdf.js's builds of them: Mozilla Foundation - Apache License 2.0 / BSD (LICENSE_PDFJS_*)
+  https://github.com/mozilla/pdf.js

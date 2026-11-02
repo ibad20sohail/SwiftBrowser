@@ -51,6 +51,8 @@ object SessionFactory {
             // unless "Keep playing in the background" is on: then video and music go on.
             .suspendMediaWhenInactive(!SwiftApp.prefs.keepPlaying)
             .build()
+        // 3.0: "Tell sites a newer Firefox version" (Settings → Privacy & security).
+        com.swiftbrowser.engine.UserAgent.overrideFor(tab.desktop)?.let { settings.setUserAgentOverride(it) }
         val session = GeckoSession(settings)
         val d = TabDelegates(tab)
         session.setNavigationDelegate(d)
@@ -71,9 +73,10 @@ object SessionFactory {
         AdBlock.extension?.let { ext ->
             session.webExtensionController.setActionDelegate(ext, UboActionDelegate(tab))
             session.webExtensionController.setTabDelegate(ext, object : WebExtension.SessionTabDelegate {
-                // uBlock Origin closes tabs it identifies as ad pop-ups.
+                // uBlock Origin closes tabs it identifies as ad pop-ups. 3.0: the pop-up's tab really has
+                // that session now (TabManager.openedByEngine), and it doesn't go to Recently closed.
                 override fun onCloseTab(source: WebExtension?, session: GeckoSession): GeckoResult<AllowOrDeny> {
-                    TabManager.bySession(session)?.let { TabManager.close(it) }
+                    TabManager.bySession(session)?.let { TabManager.closeTabs(listOf(it), remember = false) }
                     return GeckoResult.allow()
                 }
 
@@ -127,11 +130,6 @@ class UboActionDelegate(private val tab: Tab?) : WebExtension.ActionDelegate {
         return GeckoResult.fromValue(session)
     }
 }
-
-private val CONNECTION_ERRORS = setOf(
-    WebRequestError.ERROR_UNKNOWN_HOST, WebRequestError.ERROR_OFFLINE, WebRequestError.ERROR_NET_RESET,
-    WebRequestError.ERROR_NET_INTERRUPT, WebRequestError.ERROR_NET_TIMEOUT, WebRequestError.ERROR_CONNECTION_REFUSED,
-)
 
 class TabDelegates(private val tab: Tab) :
     GeckoSession.NavigationDelegate,
@@ -196,7 +194,7 @@ class TabDelegates(private val tab: Tab) :
             }
         } else {
             decide(url, popup = false) { waited ->
-                NavPolicy.navigation(level, request, tab.lastClick, System.currentTimeMillis(), tab.userNavAt, waited)
+                NavPolicy.navigation(level, request, tab.lastClick, System.currentTimeMillis(), tab.userNavAt, tab.loading, waited)
             }
         }
     }
@@ -210,6 +208,8 @@ class TabDelegates(private val tab: Tab) :
         session.settings.setUserAgentMode(
             if (want) GeckoSessionSettings.USER_AGENT_MODE_DESKTOP else GeckoSessionSettings.USER_AGENT_MODE_MOBILE,
         )
+        // 3.0: a newer Firefox version told to sites goes with the desktop or mobile version.
+        session.settings.setUserAgentOverride(com.swiftbrowser.engine.UserAgent.overrideFor(want))
         session.settings.setViewportMode(
             if (want) GeckoSessionSettings.VIEWPORT_MODE_DESKTOP else GeckoSessionSettings.VIEWPORT_MODE_MOBILE,
         )
@@ -249,10 +249,15 @@ class TabDelegates(private val tab: Tab) :
     override fun onNewSession(session: GeckoSession, uri: String): GeckoResult<GeckoSession>? =
         GeckoResult.fromValue(TabManager.openPopup(tab, uri))
 
+    /** The address that last failed to load (3.0): its error page isn't a site that "isn't secure". */
+    private var failedUrl: String? = null
+
     override fun onLoadError(session: GeckoSession, uri: String?, error: WebRequestError): GeckoResult<String>? {
-        // No connection (or it dropped): the page tries again by itself once there is one.
+        failedUrl = uri
+        // No connection (or it dropped): the page tries again by itself once there is one. 3.0: not
+        // a site that can't be found (or won't answer) while the phone is online, see ErrorPage.
         // Failed while pages were paused for the VPN (Engine.setNetworkBlocked): loads once it's connected.
-        tab.waitingForConnection = error.code in CONNECTION_ERRORS ||
+        tab.waitingForConnection = ErrorPage.waitsForConnection(error.code, com.swiftbrowser.engine.DataSaver.online) ||
             (com.swiftbrowser.engine.Engine.networkBlocked && error.category == WebRequestError.ERROR_CATEGORY_PROXY)
         return GeckoResult.fromValue(ErrorPage.create(uri, error))
     }
@@ -263,8 +268,15 @@ class TabDelegates(private val tab: Tab) :
     private var pageStartedAt = 0L
     private var pageSite = ""
 
-    /** The site for the log: never the address, and nothing of incognito tabs. */
-    private fun logSite(url: String? = tab.url) = if (tab.incognito) "(incognito)" else UrlUtils.siteName(url)
+    /**
+     * The site for the log: never the address, and nothing of incognito tabs. 3.0: other addresses
+     * only by their kind ("a magnet link", "a file"): the site name was the whole address for them.
+     */
+    private fun logSite(url: String? = tab.url) = when {
+        tab.incognito -> "(incognito)"
+        // A web address without a site (malformed) would come back whole too.
+        else -> TabRules.logKind(url) ?: if (UrlUtils.host(url).isNullOrEmpty()) "a web page" else UrlUtils.siteName(url)
+    }
 
     override fun onPageStart(session: GeckoSession, url: String) {
         pageStartedAt = android.os.SystemClock.elapsedRealtime()
@@ -277,7 +289,8 @@ class TabDelegates(private val tab: Tab) :
         // A reloaded page may offer to continue its video again (see WatchPositions).
         tab.resumeOffered = null
         tab.resumePosition = 0.0
-        if (tab === TabManager.current && session.isOpen) session.setActive(true)
+        // 3.0: only if it can be seen (not with Swift in the background, under the home page or the tab grid).
+        if (session.isOpen && TabManager.pageOnScreen(tab)) session.setActive(true)
         changed()
     }
 
@@ -306,7 +319,7 @@ class TabDelegates(private val tab: Tab) :
     /** With secure connections first on: a site without a secure version says so, once per site. */
     private fun warnIfInsecure() {
         // Not for an error page (the site couldn't be reached at all).
-        if (!SwiftApp.prefs.httpsOnly || tab.secure || tab !== TabManager.current || tab.waitingForConnection) return
+        if (!SwiftApp.prefs.httpsOnly || tab.secure || tab !== TabManager.current || tab.waitingForConnection || tab.url == failedUrl) return
         val url = tab.url
         if (!url.startsWith("http://")) return
         val host = UrlUtils.host(url) ?: return
@@ -382,7 +395,8 @@ class TabDelegates(private val tab: Tab) :
     }
 
     override fun onCloseRequest(session: GeckoSession) {
-        // Only pages opened by script may close themselves.
+        // Only pages opened by script may close themselves. 3.0: a pop-up's tab now has the window
+        // the engine opened for it (TabManager.openedByEngine), so its window.close() reaches it.
         if (tab.parentId != null && tab.session === session) TabManager.close(tab)
     }
 
@@ -422,22 +436,33 @@ class TabDelegates(private val tab: Tab) :
         } catch (_: Exception) {
         }
         tab.session = null
+        tab.restoreToken = 0
         tab.loading = false
         tab.playing = false
         Helper.detachTab(tab)
+        // 3.0: a page in full screen leaves it: the engine says nothing more of it, and the screen
+        // stayed in full screen (Back asked the new page, which isn't in it).
+        if (tab.fullscreen) {
+            tab.fullscreen = false
+            ui?.onFullScreen(tab, false)
+        }
         if (tab === TabManager.current) {
             val now = android.os.SystemClock.elapsedRealtime()
-            if (crashed && now - tab.autoRevivedAt < 60_000) {
-                // It crashed again soon after reloading: the crash page, with its Reload button.
-                tab.crashed = true
-                ui?.onTabCrashed(tab)
-            } else {
-                // Reloaded by itself once (2.7), instead of the crash page.
-                if (crashed) {
-                    tab.autoRevivedAt = now
-                    ui?.showMessage("The page stopped working, so Swift loaded it again")
+            when (TabRules.revive(now, tab.autoRevivedAt, ui?.onScreen == true)) {
+                // It ended again soon after Swift loaded it again (3.0: also when Android ended it):
+                // the crash page, with its Reload button.
+                TabRules.Revive.CRASH_PAGE -> {
+                    tab.crashed = true
+                    ui?.onTabCrashed(tab)
                 }
-                TabManager.revive(tab)
+                // 3.0: not while Swift is out of sight: when it's back (TabManager.reviveOnReturn).
+                TabRules.Revive.WHEN_BACK -> L.d("Tab ${tab.id}: its page loads again when Swift is back")
+                // Reloaded by itself once (2.7), instead of the crash page.
+                TabRules.Revive.NOW -> {
+                    tab.autoRevivedAt = now
+                    if (crashed) ui?.showMessage("The page stopped working, so Swift loaded it again")
+                    TabManager.revive(tab)
+                }
             }
         }
     }
@@ -464,25 +489,59 @@ class TabDelegates(private val tab: Tab) :
             GeckoSession.PermissionDelegate.PERMISSION_AUTOPLAY_INAUDIBLE -> GeckoResult.fromValue(
                 if (SwiftApp.prefs.autoplayMuted) ContentPermission.VALUE_ALLOW else ContentPermission.VALUE_DENY,
             )
-            GeckoSession.PermissionDelegate.PERMISSION_PERSISTENT_STORAGE,
-            GeckoSession.PermissionDelegate.PERMISSION_MEDIA_KEY_SYSTEM_ACCESS,
-            GeckoSession.PermissionDelegate.PERMISSION_STORAGE_ACCESS,
-            -> GeckoResult.fromValue(ContentPermission.VALUE_ALLOW)
+            // Protected films and series (DRM).
+            GeckoSession.PermissionDelegate.PERMISSION_MEDIA_KEY_SYSTEM_ACCESS -> GeckoResult.fromValue(ContentPermission.VALUE_ALLOW)
+            // 3.0: no site keeps its data out of reach of clearing (Android's own space cleaning included).
+            GeckoSession.PermissionDelegate.PERMISSION_PERSISTENT_STORAGE -> GeckoResult.fromValue(ContentPermission.VALUE_DENY)
+            GeckoSession.PermissionDelegate.PERMISSION_STORAGE_ACCESS -> storageAccess(session, perm)
             // Sound only after the user presses play (stops noisy auto-playing ads), unless the site is allowed.
             GeckoSession.PermissionDelegate.PERMISSION_AUTOPLAY_AUDIBLE -> GeckoResult.fromValue(
                 if (SiteSettings.autoplay(UrlUtils.site(perm.uri))) ContentPermission.VALUE_ALLOW else ContentPermission.VALUE_DENY,
             )
             // Notification prompts on these sites are spam.
             GeckoSession.PermissionDelegate.PERMISSION_DESKTOP_NOTIFICATION -> GeckoResult.fromValue(ContentPermission.VALUE_DENY)
-            GeckoSession.PermissionDelegate.PERMISSION_GEOLOCATION -> when (SiteSettings.location(UrlUtils.site(perm.uri))) {
-                SiteSettings.Location.ALLOW -> GeckoResult.fromValue(ContentPermission.VALUE_ALLOW)
-                SiteSettings.Location.BLOCK -> GeckoResult.fromValue(ContentPermission.VALUE_DENY)
-                SiteSettings.Location.ASK -> SessionFactory.prompts.askPermission(
-                    "Allow ${UrlUtils.host(perm.uri) ?: "this site"} to use your location?",
-                )
+            GeckoSession.PermissionDelegate.PERMISSION_GEOLOCATION -> {
+                val site = UrlUtils.site(perm.uri)
+                when (SiteSettings.location(site)) {
+                    SiteSettings.Location.ALLOW -> GeckoResult.fromValue(ContentPermission.VALUE_ALLOW)
+                    SiteSettings.Location.BLOCK -> GeckoResult.fromValue(ContentPermission.VALUE_DENY)
+                    // 3.0: the answer can be kept for the site (not from incognito, which leaves nothing behind).
+                    SiteSettings.Location.ASK -> SessionFactory.prompts.askPermission(
+                        session,
+                        "Allow ${UrlUtils.host(perm.uri) ?: "this site"} to use your location?",
+                        rememberable = site != null && !tab.incognito,
+                    ) { allowed, remember ->
+                        if (remember && site != null) {
+                            SiteSettings.setLocation(site, if (allowed) SiteSettings.Location.ALLOW else SiteSettings.Location.BLOCK)
+                        }
+                    }
+                }
             }
             else -> GeckoResult.fromValue(ContentPermission.VALUE_DENY)
         }
+    }
+
+    /**
+     * 3.0: a site inside the page (a video player, a "Sign in with" button, comments) asks for its
+     * own cookies here. Asked, not allowed silently: with them it also knows you from site to site.
+     * A "Don't allow" holds for the two sites until Swift closes; an "Allow" the engine keeps itself.
+     */
+    private fun storageAccess(session: GeckoSession, perm: ContentPermission): GeckoResult<Int> {
+        val inside = UrlUtils.siteName(perm.uri).ifBlank { UrlUtils.siteName(perm.thirdPartyOrigin) }
+        val here = UrlUtils.siteName(tab.url)
+        if (inside.isBlank() || here.isBlank() || ui == null) return GeckoResult.fromValue(ContentPermission.VALUE_DENY)
+        val pair = "${tab.incognito} ${UrlUtils.siteOfHost(inside)} ${UrlUtils.siteOfHost(here)}"
+        storageAnswers[pair]?.let { return GeckoResult.fromValue(it) }
+        return SessionFactory.prompts.askPermission(
+            session, "Let $inside use its cookies on $here?", allow = "Allow", deny = "Don't allow",
+        ) { allowed, _ ->
+            storageAnswers[pair] = if (allowed) ContentPermission.VALUE_ALLOW else ContentPermission.VALUE_DENY
+        }
+    }
+
+    private companion object {
+        /** 3.0: answers to a site's question for its cookies inside another (see storageAccess), this run. */
+        val storageAnswers = HashMap<String, Int>()
     }
 
     override fun onAndroidPermissionsRequest(
@@ -499,6 +558,9 @@ class TabDelegates(private val tab: Tab) :
         u.requestAndroidPermissions(wanted.toTypedArray()) { granted -> if (granted) callback.grant() else callback.reject() }
     }
 
+    /** When this tab last said that sites can't use the camera or microphone (3.0). */
+    private var mediaRefusedAt = 0L
+
     override fun onMediaPermissionRequest(
         session: GeckoSession,
         uri: String,
@@ -507,6 +569,13 @@ class TabDelegates(private val tab: Tab) :
         callback: GeckoSession.PermissionDelegate.MediaCallback,
     ) {
         callback.reject()
+        // 3.0: said, not refused silently (a call or a voice search would only seem broken); once
+        // in a while, as a page may ask again and again.
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (tab === TabManager.current && now - mediaRefusedAt > 10_000) {
+            mediaRefusedAt = now
+            ui?.showMessage("Swift doesn't let sites use the camera or microphone")
+        }
     }
 
     // ------------------------------------------------------------------ media

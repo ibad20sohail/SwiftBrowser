@@ -5,12 +5,12 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Matrix
-import android.media.ExifInterface
 import android.media.ThumbnailUtils
 import android.os.Handler
 import android.os.Looper
 import android.provider.MediaStore
 import android.util.LruCache
+import androidx.exifinterface.media.ExifInterface
 import com.swiftbrowser.core.Background
 import java.io.File
 import java.util.Collections
@@ -108,6 +108,7 @@ object FileThumbs {
             if (jpeg) inPreferredConfig = Bitmap.Config.RGB_565
         }
         val bmp = BitmapFactory.decodeFile(file.path, opts) ?: return null
+        // 3.0: AndroidX's reader, the same on every Android version (Android 7's own misses some photos' turn).
         val degrees = if (jpeg) {
             when (runCatching { ExifInterface(file.path).getAttributeInt(ExifInterface.TAG_ORIENTATION, 0) }.getOrDefault(0)) {
                 ExifInterface.ORIENTATION_ROTATE_90 -> 90

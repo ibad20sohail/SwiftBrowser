@@ -16,6 +16,7 @@ input{font-size:28px;letter-spacing:8px;text-align:center;width:100%;box-sizing:
 input:focus{border-color:var(--accent)}
 button{margin-top:16px;width:100%;padding:12px;font-size:16px;border:0;border-radius:24px;background:var(--accent);color:var(--on);cursor:pointer}
 .err{color:#d93025;min-height:20px;margin-top:12px;font-size:14px}
+.note{font-size:12px;margin:16px 0 0}
 </style>
 </head>
 <body>
@@ -25,9 +26,14 @@ button{margin-top:16px;width:100%;padding:12px;font-size:16px;border:0;border-ra
 <input name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="7" pattern="[0-9 ]{6,7}" required autofocus aria-label="Code">
 <button type="submit">Connect</button>
 <div class="err" id="err"></div>
+<!-- 3.0: plain HTTP on the local network. -->
+<p class="note">This connection isn't encrypted. Use Wi-Fi transfer on your own Wi-Fi, not public Wi-Fi.</p>
 </form>
 <script>
-if (location.search.indexOf('wrong=1') >= 0) document.getElementById('err').textContent = "That code isn't right. Check the phone and try again.";
+var q = location.search;
+// 3.0: after ten wrong codes nobody gets in until a new code is made on the phone.
+if (q.indexOf('locked=1') >= 0) document.getElementById('err').textContent = "Too many wrong codes were typed. On the phone, tap New code, then enter the new one here.";
+else if (q.indexOf('wrong=1') >= 0) document.getElementById('err').textContent = "That code isn't right. Check the phone and try again.";
 </script>
 </body>
 </html>

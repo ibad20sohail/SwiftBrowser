@@ -9,9 +9,10 @@ import android.util.Base64
 import com.swiftbrowser.engine.DataSaver
 
 /**
- * Small pictures for sheets (the picture a long press was on) and news rows: loaded in the background, at most
- * 1.5 MB and a few seconds, shrunk to about [size] pixels. Nothing loads on mobile data with Data
- * saver on; when it can't load, the sheet keeps its plain icon.
+ * Small pictures for sheets (the picture a long press was on), news rows and cards: loaded in the
+ * background, at most 1.5 MB and a few seconds, shrunk to just cover a box of [width] by [size]
+ * pixels (a square of [size] unless said). Nothing loads on mobile data with Data saver on; when it
+ * can't load, the sheet keeps its plain icon.
  */
 object PreviewLoader {
     private const val MAX_BYTES = 1_500_000
@@ -23,13 +24,15 @@ object PreviewLoader {
         override fun sizeOf(key: String, value: Bitmap) = value.byteCount
     }
 
-    fun cached(url: String, size: Int): Bitmap? = cache.get("$size:$url")
+    fun cached(url: String, size: Int, width: Int = size): Bitmap? = cache.get(key(url, size, width))
+
+    private fun key(url: String, size: Int, width: Int) = "${width}x$size:$url"
 
     /** Android is short of memory: the kept pictures go (they load again when needed). */
     fun trim() = cache.evictAll()
 
-    fun load(activity: Activity, url: String, size: Int, onLoaded: (Bitmap) -> Unit) {
-        cached(url, size)?.let {
+    fun load(activity: Activity, url: String, size: Int, width: Int = size, onLoaded: (Bitmap) -> Unit) {
+        cached(url, size, width)?.let {
             onLoaded(it)
             return
         }
@@ -40,8 +43,8 @@ object PreviewLoader {
             } catch (_: Exception) {
                 null
             } ?: return@execute
-            val bmp = decode(bytes, size) ?: return@execute
-            cache.put("$size:$url", bmp)
+            val bmp = decode(bytes, width, size) ?: return@execute
+            cache.put(key(url, size, width), bmp)
             main.post { if (!activity.isFinishing && !activity.isDestroyed) onLoaded(bmp) }
         }
     }
@@ -57,16 +60,53 @@ object PreviewLoader {
         return com.swiftbrowser.engine.Net.get(url, MAX_BYTES, "image/*", 5000)?.bytes
     }
 
-    private fun decode(bytes: ByteArray, size: Int): Bitmap? {
+    /**
+     * 3.0: decoded at the size it is shown. Halving alone (while both sides stay big enough) left a
+     * 1200 × 675 picture for a 360-pixel card at full size, 1.6 MB (3.2 MB as PNG or WebP); the
+     * decoder now scales it the rest of the way itself, into a bitmap of the final size (the bigger
+     * one it decodes into is let go at once).
+     */
+    private fun decode(bytes: ByteArray, width: Int, height: Int): Bitmap? {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
         if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
-        var sample = 1
-        while (bounds.outWidth / (sample * 2) >= size && bounds.outHeight / (sample * 2) >= size) sample *= 2
+        val fit = Fit.of(bounds.outWidth, bounds.outHeight, width, height)
         return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply {
-            inSampleSize = sample
-            // Photos have no see-through parts: half the memory (2.6).
-            if (bounds.outMimeType == "image/jpeg") inPreferredConfig = android.graphics.Bitmap.Config.RGB_565
-        })
+            inSampleSize = fit.sample
+            // Pictures without see-through parts in half the memory (2.6: photos; 3.0: PNG and WebP
+            // too). Android decodes those that have see-through parts in full colour anyway.
+            inPreferredConfig = Bitmap.Config.RGB_565
+            if (fit.scaled) {
+                // Scaled by inTargetDensity / inDensity while decoding.
+                inScaled = true
+                inDensity = fit.from
+                inTargetDensity = fit.to
+            }
+        })?.also {
+            // Shown at its own size, as before (the densities above were only the scale).
+            it.density = Bitmap.DENSITY_NONE
+        }
+    }
+
+    /**
+     * How a picture of [w] × [h] is brought down to just cover a [boxW] × [boxH] box: halved [sample]
+     * times while both sides stay big enough, then scaled from [from] to [to] pixels (never up).
+     */
+    internal class Fit(val sample: Int, val from: Int, val to: Int) {
+        val scaled get() = to < from
+
+        companion object {
+            fun of(w: Int, h: Int, width: Int, height: Int): Fit {
+                // A box of no size would halve for ever.
+                val boxW = width.coerceAtLeast(1)
+                val boxH = height.coerceAtLeast(1)
+                var sample = 1
+                while (w / (sample * 2) >= boxW && h / (sample * 2) >= boxH) sample *= 2
+                val sw = w / sample
+                val sh = h / sample
+                // The side that has to cover its box exactly decides the scale.
+                return if (sw.toLong() * boxH >= sh.toLong() * boxW) Fit(sample, sh, minOf(sh, boxH)) else Fit(sample, sw, minOf(sw, boxW))
+            }
+        }
     }
 }

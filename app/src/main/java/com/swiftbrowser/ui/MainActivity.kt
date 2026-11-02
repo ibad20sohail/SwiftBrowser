@@ -72,6 +72,7 @@ import com.swiftbrowser.tabs.BrowserUi
 import com.swiftbrowser.tabs.Tab
 import com.swiftbrowser.tabs.TabGroup
 import com.swiftbrowser.tabs.TabManager
+import com.swiftbrowser.tabs.TabRules
 import com.swiftbrowser.tabs.Thumbnails
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.asCoroutineDispatcher
@@ -95,8 +96,9 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     lateinit var gecko: SwiftGeckoView
         private set
 
-    /** The bar over selected text (2.6). */
-    private val selectionMenu by lazy { SelectionMenu(this) }
+    /** The bar over selected text (2.6). 3.0: let go of in onDestroy (the pages keep it otherwise, and this screen with it). */
+    private val selectionMenuLazy = lazy { SelectionMenu(this) }
+    private val selectionMenu by selectionMenuLazy
     private lateinit var root: FrameLayout
     private lateinit var appBar: View
     private lateinit var toolbar: LinearLayout
@@ -243,10 +245,24 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     private val voiceLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
             val text = r.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
-            if (r.resultCode == Activity.RESULT_OK && !text.isNullOrBlank()) navigate(text)
+            // 3.0: heard words only open web pages (see UrlUtils.toUrlOrSearch).
+            if (r.resultCode == Activity.RESULT_OK && !text.isNullOrBlank()) navigate(text, trusted = false)
         }
 
     private val current: Tab? get() = TabManager.current
+
+    /** 3.0: between onStart and onStop. */
+    private var visibleToUser = false
+
+    override val onScreen: Boolean get() = visibleToUser
+
+    override val pageOnScreen: Boolean
+        get() = built && visibleToUser && !switcherOpen && current?.showsHome == false
+
+    /** 3.0: the open tab's page is made active (drawn) only when it can be seen ([pageOnScreen]). */
+    private fun activateIfSeen() {
+        current?.session?.let { if (it.isOpen && pageOnScreen) it.setActive(true) }
+    }
 
     // ------------------------------------------------------------------ lifecycle
 
@@ -362,13 +378,16 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             SwiftApp.reloadAfterThemeChange = false
             // Sites that pick their colours when the page loads follow on reload. Google notices the
             // change during that load and only uses it from the next one, so it gets a second reload.
+            // 3.0: never a page that plays (or played) a video, or is in full screen: it would start over.
             current?.let {
-                if (!it.isHome && UrlUtils.isHttp(it.url)) {
+                if (!it.isHome && UrlUtils.isHttp(it.url) && !it.playing && !it.videoPlaying && !it.fullscreen) {
                     TabManager.reload(it)
                     if (UrlUtils.site(it.url)?.startsWith("google.") == true) themeReloadTab = it
                 }
             }
         }
+        // 3.0: a page that was in full screen when this screen was rebuilt (a change of colours) stays in it.
+        current?.let { if (it.fullscreen && it.session?.isOpen == true) onFullScreen(it, true) }
         // Full screen first: the dialogs below keep it (see Immersive).
         applySystemBars()
         SystemBars.keepHidden(this) { fullscreenTab == null }
@@ -454,6 +473,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             val freed = withContext(Dispatchers.IO) { com.swiftbrowser.core.Storage.freeSpaceIfLow(this@MainActivity) }
             if (freed > 0) snack("Your phone is almost full: Swift freed ${UrlUtils.formatBytes(freed)} of saved files", long = true)
             withContext(Dispatchers.IO) { com.swiftbrowser.core.Backup.autoBackupIfDue(this@MainActivity) }
+            // 3.0: history over a year old goes, once a week at most.
+            withContext(Dispatchers.IO) { SwiftApp.db.pruneHistoryIfDue(prefs) }
             // Update APKs stay in the download folder after installing (about 150 MB each).
             val oldApks = withContext(Dispatchers.IO) { com.swiftbrowser.core.Updates.deleteOldApks(this@MainActivity) }
             if (oldApks > 0) snack("Deleted the old update file (${UrlUtils.formatBytes(oldApks)})")
@@ -465,6 +486,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
                     .setMessage(VpnUi.expiryText(loc))
                     .setPositiveButton("Open Proton") { _, _ -> TabManager.newTab(com.swiftbrowser.vpn.Vpn.PROTON_DOWNLOADS, incognito = false) }
                     .setNegativeButton("Later", null)
+                    // 3.0: done at Proton already: another year, from here.
+                    .setNeutralButton("I extended it") { _, _ -> VpnUi.markExtended(this@MainActivity, loc) }
                     .showImmersive()
             }
         }
@@ -495,7 +518,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             setImageResource(b.icon)
             contentDescription = b.label
             imageTintList = ColorStateList.valueOf(iconColor())
-            layoutParams = LinearLayout.LayoutParams(dp(40f).toInt(), dp(40f).toInt())
+            layoutParams = LinearLayout.LayoutParams(dp(48f).toInt(), dp(48f).toInt())
             Ui.pressable(this, 0.88f)
             setOnClickListener { toolbarAction(key) }
         }
@@ -609,7 +632,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         }
     }
 
-    /** The camera, for a QR code: a web address opens, other text can be searched, copied or shared. */
+    /** The camera, for a QR code: a web address can be opened, other text searched, either copied or shared. */
     fun scanQr() {
         stopEditing()
         if (checkSelfPermission(android.Manifest.permission.CAMERA) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
@@ -638,6 +661,9 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         val text = raw.trim()
         if (text.isEmpty()) return
         val wifi = QrCodes.wifi(text)
+        // 3.0: every code first shows what it holds, a web address included (where it really
+        // goes, in big letters); only web pages open, never javascript:, data: or file: addresses.
+        val address = if (wifi == null) UrlUtils.addressOf(text, trusted = false) else null
         when {
             wifi != null -> {
                 val actions = ArrayList<Sheets.Action>()
@@ -654,18 +680,31 @@ class MainActivity : AppCompatActivity(), BrowserUi {
                     actions, iconRes = R.drawable.ic_wifi,
                 )
             }
-            UrlUtils.isHttp(text) -> {
-                val tab = current
-                if (tab != null && (tab.showsHome || tab.isBlank)) openInCurrent(text) else TabManager.newTab(text, incognito = tab?.incognito == true)
-            }
-            else -> Sheets.actions(
-                this, "Text from the QR code", text.take(300),
+            address != null -> Sheets.actions(
+                this, UrlUtils.siteName(address).ifBlank { address }, "Link from the QR code",
                 listOf(
-                    Sheets.Action(R.drawable.ic_search, "Search", primary = true) { navigate(text) },
+                    Sheets.Action(R.drawable.ic_open_new, "Open", primary = true) {
+                        val tab = current
+                        if (tab != null && (tab.showsHome || tab.isBlank)) openInCurrent(address) else TabManager.newTab(address, incognito = tab?.incognito == true)
+                    },
                     Sheets.Action(R.drawable.ic_copy, "Copy", primary = true) { copy(text) },
                     Sheets.Action(R.drawable.ic_share, "Share", primary = true) { share(text) },
                 ),
-                iconRes = R.drawable.ic_qr,
+                fullAddress = address, iconRes = R.drawable.ic_qr,
+            )
+            else -> Sheets.actions(
+                // Tapping it shows the whole text.
+                this, "Text from the QR code", if (text.length > 40) text.take(40).trimEnd() + "…" else text,
+                listOf(
+                    // Always a search, whatever the text looks like.
+                    Sheets.Action(R.drawable.ic_search, "Search", primary = true) {
+                        stopEditing()
+                        openInCurrent(UrlUtils.searchUrl(text))
+                    },
+                    Sheets.Action(R.drawable.ic_copy, "Copy", primary = true) { copy(text) },
+                    Sheets.Action(R.drawable.ic_share, "Share", primary = true) { share(text) },
+                ),
+                fullAddress = text.take(2000), iconRes = R.drawable.ic_qr,
             )
         }
     }
@@ -678,6 +717,9 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     }
     private var shownVpnState: com.swiftbrowser.vpn.Vpn.State? = null
     private val vpnListener: () -> Unit = { onVpnChanged() }
+
+    /** The Google account's photo on the profile button follows sign-ins (3.0). */
+    private val accountListener: () -> Unit = { updateProfileChip() }
 
     /** Setup files (.conf) already finished: each new one is offered as a VPN location once. */
     private val setupFilesSeen = HashSet<Long>()
@@ -769,6 +811,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
     override fun onStart() {
         super.onStart()
+        visibleToUser = true
         if (built) started()
     }
 
@@ -792,7 +835,10 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         current?.let { Engine.showTextScaleFor(UrlUtils.site(it.url)) }
         Diagnostics.setOnScreen(true)
         com.swiftbrowser.media.PlaybackService.setOnScreen(true)
-        if (!switcherOpen) current?.session?.let { if (it.isOpen) it.setActive(true) }
+        // 3.0: only when it can be seen (not under the home page either).
+        activateIfSeen()
+        // 3.0: the open tab's page process ended while Swift was away: its page loads again now.
+        current?.let { TabManager.reviveOnReturn(it) }
     }
 
     override fun onResume() {
@@ -825,10 +871,13 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
     override fun onStop() {
         super.onStop()
+        visibleToUser = false
         if (!built) return
         Looks.watchClock(false)
         Diagnostics.setOnScreen(false)
         com.swiftbrowser.media.PlaybackService.setOnScreen(false)
+        // 3.0: the open tab was in use until now (idle tabs and Inactive tabs count from here).
+        current?.let { TabManager.leftTab(it) }
         TabManager.flushSaves()
         com.swiftbrowser.engine.DataUsage.sample()
         com.swiftbrowser.engine.DataUsage.save()
@@ -853,8 +902,18 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             return
         }
         com.swiftbrowser.vpn.Vpn.removeListener(vpnListener)
+        com.swiftbrowser.core.GoogleAccounts.removeListener(accountListener)
         ptrSpin?.cancel()
         AdBlock.removeListener(adListener)
+        // 3.0: a tab being left lets its page rest now (its picture's answer would come to a screen that's gone).
+        leavingDone?.invoke()
+        leavingDone = null
+        leavingTab = null
+        // 3.0: the pages keep no hold on this screen (rebuilt for a change of theme, say).
+        if (selectionMenuLazy.isInitialized()) {
+            val menu = selectionMenu
+            for (t in TabManager.tabs) t.session?.let { if (it.selectionActionDelegate === menu) it.selectionActionDelegate = null }
+        }
         Downloads.removeListener(updateDownloadListener)
         Downloads.removeListener(setupFileListener)
         if (TabManager.ui === this) TabManager.ui = null
@@ -929,6 +988,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         appBar.elevation = dp(8f)
         appBar.outlineProvider = null
         com.swiftbrowser.vpn.Vpn.addListener(vpnListener)
+        com.swiftbrowser.core.GoogleAccounts.addListener(accountListener)
         shownVpnState = com.swiftbrowser.vpn.Vpn.state
         updateVpnBadge()
         // The toolbar's buttons give the same small press as every button in the app.
@@ -1018,9 +1078,18 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         }
         // Other apps can send Swift only web addresses (not file:, content: or javascript: ones).
         if (!url.isNullOrBlank() && UrlUtils.isHttp(url)) {
+            // 3.0: not again when Swift is opened from the recent apps (Android hands it the same link).
+            if (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0) return
             stopEditing()
             switcherView?.close()
-            TabManager.newTab(url, incognito = false)
+            // 3.0: a tab already showing exactly this address is shown instead of a new one (tabs piled
+            // up); a new one closes when Back leaves its first page, and Android returns to that app.
+            val open = TabManager.profileTabs().firstOrNull { TabRules.sameAddress(it.url, url) }
+            if (open != null) {
+                if (open !== current) TabManager.select(open)
+            } else {
+                TabManager.newTab(url, incognito = false).backTo = Docs.BACK_APP
+            }
         }
     }
 
@@ -1159,8 +1228,9 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         val page = !tab.showsHome && !tab.isBlank && !Helper.isReaderUrl(tab.url) && !Docs.isViewerUrl(tab.url)
         val actions = ArrayList<Sheets.Action>()
         if (clip != null) {
-            val isAddress = UrlUtils.searchQuery(UrlUtils.toUrlOrSearch(clip)) == null
-            actions += Sheets.Action(if (isAddress) R.drawable.ic_open_new else R.drawable.ic_search, if (isAddress) "Paste and go" else "Paste and search", primary = true) { navigate(clip) }
+            // 3.0: copied text only goes to web pages; "javascript:", "data:" or "file:" text is searched for.
+            val isAddress = UrlUtils.addressOf(clip, trusted = false) != null
+            actions += Sheets.Action(if (isAddress) R.drawable.ic_open_new else R.drawable.ic_search, if (isAddress) "Paste and go" else "Paste and search", primary = true) { navigate(clip, trusted = false) }
         }
         if (page) {
             actions += Sheets.Action(R.drawable.ic_copy, "Copy", primary = true) { copy(tab.url) }
@@ -1284,8 +1354,9 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         Motion.pop(urlScan, editing && empty)
     }
 
-    private fun navigate(text: String) {
-        val url = UrlUtils.toUrlOrSearch(text)
+    /** [trusted]: typed into the address bar (see UrlUtils.toUrlOrSearch). */
+    private fun navigate(text: String, trusted: Boolean = true) {
+        val url = UrlUtils.toUrlOrSearch(text, trusted)
         if (url.isBlank()) return
         stopEditing()
         openInCurrent(url)
@@ -1333,14 +1404,16 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     private fun refreshSuggestions(text: String, full: String = text) {
         suggestJob?.cancel()
         val pid = Profiles.currentId
-        val google = prefs.searchSuggestions
+        // 3.0: what's typed in an incognito tab never goes to the search engine, nor a web address
+        // being typed or pasted (it can say where you are, and who: links carry sign-in codes).
+        val google = prefs.searchSuggestions && current?.incognito != true && !UrlUtils.looksLikeAddress(text)
         suggestJob = lifecycleScope.launch {
             // A pause in typing first (2.6): fast typing doesn't look up every letter.
             if (text.isNotBlank()) delay(70)
             val head = ArrayList<Suggestion>()
             if (full.isNotBlank()) {
                 val target = UrlUtils.toUrlOrSearch(full)
-                head += if (UrlUtils.searchQuery(target) != null) {
+                head += if (UrlUtils.addressOf(full) == null) {
                     Suggestion(Suggestion.Kind.SEARCH, full, target)
                 } else {
                     Suggestion(Suggestion.Kind.GO, full, target)
@@ -1386,14 +1459,20 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         return url.takeIf { it != current?.url }
     }
 
-    /** Open tabs (other than this one) whose title or address has the typed words: "Switch to tab". */
+    /**
+     * Open tabs (other than this one) whose title or address has the typed words: "Switch to tab".
+     * 3.0: a page open in two tabs is offered once, and not when it's the page of this tab.
+     */
     private fun openTabMatches(text: String): List<Suggestion> {
         val q = text.trim()
         if (q.length < 2) return emptyList()
         val here = current
+        val herePage = here?.url?.let { UrlUtils.stripFragment(it) }
         return TabManager.tabs.asSequence()
             .filter { it !== here && it.incognito == (here?.incognito ?: false) && !it.isBlank }
             .filter { it.displayTitle.contains(q, ignoreCase = true) || it.url.contains(q, ignoreCase = true) }
+            .filter { UrlUtils.stripFragment(it.url) != herePage }
+            .distinctBy { UrlUtils.stripFragment(it.url) }
             .take(3)
             .map { Suggestion(Suggestion.Kind.TAB, it.displayTitle, it.url, it.id) }
             .toList()
@@ -1433,7 +1512,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             saved -> (if (tab?.backTo == Docs.BACK_FILES) "File · " else "Saved page · ") +
                 Uri.decode(url.orEmpty().substringAfterLast('/')).removeSuffix(".pdf")
             // While reading, just the site (the whole address shows when the bar is tapped).
-            else -> query ?: UrlUtils.siteName(url)
+            // 3.0: a site name too long for the bar shows its end, where it says whose site it is.
+            else -> query ?: UrlUtils.siteName(url).let { if (UrlUtils.isHttp(url)) fitSiteName(it) else it }
         }
         if (text != shownUrlText) {
             shownUrlText = text
@@ -1458,7 +1538,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             reader -> R.drawable.ic_reader
             document -> R.drawable.ic_documents
             saved -> R.drawable.ic_offline
-            !page -> com.swiftbrowser.core.SearchEngine.current.icon
+            // 3.0: with search words, the logo of the engine whose page it is.
+            !page -> (com.swiftbrowser.core.SearchEngine.ofResults(url)?.takeIf { query != null } ?: com.swiftbrowser.core.SearchEngine.current).icon
             // Only a site opened over plain http gets the warning (an https page that failed to
             // load isn't "not secure").
             UrlUtils.scheme(url) == "http" -> R.drawable.ic_not_secure
@@ -1469,6 +1550,39 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     }
 
     private var shownFavicon: android.graphics.Bitmap? = null
+
+    /** The text box's width the site name was last fitted to (3.0); 0 until it's laid out. */
+    private var urlFitWidth = 0
+    private var urlFitWatched = false
+
+    /**
+     * 3.0: [site] as it fits the address bar: "…" and its end when it's too long, so
+     * "accounts.google.com.verify-session.example.net" can't hide its real owner past the edge.
+     */
+    private fun fitSiteName(site: String): String {
+        if (!urlFitWatched) {
+            urlFitWatched = true
+            // The bar narrows and widens as its buttons come and go (typing, the tab grid, turning
+            // the phone): the name is fitted again to the width it ends up with.
+            urlEdit.addOnLayoutChangeListener { v, left, _, right, _, _, _, _, _ ->
+                val width = right - left - urlEdit.totalPaddingLeft - urlEdit.totalPaddingRight
+                if (width == urlFitWidth) return@addOnLayoutChangeListener
+                urlFitWidth = width
+                if (!editing) v.post {
+                    shownUrlText = null
+                    updateUrlBar()
+                }
+            }
+        }
+        val width = urlFitWidth.takeIf { it > 0 } ?: (urlEdit.width - urlEdit.totalPaddingLeft - urlEdit.totalPaddingRight)
+        if (width <= 0) return site
+        // Measured once per site and width (the bar is updated many times while a page loads).
+        lastFit?.let { (s, w, fitted) -> if (s == site && w == width) return fitted }
+        val paint = urlEdit.paint
+        return UrlUtils.hostEnd(site) { paint.measureText(it) <= width }.also { lastFit = Triple(site, width, it) }
+    }
+
+    private var lastFit: Triple<String, Int, String>? = null
 
     private fun setUrlIcon(res: Int) {
         shownUrlIcon = res
@@ -1543,15 +1657,40 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     private fun updateProfileChip() {
         home.updateProfile()
         val p = Profiles.current()
-        profileChip.text = Profiles.initial(p)
-        profileChip.backgroundTintList = ColorStateList.valueOf(p.color)
-        profileChip.contentDescription = "Profile: ${p.name}"
+        // Read before a photo first replaces it.
+        val circle = chipCircle
+        // The Google account's photo when the profile is signed in (3.0), otherwise its coloured letter.
+        val photo = com.swiftbrowser.core.GoogleAccounts.picture(this, p.id)
+        if (photo != null) {
+            profileChip.text = ""
+            profileChip.backgroundTintList = null
+            // Drawn at 30 dp in the middle of the button's 48 dp place, like its circle (bg_profile_chip).
+            profileChip.background = android.graphics.drawable.InsetDrawable(photo, dp(9f).toInt())
+        } else {
+            profileChip.text = Profiles.initial(p)
+            if (profileChip.background !== circle) profileChip.background = circle
+            profileChip.backgroundTintList = ColorStateList.valueOf(p.color)
+        }
+        val account = com.swiftbrowser.core.GoogleAccounts.get(p.id)
+        profileChip.contentDescription = "Profile: ${p.name}" + (account?.let { ", signed in as ${it.email}" } ?: "")
     }
+
+    /** The profile button's own circle, kept while a Google photo takes its place (3.0). */
+    private val chipCircle by lazy { profileChip.background }
 
     /** Incognito tabs get a dark toolbar whatever the theme, like in Chrome. */
     private fun applyIncognitoStyle(incognito: Boolean) {
+        applySecureScreen()
         if (styledIncognito == incognito) return
         styledIncognito = incognito
+        // 3.0: the keyboard learns nothing typed in incognito: no suggestions, nothing for its
+        // dictionary or history (Gboard and others honour this on Android 7 too).
+        for (field in listOf(urlEdit, findEdit)) {
+            val options = field.imeOptions and android.view.inputmethod.EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING.inv()
+            field.imeOptions = if (incognito) options or android.view.inputmethod.EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING else options
+            val type = field.inputType and android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS.inv()
+            field.inputType = if (incognito) type or android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS else type
+        }
         val bg = color(if (incognito) R.color.incognito_toolbar else R.color.toolbar_bg)
         toolbar.setBackgroundColor(bg)
         findViewById<View>(R.id.toolbar_divider).setBackgroundColor(color(if (incognito) R.color.incognito_url else R.color.divider))
@@ -1592,6 +1731,24 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
     private fun iconColor(): Int =
         color(if (current?.incognito == true) R.color.incognito_hint else R.color.text_secondary)
+
+    /** Whether this screen is kept out of screenshots now (null: not set yet). */
+    private var secureShown: Boolean? = null
+
+    /**
+     * 3.0: an incognito page, or the tab grid's incognito page, stays out of screenshots and Android's
+     * recent-apps picture, unless Settings → Privacy & security allows it. Settings calls this when
+     * that changes.
+     */
+    fun applySecureScreen() {
+        val grid = switcherView?.takeIf { it.isOpen }
+        val incognito = grid?.showingIncognito ?: (current?.incognito == true)
+        val on = incognito && !prefs.allowIncognitoScreenshots
+        // Changing the window's flags lays it out again: only when it changes.
+        if (on == secureShown) return
+        secureShown = on
+        SecureScreen.forIncognito(this, incognito)
+    }
 
     // ------------------------------------------------------------------ home page
 
@@ -1823,8 +1980,14 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             return
         }
         tab.homeShown = true
-        // The page underneath needs no drawing (unless it is playing and should go on).
-        if (!(prefs.keepPlaying && tab.playing)) tab.session?.let { if (it.isOpen) it.setActive(false) }
+        // 3.0: its page was in use until now.
+        TabManager.leftTab(tab)
+        // The page underneath needs no drawing (unless it is playing and should go on). 3.0: its
+        // picture for the tab grid is taken first.
+        val keepPlaying = prefs.keepPlaying && tab.playing
+        captureThumbnail(tab) {
+            if (!keepPlaying && tab.homeShown) tab.session?.let { if (it.isOpen) it.setActive(false) }
+        }
         showToolbar()
         updateHome(tab)
         home.animate().cancel()
@@ -1836,7 +1999,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
     private fun leaveHome(tab: Tab) {
         tab.homeShown = false
-        tab.session?.let { if (it.isOpen) it.setActive(true) }
+        activateIfSeen()
         updateHome(tab)
         refreshToolbarNow()
     }
@@ -1860,10 +2023,15 @@ class MainActivity : AppCompatActivity(), BrowserUi {
                 TabManager.newTabInGroup(group)
             }
 
+            // 3.0: not a page under the home page (pageOnScreen); the screenshot rule of the tab now shown.
             override fun onSwitcherClosed() {
-                current?.session?.let { if (it.isOpen) it.setActive(true) }
+                activateIfSeen()
+                applySecureScreen()
             }
         }
+        // 3.0: switching the grid to its incognito page (or back) lays it out again: incognito tabs
+        // stay out of screenshots there too (applySecureScreen).
+        s.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> if (s.isOpen) applySecureScreen() }
     }
 
     /** Holding the tab button: the quick things to do with tabs. */
@@ -1907,34 +2075,44 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         return android.graphics.Rect(0, dy + if (bottomBar) 0 else bar, root.width, dy + root.height - if (bottomBar) bar else 0)
     }
 
-    private var thumbnailTries = 0
+    /**
+     * 3.0: the tab being left while its picture for the tab grid is taken: the page view keeps its
+     * page until then, and the new tab's goes on screen after ([syncSession]). Pictures were taken
+     * after every page load before, each a full-screen read-back that held up the page's drawing.
+     */
+    private var leavingTab: Tab? = null
 
-    private val thumbnailRunnable: Runnable = Runnable {
-        val tab = current ?: return@Runnable
-        if (tab.loading || switcherOpen || fullscreenTab != null) return@Runnable
-        // Reading the screen back holds up drawing for a moment; wait until scrolling stops.
-        if (SystemClock.uptimeMillis() - lastUserScrollAt < 1500 && thumbnailTries++ < 10) {
-            handler.postDelayed(thumbnailRunnable, 1500)
-            return@Runnable
+    /** What lets the left tab's page rest once its picture is taken (TabManager.select). */
+    private var leavingDone: (() -> Unit)? = null
+
+    override fun onLeavingTab(tab: Tab, done: () -> Unit) {
+        val s = tab.session
+        // Only a page on screen: the tab grid took its picture as it opened, and out of sight or under
+        // the home page there is nothing to take.
+        if (s == null || !s.isOpen || gecko.session !== s || tab.showsHome || switcherOpen || !visibleToUser || leavingTab != null) {
+            done()
+            return
         }
-        captureThumbnail(tab, null)
-    }
-
-    /** Pictures for the tab grid are taken once a page has settled after loading. */
-    /** Each tab's last picture after a page load: which address, and when (2.6). */
-    private val thumbnailTaken = HashMap<Long, Pair<String, Long>>()
-
-    private fun scheduleThumbnail(tab: Tab) {
-        if (tab.isHome) return
-        // The same page again within a minute (a reload, a link to a part of it): the picture is
-        // recent enough, and taking one costs a full-screen copy (2.6).
-        val now = android.os.SystemClock.elapsedRealtime()
-        val last = thumbnailTaken[tab.id]
-        if (last != null && last.first == tab.url && now - last.second < 60_000) return
-        thumbnailTaken[tab.id] = tab.url to now
-        thumbnailTries = 0
-        handler.removeCallbacks(thumbnailRunnable)
-        handler.postDelayed(thumbnailRunnable, 2000)
+        leavingTab = tab
+        leavingDone = done
+        val finish = object : Runnable {
+            override fun run() {
+                if (leavingTab !== tab) return
+                handler.removeCallbacks(this)
+                leavingTab = null
+                leavingDone = null
+                done()
+                if (isDestroyed) return
+                current?.let { syncSession(it) }
+                if (coverWaitsForLeaving) {
+                    coverWaitsForLeaving = false
+                    fadePageCover()
+                }
+            }
+        }
+        // Not for long, whatever the engine does; the picture is shrunk and saved after.
+        handler.postDelayed(finish, 400)
+        Thumbnails.capture(gecko, tab, gecko.height - toolbarShown.roundToInt(), taken = { finish.run() })
     }
 
     private fun captureThumbnail(tab: Tab, done: (() -> Unit)?) {
@@ -2035,7 +2213,12 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         val isNew = seenTabs.add(tab.id)
         syncSession(tab)
         crashView.visibility = if (tab.crashed) View.VISIBLE else View.GONE
-        if (fullscreenTab != null && fullscreenTab !== tab) exitFullscreen()
+        val wasFullscreen = fullscreenTab
+        if (wasFullscreen != null && wasFullscreen !== tab) {
+            exitFullscreen()
+            // 3.0: its page leaves full screen too, so it isn't still in it (with the bars back) when you return.
+            wasFullscreen.session?.let { if (it.isOpen && wasFullscreen.fullscreen) it.exitFullScreen() }
+        }
         closeFind()
         if (editing) stopEditing()
         cancelPullRefresh()
@@ -2050,12 +2233,16 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             tab.wokeUp = false
             tabSwipe.coverUntilDrawn(tab)
         }
+        updateStartupCover()
     }
 
     /** Shows the tab's engine session in the page view (or nothing for the home page). */
     private fun syncSession(tab: Tab) {
+        // 3.0: not while the tab being left has its picture taken: this follows then (onLeavingTab).
+        if (leavingTab != null) return
         val session = tab.session
-        if (session != null) {
+        // 3.0: only an open one: a pop-up's is opened by the engine just after its tab is shown.
+        if (session != null && session.isOpen) {
             if (session.selectionActionDelegate !== selectionMenu) session.selectionActionDelegate = selectionMenu
             if (gecko.session !== session) gecko.setSession(session)
         } else if (gecko.session != null) {
@@ -2110,7 +2297,6 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             if (ptrRefreshing) finishPullRefresh()
         }
         if (!tab.loading && shownLoading) {
-            scheduleThumbnail(tab)
             val wanted = tab.readerOnLoad
             if (wanted != null) {
                 tab.readerOnLoad = null
@@ -2133,6 +2319,9 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         if (resumeChipFor != null && (resumeChipFor !== tab || resumeChipPage != tab.url.substringBefore('#'))) hideResumeChip(null)
         if (pageStarted) refreshToolbarNow() else requestToolbarRefresh()
         if (switcherOpen) switcher.refreshTab(tab)
+        // 3.0: the start-up screen covers only a page still waiting for the ad blocker.
+        if (startupFor != null || !startupDone()) updateStartupCover()
+        if (unfilteredUntil != 0L && tab.badge == "!") checkUnfiltered()
     }
 
     /**
@@ -2257,7 +2446,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             video.headers.forEach { (k, v) -> headers[k] = v }
             found.forEach { (k, v) -> headers[k] = v }
             if (headers.keys.none { it.equals("referer", true) }) headers["Referer"] = video.frameUrl.ifBlank { video.pageUrl }
-            if (headers.keys.none { it.equals("user-agent", true) }) headers["User-Agent"] = GeckoSession.getDefaultUserAgent()
+            // The same browser name the page saw (3.0: a newer Firefox version when that's chosen).
+            if (headers.keys.none { it.equals("user-agent", true) }) headers["User-Agent"] = com.swiftbrowser.engine.Net.USER_AGENT
             // The page stops, so the two don't play at once.
             tab.mediaSession?.pause()
             PlayerActivity.openStream(this, video.url, tab.title.ifBlank { null }, headers, tab.incognito)
@@ -2631,10 +2821,24 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             pageCover.alpha = 1f
             pageCover.translationY = dp(24f)
             pageCover.visibility = View.VISIBLE
-            pageCover.animate().alpha(0f).translationY(0f).setStartDelay(80).setDuration(300).withEndAction {
-                pageCover.visibility = View.GONE
-            }.start()
+            // 3.0: while the tab left has its picture taken (onLeavingTab), the view still shows that
+            // tab's page: the cover stays whole until the new tab's page is in it.
+            if (leavingTab != null) {
+                pageCover.translationY = 0f
+                coverWaitsForLeaving = true
+            } else {
+                fadePageCover()
+            }
         }
+    }
+
+    /** 3.0: the new tab's cover fades once the tab left has its picture (see [animateNewTab]). */
+    private var coverWaitsForLeaving = false
+
+    private fun fadePageCover() {
+        pageCover.animate().alpha(0f).translationY(0f).setStartDelay(80).setDuration(300).withEndAction {
+            pageCover.visibility = View.GONE
+        }.start()
     }
 
     private fun bumpTabCount() = Motion.bump(tabsCount, 1.35f)
@@ -2675,7 +2879,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
                 }.getOrNull()
             }
             closeIfOnlyDownload(tab, response.uri)
-            if (bytes == null) snack("Couldn't read this torrent file") else TorrentSheet.file(this@MainActivity, bytes) { torrentAdded() }
+            // 3.0: from an incognito tab, the panel says the torrent isn't incognito.
+            if (bytes == null) snack("Couldn't read this torrent file") else TorrentSheet.file(this@MainActivity, bytes, tab.incognito) { torrentAdded() }
         }
     }
 
@@ -2683,7 +2888,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         if (tab !== current) return
         // 2.9.2: magnet links are torrents, which Swift downloads itself.
         if (url.startsWith("magnet:", ignoreCase = true)) {
-            TorrentSheet.magnet(this, url) { torrentAdded() }
+            TorrentSheet.magnet(this, url, tab.incognito) { torrentAdded() }
             return
         }
         val intent = try {
@@ -2694,6 +2899,20 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         intent.addCategory(Intent.CATEGORY_BROWSABLE)
         intent.component = null
         intent.selector = null
+        // 3.0: as in Chrome, a page can't hand another app a way into Swift's own files: no
+        // permissions to read or write what a link points to, nothing attached, and no content: or
+        // file: links at all (they could reach the Private folder, downloads, problem reports).
+        intent.flags = intent.flags and (
+            Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+                Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
+            ).inv()
+        intent.clipData = null
+        if (UrlUtils.isLocalFile(intent.scheme)) {
+            L.w("A page's link to an app pointed at a file on the phone: not opened")
+            val fallback = intent.getStringExtra("browser_fallback_url")
+            if (fallback != null && UrlUtils.isHttp(fallback)) TabManager.load(tab, fallback) else snack("This link can't be opened")
+            return
+        }
         val resolved = packageManager.resolveActivity(intent, 0)
         if (resolved == null) {
             val fallback = intent.getStringExtra("browser_fallback_url")
@@ -2966,6 +3185,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     }
 
     private fun exitFullscreen() {
+        handler.removeCallbacks(fullscreenBackFallback)
         if (fullscreenTab == null) return
         fullscreenTab = null
         appBar.visibility = View.VISIBLE
@@ -3160,11 +3380,14 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         when {
             quickMenu.isOpen -> quickMenu.onBack()
             switcherOpen -> if (!switcher.back()) switcher.close(pageRect())
-            fullscreenTab != null -> tab?.session?.exitFullScreen() ?: exitFullscreen()
+            fullscreenTab != null -> leaveFullscreenOnBack(tab)
             findBar.visibility == View.VISIBLE -> closeFind()
             editing -> stopEditing()
             tab == null -> finish()
             tab.homeShown -> leaveHome(tab)
+            // 3.0: its page is still to be restored (waiting for the ad blocker at start): it can't go
+            // back yet, and closing it or leaving Swift would lose it.
+            TabManager.isRestoring(tab) -> Unit
             tab.canGoBack && tab.session != null -> TabManager.goBack(tab)
             tab.leftHome && !tab.isHome -> TabManager.returnHome(tab)
             tab.parentId != null && TabManager.tabs.any { it.id == tab.parentId } -> TabManager.close(tab)
@@ -3185,12 +3408,76 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         }
     }
 
+    /**
+     * Back in full screen: the page is asked to leave it, and says so (onFullScreen). 3.0: a page
+     * that isn't in full screen any more (its process ended and it was loaded again) sends no answer,
+     * so the screen leaves full screen itself; so it does if the page doesn't answer in 2 s.
+     */
+    private fun leaveFullscreenOnBack(tab: Tab?) {
+        val s = tab?.session
+        if (tab == null || tab !== fullscreenTab || !tab.fullscreen || s == null || !s.isOpen) {
+            exitFullscreen()
+            return
+        }
+        s.exitFullScreen()
+        handler.removeCallbacks(fullscreenBackFallback)
+        handler.postDelayed(fullscreenBackFallback, 2000)
+    }
+
+    /** 3.0: the page didn't answer Back in full screen (see [leaveFullscreenOnBack]); taken off by [exitFullscreen]. */
+    private val fullscreenBackFallback = Runnable {
+        val tab = fullscreenTab ?: return@Runnable
+        L.w("Tab ${tab.id}: its page didn't leave full screen; leaving it anyway")
+        tab.fullscreen = false
+        exitFullscreen()
+    }
+
     // ------------------------------------------------------------------ start-up screen
 
-    /** Hides the start-up screen once the ad blocker is ready. */
-    private val adListener: () -> Unit = { handler.post { if (startupDone()) hideStartup() } }
+    /** The ad blocker got ready (or its settings changed: it may have been switched off). */
+    private val adListener: () -> Unit = { handler.post { if (!isDestroyed) onAdBlockerChanged() } }
 
-    private val hideStartupRunnable = Runnable { hideStartup() }
+    private fun onAdBlockerChanged() {
+        if (!startupDone()) return
+        AdBlock.removeListener(adListener)
+        hideStartup()
+        if (!AdBlock.ready) return
+        // 3.0: a page that loaded before it was ready (Load now, or one opened in the first seconds)
+        // says so. uBlock Origin's sign for it ("!") can come a moment later.
+        unfilteredUntil = SystemClock.uptimeMillis() + 10_000
+        checkUnfiltered()
+        handler.postDelayed({ checkUnfiltered() }, 1500)
+    }
+
+    /** 3.0: until when (uptime) uBlock Origin's "!" on the open page is said: just after it got ready. */
+    private var unfilteredUntil = 0L
+
+    /** Tabs already told that their page's ads weren't blocked. */
+    private val unfilteredSaid = HashSet<Long>()
+
+    /** The open tab's page loaded before the ad blocker was ready: uBlock Origin marks it "!" (requests it never saw). */
+    private fun checkUnfiltered() {
+        if (SystemClock.uptimeMillis() > unfilteredUntil) {
+            unfilteredUntil = 0L
+            return
+        }
+        val tab = current ?: return
+        if (tab.badge != "!" || tab.showsHome || !UrlUtils.isHttp(tab.url) || AdBlock.levelFor(tab.url) == AdLevel.OFF) return
+        if (!unfilteredSaid.add(tab.id)) return
+        snack("Ads weren't blocked on this page", "Reload", long = true) { if (tab in TabManager.tabs) TabManager.reload(tab) }
+    }
+
+    /** When the start-up screen first showed (uptime; 0: not yet). "Load now" comes 8 s after. */
+    private var startupShownAt = 0L
+
+    /** The tab whose page the start-up screen covers; null while it doesn't show. */
+    private var startupFor: Tab? = null
+
+    /** What was put on the start-up screen (the page's picture, the note, Load now): taken off when it goes. */
+    private val startupExtras = ArrayList<View>()
+    private var startupBottom: LinearLayout? = null
+    private var loadNowButton: View? = null
+    private val showLoadNow = Runnable { addLoadNow() }
 
     /**
      * When the app starts, the open page waits for the engine and the ad blocker, so that no ads
@@ -3198,31 +3485,62 @@ class MainActivity : AppCompatActivity(), BrowserUi {
      * of an empty page. The home page needs neither, so it shows straight away.
      */
     private fun showStartupUntilReady() {
+        if (startupDone()) return
+        AdBlock.addListener(adListener)
+        updateStartupCover()
+    }
+
+    /**
+     * 3.0: the page waits however long the ad blocker takes (8 s at most before, then it loaded
+     * unfiltered); the screen covers it meanwhile and, 8 s on, offers to load it now without ad
+     * blocking. It follows the open tab: a tab chosen meanwhile whose page waits too is covered, and a
+     * page the user opened, or one that doesn't wait, isn't.
+     */
+    private fun updateStartupCover() {
         val tab = current
-        if (tab == null || tab.isHome || startupDone()) return
+        if (tab == null || tab.showsHome || !TabManager.waitsForAdBlocker(tab) || startupDone()) {
+            if (startupFor != null) hideStartup()
+            return
+        }
+        if (startupFor !== tab) showStartupCover(tab)
+    }
+
+    private fun showStartupCover(tab: Tab) {
+        val first = startupShownAt == 0L
+        if (first) startupShownAt = SystemClock.uptimeMillis()
+        startupFor = tab
+        startup.animate().cancel()
+        clearStartupExtras()
+        startup.alpha = 1f
         startup.visibility = View.VISIBLE
         findViewById<android.widget.ImageView>(R.id.startup_logo)?.setImageDrawable(Ui.logo(this))
         // In the accent chosen (2.6), your own included.
         findViewById<android.widget.ProgressBar>(R.id.startup_spinner)?.indeterminateTintList = ColorStateList.valueOf(Ui.accent(this))
+        // 3.0: a tab chosen later is covered below the toolbar, which is in use (at start the screen
+        // carries on from Swift's start screen).
+        if (!first) coverBelowToolbar()
         // The tab's last picture, if there is one, instead of the logo: the page seems to be back
         // at once, with a small note at the bottom until it really loads.
         Thumbnails.load(tab) { bmp ->
-            if (bmp != null && startup.visibility == View.VISIBLE && startup.alpha == 1f) showStartupPicture(bmp)
+            if (bmp != null && startupFor === tab && startup.alpha == 1f) showStartupPicture(bmp)
         }
-        AdBlock.addListener(adListener)
-        // Pages stop waiting after this long too (see TabManager), so the screen does as well.
-        handler.postDelayed(hideStartupRunnable, 8000)
+        handler.removeCallbacks(showLoadNow)
+        val wait = LOAD_NOW_AFTER_MS - (SystemClock.uptimeMillis() - startupShownAt)
+        if (wait <= 0) addLoadNow() else handler.postDelayed(showLoadNow, wait)
     }
 
     private fun showStartupPicture(bmp: android.graphics.Bitmap) {
         val box = startup as FrameLayout
-        for (i in 0 until box.childCount) box.getChildAt(i).visibility = View.GONE
-        box.addView(TopCropImageView(this).apply {
+        for (i in 0 until box.childCount) box.getChildAt(i).let { if (it !in startupExtras) it.visibility = View.GONE }
+        val picture = TopCropImageView(this).apply {
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
             setImageBitmap(bmp)
             alpha = 0.85f
-        }, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
-        box.addView(TextView(this).apply {
+        }
+        // Under the note and Load now.
+        box.addView(picture, 0, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+        startupExtras += picture
+        startupBottom().addView(TextView(this).apply {
             text = "Loading… the ad blocker is starting"
             textSize = 13f
             setTextColor(color(Looks.accent.onPrimary))
@@ -3232,11 +3550,12 @@ class MainActivity : AppCompatActivity(), BrowserUi {
                 cornerRadius = dp(18f)
                 setColor(color(Looks.accent.primary))
             }
-        }, FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
-            android.view.Gravity.BOTTOM or android.view.Gravity.CENTER_HORIZONTAL,
-        ).apply { bottomMargin = dp(24f).toInt() })
-        // Below the toolbar, which stays usable meanwhile.
+        }, 0)
+        coverBelowToolbar()
+    }
+
+    /** Below the toolbar, which stays usable meanwhile. */
+    private fun coverBelowToolbar() {
         (startup.layoutParams as FrameLayout.LayoutParams).apply {
             topMargin = if (bottomBar) 0 else toolbarPx
             bottomMargin = if (bottomBar) toolbarPx else 0
@@ -3245,13 +3564,74 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         startup.requestLayout()
     }
 
+    /** The column at the bottom of the start-up screen: the note, then Load now. */
+    private fun startupBottom(): LinearLayout = startupBottom ?: LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        gravity = android.view.Gravity.CENTER_HORIZONTAL
+    }.also { col ->
+        startupBottom = col
+        startupExtras += col
+        (startup as FrameLayout).addView(col, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
+            android.view.Gravity.BOTTOM or android.view.Gravity.CENTER_HORIZONTAL,
+        ).apply { bottomMargin = dp(24f).toInt() })
+    }
+
+    /** 3.0: 8 s on, the waiting page can be loaded at once, without the ad blocker. */
+    private fun addLoadNow() {
+        if (startupFor == null || loadNowButton != null) return
+        val pad = dp(20f).toInt()
+        val b = TextView(this).apply {
+            text = "Load now, without blocking ads"
+            textSize = 15f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            setTextColor(color(Looks.accent.onContainer))
+            gravity = android.view.Gravity.CENTER
+            minHeight = dp(44f).toInt()
+            setPadding(pad, 0, pad, 0)
+            background = Ui.shape(this@MainActivity, color(Looks.accent.container), 22)
+            Ui.pressable(this)
+            setOnClickListener { loadNow() }
+        }
+        startupBottom().addView(b, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+            topMargin = dp(12f).toInt()
+        })
+        loadNowButton = b
+        Motion.fadeIn(b)
+    }
+
+    /** 3.0: the waiting pages load now (a page that let ads through says so once the ad blocker is ready). */
+    private fun loadNow() {
+        AdBlock.loadWaitingNow()
+        updateStartupCover()
+    }
+
+    /** The start-up screen as the layout has it: the logo and the spinner over the whole screen. */
+    private fun clearStartupExtras() {
+        val box = startup as FrameLayout
+        startupExtras.forEach { box.removeView(it) }
+        startupExtras.clear()
+        startupBottom = null
+        loadNowButton = null
+        for (i in 0 until box.childCount) box.getChildAt(i).visibility = View.VISIBLE
+        (startup.layoutParams as FrameLayout.LayoutParams).apply {
+            topMargin = 0
+            bottomMargin = 0
+        }
+        startup.elevation = dp(20f)
+        startup.requestLayout()
+    }
+
     private fun startupDone() = AdBlock.ready || AdBlock.global == AdLevel.OFF
 
     private fun hideStartup() {
-        AdBlock.removeListener(adListener)
-        handler.removeCallbacks(hideStartupRunnable)
+        handler.removeCallbacks(showLoadNow)
+        startupFor = null
         if (startup.visibility != View.VISIBLE) return
-        startup.animate().alpha(0f).setDuration(200).withEndAction { startup.visibility = View.GONE }.start()
+        startup.animate().alpha(0f).setDuration(200).withEndAction {
+            startup.visibility = View.GONE
+            if (startupFor == null) clearStartupExtras()
+        }.start()
     }
 
     // ------------------------------------------------------------------ swipe the toolbar to switch tabs
@@ -3471,11 +3851,14 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             Updates.downloadId = -1
             updateBar?.dismiss()
             updateBar = null
-            DownloadsActivity.openFileIntent(this, item)?.let { intent ->
-                try {
-                    startActivity(intent)
-                } catch (_: Exception) {
-                    snack("Open the downloaded update from Downloads to install it")
+            // 3.0: only a genuine Swift update (signed like this one) goes to Android's installer.
+            Updates.whenGenuine(this, item) {
+                DownloadsActivity.openFileIntent(this, item)?.let { intent ->
+                    try {
+                        startActivity(intent)
+                    } catch (_: Exception) {
+                        snack("Open the downloaded update from Downloads to install it")
+                    }
                 }
             }
         }
@@ -3604,18 +3987,21 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     /** The problem report with this run's settings; see Diagnostics. */
     fun shareProblemReport() = Diagnostics.shareReport(this)
 
-    /** For the video sheet: picks a quality of an HLS stream, then downloads it. */
-    fun startHlsDownload(tab: Tab, playlistUrl: String, headers: Map<String, String>, quality: String?) {
+    /** For the video sheet: picks a quality of an HLS stream, then downloads it (3.0: with its separate [audio], if any). */
+    fun startHlsDownload(tab: Tab, playlistUrl: String, headers: Map<String, String>, quality: String?, audio: String? = null) {
         withStorage {
             val base = tab.title.ifBlank { UrlUtils.host(tab.url) ?: "video" }
             val title = if (quality != null) "$base $quality" else base
-            Downloads.startHls(tab.profileId, playlistUrl, title, headers, tab.url, tab.incognito)
+            Downloads.startHls(tab.profileId, playlistUrl, title, headers, tab.url, tab.incognito, audio)
             snack("Downloading video", "View") { openDownloads() }
         }
     }
 
     companion object {
         private const val TOOLBAR_SETTLE_MS = 300L
+
+        /** 3.0: how long the start-up screen waits for the ad blocker before it offers Load now. */
+        private const val LOAD_NOW_AFTER_MS = 8000L
 
         /** "example.com/page": an address without its https:// (made once, 2.6). */
         private val BARE_ADDRESS = Regex("^[a-z0-9-]+(\\.[a-z0-9-]+)*\\.[a-z]{2,}(/\\S*)?$", RegexOption.IGNORE_CASE)

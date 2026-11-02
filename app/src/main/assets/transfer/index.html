@@ -56,6 +56,7 @@ td.act a{color:var(--accent);text-decoration:none;white-space:nowrap}
 .x{cursor:pointer;color:var(--accent);background:none;border:0;font-size:12px}
 .msg{padding:10px 14px;border-radius:10px;background:var(--card);border:1px solid var(--line);margin-bottom:12px;display:none}
 .msg.on{display:block}
+.note{color:var(--muted);font-size:12px;margin:16px 2px 0}
 input[type=checkbox]{width:16px;height:16px;accent-color:var(--accent)}
 </style>
 </head>
@@ -82,6 +83,8 @@ input[type=checkbox]{width:16px;height:16px;accent-color:var(--accent)}
     </table>
     <div class="empty" id="empty" hidden></div>
   </div>
+  <!-- 3.0: plain HTTP on the local network. -->
+  <p class="note">This connection isn't encrypted. Use Wi-Fi transfer on your own Wi-Fi, not public Wi-Fi.</p>
 </main>
 <div class="drop" id="drop"><div>Drop files to upload them to this folder</div></div>
 <div class="uploads" id="uploads"><h3><span id="upTitle">Uploads</span><button class="x" id="upClose">Close</button></h3><div id="upList"></div></div>
@@ -294,6 +297,11 @@ input[type=checkbox]{width:16px;height:16px;accent-color:var(--accent)}
   document.addEventListener('drop', function (e) { e.preventDefault(); depth = 0; $('drop').className = 'drop'; if (e.dataTransfer && e.dataTransfer.files.length) add(e.dataTransfer.files); });
   window.addEventListener('beforeunload', function (e) { if (busy) { e.preventDefault(); e.returnValue = ''; } });
   window.addEventListener('hashchange', load);
+
+  // 3.0: while this page is open, the phone hears from it now and then, so it can say the computer is connected.
+  setInterval(function () {
+    fetch('/api/ping', { credentials: 'same-origin' }).then(function (r) { if (r.status === 401) location.href = '/'; }).catch(function () {});
+  }, 30000);
 
   api('/api/roots').then(function (r) { roots = r; load(); }).catch(function (e) { if (e.message !== 'signin') say(e.message); });
 })();

@@ -16,14 +16,21 @@ The patch:
 uBO's version string is left untouched (a 4-part version would switch uBO into
 dev-build mode). When the bridge changes, bump UBO_BRIDGE_REV in Engine.kt so the
 app reinstalls the extension.
+
+3.0: the XPI's SHA-256 is printed and compared with the one addons.mozilla.org
+publishes for that version (GitHub's signed XPI is the same file); a different one,
+or none to compare with, stops the update unless --skip-amo-check is given. Files in
+the XPI that would land outside the ublock folder are refused.
 """
 
 import argparse
+import hashlib
 import io
 import json
 import os
 import shutil
 import sys
+import urllib.parse
 import urllib.request
 import zipfile
 
@@ -100,8 +107,41 @@ def fetch(version):
         f"{version}/uBlock0_{version}.firefox.signed.xpi"
     )
     print("Downloading", url)
-    with urllib.request.urlopen(url) as resp:
+    with urllib.request.urlopen(url, timeout=120) as resp:
         return resp.read()
+
+
+AMO_VERSION = "https://addons.mozilla.org/api/v5/addons/addon/uBlock0@raymondhill.net/versions/{version}/"
+
+
+def amo_sha256(version):
+    """The SHA-256 addons.mozilla.org publishes for uBO's signed XPI of [version], or None."""
+    url = AMO_VERSION.format(version=urllib.parse.quote(version, safe=""))
+    try:
+        with urllib.request.urlopen(url, timeout=60) as resp:
+            info = json.load(resp)
+    except Exception as e:  # offline, AMO down, no such version
+        print("Couldn't get the hash from addons.mozilla.org:", e)
+        return None
+    published = ((info.get("file") or {}).get("hash") or "").lower()
+    return published[len("sha256:"):] if published.startswith("sha256:") else None
+
+
+def check_xpi(data, skip):
+    """Prints the XPI's SHA-256 and stops unless it is the file AMO published for its version."""
+    digest = hashlib.sha256(data).hexdigest()
+    with zipfile.ZipFile(io.BytesIO(data)) as z:
+        version = json.loads(z.read("manifest.json").decode("utf-8")).get("version", "")
+    print("uBlock Origin", version, "XPI SHA-256:", digest)
+    if skip:
+        print("Not compared with addons.mozilla.org (--skip-amo-check)")
+        return
+    published = amo_sha256(version)
+    if published is None:
+        raise SystemExit("No hash to compare with: run again online, or with --skip-amo-check after checking it yourself")
+    if published != digest:
+        raise SystemExit(f"This XPI isn't the one addons.mozilla.org published for {version} (its SHA-256 is {published}): stopped")
+    print("Matches the file addons.mozilla.org published for", version)
 
 
 def main():
@@ -112,9 +152,14 @@ def main():
         "--locales", default="en",
         help="comma-separated uBO UI languages to keep (default: en); 'all' keeps every language",
     )
+    ap.add_argument(
+        "--skip-amo-check", action="store_true",
+        help="don't compare the XPI's SHA-256 with the one addons.mozilla.org publishes",
+    )
     args = ap.parse_args()
 
     data = open(args.xpi, "rb").read() if args.xpi else fetch(args.version)
+    check_xpi(data, args.skip_amo_check)
 
     if os.path.isdir(DEST):
         shutil.rmtree(DEST)
@@ -124,7 +169,10 @@ def main():
             if info.filename.startswith("META-INF/"):
                 continue  # Mozilla signature; meaningless once patched.
             target = os.path.normpath(os.path.join(DEST, info.filename))
-            if not target.startswith(DEST):
+            # 3.0: inside the folder itself (DEST + separator): "../ublock-x/…" starts with DEST too.
+            if target == DEST and info.is_dir():
+                continue
+            if not target.startswith(DEST + os.sep):
                 raise SystemExit("Refusing unsafe path in archive: " + info.filename)
             if info.is_dir():
                 os.makedirs(target, exist_ok=True)

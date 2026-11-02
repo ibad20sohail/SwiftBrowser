@@ -134,10 +134,23 @@ object Diagnostics {
         } ?: ((System.currentTimeMillis() - android.os.SystemClock.elapsedRealtime()) / 600_000L).toString()
         ).also { cachedBootId = it }
 
-    /** Clearing all history (2.6): the logs, which name the sites of blocked pop-ups, start over. */
+    /**
+     * Clearing all history (2.6): the logs, which name the sites of blocked pop-ups, start over.
+     * 3.0: so do the notes of the last crash (they hold the log before it) and a report made earlier.
+     */
     fun clearLogs() {
         if (!::app.isInitialized) return
         L.clear()
+        Crash.clear(app)
+        File(app.filesDir, REPORTS).deleteRecursively()
+    }
+
+    /** 3.0: clearing history for a time: the log lines of that time, and crash notes or a report made then. */
+    fun clearLogsBetween(from: Long, to: Long) {
+        if (!::app.isInitialized) return
+        L.clearBetween(from, to)
+        File(app.filesDir, "last_crash.txt").takeIf { it.lastModified() in from..to }?.delete()
+        File(app.filesDir, REPORTS).listFiles()?.filter { it.lastModified() in from..to }?.forEach { it.delete() }
     }
 
     // ------------------------------------------------------------------ memory
@@ -189,69 +202,118 @@ object Diagnostics {
 
     // ------------------------------------------------------------------ report
 
-    /** Everything useful for finding a problem; the user decides where to send it. */
-    fun report(extra: String): String = buildString {
-        appendLine("Swift ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) problem report")
-        appendLine("Time: ${time.format(Date())}")
-        appendLine("Device: ${Build.MANUFACTURER} ${Build.MODEL}, Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT}), ${Build.SUPPORTED_ABIS.joinToString()}")
-        appendLine("Memory: ${memoryText()}")
-        appendLine(extra)
-        problem?.let { appendLine("Last run ended: $it ${problemDetail.orEmpty()}") }
-        appendLine()
-        appendLine("--- Engine crashes ---")
+    /** The folder of the report made for sending. */
+    private const val REPORTS = "reports"
+
+    /** 3.0: the report's first and last lines, to show before it is sent, and how many lines it has. */
+    class Preview(val head: List<String>, val tail: List<String>, val lines: Int)
+
+    /**
+     * Everything useful for finding a problem, line by line; the user decides where to send it.
+     * 3.0: read as it goes (three days of logs can be several MB, too much to hold at once), off
+     * the main thread (it ran when the row was tapped).
+     */
+    private fun reportLines(extra: String, each: (String) -> Unit) {
+        each("Swift ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) problem report")
+        each("Time: ${time.format(Date())}")
+        each("Device: ${Build.MANUFACTURER} ${Build.MODEL}, Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT}), ${Build.SUPPORTED_ABIS.joinToString()}")
+        each("Memory: ${memoryText()}")
+        extra.lines().forEach(each)
+        problem?.let { each("Last run ended: $it ${problemDetail.orEmpty()}") }
+        each("")
+        each("--- Engine crashes ---")
         val crashes = engineCrashes(app)
-        if (crashes.isEmpty()) appendLine("none")
-        crashes.forEach { appendLine("${time.format(Date(it.time))} ${if (it.fatal) "app" else "page/graphics"} ${it.reason}") }
+        if (crashes.isEmpty()) each("none")
+        crashes.forEach { each("${time.format(Date(it.time))} ${if (it.fatal) "app" else "page/graphics"} ${it.reason}") }
         File(app.filesDir, "last_crash.txt").takeIf { it.exists() }?.let {
-            appendLine()
-            appendLine("--- App crash ---")
-            appendLine(it.readText().take(6000))
+            each("")
+            each("--- App crash ---")
+            it.readText().take(6000).lines().forEach(each)
         }
         // The last 3 days' logs (2.7), oldest first.
         L.flushNow()
         val days = L.files()
         if (days.isEmpty()) {
-            appendLine()
-            appendLine("--- Log ---")
-            appendLine(L.dump())
+            each("")
+            each("--- Log ---")
+            L.dump().lines().forEach(each)
         }
         for (f in days) {
-            appendLine()
-            appendLine("--- Log of ${f.name.removePrefix("swift-").removeSuffix(".txt")} ---")
-            appendLine(f.readText())
+            each("")
+            each("--- Log of ${f.name.removePrefix("swift-").removeSuffix(".txt")} ---")
+            try {
+                f.bufferedReader().useLines { lines -> lines.forEach(each) }
+            } catch (_: Exception) {
+                each("(this day's log couldn't be read)")
+            }
         }
     }
 
-    /** The report with the app's settings and tabs, for the share sheet. */
-    fun shareReport(activity: Activity) {
+    /** Blocking: the start and the end of the report as it is now, to show before sending (3.0). */
+    fun preview(extra: String): Preview {
+        val head = ArrayList<String>()
+        val tail = ArrayDeque<String>()
+        var n = 0
+        reportLines(extra) { line ->
+            n++
+            if (head.size < PREVIEW_HEAD) {
+                head += line
+            } else {
+                tail.addLast(line)
+                if (tail.size > PREVIEW_TAIL) tail.removeFirst()
+            }
+        }
+        return Preview(head, tail.toList(), n)
+    }
+
+    private const val PREVIEW_HEAD = 40
+    private const val PREVIEW_TAIL = 120
+
+    /**
+     * A line as the report sends it. Addresses are always cut to their site (where, not what was
+     * read); 3.0: without [withSites] (the default), sites' names become "a site" too.
+     */
+    fun clean(line: String, withSites: Boolean): String = if (withSites) LogLines.trimAddress(line) else LogLines.withoutSites(line)
+
+    /** Blocking (3.0): writes the report to send, line by line, and gives its file. */
+    fun writeReport(ctx: Context, extra: String, withSites: Boolean): File {
+        val dir = File(ctx.filesDir, REPORTS).apply { mkdirs() }
+        val file = File(dir, "swift-report.txt")
+        file.bufferedWriter().use { out ->
+            reportLines(extra) { line ->
+                out.write(clean(line, withSites))
+                out.write("\n")
+            }
+        }
+        return file
+    }
+
+    /** The app's settings and tabs at the start of the report. On the main thread (it reads the tabs). */
+    fun reportExtra(activity: Activity): String {
         val prefs = SwiftApp.prefs
         val tabs = TabManager.tabs
-        val extra = "Settings: tabs kept in memory ${prefs.maxLiveTabs}, graphics chip ${com.swiftbrowser.engine.GpuInfo.renderer(activity).ifBlank { "unknown" }}, " +
+        return "Settings: tabs kept in memory ${prefs.maxLiveTabs}, graphics chip ${com.swiftbrowser.engine.GpuInfo.renderer(activity).ifBlank { "unknown" }}, " +
             "ad blocking ${AdBlock.global.label}, Lite mode ${prefs.liteMode}, saving battery ${com.swiftbrowser.engine.Power.saving}, sites as designed ${prefs.sitesAsDesigned}, full screen ${prefs.fullScreen}, " +
             "keep playing ${prefs.keepPlaying}, text size ${(prefs.textScale * 100).toInt()}%\n" +
             "Tabs: ${tabs.size} open, ${tabs.count { it.session != null }} loaded; current site: " +
             // An incognito tab's site stays private, even in a problem report (2.6).
             (TabManager.current?.let { if (it.incognito) "(incognito)" else UrlUtils.siteName(it.url) } ?: "")
-        share(activity, extra)
     }
 
-    /** Opens Android's share sheet with the report as a text file (for WhatsApp, Gmail, ...). */
-    fun share(activity: Activity, extra: String) {
-        // Page addresses in the log are cut to their site: the report says where, not what you read.
-        val text = report(extra).replace(Regex("(https?://[^/\\s\"'<>]+)[^\\s\"'<>]*"), "$1/…")
-        val dir = File(activity.filesDir, "reports").apply { mkdirs() }
-        val file = File(dir, "swift-report.txt")
+    /**
+     * The report, for the share sheet. 3.0: first shown in a sheet with what it holds, sites' names
+     * left out unless the user lets them in (ReportUi).
+     */
+    fun shareReport(activity: Activity) = com.swiftbrowser.ui.ReportUi.show(activity)
+
+    /** Opens Android's share sheet with the report's [file] (for WhatsApp, Gmail, ...). */
+    fun shareFile(activity: Activity, file: File) {
         val intent = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"
             putExtra(Intent.EXTRA_SUBJECT, "Swift ${BuildConfig.VERSION_NAME} problem report")
-            try {
-                file.writeText(text)
-                putExtra(Intent.EXTRA_STREAM, FileProvider.getUriForFile(activity, activity.packageName + ".files", file))
-                putExtra(Intent.EXTRA_TEXT, "Swift ${BuildConfig.VERSION_NAME} problem report (attached)")
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            } catch (e: Exception) {
-                putExtra(Intent.EXTRA_TEXT, text.take(60000))
-            }
+            putExtra(Intent.EXTRA_STREAM, FileProvider.getUriForFile(activity, activity.packageName + ".files", file))
+            putExtra(Intent.EXTRA_TEXT, "Swift ${BuildConfig.VERSION_NAME} problem report (attached)")
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
         try {
             activity.startActivity(Intent.createChooser(intent, "Send problem report"))

@@ -96,6 +96,17 @@ object LocalMedia {
 
     fun clear(ctx: Context) = sp(ctx).edit { clear() }
 
+    /**
+     * 3.0: forgets the places left off from [from] to [to] (Clear browsing data → Where you left off);
+     * with [onlyCount], only says how many there are. Blocking.
+     */
+    fun clearSince(ctx: Context, from: Long, to: Long, onlyCount: Boolean = false): Int {
+        val sp = sp(ctx)
+        val gone = sp.all.entries.filter { e -> (e.value as? String)?.let { read(it) }?.item?.updated?.let { it in from..to } == true }.map { it.key }
+        if (!onlyCount && gone.isNotEmpty()) sp.edit { gone.forEach { remove(it) } }
+        return gone.size
+    }
+
     private fun read(s: String?): Saved? = try {
         if (s == null) null else JSONObject(s).let { o ->
             Saved(Item(o.getString("p"), o.optString("t"), o.optBoolean("v", true), o.optLong("pos"), o.optLong("dur"), o.optLong("u")), o.optLong("s", -1))

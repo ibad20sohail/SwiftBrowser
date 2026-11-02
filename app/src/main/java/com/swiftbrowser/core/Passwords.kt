@@ -23,9 +23,26 @@ object Passwords {
 
     class Login(val guid: String, val origin: String, val username: String, val password: String, val created: Long, val used: Long)
 
+    /**
+     * 3.0: the key the sign-ins were locked with, or null when Android's keystore no longer has it
+     * (a reset of its secure storage). A new key is only made to save new ones: it can't open the
+     * old ones, which then count as unreadable (they showed in the count, but not in the list).
+     */
+    private fun keyStore(): KeyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+
+    /** The keystore itself failing throws instead: a new key must never take a working one's place. */
+    private fun existingKey(ks: KeyStore = keyStore()): SecretKey? {
+        if (!ks.containsAlias(KEY_ALIAS)) return null
+        return try {
+            ks.getKey(KEY_ALIAS, null) as? SecretKey
+        } catch (_: java.security.UnrecoverableKeyException) {
+            null
+        }
+    }
+
     private fun key(): SecretKey {
-        val ks = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-        (ks.getKey(KEY_ALIAS, null) as? SecretKey)?.let { return it }
+        val ks = keyStore()
+        existingKey(ks)?.let { return it }
         val gen = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
         gen.init(
             KeyGenParameterSpec.Builder(KEY_ALIAS, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
@@ -44,14 +61,61 @@ object Passwords {
         return Base64.encodeToString(c.iv, Base64.NO_WRAP) + ":" + Base64.encodeToString(out, Base64.NO_WRAP)
     }
 
-    private fun decrypt(stored: String): String? = try {
-        val (iv, data) = stored.split(':', limit = 2)
-        val c = Cipher.getInstance("AES/GCM/NoPadding")
-        c.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, Base64.decode(iv, Base64.NO_WRAP)))
-        String(c.doFinal(Base64.decode(data, Base64.NO_WRAP)), Charsets.UTF_8)
-    } catch (e: Exception) {
-        L.w("Couldn't read a saved password", e)
-        null
+    /** [key]: the keystore's (null when it lost it: then nothing can be read). */
+    private fun decrypt(stored: String, key: SecretKey?): String? {
+        if (key == null) return null
+        return try {
+            val (iv, data) = stored.split(':', limit = 2)
+            val c = Cipher.getInstance("AES/GCM/NoPadding")
+            c.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, Base64.decode(iv, Base64.NO_WRAP)))
+            String(c.doFinal(Base64.decode(data, Base64.NO_WRAP)), Charsets.UTF_8)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /** 3.0: how many of a profile's sign-ins can be read, and how many can't any more. */
+    class Count(val readable: Int, val unreadable: Int)
+
+    /** The last count and the rows it was made of: Settings asks at every visit, and the keystore is slow. */
+    @Volatile private var lastCount: Pair<Int, Count>? = null
+
+    /** Blocking (3.0): for Settings' row; a sign-in that can't be read any more isn't counted as one. */
+    fun count(profileId: Long): Count {
+        val rows = SwiftApp.db.logins(profileId)
+        val sign = rows.fold(profileId.hashCode()) { h, r -> 31 * h + r.guid.hashCode() * 17 + r.password.hashCode() }
+        lastCount?.takeIf { it.first == sign }?.let { return it.second }
+        val key = try {
+            existingKey()
+        } catch (e: Exception) {
+            // The keystore didn't answer this time: nothing is said to be lost.
+            L.w("The keystore can't be read", e)
+            return Count(rows.size, 0)
+        }
+        val bad = if (key == null) rows.size else rows.count { decrypt(it.password, key) == null }
+        if (bad > 0) L.w("$bad saved sign-ins can't be read any more (the keystore lost their key)")
+        return Count(rows.size - bad, bad).also { lastCount = sign to it }
+    }
+
+    /**
+     * Blocking (3.0): this profile's sign-ins: those that can be read, and the rows of those that
+     * can't any more. Throws when the keystore doesn't answer (they may be fine: nothing is said).
+     */
+    fun read(profileId: Long): Pair<List<Login>, List<LoginRow>> {
+        val key = existingKey()
+        val good = ArrayList<Login>()
+        val bad = ArrayList<LoginRow>()
+        for (r in SwiftApp.db.logins(profileId)) {
+            val password = decrypt(r.password, key)
+            if (password != null) good += Login(r.guid, r.origin, r.username, password, r.created, r.used) else bad += r
+        }
+        return good to bad
+    }
+
+    /** Blocking (3.0): deletes sign-ins that can't be read any more. */
+    fun removeRows(rows: List<LoginRow>) {
+        for (r in rows) SwiftApp.db.deleteLogin(r.guid)
+        lastCount = null
     }
 
     private fun hostOf(origin: String) = UrlUtils.host(origin) ?: origin
@@ -61,8 +125,15 @@ object Passwords {
         val rows = SwiftApp.db.logins(Profiles.currentId).filter { r ->
             domain == null || hostOf(r.origin).let { it == domain || it.endsWith(".$domain") }
         }
+        if (rows.isEmpty()) return emptyArray()
+        val key = try {
+            existingKey()
+        } catch (e: Exception) {
+            L.w("The keystore can't be read", e)
+            return emptyArray()
+        }
         return rows.mapNotNull { r ->
-            val password = decrypt(r.password) ?: return@mapNotNull null
+            val password = decrypt(r.password, key) ?: return@mapNotNull null
             Autocomplete.LoginEntry.Builder()
                 .guid(r.guid).origin(r.origin).formActionOrigin(r.formAction).httpRealm(r.realm)
                 .username(r.username).password(password)
@@ -92,9 +163,7 @@ object Passwords {
     }
 
     /** Blocking: this profile's sign-ins, for Settings → Passwords. */
-    fun all(profileId: Long): List<Login> = SwiftApp.db.logins(profileId).mapNotNull { r ->
-        decrypt(r.password)?.let { Login(r.guid, r.origin, r.username, it, r.created, r.used) }
-    }
+    fun all(profileId: Long): List<Login> = read(profileId).first
 
     /** Blocking. Deletes a sign-in and gives back what was stored, for Undo. */
     fun remove(guid: String): LoginRow? {

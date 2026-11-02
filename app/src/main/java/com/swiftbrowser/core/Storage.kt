@@ -43,6 +43,16 @@ object Storage {
 
     class SiteUsage(val site: String, val bytes: Long, val lastVisit: Long)
 
+    /** 3.0: the last measure and when it was made (Settings asks at every visit). */
+    @Volatile private var last: Pair<Long, Usage>? = null
+
+    /** Blocking: the last measure if it is under a minute old (not [fresh]), else a new one. */
+    fun measureRecent(ctx: Context, fresh: Boolean = false): Usage {
+        val now = android.os.SystemClock.elapsedRealtime()
+        last?.takeIf { !fresh && now - it.first < 60_000 }?.let { return it.second }
+        return measure(ctx).also { last = android.os.SystemClock.elapsedRealtime() to it }
+    }
+
     /** Blocking: everything measured. */
     fun measure(ctx: Context): Usage {
         val app = appSize(ctx)
@@ -179,5 +189,21 @@ object Storage {
         if (!f.exists()) return 0
         if (f.isFile) return f.length()
         return f.listFiles()?.sumOf { sizeOf(it) } ?: 0
+    }
+
+    /**
+     * 3.0: reads [input] to its end, or gives null as soon as it holds more than [limit] bytes: a
+     * file picked by mistake (a 1 GB video for a VPN setup file or a backup) is never read whole into
+     * memory, where it would run out (an error that catch (Exception) doesn't catch).
+     */
+    fun readAtMost(input: java.io.InputStream, limit: Int): ByteArray? {
+        val out = java.io.ByteArrayOutputStream(minOf(limit, 64 * 1024))
+        val buf = ByteArray(16 * 1024)
+        while (true) {
+            val n = input.read(buf)
+            if (n < 0) return out.toByteArray()
+            if (out.size() + n > limit) return null
+            out.write(buf, 0, n)
+        }
     }
 }

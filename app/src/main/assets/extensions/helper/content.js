@@ -4,7 +4,7 @@
 // user tapped from a script hijacking the tap), applies the playback speed, does
 // the full-screen video gestures (skip, hold for double speed), reports where long
 // videos are so the app can offer to continue them, and, in the top frame, tells
-// the app the page's icon.
+// the app the page's icon and, on Google's pages, which account is signed in.
 (function () {
   if (window.__swiftHelper) { return; }
   window.__swiftHelper = true;
@@ -174,9 +174,18 @@
     reportPosition(v, false);
   }, true);
 
+  // 3.0: a pause reports at once, but not more than once in a few seconds (a page pausing and playing
+  // over and over made Swift write it down each time).
+  const PAUSE_EVERY = 5000;
+  let lastPause = 0;
   document.addEventListener('pause', ev => {
     const v = ev.target;
-    if (longVideo(v) && !v.ended && v.currentTime > 0) { reportPosition(v, false); }
+    if (!longVideo(v) || v.ended || v.currentTime <= 0) { return; }
+    const now = Date.now();
+    if (now - lastPause < PAUSE_EVERY) { return; }
+    lastPause = now;
+    lastReport = now;
+    reportPosition(v, false);
   }, true);
 
   document.addEventListener('ended', ev => {
@@ -212,6 +221,57 @@
       }
     }
     send({ type: 'icon', href: best, page: location.href });
+  }
+
+  // ---------------------------------------------------------------- the Google account
+
+  // Which Google account is signed in (3.0), for Swift's profiles: its name, address and picture,
+  // as Google's own bar shows them ("Google Account: Name (address)" on the account button, a link
+  // to its sign-out options). A sign-in button near the top and no account: signed out.
+  const GOOGLE_HOST = /(^|\.)google\.(com|co\.[a-z]{2}|com\.[a-z]{2}|[a-z]{2})$/;
+  const ACCOUNT_LABEL = /^(?:[^:(]*:\s*)?(.*?)\s*\(\s*([^\s@()<>]+@[^\s@()<>]+\.[^\s@()<>]+)\s*\)$/;
+
+  function accountIn(el) {
+    const label = (el.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim();
+    const m = ACCOUNT_LABEL.exec(label);
+    if (!m) { return null; }
+    const img = el.tagName === 'IMG' ? el : el.querySelector('img');
+    const src = img ? (img.currentSrc || img.src || '') : '';
+    const photo = /^https:\/\/[a-z0-9-]+\.googleusercontent\.com\//.test(src) ? src : '';
+    return { name: m[1].trim(), email: m[2], photo };
+  }
+
+  function googleAccount() {
+    for (const el of document.querySelectorAll('a[href*="accounts.google.com/SignOutOptions"][aria-label*="@"]')) {
+      const found = accountIn(el);
+      if (found) { return found; }
+    }
+    // Pages whose bar has the button without that link: only with the account's picture in it.
+    for (const el of document.querySelectorAll('#gb [aria-label*="@"], header [aria-label*="@"], [role="banner"] [aria-label*="@"]')) {
+      const found = accountIn(el);
+      if (found && found.photo) { return found; }
+    }
+    return null;
+  }
+
+  function signInOffered() {
+    for (const a of document.querySelectorAll('a[href*="accounts.google.com/ServiceLogin"], a[href*="accounts.google.com/v3/signin"]')) {
+      const r = a.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0 && r.top < 200) { return true; }
+    }
+    return false;
+  }
+
+  // The bar may come after the page (Gmail, Google Account): looked for again twice.
+  function reportGoogleAccount(tries) {
+    const found = googleAccount();
+    if (found) {
+      send(Object.assign({ type: 'google-account', page: location.href }, found));
+    } else if (tries > 1) {
+      setTimeout(() => reportGoogleAccount(tries - 1), tries === 3 ? 1500 : 3000);
+    } else if (signInOffered()) {
+      send({ type: 'google-account', page: location.href, out: true });
+    }
   }
 
   // ---------------------------------------------------------------- keep playing in the background
@@ -301,9 +361,16 @@
   // every 30 s at most, with how often it happened), which is how a lagging player looks.
   let waits = 0;
   let waitSent = 0;
+  // 3.0: failures too at most once every 10 s, and 10 in all, per frame (each is a line in the log).
+  let errorsSent = 0;
+  let errorSent = 0;
   window.addEventListener('error', ev => {
     const m = ev.target;
     if (!ev.isTrusted || !m || (m.tagName !== 'VIDEO' && m.tagName !== 'AUDIO')) { return; }
+    const now = Date.now();
+    if (errorsSent >= 10 || now - errorSent < 10000) { return; }
+    errorsSent++;
+    errorSent = now;
     const e = m.error;
     send({ type: 'media-error', code: e ? e.code : 0, text: e && e.message ? String(e.message).slice(0, 200) : '' });
   }, true);
@@ -349,6 +416,17 @@
         document.addEventListener('DOMContentLoaded', reportIcon, { once: true });
       } else {
         reportIcon();
+      }
+    }
+
+    // Pages of the first account only: "/u/1/" and "authuser=1" are another one signed in beside it.
+    if (location.protocol === 'https:' && GOOGLE_HOST.test(location.hostname) &&
+        !/\/u\/[1-9]|[?&]authuser=[1-9]/.test(location.pathname + location.search)) {
+      const start = () => reportGoogleAccount(3);
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', start, { once: true });
+      } else {
+        start();
       }
     }
   }

@@ -63,6 +63,11 @@ class Prefs(ctx: Context) {
         get() = sp.getStringSet(NEWS_TOPICS, null)?.toSet() ?: setOf("top", "world", "nation", "business", "tech", "sports", "entertainment")
         set(v) = sp.edit { putStringSet(NEWS_TOPICS, v) }
 
+    /** 3.0: the news topic last chosen on the home page (News.Topic key); it stays when the screen is made again. */
+    var newsTopic: String
+        get() = sp.getString(NEWS_TOPIC, "top") ?: "top"
+        set(v) = sp.edit { putString(NEWS_TOPIC, v) }
+
     /** Feeds of news sites the user added, in the order added. */
     var newsFeeds: List<String>
         get() = (sp.getString(NEWS_FEEDS, "") ?: "").split('\n').filter { it.isNotBlank() }
@@ -254,6 +259,27 @@ class Prefs(ctx: Context) {
         get() = sp.getBoolean(HTTPS_ONLY, false)
         set(v) = sp.edit { putBoolean(HTTPS_ONLY, v) }
 
+    /**
+     * 3.0: incognito pages may appear in screenshots and Android's recent-apps picture. Off: they
+     * are kept out of both (as in Firefox).
+     */
+    var allowIncognitoScreenshots: Boolean
+        get() = sp.getBoolean(INCOGNITO_SCREENSHOTS, false)
+        set(v) = sp.edit { putBoolean(INCOGNITO_SCREENSHOTS, v) }
+
+    /**
+     * 3.0: Safer browsing: web pages run without the engine's JavaScript compilers and WebAssembly,
+     * the usual way into an old browser (Engine.saferPrefs). Slower scripts; off at first.
+     */
+    var saferBrowsing: Boolean
+        get() = sp.getBoolean(SAFER_BROWSING, false)
+        set(v) = sp.edit { putBoolean(SAFER_BROWSING, v) }
+
+    /** 3.0: sites are told a newer Firefox than the engine's 143 (engine.UserAgent); off at first. */
+    var newerFirefoxVersion: Boolean
+        get() = sp.getBoolean(NEWER_FIREFOX, false)
+        set(v) = sp.edit { putBoolean(NEWER_FIREFOX, v) }
+
     /** Firefox answers cookie banners with "Reject" where it knows how. */
     var rejectCookieBanners: Boolean
         get() = sp.getBoolean(REJECT_COOKIE_BANNERS, true)
@@ -379,6 +405,11 @@ class Prefs(ctx: Context) {
         get() = sp.getLong(LAST_LOW_SPACE_CLEANUP, 0L)
         set(v) = sp.edit { putLong(LAST_LOW_SPACE_CLEANUP, v) }
 
+    /** 3.0: when history over a year old was last removed (Db.pruneHistoryIfDue, once a week). */
+    var lastHistoryPrune: Long
+        get() = sp.getLong(LAST_HISTORY_PRUNE, 0L)
+        set(v) = sp.edit { putLong(LAST_HISTORY_PRUNE, v) }
+
     /** The version whose "What's new" was shown (0 on a new install). */
     var seenVersion: Int
         get() = sp.getInt(SEEN_VERSION, 0)
@@ -388,6 +419,14 @@ class Prefs(ctx: Context) {
     var lastUpdateCheck: Long
         get() = sp.getLong(LAST_UPDATE_CHECK, 0L)
         set(v) = sp.edit { putLong(LAST_UPDATE_CHECK, v) }
+
+    /**
+     * 3.0: the files Swift downloaded as its own updates (full paths), so the old ones can be deleted
+     * even after they left the downloads list; nothing else of the download folder is touched.
+     */
+    var updateFiles: Set<String>
+        get() = sp.getStringSet(UPDATE_FILES, emptySet())?.toSet() ?: emptySet()
+        set(v) = sp.edit { putStringSet(UPDATE_FILES, v) }
 
     companion object {
         const val DARK_MODE = "dark_mode"
@@ -414,6 +453,7 @@ class Prefs(ctx: Context) {
         const val SWIPE_SHOW = 2
         const val NEWS_COUNTRY = "news_country"
         const val NEWS_TOPICS = "news_topics"
+        const val NEWS_TOPIC = "news_topic"
         const val NEWS_FEEDS = "news_feeds"
         const val NEWS_HIDDEN = "news_hidden"
         const val DEFAULT_MENU_BUTTONS = "new_tab,incognito,bookmarks,history,downloads,reader,save"
@@ -441,11 +481,15 @@ class Prefs(ctx: Context) {
         const val AUTO_BACKUP = "auto_backup"
         const val LAST_AUTO_BACKUP = "last_auto_backup"
         const val LAST_LOW_SPACE_CLEANUP = "last_low_space_cleanup"
+        const val LAST_HISTORY_PRUNE = "last_history_prune"
         const val SEEN_VERSION = "seen_version"
         const val SHOW_HOME_BUTTON = "show_home_button"
         const val HAPTICS = "haptics"
         const val HTTPS_ONLY = "https_only"
         const val REJECT_COOKIE_BANNERS = "reject_cookie_banners"
+        const val INCOGNITO_SCREENSHOTS = "incognito_screenshots"
+        const val SAFER_BROWSING = "safer_browsing"
+        const val NEWER_FIREFOX = "newer_firefox_version"
         const val WIFI_ONLY_DOWNLOADS = "wifi_only_downloads"
         const val READER_FONT = "reader_font"
         const val READER_SPACING = "reader_spacing"
@@ -454,6 +498,7 @@ class Prefs(ctx: Context) {
         const val LITE_MODE = "lite_mode"
         const val FULL_SCREEN = "full_screen"
         const val LAST_UPDATE_CHECK = "last_update_check"
+        const val UPDATE_FILES = "update_files"
         const val INACTIVE_DAYS = "inactive_days"
         const val SITES_AS_DESIGNED = "sites_as_designed"
         const val HIDE_COOKIE_NOTICES = "hide_cookie_notices"

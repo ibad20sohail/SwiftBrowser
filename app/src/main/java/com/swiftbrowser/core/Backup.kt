@@ -18,20 +18,18 @@ import java.util.Locale
 /**
  * Backup and restore (Settings → Privacy & storage): one JSON file in the download folder with the
  * settings, profiles, bookmarks, history, open tabs and groups, and per-site settings. Restoring adds
- * to what is there (nothing is deleted) and then restarts Swift. Passwords and cookies aren't in it:
- * sign in again after restoring on a new phone.
+ * to what is there (nothing is deleted), the backup's settings replace these, and then Swift restarts.
+ * Passwords and cookies aren't in it: sign in again after restoring on a new phone.
+ *
+ * 3.0: only the user's own settings go in (BackupSettings), never secrets or what only this phone
+ * knows. A backup is read as something that may be broken or made by someone else: every item is
+ * checked, the data goes in in one go (all of it or none), and the settings come last.
  */
 object Backup {
     private const val HISTORY_LIMIT = 5000
 
-    /** Settings that describe this phone, not the user's choices. */
-    private val SKIP_SETTINGS = setOf(
-        "prefs_version", Prefs.LAST_UPDATE_CHECK, "ubo_last_update_check", Prefs.CURRENT_PROFILE,
-        Prefs.LAST_AUTO_BACKUP, Prefs.LAST_LOW_SPACE_CLEANUP, Prefs.SEEN_VERSION, Prefs.WELCOME_DONE,
-    ) + com.swiftbrowser.vpn.Vpn.PREF_KEYS
-
-    /** Settings that belong to one profile, ending in its id. */
-    private val PER_PROFILE = listOf("pinned_tiles_")
+    /** A backup is never bigger than this (5,000 pages of history make about 1 MB). */
+    private const val MAX_BYTES = 16 * 1024 * 1024
 
     private const val AUTO_PREFIX = "Swift backup (automatic)"
     private const val WEEK = 7L * 24 * 3600 * 1000
@@ -48,7 +46,8 @@ object Backup {
     fun autoBackupIfDue(ctx: Context): File? {
         val prefs = SwiftApp.prefs
         if (!prefs.autoBackup || System.currentTimeMillis() - prefs.lastAutoBackup < WEEK) return null
-        if (SwiftApp.db.tabs().none { !UrlUtils.isBlank(it.url) }) return null
+        // 3.0: the tabs without their back history (only the addresses are needed).
+        if (SwiftApp.db.tabsWithoutState().none { !UrlUtils.isBlank(it.url) }) return null
         val file = try {
             write(ctx, automatic = true)
         } catch (e: Exception) {
@@ -69,26 +68,22 @@ object Backup {
             .put("version", BuildConfig.VERSION_NAME)
             .put("created", System.currentTimeMillis())
 
+        // 3.0: the user's choices only, each of the kind it should be (BackupSettings).
         val settings = JSONObject()
         for ((key, value) in SwiftApp.prefs.sp.all) {
-            if (key in SKIP_SETTINGS || value == null) continue
-            val type = when (value) {
-                is Boolean -> "b"
-                is Int -> "i"
-                is Long -> "l"
-                is Float -> "f"
-                is Set<*> -> "set"
-                else -> "s"
-            }
-            val v: Any = if (value is Set<*>) JSONArray(value.map { it.toString() }) else value
-            settings.put(key, JSONObject().put("t", type).put("v", v))
+            val (kind, v) = BackupSettings.forBackup(key, value) ?: continue
+            settings.put(key, JSONObject().put("t", kind).put("v", if (v is List<*>) JSONArray(v) else v))
         }
         root.put("settings", settings)
 
         val profiles = JSONArray()
+        val allTabs = db.tabsWithoutState()
         for (p in Profiles.all()) {
             val bookmarks = JSONArray()
-            for (b in db.bookmarks(p.id)) bookmarks.put(JSONObject().put("url", b.url).put("title", b.title).put("created", b.created))
+            // 3.0: with their folder (2.6 made folders; backups left them out).
+            for (b in db.bookmarks(p.id)) {
+                bookmarks.put(JSONObject().put("url", b.url).put("title", b.title).put("created", b.created).put("folder", b.folder))
+            }
             // The automatic backup (a file in the Download folder, made by itself) leaves history out
             // (2.6): only a backup made on purpose carries it.
             val history = JSONArray()
@@ -100,7 +95,7 @@ object Backup {
             val groups = JSONArray()
             for (g in db.tabGroups().filter { it.profileId == p.id }) groups.put(JSONObject().put("id", g.id).put("name", g.name).put("color", g.color))
             val tabs = JSONArray()
-            for (t in db.tabs().filter { it.profileId == p.id && !UrlUtils.isBlank(it.url) }) {
+            for (t in allTabs.filter { it.profileId == p.id && !UrlUtils.isBlank(it.url) }) {
                 tabs.put(JSONObject().put("url", t.url).put("title", t.title).put("group", t.groupId ?: -1).put("used", t.lastUsed))
             }
             profiles.put(
@@ -138,128 +133,186 @@ object Backup {
         }.distinctBy { it.canonicalPath }.sortedByDescending { it.lastModified() }
     }
 
-    /** Blocking: reads a backup, or null if [uri] isn't one. */
+    /**
+     * Blocking: reads a backup, or null if [uri] isn't one. 3.0: never more than [MAX_BYTES] (a big
+     * file picked by mistake isn't read whole), and only what has the shape of a Swift backup.
+     */
     fun read(ctx: Context, uri: Uri): JSONObject? = try {
-        val text = ctx.contentResolver.openInputStream(uri)?.use { it.readBytes().toString(Charsets.UTF_8) }
-        text?.let { JSONObject(it) }?.takeIf { it.optString("app") == "Swift" }
+        val bytes = ctx.contentResolver.openInputStream(uri)?.use { Storage.readAtMost(it, MAX_BYTES) }
+        bytes?.let { JSONObject(String(it, Charsets.UTF_8)) }
+            ?.takeIf { it.optString("app") == "Swift" && (it.opt("profiles") == null || it.opt("profiles") is JSONArray) }
     } catch (_: Exception) {
+        null
+    } catch (_: OutOfMemoryError) {
         null
     }
 
     fun summary(root: JSONObject): Summary {
         val profiles = root.optJSONArray("profiles") ?: JSONArray()
+        var count = 0
         var bookmarks = 0
         var tabs = 0
         var history = 0
         for (i in 0 until profiles.length()) {
-            val p = profiles.getJSONObject(i)
+            // 3.0: an entry that isn't a profile is passed by (it made the summary crash).
+            val p = profiles.optJSONObject(i) ?: continue
+            count++
             bookmarks += p.optJSONArray("bookmarks")?.length() ?: 0
             tabs += p.optJSONArray("tabs")?.length() ?: 0
             history += p.optJSONArray("history")?.length() ?: 0
         }
         val created = SimpleDateFormat("d MMM yyyy", Locale.getDefault()).format(Date(root.optLong("created")))
-        return Summary(profiles.length(), bookmarks, tabs, history, created)
+        return Summary(count, bookmarks, tabs, history, created)
     }
+
+    /** A text of [o], at most [max] long; "" when it isn't one. */
+    private fun JSONObject.text(name: String, max: Int = 2048): String = (opt(name) as? String)?.take(max).orEmpty()
+
+    /** A web address of [o] Swift keeps (pages only: never javascript: or Swift's own files). */
+    private fun JSONObject.webUrl(name: String): String? = text(name, 8192).takeIf { it.isNotBlank() && UrlUtils.isHttp(it) }
 
     /**
      * Blocking (run on TabManager.io, so it comes after any pending saves): adds the backup's
-     * contents. Swift must restart afterwards to load the tabs and settings.
+     * contents. Swift must restart afterwards to load the tabs and settings. 3.0: the data goes in
+     * as one transaction (a failure leaves the phone as it was, and 5,000 pages of history take one
+     * write instead of 5,000), then the settings. False when it failed (nothing was changed).
      */
-    fun restore(root: JSONObject) {
+    fun restore(ctx: Context, root: JSONObject): Boolean {
         val db = SwiftApp.db
-        val sp = SwiftApp.prefs.sp
         val profiles = root.optJSONArray("profiles") ?: JSONArray()
         // The backup's profile ids (backups since 2.6) and the ones they get here.
         val ids = HashMap<Long, Long>()
-        for (i in 0 until profiles.length()) {
-            val p = profiles.getJSONObject(i)
-            if (!p.has("id")) continue
-            val name = p.optString("name").ifBlank { "Restored" }
-            ids[p.optLong("id")] = Profiles.all().firstOrNull { it.name.equals(name, ignoreCase = true) }?.id ?: Profiles.add(name).id
-        }
-        root.optJSONObject("settings")?.let { settings ->
-            val edit = sp.edit()
-            for (backupKey in settings.keys()) {
-                if (backupKey in SKIP_SETTINGS) continue
-                val o = settings.optJSONObject(backupKey) ?: continue
-                // A setting of one profile goes to that profile's id here, or is left out if unknown.
-                val key = PER_PROFILE.firstOrNull { backupKey.startsWith(it) }?.let { prefix ->
-                    val old = backupKey.removePrefix(prefix).toLongOrNull()
-                    ids[old]?.let { "$prefix$it" }
-                } ?: if (PER_PROFILE.any { backupKey.startsWith(it) }) continue else backupKey
-                // Another phone's download folder may not exist here.
-                if (key == Prefs.DOWNLOAD_FOLDER) {
-                    val dir = java.io.File(o.optString("v"))
-                    if (o.optString("v").isNotBlank() && !(dir.isDirectory && dir.canWrite())) continue
-                }
-                when (o.optString("t")) {
-                    "b" -> edit.putBoolean(key, o.optBoolean("v"))
-                    "i" -> edit.putInt(key, o.optInt("v"))
-                    "l" -> edit.putLong(key, o.optLong("v"))
-                    "f" -> edit.putFloat(key, o.optDouble("v").toFloat())
-                    "set" -> {
-                        val arr = o.optJSONArray("v") ?: JSONArray()
-                        // Lists like per-site settings are merged with what this phone has.
-                        val mine = sp.getStringSet(key, emptySet()) ?: emptySet()
-                        edit.putStringSet(key, mine + (0 until arr.length()).map { arr.getString(it) })
+        try {
+            db.transaction {
+                val open = db.tabsWithoutState().map { it.profileId to it.url }.toHashSet()
+                for (i in 0 until profiles.length()) {
+                    val p = profiles.optJSONObject(i) ?: continue
+                    val name = p.text("name", 60).trim().ifBlank { "Restored" }
+                    val pid = Profiles.all().firstOrNull { it.name.equals(name, ignoreCase = true) }?.id ?: Profiles.add(name).id
+                    if (p.has("id")) ids[p.optLong("id")] = pid
+                    p.optJSONArray("bookmarks")?.let { arr ->
+                        for (j in 0 until arr.length()) {
+                            val b = arr.optJSONObject(j) ?: continue
+                            val url = b.webUrl("url") ?: continue
+                            db.importBookmark(pid, url, b.text("title"), b.optLong("created", System.currentTimeMillis()), b.text("folder", 60).trim())
+                        }
                     }
-                    else -> edit.putString(key, o.optString("v"))
+                    p.optJSONArray("history")?.let { arr ->
+                        for (j in 0 until minOf(arr.length(), HISTORY_LIMIT)) {
+                            val h = arr.optJSONObject(j) ?: continue
+                            val url = h.webUrl("url") ?: continue
+                            db.importHistory(pid, url, h.text("title"), h.optLong("last"), h.optInt("visits", 1).coerceAtLeast(1))
+                        }
+                    }
+                    val groups = HashMap<Long, JSONObject>()
+                    p.optJSONArray("groups")?.let { arr ->
+                        for (j in 0 until arr.length()) arr.optJSONObject(j)?.let { groups[it.optLong("id")] = it }
+                    }
+                    // A group is made only for tabs actually added, joining one of the same name if there is one.
+                    val groupIds = HashMap<Long, Long>()
+                    fun groupFor(id: Long): Long? {
+                        val g = groups[id] ?: return null
+                        val name = g.text("name", 60)
+                        return groupIds.getOrPut(id) {
+                            db.tabGroups().firstOrNull { it.profileId == pid && it.name == name }?.id
+                                ?: db.insertTabGroup(pid, name, g.optInt("color"))
+                        }
+                    }
+                    p.optJSONArray("tabs")?.let { arr ->
+                        for (j in 0 until arr.length()) {
+                            val t = arr.optJSONObject(j) ?: continue
+                            // Only web pages: another phone's files and Swift's own pages don't exist here.
+                            val url = t.webUrl("url") ?: continue
+                            if ((pid to url) in open) continue
+                            open += pid to url
+                            db.importTab(pid, url, t.text("title"), groupFor(t.optLong("group", -1)), t.optLong("used", System.currentTimeMillis()))
+                        }
+                    }
+                }
+                root.optJSONObject("siteLevels")?.let { levels ->
+                    for (site in levels.keys()) {
+                        if (site.isBlank() || site.length > 253) continue
+                        db.setSiteLevel(site, AdLevel.fromKey(levels.optString(site)).key)
+                    }
                 }
             }
-            edit.commit()
+        } catch (e: Exception) {
+            L.w("Restoring a backup failed; nothing was changed", e)
+            Profiles.refresh()
+            return false
         }
-
-        val open = db.tabs().map { it.profileId to it.url }.toSet()
-        for (i in 0 until profiles.length()) {
-            val p = profiles.getJSONObject(i)
-            val name = p.optString("name").ifBlank { "Restored" }
-            val pid = Profiles.all().firstOrNull { it.name.equals(name, ignoreCase = true) }?.id ?: Profiles.add(name).id
-            p.optJSONArray("bookmarks")?.let { arr ->
-                for (j in 0 until arr.length()) {
-                    val b = arr.getJSONObject(j)
-                    db.importBookmark(pid, b.optString("url"), b.optString("title"), b.optLong("created", System.currentTimeMillis()))
-                }
-            }
-            p.optJSONArray("history")?.let { arr ->
-                for (j in 0 until arr.length()) {
-                    val h = arr.getJSONObject(j)
-                    db.importHistory(pid, h.optString("url"), h.optString("title"), h.optLong("last"), h.optInt("visits", 1))
-                }
-            }
-            val groups = HashMap<Long, JSONObject>()
-            p.optJSONArray("groups")?.let { arr ->
-                for (j in 0 until arr.length()) arr.getJSONObject(j).let { groups[it.optLong("id")] = it }
-            }
-            // A group is made only for tabs actually added, joining one of the same name if there is one.
-            val groupIds = HashMap<Long, Long>()
-            fun groupFor(id: Long): Long? {
-                val g = groups[id] ?: return null
-                return groupIds.getOrPut(id) {
-                    db.tabGroups().firstOrNull { it.profileId == pid && it.name == g.optString("name") }?.id
-                        ?: db.insertTabGroup(pid, g.optString("name"), g.optInt("color"))
-                }
-            }
-            p.optJSONArray("tabs")?.let { arr ->
-                for (j in 0 until arr.length()) {
-                    val t = arr.getJSONObject(j)
-                    val url = t.optString("url")
-                    // Only web pages: another phone's files and Swift's own pages don't exist here.
-                    if (url.isBlank() || (pid to url) in open || !UrlUtils.isHttp(url)) continue
-                    db.importTab(pid, url, t.optString("title"), groupFor(t.optLong("group", -1)), t.optLong("used", System.currentTimeMillis()))
-                }
-            }
-        }
-        root.optJSONObject("siteLevels")?.let { levels ->
-            for (site in levels.keys()) db.setSiteLevel(site, AdLevel.fromKey(levels.optString(site)).key)
-        }
+        restoreSettings(ctx, root, ids)
+        L.d("Backup restored: ${profiles.length()} profiles")
+        return true
     }
 
-    /** Runs [restore] after the app's pending database writes. */
-    fun restoreThen(root: JSONObject, done: () -> Unit) {
+    /**
+     * The backup's settings (3.0: last, once the data is in): only those Swift restores, of the kind
+     * each one holds. A list setting replaces this phone's (merged, an old backup could add
+     * "Saved passwords" to what Quit clears).
+     */
+    private fun restoreSettings(ctx: Context, root: JSONObject, ids: Map<Long, Long>) {
+        val settings = root.optJSONObject("settings") ?: return
+        val edit = SwiftApp.prefs.sp.edit()
+        for (backupKey in settings.keys()) {
+            val o = settings.optJSONObject(backupKey) ?: continue
+            val raw = when (val v = o.opt("v")) {
+                is JSONArray -> (0 until v.length()).map { v.opt(it) }
+                JSONObject.NULL -> null
+                else -> v
+            }
+            var value = BackupSettings.fromBackup(backupKey, o.opt("t") as? String, raw) ?: continue
+            // A setting of one profile goes to that profile's id here, or is left out if unknown.
+            val prefix = BackupSettings.perProfilePrefix(backupKey)
+            val key = if (prefix != null) {
+                val here = BackupSettings.profileOf(backupKey, prefix)?.let { ids[it] } ?: continue
+                "$prefix$here"
+            } else {
+                backupKey
+            }
+            when (key) {
+                // Another phone's download folder may not exist here; and never Swift's own data folder.
+                Prefs.DOWNLOAD_FOLDER -> {
+                    val path = value as String
+                    val dir = File(path)
+                    if (path.isNotBlank() && (!(dir.isDirectory && dir.canWrite()) || AppFiles.isPrivate(ctx, dir))) continue
+                }
+                // What Quit clears: only what this version knows ("TABS" is ClearData's open tabs).
+                QUIT_CLEAR -> {
+                    val known = Clearing.What.entries.map { it.name }.toSet() + "TABS"
+                    @Suppress("UNCHECKED_CAST")
+                    value = (value as Set<String>).filter { it in known }.toSet()
+                }
+            }
+            when (value) {
+                is Boolean -> edit.putBoolean(key, value)
+                is Int -> edit.putInt(key, value)
+                is Long -> edit.putLong(key, value)
+                is Float -> edit.putFloat(key, value)
+                is String -> edit.putString(key, value)
+                is Set<*> -> edit.putStringSet(key, value.filterIsInstance<String>().toSet())
+            }
+        }
+        edit.commit()
+    }
+
+    private const val QUIT_CLEAR = "quit_clear"
+
+    /**
+     * Runs [restore] after the app's pending database writes; [done] on the main thread with whether
+     * it worked.
+     */
+    fun restoreThen(ctx: Context, root: JSONObject, done: (Boolean) -> Unit) {
+        val app = ctx.applicationContext
         TabManager.flushSaves()
         TabManager.io.execute {
-            restore(root)
-            android.os.Handler(android.os.Looper.getMainLooper()).post(done)
+            val ok = try {
+                restore(app, root)
+            } catch (e: Exception) {
+                L.w("Restoring a backup failed", e)
+                false
+            }
+            android.os.Handler(android.os.Looper.getMainLooper()).post { done(ok) }
         }
     }
 }

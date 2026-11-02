@@ -25,11 +25,20 @@ import java.util.concurrent.atomic.AtomicInteger
  *
  * Swift's own folders (and Private, which must never land on shared storage) have no bin: what is
  * deleted there is asked about and erased.
+ *
+ * 3.0: each thing's folder in the bin also holds a small file of its own details (where it was, when
+ * it went), used when the index lacks it (Swift closed before writing it), so it still goes back
+ * where it was. Moving in is only the rename: sizes are counted afterwards, when the bin is looked at,
+ * so Undo shows at once. The clean-up doesn't trust a clock that was reset (a date before 2020, or
+ * one still to come, counts as now), so it never erases everything at once.
  */
 object RecycleBin {
     const val FOLDER = ".SwiftBin"
     private const val INDEX = "index.json"
     private const val NOMEDIA = ".nomedia"
+
+    /** 3.0: a thing's own details, in its folder in the bin. */
+    private const val META = ".swift-bin.json"
     private const val DAY = 24L * 3600 * 1000
     private const val PREF_CHECKED = "files_bin_checked"
 
@@ -56,6 +65,10 @@ object RecycleBin {
         /** Whole days left before it goes (0: today). */
         fun daysLeft(now: Long = System.currentTimeMillis(), days: Int = FilesSettings.binDays): Int =
             ((goesAt(days) - now + DAY - 1) / DAY).toInt().coerceAtLeast(0)
+
+        /** 3.0: the same thing with other details (its size once counted, its date made sane). */
+        internal fun with(size: Long = this.size, files: Int = this.files, deletedAt: Long = this.deletedAt) =
+            Item(id, volume, name, from, deletedAt, size, isDir, files)
     }
 
     /** What one deletion did: [items] went to the bin (for Undo), [failed] couldn't. */
@@ -82,6 +95,13 @@ object RecycleBin {
 
     /** Whether [f] is in the bin (or is the bin). */
     fun isInBin(ctx: Context, f: File): Boolean = Volumes.of(ctx, f)?.let { inBin(it, f) } == true
+
+    /**
+     * 3.0: the bins [files] would go to, to ask for a card's access before deleting: a file in Swift's
+     * own folder on the card needs none itself, but the bin at the card's top does.
+     */
+    fun binsFor(ctx: Context, files: Collection<File>): List<File> =
+        files.mapNotNull { f -> Volumes.of(ctx, f)?.takeIf { canHold(ctx, f) }?.let { binOf(it) } }.distinctBy { it.path }
 
     // ------------------------------------------------------------------ for other screens
 
@@ -126,7 +146,11 @@ object RecycleBin {
             if (a.isFinishing) return@move
             if (b.items.isNotEmpty()) {
                 Messages.show(a, "Moved " + movedText(b.items) + " to the recycle bin", "Undo", bottomOffset = bottomOffset) {
-                    restore(a, b.items) { _, _ -> changed() }
+                    restore(a, b.items) { back, _ ->
+                        changed()
+                        // 3.0: put back under another name (the old one was taken meanwhile): said.
+                        renamedText(b.items, back)?.let { if (!a.isFinishing) Messages.show(a, it, bottomOffset = bottomOffset) }
+                    }
                 }
             }
             if (b.failed.isNotEmpty()) {
@@ -139,6 +163,21 @@ object RecycleBin {
 
     /** "“photo.jpg”" or "3 items". */
     fun movedText(items: List<Item>) = if (items.size == 1) "“${items[0].name}”" else "${items.size} items"
+
+    /**
+     * 3.0: when some of [items] came back ([back]) under new names, because the old ones were taken
+     * meanwhile: "Restored as “photo (1).jpg”", or how many got new names. Null when none did.
+     */
+    fun renamedText(items: List<Item>, back: List<File>): String? {
+        val homes = items.map { File(it.home, it.name).path }.toHashSet()
+        val renamed = back.filter { it.path !in homes }
+        return when {
+            renamed.isEmpty() -> null
+            back.size == 1 -> "Restored as “${renamed[0].name}”: the old name was taken"
+            renamed.size == 1 -> "1 of them came back as “${renamed[0].name}”: the old name was taken"
+            else -> "${renamed.size} of them came back with new names: the old ones were taken"
+        }
+    }
 
     /** Why some didn't go to the bin, in a sentence. */
     fun couldntText(failed: List<File>) =
@@ -193,9 +232,28 @@ object RecycleBin {
         }
     }
 
-    /** What is in the bin on every storage that is in, newest first. Reads files: not on the main thread. */
+    /**
+     * What is in the bin on every storage that is in, newest first. Reads files: not on the main
+     * thread. 3.0: things whose size wasn't counted yet are counted now, and written down.
+     */
     fun list(ctx: Context): List<Item> = synchronized(lock) {
-        Volumes.all(ctx).flatMap { listVolume(it).first }.sortedByDescending { it.deletedAt }
+        Volumes.all(ctx).flatMap { v ->
+            val (items, stale) = listVolume(v, measure = true)
+            // What was counted or found out just now is written down.
+            if (stale) writeIndex(ctx, v, items)
+            items
+        }.sortedByDescending { it.deletedAt }
+    }
+
+    /** 3.0: what [days] days in the bin (rather than the days chosen now) would delete for good now; [done] on the main thread. */
+    fun dueSummary(ctx: Context, days: Int, done: (Summary) -> Unit) {
+        val app = ctx.applicationContext
+        worker.execute {
+            val now = System.currentTimeMillis()
+            val due = runCatching { list(app) }.getOrDefault(emptyList()).filter { BinClock.due(it.deletedAt, now, days) }
+            val s = Summary(due.size, due.sumOf { it.size.coerceAtLeast(0) })
+            main.post { done(s) }
+        }
     }
 
     /** How many things the bin holds and their size; [done] on the main thread. */
@@ -270,7 +328,8 @@ object RecycleBin {
         val access = Volumes.accessFor(ctx, bin) ?: return null
         if (!ready(access, bin)) return null
         val isDir = f.isDirectory
-        val totals = FileOps.measure(listOf(f))
+        // 3.0: a file's size is at hand; a folder's is counted later (the move is a rename, done at once).
+        val size = if (isDir) -1L else f.length()
         val id = "${now}_${seq.incrementAndGet()}"
         val holder = File(bin, id)
         if (!access.mkdir(holder)) return null
@@ -280,7 +339,42 @@ object RecycleBin {
         }
         FileOps.forget(ctx, f)
         val from = f.parentFile?.path?.removePrefix(v.root.path)?.trim('/').orEmpty()
-        return Item(id, v, f.name, from, now, totals.bytes, isDir, if (isDir) totals.files else 1)
+        val item = Item(id, v, f.name, from, now, size, isDir, if (isDir) -1 else 1)
+        writeMeta(access, item)
+        return item
+    }
+
+    /**
+     * 3.0: [item]'s details in its own folder in the bin, for when the index lacks it (Swift closed
+     * before the index was written, or the index was lost). Not a problem if it can't be written.
+     */
+    private fun writeMeta(access: FileAccess, item: Item) {
+        val bytes = JSONObject().apply {
+            put("name", item.name)
+            put("from", item.from ?: JSONObject.NULL)
+            put("at", item.deletedAt)
+            put("dir", item.isDir)
+        }.toString().toByteArray()
+        try {
+            val meta = File(item.holder, META)
+            if (access is PlainAccess) meta.writeBytes(bytes) else access.output(meta).use { it.write(bytes) }
+        } catch (e: Exception) {
+            L.w("Recycle bin: a thing's own details couldn't be written (${e.javaClass.simpleName})")
+        }
+    }
+
+    /** 3.0: [one], the thing in [holder], with the details [writeMeta] kept beside it (null when there are none). */
+    private fun readMeta(v: Volumes.Volume, holder: File, one: File): Item? = try {
+        val meta = File(holder, META)
+        if (!meta.isFile || meta.length() > 64 * 1024) {
+            null
+        } else {
+            val o = JSONObject(meta.readText())
+            val from = if (o.isNull("from")) null else safeFrom(o.optString("from"))
+            Item(holder.name, v, one.name, from, o.optLong("at", holder.lastModified()), -1, one.isDirectory, if (one.isDirectory) -1 else 1)
+        }
+    } catch (_: Exception) {
+        null
     }
 
     /** The bin's folder is there, with its .nomedia file. */
@@ -313,12 +407,9 @@ object RecycleBin {
             }
         }
         if (gone.isNotEmpty()) synchronized(lock) { dropFromIndex(ctx, items.filter { it.id in gone }) }
-        // Back in the Gallery and music apps (a folder's first few hundred files).
-        val scan = ArrayList<String>()
-        for (f in restored) {
-            if (f.isDirectory) f.walkTopDown().filter { it.isFile }.take(300).forEach { scan += it.path } else scan += f.path
-        }
-        FileOps.scan(ctx, scan)
+        // Back in the Gallery and music apps (3.0: every file of a folder, not the first few hundred).
+        FileOps.scan(ctx, restored.filter { !it.isDirectory }.map { it.path })
+        restored.filter { it.isDirectory }.forEach { FileOps.scanTree(ctx, it) }
         L.d("Recycle bin: ${restored.size} put back, $failed couldn't")
         return restored to failed
     }
@@ -369,18 +460,27 @@ object RecycleBin {
 
     private fun purgeNow(ctx: Context) {
         val now = System.currentTimeMillis()
+        // 3.0: a clock before 2020 is wrong (a phone that lost its time): nothing goes until it is right.
+        if (!BinClock.sane(now)) {
+            L.w("Recycle bin: the phone's clock looks wrong, nothing deleted")
+            return
+        }
         val days = FilesSettings.binDays
         synchronized(lock) {
             for (v in Volumes.refresh(ctx)) {
                 val bin = binOf(v)
                 if (!bin.isDirectory) continue
-                val (items, changed) = listVolume(v)
-                val due = items.filter { now > it.goesAt(days) }
-                if (due.isEmpty() && !changed) continue
+                val (listed, changed) = listVolume(v)
+                // 3.0: a date before 2020 or still to come (written while the clock was wrong) counts from now.
+                val items = listed.map { if (BinClock.fixed(it.deletedAt, now) != it.deletedAt) it.with(deletedAt = now) else it }
+                val redated = items.indices.any { items[it] !== listed[it] }
+                val due = items.filter { BinClock.due(it.deletedAt, now, days) }
+                if (due.isEmpty() && !changed && !redated) continue
                 val access = Volumes.accessFor(ctx, bin) ?: continue
                 val gone = due.filter { runCatching { access.delete(it.holder) }.getOrDefault(false) || !it.holder.exists() }.map { it.id }.toSet()
                 writeIndex(ctx, v, items.filter { it.id !in gone })
                 if (gone.isNotEmpty()) L.d("Recycle bin: ${gone.size} past their time deleted")
+                if (redated) L.w("Recycle bin: dates from a wrong clock counted from now")
             }
         }
     }
@@ -397,10 +497,11 @@ object RecycleBin {
 
     /**
      * The bin on [v] as it is: what the index says, for things still there; and things in the bin
-     * the index doesn't know (it was lost, or written before them), dated by their folder. The
-     * second value tells that the index is out of date.
+     * the index doesn't know (it was lost, or written before them): 3.0: with the details kept in
+     * their own folder, otherwise dated by their folder. With [measure], sizes not counted yet are
+     * counted. The second value tells that the index is out of date.
      */
-    private fun listVolume(v: Volumes.Volume, except: Set<String> = emptySet()): Pair<List<Item>, Boolean> {
+    private fun listVolume(v: Volumes.Volume, except: Set<String> = emptySet(), measure: Boolean = false): Pair<List<Item>, Boolean> {
         val bin = binOf(v)
         val dirs = bin.listFiles()?.filter { it.isDirectory }.orEmpty()
         if (dirs.isEmpty()) return emptyList<Item>() to File(bin, INDEX).let { it.exists() && it.length() > 2 }
@@ -433,16 +534,25 @@ object RecycleBin {
                 seen += k.id
                 continue
             }
-            // Not in the index: what its folder holds, dated by the folder.
-            val inside = d.listFiles().orEmpty()
+            // Not in the index: what its folder holds (not its own details file).
+            val inside = d.listFiles().orEmpty().filter { it.name != META }
             val one = inside.firstOrNull() ?: continue
             if (!ID.matches(d.name)) continue
             stale = true
-            val t = FileOps.measure(listOf(one))
-            out += Item(d.name, v, one.name, null, d.lastModified(), t.bytes, one.isDirectory, if (one.isDirectory) t.files else 1)
+            // 3.0: where it was and when, from its own details; otherwise not known, dated by its folder.
+            out += readMeta(v, d, one) ?: Item(d.name, v, one.name, null, d.lastModified(), -1, one.isDirectory, if (one.isDirectory) -1 else 1)
             seen += d.name
         }
         if (known.keys.any { it !in seen }) stale = true
+        if (measure) {
+            for (i in out.indices) {
+                val item = out[i]
+                if (item.size >= 0 && (!item.isDir || item.files >= 0)) continue
+                val t = FileOps.measure(listOf(item.file))
+                out[i] = item.with(size = t.bytes, files = if (item.isDir) t.files else 1)
+                stale = true
+            }
+        }
         return out to stale
     }
 
@@ -491,4 +601,24 @@ object RecycleBin {
             false
         }
     }
+}
+
+/**
+ * The recycle bin's sense of time (3.0), which doesn't trust a clock that was reset: a phone that lost
+ * its time (a dead battery) says 1970 or 2000, and the bin mustn't erase everything then, nor keep
+ * for ever what it was given while the clock was wrong.
+ */
+object BinClock {
+    /** 1 January 2020: nothing was deleted in Swift before. */
+    const val EARLIEST = 1_577_836_800_000L
+    private const val DAY = 24L * 3600 * 1000
+
+    /** Whether [now] can be the true time. */
+    fun sane(now: Long) = now >= EARLIEST
+
+    /** [deletedAt] as the bin counts it at [now]: a date before 2020 or still to come counts as now. */
+    fun fixed(deletedAt: Long, now: Long): Long = if (deletedAt < EARLIEST || deletedAt > now) now else deletedAt
+
+    /** Whether a thing deleted at [deletedAt] goes for good at [now], when things are kept [days] days. */
+    fun due(deletedAt: Long, now: Long, days: Int): Boolean = sane(now) && now > fixed(deletedAt, now) + days * DAY
 }

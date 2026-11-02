@@ -75,14 +75,23 @@ object FilesSettings {
         get() = sp.getBoolean(KEY_RECYCLE_BIN, true)
         set(v) = sp.edit().putBoolean(KEY_RECYCLE_BIN, v).apply()
 
-    /** Days the recycle bin keeps things before they go for good: 7, 30 (the default) or 90. */
+    /**
+     * Days the recycle bin keeps things before they go for good: 7, 30 (the default) or 90. 3.0:
+     * changing it deletes nothing by itself: [setBinDays] does, once Settings has asked (a shorter
+     * time used to delete the older things for good at once, without a word).
+     */
     var binDays: Int
         get() = sp.getInt(KEY_BIN_DAYS, 30).let { d -> if (d in BIN_DAY_CHOICES) d else 30 }
-        set(v) {
-            sp.edit().putInt(KEY_BIN_DAYS, if (v in BIN_DAY_CHOICES) v else 30).apply()
-            // A shorter time may mean some things are due now.
-            SwiftApp.instance?.let { RecycleBin.purgeSoon(it, force = true) }
-        }
+        set(v) = sp.edit().putInt(KEY_BIN_DAYS, if (v in BIN_DAY_CHOICES) v else 30).apply()
+
+    /** 3.0: things are kept [days] days from now on; what has been in the bin longer goes for good now. */
+    fun setBinDays(ctx: Context, days: Int) {
+        binDays = days
+        RecycleBin.purgeSoon(ctx, force = true)
+    }
+
+    /** 3.0: what keeping things only [days] days would delete for good now ([done] on the main thread). */
+    fun binDue(ctx: Context, days: Int, done: (RecycleBin.Summary) -> Unit) = RecycleBin.dueSummary(ctx, days, done)
 
     /** What the recycle bin holds now ([done] on the main thread). */
     fun binSummary(ctx: Context, done: (RecycleBin.Summary) -> Unit) = RecycleBin.summary(ctx, done)
@@ -90,14 +99,20 @@ object FilesSettings {
     /** Deletes everything in the recycle bin for good; [done] on the main thread with how many went. */
     fun emptyBin(ctx: Context, done: (Int) -> Unit) = RecycleBin.empty(ctx, done)
 
-    /** How Private opens now: [LOCK_SCREEN], [LOCK_PIN] or [LOCK_NONE] (not set up: no screen lock and no PIN). */
+    /**
+     * How Private opens now: [LOCK_SCREEN], [LOCK_PIN] or [LOCK_NONE] (not set up: no screen lock and
+     * no PIN). 3.0: a PIN, once chosen, keeps Private even after the phone gets a screen lock.
+     */
     fun privateLockKind(ctx: Context): String = when {
-        (ctx.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager)?.isKeyguardSecure == true -> LOCK_SCREEN
         PrivateFolder.hasPin() -> LOCK_PIN
+        (ctx.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager)?.isKeyguardSecure == true -> LOCK_SCREEN
         else -> LOCK_NONE
     }
 
-    /** Sets or changes Private's PIN (asking for the old one first); with a screen lock, says that it is used instead. */
+    /** 3.0: how long before a forgotten PIN can be reset (0: now), or null when no reset was asked for. */
+    fun privateResetLeft(): Long? = PrivateFolder.resetLeft()
+
+    /** Sets or changes Private's PIN (asking for the old one first); with a screen lock and no PIN, says that it is used. */
     fun changePin(activity: Activity) = PrivateLock.changePin(activity)
 
     /** The port Wi-Fi transfer tries first (the next free one when it is taken). */

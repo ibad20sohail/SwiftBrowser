@@ -230,7 +230,8 @@ object Favicons {
      */
     fun clearSince(since: Long, hosts: Set<String>, until: Long = Long.MAX_VALUE) {
         cache.evictAll()
-        absent.clear()
+        // 3.0: [absent] is the main thread's (a plain set); clearing runs on a thread of its own.
+        main.post { absent.clear() }
         missed.clear()
         val keys = fileKeys(hosts)
         exec.execute {
@@ -253,7 +254,7 @@ object Favicons {
     /** Removes all stored icons, and the marks of sites without one (when clearing browsing data). */
     fun clear() {
         cache.evictAll()
-        absent.clear()
+        main.post { absent.clear() }
         missed.clear()
         exec.execute { dir.listFiles()?.forEach { it.delete() } }
     }

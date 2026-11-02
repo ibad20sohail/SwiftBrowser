@@ -94,7 +94,8 @@ class MusicService : Service() {
             ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_DETACH)
             foreground = false
             try {
-                NotificationManagerCompat.from(this).notify(NOTIFICATION_ID, notification(look))
+                val nm = NotificationManagerCompat.from(this)
+                if (nm.areNotificationsEnabled()) nm.notify(NOTIFICATION_ID, notification(look))
             } catch (e: SecurityException) {
                 L.w("Player notification not allowed", e)
             }
@@ -114,10 +115,11 @@ class MusicService : Service() {
 
     private fun look(): Look {
         val e = LocalPlayback.current
-        val incognito = e?.incognito == true
+        val incognito = e?.private == true
         val timer = LocalPlayback.sleepLabel()?.let { "Sleep: $it" }
-        // An incognito tab's video says nothing about itself (the notification is on the lock screen too).
-        val title = if (incognito) "Playing a video from an incognito tab" else LocalPlayback.displayTitle()
+        // An incognito tab's video says nothing about itself (the notification is on the lock screen too);
+        // 3.0: nor does a file of Private.
+        val title = if (incognito) hiddenTitle(e) else LocalPlayback.displayTitle()
         val sub = if (incognito) "Swift" else LocalPlayback.displaySubtitle().ifBlank { "Swift" }
         return Look(title, listOfNotNull(sub, timer).joinToString(" · "), if (incognito) null else LocalPlayback.smallArt, LocalPlayback.playing, incognito)
     }
@@ -170,10 +172,10 @@ class MusicService : Service() {
                 .build(),
         )
         val e = LocalPlayback.current
-        val incognito = e?.incognito == true
+        val incognito = e?.private == true
         val duration = p.duration.takeIf { it != C.TIME_UNSET && it > 0 } ?: 0L
         val meta = Meta(
-            if (incognito) "Playing a video from an incognito tab" else LocalPlayback.displayTitle(),
+            if (incognito) hiddenTitle(e) else LocalPlayback.displayTitle(),
             if (incognito) "" else LocalPlayback.displaySubtitle(),
             if (incognito) null else LocalPlayback.smallArt,
             duration,
@@ -189,6 +191,13 @@ class MusicService : Service() {
             shownMeta = meta
         }
         s.isActive = true
+    }
+
+    /** What the notification and lock screen say about something that keeps itself to itself. */
+    private fun hiddenTitle(e: LocalPlayback.Entry?): String = when {
+        e?.secure == true -> "Playing a file from Private"
+        e?.stream == true -> "Playing a video from an incognito tab"
+        else -> "Playing an incognito download"
     }
 
     private fun stop() {
@@ -261,7 +270,9 @@ class MusicService : Service() {
     companion object {
         /** The pages' playback notifications' channel: one "Playing videos and music" in Android's settings. */
         private const val CHANNEL = "playback"
-        private const val NOTIFICATION_ID = 4200
+
+        /** 3.0: its own (read aloud's was the same 4200, so music lost its controls when reading stopped). */
+        private const val NOTIFICATION_ID = 4300
         private const val EXTRA_FOREGROUND = "foreground"
         private const val ACTION_PLAY = "com.swiftbrowser.player.play"
         private const val ACTION_PAUSE = "com.swiftbrowser.player.pause"

@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.StatFs
+import android.os.SystemClock
 import com.swiftbrowser.core.L
 import com.swiftbrowser.core.UrlUtils
 import org.json.JSONArray
@@ -51,9 +52,17 @@ import java.util.zip.ZipOutputStream
  * checked to stay inside a storage (no "..", no links out), and hidden folders, the recycle bin and
  * Swift's own folders are never served. Ten wrong codes make a new code. Nothing about files or
  * folders goes into Swift's logs.
+ *
+ * 3.0: after ten wrong codes in all, no computer gets in (even with the right code) until New code
+ * is tapped on the phone, which says why. Swift's own folder is hidden in any capitals (the phone's
+ * storage and cards ignore them: "android/DATA/…" got through), but Swift's download folder in it
+ * shows as a place of its own. Uploads leave 50 MB free, are noted as unfinished copies (Parts), and
+ * fail with a reason in words (the phone full, a FAT32 card and a file over 4 GB). It can go on in
+ * the background while files move (WifiTransferService); "connected" ends when the computer has
+ * been quiet a while (its page asks every half a minute while open).
  */
 class WifiServer(private val ctx: Context, val address: InetAddress, private val page: (String) -> String) {
-    /** The code the computer types; a new one after [MAX_WRONG] wrong tries, or on request. */
+    /** The code the computer types; a new one on request. */
     @Volatile
     var code: String = newCode()
         private set
@@ -80,10 +89,43 @@ class WifiServer(private val ctx: Context, val address: InetAddress, private val
     val bytesReceived = AtomicLong()
     val filesReceived = AtomicInteger()
 
+    /** 3.0: when the computer last asked anything (signed in), on the phone's own clock. */
+    @Volatile
+    private var lastSeen = 0L
+
+    /** 3.0: when something was last sent or received. */
+    @Volatile
+    var lastBusyAt = 0L
+        private set
+
+    /** 3.0: the file being received now, for the phone's screen and notification (never logged). */
+    @Volatile
+    var receivingName: String? = null
+        private set
+
+    /** 3.0: something is being sent or received now. */
+    val busy: Boolean get() = sending.get() > 0 || receiving.get() > 0
+
+    /** 3.0: something was being sent or received within [ms]. */
+    fun busyWithin(ms: Long): Boolean = busy || SystemClock.elapsedRealtime() - lastBusyAt < ms
+
+    /** 3.0: a computer is signed in and was heard from lately (its page asks every half a minute while open). */
+    val connected: Boolean get() = signedIn && (busy || SystemClock.elapsedRealtime() - lastSeen < QUIET_MS)
+
+    /** 3.0: ten wrong codes were typed: no computer gets in until New code is tapped. */
+    val lockedOut: Boolean get() = codeLock.locked
+
     private var server: ServerSocket? = null
     private val clients: MutableSet<Socket> = Collections.synchronizedSet(HashSet())
-    private val wrong = AtomicInteger()
+    private val codeLock = CodeLock(MAX_WRONG)
     private val nameLock = Any()
+
+    /** 3.0: where the computer may look: each storage, and Swift's download folder when it is inside Swift's own folder. */
+    private val roots: List<Root> = makeRoots()
+
+    /** The storages' tops and Swift's download folder, as their real paths, for the checks. */
+    private val storageTops: List<String> = Volumes.all(ctx).mapNotNull { canonical(it.root) }
+    private val downloadsPath: String? = roots.firstOrNull { it.downloads }?.let { canonical(it.dir) }
     private val pool = ThreadPoolExecutor(6, 6, 30, TimeUnit.SECONDS, LinkedBlockingQueue(32)) { r ->
         Thread(r, "wifi-transfer-io").apply { isDaemon = true }
     }
@@ -122,12 +164,12 @@ class WifiServer(private val ctx: Context, val address: InetAddress, private val
         L.d("Wi-Fi transfer off")
     }
 
-    /** A new code; the computer signed in with the old one must type it. */
+    /** A new code; the computer signed in with the old one must type it. 3.0: computers may sign in again. */
     fun renewCode() {
         code = newCode()
         token = newToken()
         signedIn = false
-        wrong.set(0)
+        codeLock.reset()
     }
 
     val url: String get() = "http://${address.hostAddress}:$port"
@@ -177,7 +219,8 @@ class WifiServer(private val ctx: Context, val address: InetAddress, private val
                 route(req, out)
             } catch (e: Exception) {
                 L.w("Wi-Fi transfer: a request failed (${e.javaClass.simpleName})")
-                runCatching { send(out, Reply(500, TEXT, "Something went wrong on the phone.".toByteArray())) }
+                // 3.0: the reason in words when it is a usual one (the page shows the answer's "error").
+                runCatching { send(out, Reply(500, JSON, err(FileErrors.text(e) ?: "Something went wrong on the phone."))) }
             }
             out.flush()
             // The answer is whole; what the computer still sends (the last bytes of an upload) is read and
@@ -245,13 +288,16 @@ class WifiServer(private val ctx: Context, val address: InetAddress, private val
             return
         }
         val authed = cookieOk(req)
+        if (authed) lastSeen = SystemClock.elapsedRealtime()
         when {
             req.path == "/favicon.ico" -> send(out, Reply(204, TEXT, ByteArray(0)))
             req.path == "/login" && req.method == "POST" -> login(req, out)
             req.path == "/" && (req.method == "GET" || req.method == "HEAD") ->
                 send(out, Reply(200, HTML, page(if (authed) "index" else "login").toByteArray(), PAGE_HEADERS), head = req.method == "HEAD")
             !authed -> send(out, Reply(401, JSON, """{"error":"signin"}""".toByteArray()))
-            req.path == "/api/roots" -> send(out, Reply(200, JSON, roots().toByteArray()))
+            // 3.0: the page says it is still open (for "connected" on the phone).
+            req.path == "/api/ping" -> send(out, Reply(204, TEXT, ByteArray(0)))
+            req.path == "/api/roots" -> send(out, Reply(200, JSON, rootsJson().toByteArray()))
             req.path == "/api/list" -> list(req, out)
             req.path == "/dl" && (req.method == "GET" || req.method == "HEAD") -> download(req, out)
             req.path == "/zip" && req.method == "GET" -> zip(req, out)
@@ -280,9 +326,10 @@ class WifiServer(private val ctx: Context, val address: InetAddress, private val
             read += n
         }
         val typed = String(body, 0, read).split('&').firstOrNull { it.startsWith("code=") }?.substringAfter('=')?.let { decode(it) }?.filter { it.isDigit() }.orEmpty()
-        if (MessageDigest.isEqual(typed.toByteArray(), code.toByteArray())) {
+        val answer = codeLock.attempt(typed, code)
+        if (answer == CodeLock.Answer.IN) {
             signedIn = true
-            wrong.set(0)
+            lastSeen = SystemClock.elapsedRealtime()
             L.d("Wi-Fi transfer: a computer signed in")
             send(out, Reply(303, TEXT, ByteArray(0), listOf(
                 "Location" to "/",
@@ -290,67 +337,94 @@ class WifiServer(private val ctx: Context, val address: InetAddress, private val
             )))
             return
         }
-        // Slow to guess, and after ten wrong ones the code on the phone changes.
+        // Slow to guess. 3.0: after ten wrong ones in all, nobody gets in until New code is tapped on the phone
+        // (2.9 showed a new code instead, which guessing could go on against for ever).
+        if (answer == CodeLock.Answer.LOCKED_NOW) L.w("Wi-Fi transfer: ten wrong codes, no more sign-ins until New code is tapped")
         Thread.sleep(600)
-        if (wrong.incrementAndGet() >= MAX_WRONG) {
-            L.w("Wi-Fi transfer: too many wrong codes, a new one is shown")
-            code = newCode()
-            wrong.set(0)
-        }
-        send(out, Reply(303, TEXT, ByteArray(0), listOf("Location" to "/?wrong=1")))
+        send(out, Reply(303, TEXT, ByteArray(0), listOf("Location" to if (codeLock.locked) "/?locked=1" else "/?wrong=1")))
     }
 
     // ------------------------------------------------------------------ what may be seen
 
-    private fun volumes() = Volumes.all(ctx)
+    /** A place the computer can open: a storage, or (3.0) Swift's download folder when it is inside Swift's own folder there. */
+    private class Root(val name: String, val dir: File, val volume: Volumes.Volume, val downloads: Boolean = false)
 
-    /** A folder or file asked for: [v] is the storage's number, [p] the path inside it. Null when it isn't to be shown. */
-    private fun resolve(v: String?, p: String?): Pair<Volumes.Volume, File>? {
-        val vol = volumes().getOrNull(v?.toIntOrNull() ?: 0) ?: return null
+    private fun makeRoots(): List<Root> {
+        val out = Volumes.all(ctx).map { Root(it.name, it.root, it) }.toMutableList()
+        // 3.0: Swift's downloads may be in its own folder on a storage (Android/data/…/files, always so on a
+        // card), which is hidden: that folder alone shows, as a place of its own.
+        val dl = runCatching { com.swiftbrowser.download.Downloads.directory() }.getOrNull()
+        val v = dl?.let { Volumes.of(ctx, it) }
+        if (dl != null && v != null) {
+            val parts = dl.path.removePrefix(v.root.path).trim('/').split('/')
+            if (WifiPaths.isOwnFolder(parts, ctx.packageName) && parts.size > 4 && parts[3].equals("files", ignoreCase = true)) {
+                out += Root("Swift's downloads" + if (v.removable) " (${v.name})" else "", dl, v, downloads = true)
+            }
+        }
+        return out
+    }
+
+    private fun canonical(f: File): String? = runCatching { f.canonicalPath }.getOrNull()
+
+    /** A folder or file asked for: [v] is the place's number, [p] the path inside it. Null when it isn't to be shown. */
+    private fun resolve(v: String?, p: String?): Pair<Root, File>? {
+        val root = roots.getOrNull(v?.toIntOrNull() ?: 0) ?: return null
         val rel = p.orEmpty().trim('/')
         val parts = rel.split('/').filter { it.isNotEmpty() }
         if (parts.any { it == ".." || it == "." || it.startsWith(".") || it.contains('\u0000') || it.contains('\\') }) return null
-        val f = if (parts.isEmpty()) vol.root else File(vol.root, parts.joinToString("/"))
-        val canon = runCatching { f.canonicalPath }.getOrNull() ?: return null
-        val root = runCatching { vol.root.canonicalPath }.getOrNull() ?: return null
-        // Through a link out of the storage: not shown.
-        if (canon != root && !canon.startsWith("$root/")) return null
-        if (blocked(parts)) return null
-        val own = runCatching { File(ctx.applicationInfo.dataDir).canonicalPath }.getOrNull()
+        val f = if (parts.isEmpty()) root.dir else File(root.dir, parts.joinToString("/"))
+        val canon = canonical(f) ?: return null
+        val top = canonical(root.dir) ?: return null
+        // Through a link out of the place: not shown.
+        if (canon != top && !canon.startsWith("$top/")) return null
+        if (hidden(canon)) return null
+        val own = canonical(File(ctx.applicationInfo.dataDir))
         if (own != null && (canon == own || canon.startsWith("$own/"))) return null
-        return vol to f
+        return root to f
     }
 
-    /** Swift's own folder on a storage (its cache and app data) isn't shown. */
-    private fun blocked(parts: List<String>) = parts.size >= 3 && parts[0] == "Android" && parts[1] == "data" && parts[2] == ctx.packageName
+    /**
+     * Swift's own folder on a storage (its cache and app data) isn't shown. 3.0: in any capitals (the
+     * phone's storage and cards ignore them), except for Swift's download folder in it.
+     */
+    private fun hidden(canon: String): Boolean {
+        for (top in storageTops) {
+            if (canon != top && !canon.startsWith("$top/")) continue
+            val parts = canon.removePrefix(top).trim('/').split('/')
+            if (WifiPaths.isOwnFolder(parts, ctx.packageName)) return downloadsPath == null || !WifiPaths.within(canon, downloadsPath)
+        }
+        return false
+    }
 
-    private fun relOf(v: Volumes.Volume, f: File) = f.path.removePrefix(v.root.path).trim('/')
+    private fun relOf(root: Root, f: File) = f.path.removePrefix(root.dir.path).trim('/')
 
-    private fun roots(): String {
+    private fun rootsJson(): String {
         val arr = JSONArray()
-        volumes().forEachIndexed { i, v ->
-            val (free, total) = v.space()
-            arr.put(JSONObject().put("v", i).put("name", v.name).put("free", free).put("total", total).put("card", v.removable))
+        roots.forEachIndexed { i, r ->
+            val (free, total) = r.volume.space()
+            arr.put(JSONObject().put("v", i).put("name", r.name).put("free", free).put("total", total).put("card", r.volume.removable))
         }
         return arr.toString()
     }
 
     private fun list(req: Request, out: OutputStream) {
-        val (v, dir) = resolve(req.q("v"), req.q("p")) ?: return send(out, Reply(404, JSON, err("That folder isn't there.")))
+        val (root, dir) = resolve(req.q("v"), req.q("p")) ?: return send(out, Reply(404, JSON, err("That folder isn't there.")))
         val files = dir.listFiles() ?: return send(out, Reply(404, JSON, err("That folder can't be read.")))
-        val rel = relOf(v, dir)
+        val rel = relOf(root, dir)
         val items = FileOps.sorted(
-            files.filter { !it.name.startsWith(".") && !(rel == "Android/data" && it.name == ctx.packageName) }.map { FileItem.of(it) },
+            // 3.0: Swift's own folder isn't listed in Android/data in any capitals.
+            files.filter { !it.name.startsWith(".") && !(!root.downloads && rel.equals("Android/data", ignoreCase = true) && it.name.equals(ctx.packageName, ignoreCase = true)) }
+                .map { FileItem.of(it) },
             FileOps.SORT_NAME,
         )
         val arr = JSONArray()
         for (it in items) arr.put(JSONObject().put("n", it.name).put("d", it.isDir).put("s", it.size).put("t", it.time))
         val o = JSONObject()
-            .put("v", volumes().indexOf(v))
-            .put("root", v.name)
+            .put("v", roots.indexOf(root))
+            .put("root", root.name)
             .put("p", rel)
             .put("canWrite", Volumes.accessFor(ctx, dir) != null)
-            .put("free", v.space().first)
+            .put("free", root.volume.space().first)
             .put("items", arr)
         send(out, Reply(200, JSON, o.toString().toByteArray()))
     }
@@ -409,6 +483,7 @@ class WifiServer(private val ctx: Context, val address: InetAddress, private val
         writeHead(out, status, mime, count, headers)
         if (req.method == "HEAD" || count == 0L) return
         sending.incrementAndGet()
+        lastBusyAt = SystemClock.elapsedRealtime()
         try {
             RandomAccessFile(f, "r").use { raf ->
                 raf.seek(start)
@@ -425,24 +500,26 @@ class WifiServer(private val ctx: Context, val address: InetAddress, private val
             out.flush()
         } finally {
             sending.decrementAndGet()
+            lastBusyAt = SystemClock.elapsedRealtime()
         }
     }
 
     /** A folder, or the files picked in it ([n]), as a ZIP made while it is sent. */
     private fun zip(req: Request, out: OutputStream) {
-        val (v, dir) = resolve(req.q("v"), req.q("p"))?.takeIf { it.second.isDirectory } ?: return send(out, Reply(404, TEXT, "That folder isn't there.".toByteArray()))
+        val (r, dir) = resolve(req.q("v"), req.q("p"))?.takeIf { it.second.isDirectory } ?: return send(out, Reply(404, TEXT, "That folder isn't there.".toByteArray()))
         val picked = req.query["n"].orEmpty().filter { n -> n.isNotEmpty() && !n.contains('/') && !n.startsWith(".") }
         val items = if (picked.isEmpty()) listOf(dir) else picked.map { File(dir, it) }.filter { it.exists() }
         if (items.isEmpty()) return send(out, Reply(404, TEXT, "Nothing to send.".toByteArray()))
-        val folderName = if (dir.path == v.root.path) v.name else dir.name
+        val folderName = if (dir.path == r.dir.path) r.name else dir.name
         val base = when {
             picked.isEmpty() -> folderName
             items.size == 1 -> items[0].name
             else -> "$folderName (${items.size} items)"
         }
-        val root = runCatching { v.root.canonicalPath }.getOrNull() ?: return send(out, Reply(404, TEXT, "Nothing to send.".toByteArray()))
+        val root = canonical(r.dir) ?: return send(out, Reply(404, TEXT, "Nothing to send.".toByteArray()))
         writeHead(out, 200, "application/zip", -1, listOf("Content-Disposition" to disposition("attachment", "$base.zip")))
         sending.incrementAndGet()
+        lastBusyAt = SystemClock.elapsedRealtime()
         try {
             val zip = ZipOutputStream(CountingOutput(out, bytesSent))
             for (f in items) addToZip(zip, f, if (items.size == 1 && f.isDirectory) "" else f.name, root)
@@ -450,15 +527,16 @@ class WifiServer(private val ctx: Context, val address: InetAddress, private val
             out.flush()
         } finally {
             sending.decrementAndGet()
+            lastBusyAt = SystemClock.elapsedRealtime()
         }
     }
 
     private fun addToZip(zip: ZipOutputStream, f: File, name: String, root: String) {
         if (f.name.startsWith(".")) return
-        // Nothing reached through a link out of the storage, nor Swift's own folder.
+        // Nothing reached through a link out of the place, nor Swift's own folder (3.0: in any capitals).
         val canon = runCatching { f.canonicalPath }.getOrNull() ?: return
         if (!canon.startsWith("$root/") && canon != root) return
-        if (blocked(canon.removePrefix(root).trim('/').split('/'))) return
+        if (hidden(canon)) return
         if (f.isDirectory) {
             if (name.isNotEmpty()) {
                 zip.putNextEntry(ZipEntry("$name/").apply { time = f.lastModified() })
@@ -507,7 +585,7 @@ class WifiServer(private val ctx: Context, val address: InetAddress, private val
     // ------------------------------------------------------------------ from the computer
 
     private fun upload(req: Request, out: OutputStream) {
-        val (_, dir) = resolve(req.q("v"), req.q("p"))?.takeIf { it.second.isDirectory } ?: return send(out, Reply(404, JSON, err("That folder isn't there.")))
+        val (root, dir) = resolve(req.q("v"), req.q("p"))?.takeIf { it.second.isDirectory } ?: return send(out, Reply(404, JSON, err("That folder isn't there.")))
         val boundary = req.headers["content-type"]?.let { t ->
             if (!t.startsWith("multipart/form-data", ignoreCase = true)) null
             else Regex("boundary=\"?([^\";]+)\"?").find(t)?.groupValues?.get(1)
@@ -515,11 +593,19 @@ class WifiServer(private val ctx: Context, val address: InetAddress, private val
         val access = Volumes.accessFor(ctx, dir) ?: return send(out, Reply(403, JSON, err(CARD_TEXT)))
         val length = req.headers["content-length"]?.toLongOrNull() ?: -1L
         val free = runCatching { StatFs(dir.path).availableBytes }.getOrDefault(Long.MAX_VALUE)
-        if (length > 0 && length > free) {
-            return send(out, Reply(507, JSON, err("There isn't enough room on the phone: this needs ${UrlUtils.formatBytes(length)}, and ${UrlUtils.formatBytes(free)} is free.")))
+        // 3.0: some room always stays free for the phone itself.
+        val room = if (free == Long.MAX_VALUE) free else (free - FileJobs.MARGIN).coerceAtLeast(0)
+        if (length > 0 && length > room) {
+            return send(out, Reply(507, JSON, err("There isn't enough room on the phone: this needs ${UrlUtils.formatBytes(length)}, and ${UrlUtils.formatBytes(room)} can be used.")))
+        }
+        // 3.0: a FAT32 card can't take a file over 4 GB: said before it is sent, not after.
+        if (length > FileErrors.FAT32_MAX + 65_536 && Volumes.isFat32(root.volume)) {
+            return send(out, Reply(413, JSON, err(FileErrors.FAT32)))
         }
         val saved = ArrayList<String>()
         receiving.incrementAndGet()
+        lastBusyAt = SystemClock.elapsedRealtime()
+        var used = 0L
         try {
             val parts = Multipart(req.body, boundary) { n -> bytesReceived.addAndGet(n.toLong()) }
             var more = parts.begin()
@@ -532,16 +618,27 @@ class WifiServer(private val ctx: Context, val address: InetAddress, private val
                     continue
                 }
                 // Written under a hidden name, then given its own: half an upload never shows as the file.
-                val temp = File(dir, ".swift-up-" + System.nanoTime() + ".part")
+                // 3.0: noted as an unfinished copy, so one cut off by Swift closing goes the next time Files opens.
+                val temp = Parts.newIn(dir, "up-")
+                Parts.begin(ctx, temp)
+                receivingName = name
                 var ok = false
                 try {
-                    access.output(temp).use { o -> more = parts.data(o) }
+                    Saving(access.output(temp), room - used, root.volume.removable).use { o ->
+                        more = parts.data(o)
+                        used += o.count
+                    }
                     ok = true
+                } catch (e: Saving.Failed) {
+                    L.w("Wi-Fi transfer: an upload couldn't be saved (${e.cause?.javaClass?.simpleName ?: "no room"})")
+                    return send(out, Reply(if (e.full) 507 else 500, JSON, err(e.text)))
                 } finally {
                     if (!ok) runCatching { access.delete(temp) }
+                    if (!ok) Parts.end(ctx, temp)
+                    receivingName = null
                 }
                 val target = synchronized(nameLock) {
-                    val t = FileOps.freeName(File(dir, name))
+                    val t = FileOps.freeName(File(dir, name), isDir = false)
                     if (!access.rename(temp, t.name)) {
                         runCatching { access.delete(temp) }
                         null
@@ -549,6 +646,7 @@ class WifiServer(private val ctx: Context, val address: InetAddress, private val
                         t
                     }
                 }
+                Parts.end(ctx, temp)
                 if (target != null) {
                     saved += target.name
                     filesReceived.incrementAndGet()
@@ -557,8 +655,44 @@ class WifiServer(private val ctx: Context, val address: InetAddress, private val
             }
         } finally {
             receiving.decrementAndGet()
+            lastBusyAt = SystemClock.elapsedRealtime()
         }
         send(out, Reply(200, JSON, JSONObject().put("ok", true).put("saved", JSONArray(saved)).toString().toByteArray()))
+    }
+
+    /**
+     * 3.0: where an upload is written: no further than [room] (the free space less 50 MB), and a
+     * failure to write said in words (FileErrors), apart from the computer going away.
+     */
+    private class Saving(out: OutputStream, private val room: Long, private val onCard: Boolean) : java.io.FilterOutputStream(out) {
+        class Failed(val text: String, val full: Boolean, cause: Throwable?) : IOException(text, cause)
+
+        var count = 0L
+            private set
+
+        override fun write(b: ByteArray, off: Int, len: Int) {
+            if (count + len > room) throw Failed(if (onCard) FileErrors.CARD_FULL else FileErrors.FULL, true, null)
+            try {
+                out.write(b, off, len)
+            } catch (e: IOException) {
+                val text = FileErrors.text(e, count, onCard) ?: "The phone couldn't save this."
+                throw Failed(text, text == FileErrors.FULL || text == FileErrors.CARD_FULL, e)
+            }
+            count += len
+        }
+
+        override fun write(b: Int) = write(byteArrayOf(b.toByte()), 0, 1)
+
+        override fun close() {
+            try {
+                super.close()
+            } catch (e: Failed) {
+                throw e
+            } catch (e: IOException) {
+                val text = FileErrors.text(e, count, onCard) ?: "The phone couldn't save this."
+                throw Failed(text, text == FileErrors.FULL || text == FileErrors.CARD_FULL, e)
+            }
+        }
     }
 
     /** The name the computer gave the file, as a safe name of one part ("upload" when nothing is left). */
@@ -715,6 +849,9 @@ class WifiServer(private val ctx: Context, val address: InetAddress, private val
     companion object {
         private const val COOKIE = "swift_t"
         private const val MAX_WRONG = 10
+
+        /** 3.0: a computer not heard from this long counts as gone (its page asks every 30 seconds; hidden tabs less often). */
+        private const val QUIET_MS = 150_000L
         private const val TEXT = "text/plain; charset=utf-8"
         private const val HTML = "text/html; charset=utf-8"
         private const val JSON = "application/json; charset=utf-8"
@@ -732,8 +869,8 @@ class WifiServer(private val ctx: Context, val address: InetAddress, private val
 
         private val REASONS = mapOf(
             200 to "OK", 204 to "No Content", 206 to "Partial Content", 303 to "See Other", 400 to "Bad Request",
-            401 to "Unauthorized", 403 to "Forbidden", 404 to "Not Found", 409 to "Conflict", 416 to "Range Not Satisfiable",
-            500 to "Internal Server Error", 507 to "Insufficient Storage",
+            401 to "Unauthorized", 403 to "Forbidden", 404 to "Not Found", 409 to "Conflict", 413 to "Payload Too Large",
+            416 to "Range Not Satisfiable", 500 to "Internal Server Error", 507 to "Insufficient Storage",
         )
 
         private val random = SecureRandom()
@@ -771,4 +908,53 @@ class WifiServer(private val ctx: Context, val address: InetAddress, private val
             return null
         }
     }
+}
+
+/**
+ * Wrong codes typed on computers (3.0): after [max] in all (not in a row, and many computers or
+ * requests at once count together), no computer gets in, even with the right code, until [reset]
+ * (New code on the phone). Guessing can't go on in the background while the phone shows a code.
+ */
+class CodeLock(private val max: Int) {
+    enum class Answer { IN, WRONG, LOCKED_NOW, LOCKED }
+
+    private var wrong = 0
+
+    @Volatile
+    var locked = false
+        private set
+
+    /** [typed] against the code shown on the phone. */
+    @Synchronized
+    fun attempt(typed: String, code: String): Answer {
+        if (locked) return Answer.LOCKED
+        if (typed.isNotEmpty() && MessageDigest.isEqual(typed.toByteArray(), code.toByteArray())) return Answer.IN
+        wrong++
+        if (wrong >= max) {
+            locked = true
+            return Answer.LOCKED_NOW
+        }
+        return Answer.WRONG
+    }
+
+    /** New code: computers may try again. */
+    @Synchronized
+    fun reset() {
+        wrong = 0
+        locked = false
+    }
+}
+
+/** What Wi-Fi transfer never shows (3.0), as plain checks on paths. */
+object WifiPaths {
+    /**
+     * Whether [parts] (a path inside a storage, folder by folder) is in Swift's own folder there,
+     * Android/data/<package>, in any capitals: the phone's storage and memory cards ignore them.
+     */
+    fun isOwnFolder(parts: List<String>, pkg: String): Boolean =
+        parts.size >= 3 && parts[0].equals("Android", ignoreCase = true) && parts[1].equals("data", ignoreCase = true) && parts[2].equals(pkg, ignoreCase = true)
+
+    /** Whether [path] is [dir] or inside it, capitals aside. */
+    fun within(path: String, dir: String): Boolean =
+        path.equals(dir, ignoreCase = true) || path.lowercase(Locale.ROOT).startsWith(dir.lowercase(Locale.ROOT) + "/")
 }

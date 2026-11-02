@@ -29,6 +29,7 @@ import com.swiftbrowser.files.FileJobs
 import com.swiftbrowser.files.FileOpener
 import com.swiftbrowser.files.FileThumbs
 import com.swiftbrowser.files.FilesSettings
+import com.swiftbrowser.files.Parts
 import com.swiftbrowser.files.RecycleBin
 import com.swiftbrowser.files.Transfers
 import com.swiftbrowser.files.Volumes
@@ -46,6 +47,10 @@ import java.util.Locale
  * free. In a list, things are ticked (app files, empty folders and Swift's leftovers all at first;
  * of twins all but the newest; large files none), and the bar at the bottom says how much the ticked
  * ones take, with Delete (to the recycle bin, Undo at hand) or Delete forever.
+ *
+ * 3.0: one copy of each set of twins always stays: it can't be ticked, "Tick all" leaves it, and a
+ * set down to one copy leaves the list (its last copy was offered for deleting). App files are ticked
+ * only when their app is installed. Clearing Swift's leftovers and deleting empty folders ask first.
  */
 class CleanerActivity : ListActivity() {
     private class Hint(val text: String)
@@ -243,7 +248,17 @@ class CleanerActivity : ListActivity() {
         bar.visibility = View.GONE
         empty.visibility = View.GONE
         val items = ArrayList<Any>()
-        val cards = Cleaner.Kind.entries.map { k -> r.of(k).let { l -> Card(k, l.size, l.sumOf { it.size }) } }
+        val cards = Cleaner.Kind.entries.map { k ->
+            r.of(k).let { l ->
+                if (k == Cleaner.Kind.DUPLICATES) {
+                    // 3.0: what can be freed: every copy but one of each set (a set of one isn't twins any more).
+                    val twins = l.groupBy { it.group }.values.filter { it.size >= 2 }.flatten()
+                    Card(k, twins.size, Cleaner.tickableTwins(l).second)
+                } else {
+                    Card(k, l.size, l.sumOf { it.size })
+                }
+            }
+        }
         val total = cards.filter { it.kind != Cleaner.Kind.EMPTY }.sumOf { it.bytes }
         items += Hint(
             (if (total > 0) "Up to ${UrlUtils.formatBytes(total)} can be freed. " else "") +
@@ -259,7 +274,9 @@ class CleanerActivity : ListActivity() {
         val r = results ?: return
         // Gone meanwhile (deleted in another app): not shown.
         r.lists[kind].orEmpty().forEach { if (!it.gone && !it.file.exists()) it.gone = true }
-        val found = r.of(kind)
+        // 3.0: a set of twins down to one copy isn't shown, and nothing of it stays ticked.
+        if (kind == Cleaner.Kind.DUPLICATES) Cleaner.tidyTwins(r.of(kind))
+        val found = r.of(kind).let { l -> if (kind == Cleaner.Kind.DUPLICATES) l.groupBy { it.group }.values.filter { it.size >= 2 }.flatten() else l }
         if (found.isEmpty()) {
             say(kind.nothing)
             if (shown != null) showSummary()
@@ -285,14 +302,27 @@ class CleanerActivity : ListActivity() {
         updateMenu()
     }
 
-    private fun ticked(): List<Cleaner.Found> = shown?.let { k -> results?.of(k)?.filter { it.ticked } }.orEmpty()
+    private fun ticked(): List<Cleaner.Found> = shown?.let { k ->
+        results?.of(k)?.let { l ->
+            // 3.0: of twins, only sets still of two or more (never the last copy of one).
+            if (k == Cleaner.Kind.DUPLICATES) {
+                Cleaner.tidyTwins(l)
+                l.groupBy { it.group }.values.filter { it.size >= 2 }.flatten().filter { it.ticked }
+            } else {
+                l.filter { it.ticked }
+            }
+        }
+    }.orEmpty()
+
+    /** How many in the list on show can be ticked (3.0: of twins, all but one copy of each). */
+    private fun tickable(k: Cleaner.Kind): Int = results?.of(k)?.let { l -> if (k == Cleaner.Kind.DUPLICATES) Cleaner.tickableTwins(l).first else l.size } ?: 0
 
     /** "3 ticked · 1.2 GB", and the buttons for this list. */
     private fun updateBar() {
         val k = shown ?: return
         val t = ticked()
         val bytes = t.sumOf { it.size }
-        val all = results?.of(k)?.size ?: 0
+        val all = tickable(k)
         toolbar.subtitle = "${t.size} of $all ticked" + if (bytes > 0) " · ${UrlUtils.formatBytes(bytes)}" else ""
         barText.text = when {
             t.isEmpty() -> "Tick what you want to delete"
@@ -343,7 +373,7 @@ class CleanerActivity : ListActivity() {
 
     private fun updateMenu() {
         val k = shown
-        val all = k != null && results?.of(k)?.all { it.ticked } == true
+        val all = k != null && ticked().size.let { n -> n > 0 && n >= tickable(k) }
         val key = if (k == null) "" else "tick:$all"
         if (key == menuShown) return
         menuShown = key
@@ -366,13 +396,22 @@ class CleanerActivity : ListActivity() {
         if (id != MENU_TICK) return
         val k = shown ?: return
         val l = results?.of(k) ?: return
-        val on = !l.all { it.ticked }
-        l.forEach { it.ticked = on }
+        val on = ticked().size < tickable(k)
+        when {
+            // 3.0: all but the copy of each set that stays.
+            k == Cleaner.Kind.DUPLICATES && on -> Cleaner.tickAllTwins(l)
+            else -> l.forEach { it.ticked = on }
+        }
         adapter.notifyItemRangeChanged(0, adapter.itemCount, PAYLOAD_TICK)
         updateBar()
     }
 
     private fun toggle(f: Cleaner.Found, position: Int) {
+        // 3.0: the last unticked copy of a set of twins stays.
+        if (!f.ticked && !Cleaner.canTick(results?.of(Cleaner.Kind.DUPLICATES).orEmpty(), f)) {
+            say("One copy always stays. Untick another copy first to delete this one.")
+            return
+        }
         f.ticked = !f.ticked
         adapter.notifyItemChanged(position, PAYLOAD_TICK)
         updateBar()
@@ -382,11 +421,18 @@ class CleanerActivity : ListActivity() {
 
     private fun delete(forever: Boolean) {
         val k = shown ?: return
+        // ticked() never holds every copy of a set of twins (3.0).
         val items = ticked()
         if (items.isEmpty()) return
         val files = items.map { it.file }
         when {
-            k == Cleaner.Kind.LEFTOVERS -> access.withChanges(files.filter { Volumes.of(this, it) != null }) { clearLeftovers(items) }
+            // 3.0: asked first (it was deleted for good at once).
+            k == Cleaner.Kind.LEFTOVERS -> Dialogs.confirm(
+                this, "Clear Swift's leftovers?",
+                "${FileJobs.items(items.size)} (${UrlUtils.formatBytes(items.sumOf { it.size })}) " + (if (items.size == 1) "is" else "are") +
+                    " deleted for good. Swift makes its pictures and copies again when it needs them.",
+                "Clear", danger = true,
+            ) { access.withChanges(files.filter { Volumes.of(this, it) != null }) { clearLeftovers(items) } }
             // Only folders still without a file below them (something may have been put there since the walk).
             k == Cleaner.Kind.EMPTY -> {
                 val still = items.filter { it.file.isDirectory && com.swiftbrowser.files.FileOps.measure(listOf(it.file)).files == 0 }
@@ -394,7 +440,12 @@ class CleanerActivity : ListActivity() {
                     markGone(items.map { it.file.path }.toSet())
                     refresh()
                 } else {
-                    access.withChanges(still.map { it.file }) { erase(still) }
+                    // 3.0: asked first.
+                    Dialogs.confirm(
+                        this, if (still.size == 1) "Delete 1 empty folder?" else "Delete ${still.size} empty folders?",
+                        (if (still.size == 1) "It holds" else "They hold") + " nothing, so nothing is lost. Swift can't bring " + (if (still.size == 1) "it" else "them") + " back.",
+                        "Delete", danger = true,
+                    ) { access.withChanges(still.map { it.file }) { erase(still) } }
                 }
             }
             forever || !FilesSettings.useRecycleBin -> Dialogs.confirm(
@@ -402,7 +453,8 @@ class CleanerActivity : ListActivity() {
                 "${UrlUtils.formatBytes(items.sumOf { it.size })} is freed now. Swift can't bring " + (if (items.size == 1) "it" else "them") + " back.",
                 "Delete forever", danger = true,
             ) { access.withChanges(files) { erase(items) } }
-            else -> access.withChanges(files) { toBin(items) }
+            // 3.0: the bin at a card's top may need the card's access even when the files don't (Swift's own folder there).
+            else -> access.withChanges(files + RecycleBin.binsFor(this, files)) { toBin(items) }
         }
     }
 
@@ -419,6 +471,8 @@ class CleanerActivity : ListActivity() {
                         val paths = back.map { it.path }.toSet()
                         results?.lists?.values?.forEach { l -> l.forEach { if (it.file.path in paths) it.gone = false } }
                         refresh()
+                        // 3.0: put back under another name (the old one was taken meanwhile): said.
+                        RecycleBin.renamedText(b.items, back)?.let { say(it) }
                     }
                 }
             }
@@ -440,7 +494,7 @@ class CleanerActivity : ListActivity() {
             doneWorking()
             markGone(items.filter { !it.file.exists() }.map { it.file.path }.toSet())
             refresh()
-            job.message?.takeIf { it != "Cancelled" }?.let { say(it) }
+            job.message?.takeIf { !job.cancelled }?.let { say(it) }
         }) { w -> Transfers.delete(w, files) }
     }
 
@@ -451,8 +505,11 @@ class CleanerActivity : ListActivity() {
         lifecycleScope.launch {
             val bytes = withContext(Dispatchers.IO) {
                 var freed = 0L
+                // 3.0: an unfinished copy a file job started meanwhile is being written: it stays.
+                val jobsIdle = FileJobs.active.none { it.kind != FileJobs.Kind.OPEN }
                 for (f in items) {
                     val file = f.file
+                    if (Parts.isPart(file.name) && (!jobsIdle || Parts.isLive(file))) continue
                     val ok = when {
                         file.path == File(app.cacheDir, "doc_thumbs").path -> {
                             DocThumbs.clear(app)
@@ -496,6 +553,11 @@ class CleanerActivity : ListActivity() {
 
     private fun open(f: Cleaner.Found) {
         if (f.isDir) {
+            // 3.0: Files shows nothing of Swift's own data (its leftovers inside itself, such as pictures of documents).
+            if (Volumes.of(this, f.file) == null) {
+                say("Swift keeps these inside itself, so Files can't show them. Clearing them is safe: Swift makes them again when needed.")
+                return
+            }
             FilesActivity.open(this, f.file)
             return
         }

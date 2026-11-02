@@ -134,8 +134,9 @@
         <item name="android:textSize">12sp</item>
     </style>
 
+    <!-- 3.0: 48 dp wide too (40 before), so every address bar button is finger-sized. -->
     <style name="Swift.ToolbarButton" parent="">
-        <item name="android:layout_width">40dp</item>
+        <item name="android:layout_width">48dp</item>
         <item name="android:layout_height">48dp</item>
         <item name="android:background">?attr/selectableItemBackgroundBorderless</item>
         <item name="android:scaleType">center</item>

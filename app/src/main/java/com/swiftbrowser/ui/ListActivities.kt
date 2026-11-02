@@ -220,6 +220,19 @@ class HistoryActivity : ListActivity() {
     private var query = ""
     private var rows: List<HistoryRow> = emptyList()
 
+    /**
+     * 3.0: history comes [PAGE] pages at a time, more as the list is scrolled (it showed only the
+     * newest 500, with no way to older ones); a search goes through all of it the same way.
+     */
+    private var hasMore = false
+    private var loadingMore = false
+
+    /** Counts loads: the results of one that was overtaken (a new search) are dropped. */
+    private var generation = 0
+
+    /** The search the pages shown were loaded for. */
+    private var loadedQuery = ""
+
     // Removed, but still undoable.
     private val hiddenIds = HashSet<Long>()
     private val hiddenDays = ArrayList<Pair<Long, Long>>()
@@ -251,14 +264,43 @@ class HistoryActivity : ListActivity() {
         enableSwipe({ it is RowHolder }) { vh ->
             (adapter.items.getOrNull(vh.bindingAdapterPosition) as? HistoryRow)?.let { remove(it) } ?: adapter.notifyItemChanged(vh.bindingAdapterPosition)
         }
+        // 3.0: near the end of what is loaded, the next pages come.
+        list.addOnScrollListener(object : RecyclerView.OnScrollListener() {
+            override fun onScrolled(rv: RecyclerView, dx: Int, dy: Int) {
+                val lm = rv.layoutManager as? LinearLayoutManager ?: return
+                if (lm.findLastVisibleItemPosition() >= adapter.itemCount - 40) loadMore()
+            }
+        })
         load()
     }
 
     private fun load() {
         val q = search.text.toString()
         query = q.trim()
+        val gen = ++generation
         lifecycleScope.launch {
-            rows = withContext(Dispatchers.IO) { SwiftApp.db.history(Profiles.currentId, q) }
+            val page = withContext(Dispatchers.IO) { SwiftApp.db.history(Profiles.currentId, q, PAGE) }
+            if (gen != generation) return@launch
+            rows = page
+            loadedQuery = q
+            hasMore = page.size == PAGE
+            loadingMore = false
+            render()
+        }
+    }
+
+    private fun loadMore() {
+        val last = rows.lastOrNull() ?: return
+        if (!hasMore || loadingMore) return
+        loadingMore = true
+        val gen = generation
+        val q = loadedQuery
+        lifecycleScope.launch {
+            val page = withContext(Dispatchers.IO) { SwiftApp.db.history(Profiles.currentId, q, PAGE, after = last) }
+            if (gen != generation) return@launch
+            rows = rows + page
+            hasMore = page.size == PAGE
+            loadingMore = false
             render()
         }
     }
@@ -266,6 +308,8 @@ class HistoryActivity : ListActivity() {
     private fun render() {
         val shown = rows.filter { r -> r.id !in hiddenIds && hiddenDays.none { r.lastVisit >= it.first && r.lastVisit < it.second } }
         adapter.items = byDay(shown)
+        // 3.0: too few left to fill the screen (a day deleted, say) while there are more: the next ones.
+        if (shown.size < 40 && hasMore) list.post { loadMore() }
         if (query.isBlank()) {
             showEmpty(shown.isEmpty(), "No history yet", "Pages you open show up here, newest first.", R.drawable.ic_history)
         } else {
@@ -427,6 +471,10 @@ class HistoryActivity : ListActivity() {
             ),
             com.swiftbrowser.core.Favicons.cached(r.url), fullAddress = r.url,
         )
+    }
+
+    private companion object {
+        const val PAGE = 300
     }
 }
 
@@ -606,16 +654,30 @@ class BookmarksActivity : ListActivity() {
             .setNegativeButton(android.R.string.cancel, null)
             .showImmersive()
         // A wrong address keeps the dialog open with what was typed (2.6).
-        dialog.getButton(android.content.DialogInterface.BUTTON_POSITIVE)?.setOnClickListener {
+        val save = dialog.getButton(android.content.DialogInterface.BUTTON_POSITIVE)
+        save?.setOnClickListener {
             val url = UrlUtils.toUrlOrSearch(address.text.toString())
             if (!UrlUtils.isHttp(url) || UrlUtils.searchQuery(url) != null && !address.text.contains('.')) {
                 address.error = "That isn't a web address"
                 address.requestFocus()
                 return@setOnClickListener
             }
-            dialog.dismiss()
+            save.isEnabled = false
+            val title = name.text.toString().trim()
             lifecycleScope.launch {
-                withContext(Dispatchers.IO) { SwiftApp.db.updateBookmark(r.id, name.text.toString().trim(), url) }
+                // 3.0: an address another bookmark has can't be saved twice (it crashed Swift): the
+                // dialog stays open and says so.
+                val taken = withContext(Dispatchers.IO) {
+                    val db = SwiftApp.db
+                    !db.updateBookmark(r.id, title, url) && db.bookmark(Profiles.currentId, url)?.let { it.id != r.id } == true
+                }
+                if (taken) {
+                    save.isEnabled = true
+                    address.error = "That address is already bookmarked"
+                    address.requestFocus()
+                    return@launch
+                }
+                dialog.dismiss()
                 load()
             }
         }
@@ -694,28 +756,39 @@ class BookmarksActivity : ListActivity() {
     /** A bookmarks file saved by Chrome, Firefox or another browser (the "Netscape" format they share). */
     private fun importFrom(uri: android.net.Uri) {
         val pid = Profiles.currentId
+        // 3.0: a big file says how far it got.
+        var progress: Messages.Handle? = null
         lifecycleScope.launch {
             val count = withContext(Dispatchers.IO) {
                 try {
-                    val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return@withContext -1
-                    if (bytes.size > 30_000_000) return@withContext -1
-                    val text = String(bytes, Charsets.UTF_8)
-                    val marks = BookmarkFile.parse(text)
+                    // 3.0: read only up to its limit (a big file picked by mistake isn't read whole).
+                    val bytes = contentResolver.openInputStream(uri)?.use { com.swiftbrowser.core.Storage.readAtMost(it, 30_000_000) }
+                        ?: return@withContext -1
+                    if (bytes.size > 500_000) withContext(Dispatchers.Main) { progress = Messages.sticky(this@BookmarksActivity, "Importing bookmarks…") }
+                    val marks = BookmarkFile.parse(String(bytes, Charsets.UTF_8))
                     val db = SwiftApp.db
                     val had = db.bookmarks(pid).map { it.url }.toHashSet()
-                    var added = 0
-                    for (m in marks) {
-                        if (m.url in had) continue
-                        db.importBookmark(pid, m.url, m.title, m.added, m.folder)
-                        had += m.url
-                        added++
+                    val fresh = marks.filter { had.add(it.url) }
+                    // 3.0: one transaction (it wrote to the phone's storage once per bookmark).
+                    db.transaction {
+                        fresh.forEachIndexed { i, m ->
+                            db.importBookmark(pid, m.url, m.title, m.added, m.folder)
+                            if (i % 250 == 0 && progress != null) {
+                                val text = "Importing bookmarks… ${i * 100 / fresh.size}%"
+                                runOnUiThread { progress?.setText(text) }
+                            }
+                        }
                     }
-                    added
+                    fresh.size
                 } catch (e: Exception) {
                     com.swiftbrowser.core.L.w("Couldn't import bookmarks", e)
                     -1
+                } catch (e: OutOfMemoryError) {
+                    com.swiftbrowser.core.L.w("Couldn't import bookmarks: the file is too big")
+                    -1
                 }
             }
+            progress?.dismiss()
             load()
             Messages.show(
                 this@BookmarksActivity,
@@ -954,7 +1027,7 @@ class DownloadsActivity : ListActivity() {
         Downloads.DONE -> listOf("Torrent", UrlUtils.formatBytes(d.done), dateText(d.created)).joinToString(" · ")
         Downloads.QUEUED -> d.error ?: "Waiting to start…"
         Downloads.PAUSED -> "Paused · ${UrlUtils.formatBytes(d.done)}${if (d.percent >= 0) " (${d.percent}%)" else ""}"
-        Downloads.FAILED -> "Didn't finish: ${d.error ?: "something went wrong"}. Tap ↻ to try again."
+        Downloads.FAILED -> "Didn't finish: ${(d.error ?: "something went wrong").trimEnd('.')}. Tap ↻ to try again."
         else -> d.error ?: buildString {
             if (d.percent >= 0) append("${d.percent}% · ")
             append(UrlUtils.formatBytes(d.done))
@@ -1040,12 +1113,17 @@ class DownloadsActivity : ListActivity() {
     /** Off the list (and with [deleteFile], the file too) once the Undo is gone. */
     private fun removeFromList(d: Downloads.Item, deleteFile: Boolean) {
         val running = d.status == Downloads.RUNNING || d.status == Downloads.QUEUED || d.status == Downloads.CONVERTING
+        // 3.0: an unfinished download's files stay too (before 3.0 they went): where they are is said.
+        val where = (if (d.kind == Downloads.KIND_TORRENT) d.extra.optString("dir").takeIf { it.isNotEmpty() }?.let { File(it) } else null)
+            ?: File(d.filePath).parentFile
         removeLater(
             "dl${d.id}",
             when {
                 running -> "Download cancelled"
                 deleteFile -> "Deleted ${d.fileName}"
-                else -> "Removed from the list (the file stays)"
+                d.status == Downloads.DONE -> if (d.kind == Downloads.KIND_TORRENT) "Removed from the list (the files stay)" else "Removed from the list (the file stays)"
+                where != null -> "Removed from the list. What was downloaded stays in ${Downloads.describe(where)}"
+                else -> "Removed from the list (what was downloaded stays)"
             },
             hide = {
                 hiddenIds += d.id
@@ -1120,7 +1198,10 @@ class DownloadsActivity : ListActivity() {
                     h.action.setOnClickListener { Downloads.pause(d.id) }
                 }
                 Downloads.PAUSED, Downloads.FAILED -> {
-                    h.action.visibility = View.VISIBLE
+                    // 3.0: no ↻ for what can never be saved (a live stream, copy protection).
+                    val never = d.status == Downloads.FAILED && d.kind != Downloads.KIND_TORRENT &&
+                        (d.extra.optBoolean("local") || problemOf(d).why == com.swiftbrowser.download.DownloadRules.Why.PERMANENT)
+                    h.action.visibility = if (never) View.GONE else View.VISIBLE
                     h.action.setImageResource(if (d.status == Downloads.FAILED) R.drawable.ic_refresh else R.drawable.ic_play)
                     h.action.contentDescription = if (d.status == Downloads.FAILED) "Try again" else "Resume"
                     h.action.setOnClickListener { Downloads.resume(d.id) }
@@ -1151,19 +1232,49 @@ class DownloadsActivity : ListActivity() {
     }
 
     private fun statusText(d: Downloads.Item): String = if (d.kind == Downloads.KIND_TORRENT) torrentStatus(d) else when (d.status) {
+        // 3.0: with what to know about it (kept as .ts, only part of it, its sound apart).
         Downloads.DONE -> listOfNotNull(
             com.swiftbrowser.docs.Docs.kindOf(d.fileName, d.mime)?.label, UrlUtils.formatBytes(d.done), dateText(d.created),
+            d.extra.optString("note").takeIf { it.isNotEmpty() },
         ).joinToString(" · ")
-        Downloads.QUEUED -> if (d.error == Downloads.WAITING_FOR_WIFI) "Waiting for Wi-Fi (it's a big file)" else "Waiting to start…"
+        Downloads.QUEUED -> when (d.error) {
+            Downloads.WAITING_FOR_WIFI -> "Waiting for Wi-Fi (it's a big file)"
+            null -> "Waiting to start…"
+            else -> d.error ?: ""
+        }
         Downloads.PAUSED -> "Paused · ${UrlUtils.formatBytes(d.done)}${if (d.percent >= 0) " (${d.percent}%)" else ""}"
-        Downloads.FAILED -> "Didn't finish: ${d.error ?: "something went wrong"}. Tap ↻ to try again."
+        Downloads.FAILED -> failedText(d)
         Downloads.CONVERTING -> "Saving as MP4…"
         else -> buildString {
+            // 3.0: a try after the connection was lost says so.
+            d.extra.optInt("retries", 0).takeIf { it > 0 }?.let { append(com.swiftbrowser.download.DownloadRules.retrying(it)).append(" · ") }
             if (d.percent >= 0) append("${d.percent}% · ")
             append(UrlUtils.formatBytes(d.done))
             if (d.total > 0 && d.kind != Downloads.KIND_HLS) append(" of ").append(UrlUtils.formatBytes(d.total))
             if (d.bytesPerSecond > 0) append(" · ").append(UrlUtils.formatBytes(d.bytesPerSecond)).append("/s")
         }
+    }
+
+    /**
+     * 3.0: what went wrong in plain words ("The phone is full", "The site refused — the link may
+     * have expired"; rows from before 3.0 kept raw errors, put in words here), and ↻ only when trying
+     * again can help (not for a live stream or copy protection).
+     */
+    private fun failedText(d: Downloads.Item): String {
+        val p = problemOf(d)
+        val text = if (p.text.startsWith("Swift")) p.text else p.text.replaceFirstChar { it.lowercase() }
+        // A page Swift saved itself can't be fetched again: it is saved again from the page.
+        val again = p.retryable && !d.extra.optBoolean("local")
+        return "Didn't finish: " + text.trimEnd('.') + "." + if (again) " Tap ↻ to try again." else ""
+    }
+
+    private fun problemOf(d: Downloads.Item): com.swiftbrowser.download.DownloadRules.Problem {
+        val why = d.extra.optString("why")
+        if (why.isEmpty()) return com.swiftbrowser.download.DownloadRules.reword(d.error)
+        return com.swiftbrowser.download.DownloadRules.Problem(
+            runCatching { com.swiftbrowser.download.DownloadRules.Why.valueOf(why) }.getOrDefault(com.swiftbrowser.download.DownloadRules.Why.OTHER),
+            d.error ?: "Something went wrong.",
+        )
     }
 
     private fun open(d: Downloads.Item) {
@@ -1173,6 +1284,13 @@ class DownloadsActivity : ListActivity() {
         }
         if (VpnUi.isSetupFile(d)) {
             VpnUi.addDownloaded(this, d)
+            return
+        }
+        // 3.0: videos and songs in Swift's player (going on where they were left, with the subtitles
+        // next to them and the folder as the playlist), pictures in its picture viewer.
+        val file = File(d.filePath)
+        if (file.isFile && (PlayerActivity.kindOf(d.fileName) != null || MediaViewerActivity.kindOf(d.fileName) == MediaViewerActivity.Kind.IMAGE)) {
+            if (PlayerActivity.kindOf(d.fileName) != null) PlayerActivity.open(this, file, incognito = d.incognito) else MediaViewerActivity.open(this, file)
             return
         }
         if (PageActions.isSavedPage(d) || com.swiftbrowser.docs.Docs.kindOf(d.fileName, d.mime) != null && File(d.filePath).exists()) {
@@ -1191,6 +1309,25 @@ class DownloadsActivity : ListActivity() {
         }
         try {
             startActivity(intent)
+        } catch (_: Exception) {
+            Messages.show(this, "No app on this phone can open this file")
+        }
+    }
+
+    /** 3.0: Android's "Open with" list, without Swift's own player and viewers (the file opens in those by a tap). */
+    private fun openWithAnother(d: Downloads.Item) {
+        val view = openFileIntent(this, d)
+        if (view == null) {
+            Messages.show(this, "The file isn't there any more")
+            return
+        }
+        try {
+            startActivity(
+                Intent.createChooser(view, "Open with").putExtra(
+                    Intent.EXTRA_EXCLUDE_COMPONENTS,
+                    arrayOf(android.content.ComponentName(this, PlayerActivity::class.java), android.content.ComponentName(this, MediaViewerActivity::class.java)),
+                ),
+            )
         } catch (_: Exception) {
             Messages.show(this, "No app on this phone can open this file")
         }
@@ -1218,13 +1355,25 @@ class DownloadsActivity : ListActivity() {
         val done = d.status == Downloads.DONE
         val running = d.status == Downloads.RUNNING || d.status == Downloads.QUEUED || d.status == Downloads.CONVERTING
         val actions = ArrayList<Sheets.Action>()
+        val media = PlayerActivity.kindOf(d.fileName)
         if (done) {
-            actions += Sheets.Action(R.drawable.ic_open_new, "Open", primary = true) { open(d) }
+            actions += Sheets.Action(if (media != null) R.drawable.ic_play else R.drawable.ic_open_new, if (media != null) "Play" else "Open", primary = true) { open(d) }
             actions += Sheets.Action(R.drawable.ic_share, "Share", primary = true) { shareFile(d) }
             actions += Sheets.Action(R.drawable.ic_folder, "Where", primary = true) { showInFolder(d) }
+            // 3.0: Swift's own player or viewer opens them; another app is still a choice.
+            if (media != null || MediaViewerActivity.kindOf(d.fileName) == MediaViewerActivity.Kind.IMAGE) {
+                actions += Sheets.Action(R.drawable.ic_reopen, "Open with another app") { openWithAnother(d) }
+            }
         }
         actions += Sheets.Action(R.drawable.ic_link, "Copy", primary = true) { copyText(this, d.url) }
-        if (!running) actions += Sheets.Action(R.drawable.ic_close, "Remove from list (keep the file)") { removeFromList(d, deleteFile = false) }
+        // 3.0: a stream that stopped part-way can be kept as it is: a video that ends early.
+        if ((d.status == Downloads.FAILED || d.status == Downloads.PAUSED) && Downloads.hasPart(d)) {
+            actions += Sheets.Action(R.drawable.ic_check, "Keep what was downloaded") {
+                Downloads.keepPart(d.id)
+                Messages.show(this, "Saving what was downloaded…")
+            }
+        }
+        if (!running) actions += Sheets.Action(R.drawable.ic_close, if (done) "Remove from list (keep the file)" else "Remove from list (keep what was downloaded)") { removeFromList(d, deleteFile = false) }
         actions += if (running) {
             Sheets.Action(R.drawable.ic_close, "Cancel download", danger = true) { removeFromList(d, deleteFile = true) }
         } else {
@@ -1276,6 +1425,20 @@ class DownloadsActivity : ListActivity() {
             return Intent(Intent.ACTION_VIEW).apply {
                 setDataAndType(uri, mime)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+        }
+
+        /**
+         * 3.0: what a finished download's notification opens: a video or song in Swift's player, a
+         * picture in its viewer (by the file, not through another app's link), anything else as before.
+         */
+        fun openIntent(ctx: Context, d: Downloads.Item): Intent? {
+            val file = File(d.filePath)
+            if (!file.isFile) return null
+            return when {
+                PlayerActivity.kindOf(d.fileName) != null -> PlayerActivity.intentFor(ctx, file, d.incognito)
+                MediaViewerActivity.kindOf(d.fileName) == MediaViewerActivity.Kind.IMAGE -> MediaViewerActivity.intentFor(ctx, file).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                else -> openFileIntent(ctx, d)
             }
         }
     }

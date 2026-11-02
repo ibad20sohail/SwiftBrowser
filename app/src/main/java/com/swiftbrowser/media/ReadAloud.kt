@@ -28,12 +28,26 @@ import java.util.Locale
  * notification ([ReadAloudService]). Nothing runs while nothing is being read.
  */
 object ReadAloud : TextToSpeech.OnInitListener {
+    /**
+     * 3.0: the speech engine (30 to 80 MB in its own service) is let go of a minute after reading
+     * stops or pauses, and made again the next time; it used to be kept as long as Swift ran.
+     */
+    private const val IDLE_MS = 60_000L
+
+    /** 3.0: paragraphs handed to the engine ahead of the one being read (each is a system call). */
+    private const val WINDOW = 3
+
     private var tts: TextToSpeech? = null
+    private var app: Context? = null
     private var ready = false
     private var failed: String? = null
     private var parts: List<String> = emptyList()
     private var lang: String? = null
     private var rate = 1f
+
+    /** 3.0: the paragraphs already handed to the engine in this run (it gets a few at a time). */
+    private var queuedTo = 0
+    private val queue = Any()
 
     /** The article's title, for the notification. */
     var title: String = ""
@@ -106,18 +120,30 @@ object ReadAloud : TextToSpeech.OnInitListener {
     }
 
     private fun start(ctx: Context, texts: List<String>, from: Int, language: String?) {
+        app = ctx.applicationContext
         parts = texts
         finished = false
         lang = language?.takeIf { it.isNotBlank() }
         index = from.coerceIn(0, (texts.size - 1).coerceAtLeast(0))
         speaking = true
         failed = null
+        busy()
         val engine = tts
         if (engine == null) {
+            ready = false
             tts = TextToSpeech(ctx.applicationContext, this).also { it.setOnUtteranceProgressListener(progress) }
         } else if (ready) {
             speakFrom(index)
         }
+    }
+
+    /** 3.0: the engine again after it was let go of (reading goes on after a long pause). */
+    private fun ensureEngine(): Boolean {
+        if (tts != null) return ready
+        val ctx = app ?: SwiftApp.instance ?: return false
+        ready = false
+        tts = TextToSpeech(ctx.applicationContext, this).also { it.setOnUtteranceProgressListener(progress) }
+        return false
     }
 
     override fun onInit(status: Int) {
@@ -126,12 +152,13 @@ object ReadAloud : TextToSpeech.OnInitListener {
             failed = "This phone has no text-to-speech voice. Install one (for example Google Text-to-speech) and try again."
             speaking = false
             parts = emptyList()
+            runCatching { tts?.shutdown() }
             tts = null
             report()
             failed = null
             return
         }
-        if (speaking) speakFrom(index)
+        if (speaking) speakFrom(index) else idleLater()
     }
 
     private fun speakFrom(from: Int) {
@@ -141,16 +168,56 @@ object ReadAloud : TextToSpeech.OnInitListener {
             if (engine.isLanguageAvailable(locale) >= TextToSpeech.LANG_AVAILABLE) engine.language = locale
         }
         engine.setSpeechRate(rate)
-        val r = ++run
-        engine.stop()
-        val max = (TextToSpeech.getMaxSpeechInputLength() - 100).coerceAtLeast(500)
-        for (i in from until parts.size) {
-            // Long paragraphs are said in pieces, split where sentences end.
-            chunks(parts[i], max).forEachIndexed { k, piece ->
-                engine.speak(piece, TextToSpeech.QUEUE_ADD, null, "$r:$i.$k")
+        synchronized(queue) {
+            val r = ++run
+            engine.stop()
+            queuedTo = from
+            queueMore(engine, r, from)
+        }
+    }
+
+    /**
+     * 3.0: hands the engine the paragraphs up to [WINDOW] after [at] (the one being read), and the end
+     * mark after the last. Called again as reading goes on (from the engine's thread), so a long
+     * article isn't queued all at once on the main thread, a system call a paragraph.
+     */
+    private fun queueMore(engine: TextToSpeech, r: Int, at: Int) {
+        synchronized(queue) {
+            // As they are now (a stop on the main thread may empty them meanwhile).
+            val list = parts
+            if (r != run || queuedTo > list.size) return
+            val max = (TextToSpeech.getMaxSpeechInputLength() - 100).coerceAtLeast(500)
+            while (queuedTo < list.size && queuedTo <= at + WINDOW) {
+                val i = queuedTo++
+                // Long paragraphs are said in pieces, split where sentences end.
+                chunks(list[i], max).forEachIndexed { k, piece ->
+                    engine.speak(piece, TextToSpeech.QUEUE_ADD, null, "$r:$i.$k")
+                }
+            }
+            if (queuedTo == list.size) {
+                engine.speak(" ", TextToSpeech.QUEUE_ADD, null, "$r:end")
+                queuedTo++
             }
         }
-        engine.speak(" ", TextToSpeech.QUEUE_ADD, null, "$r:end")
+    }
+
+    /** 3.0: reading goes on: the engine isn't let go of. */
+    private fun busy() = main.removeCallbacks(letGo)
+
+    /** 3.0: reading stopped or paused: the engine goes in a minute unless it reads again. */
+    private fun idleLater() {
+        main.removeCallbacks(letGo)
+        main.postDelayed(letGo, IDLE_MS)
+    }
+
+    private val letGo = Runnable {
+        if (speaking) return@Runnable
+        val engine = tts ?: return@Runnable
+        tts = null
+        ready = false
+        runCatching { engine.stop() }
+        runCatching { engine.shutdown() }
+        L.d("Read aloud: the speech engine was let go of")
     }
 
     private fun chunks(text: String, max: Int): List<String> {
@@ -182,17 +249,25 @@ object ReadAloud : TextToSpeech.OnInitListener {
                 } else if (id.endsWith(".0")) {
                     report()
                 }
+                // 3.0: the next paragraphs, a few ahead of this one.
+                val r = utteranceId?.substringBefore(':')?.toIntOrNull() ?: return
+                tts?.let { engine -> queueMore(engine, r, it) }
             }
         }
 
         override fun onDone(utteranceId: String?) {
-            if (current(utteranceId) == "end") {
+            val id = current(utteranceId) ?: return
+            if (id == "end") {
                 speaking = false
                 parts = emptyList()
                 index = 0
                 finished = true
                 report()
+                main.post { idleLater() }
+                return
             }
+            val r = utteranceId?.substringBefore(':')?.toIntOrNull() ?: return
+            id.substringBefore('.').toIntOrNull()?.let { i -> tts?.let { engine -> queueMore(engine, r, i + 1) } }
         }
 
         @Deprecated("Deprecated in Java")
@@ -205,13 +280,16 @@ object ReadAloud : TextToSpeech.OnInitListener {
         speaking = false
         run++
         tts?.stop()
+        idleLater()
         report()
     }
 
     fun resume() {
         if (parts.isEmpty()) return
         speaking = true
-        if (ready) speakFrom(index)
+        busy()
+        // After a long pause the engine is made again; it reads from here once ready (onInit).
+        if (ensureEngine()) speakFrom(index)
         report()
     }
 
@@ -220,7 +298,8 @@ object ReadAloud : TextToSpeech.OnInitListener {
         if (parts.isEmpty()) return
         index = (index + delta).coerceIn(0, parts.size - 1)
         speaking = true
-        if (ready) speakFrom(index)
+        busy()
+        if (ensureEngine()) speakFrom(index)
     }
 
     private fun setRate(r: Float) {
@@ -236,6 +315,7 @@ object ReadAloud : TextToSpeech.OnInitListener {
         parts = emptyList()
         index = 0
         tts?.stop()
+        idleLater()
         report()
     }
 }
@@ -263,7 +343,13 @@ class ReadAloudService : Service() {
             startForeground(NOTIFICATION_ID, n)
         } else {
             ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_DETACH)
-            NotificationManagerCompat.from(this).notify(NOTIFICATION_ID, n)
+            // 3.0: Android 13 and later ask before showing notifications.
+            try {
+                val nm = NotificationManagerCompat.from(this)
+                if (nm.areNotificationsEnabled()) nm.notify(NOTIFICATION_ID, n)
+            } catch (e: SecurityException) {
+                L.w("Read aloud notification not allowed", e)
+            }
         }
         return START_NOT_STICKY
     }

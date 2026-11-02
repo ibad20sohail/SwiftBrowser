@@ -78,21 +78,80 @@ object Helper {
                 tab.helperPorts.add(port)
                 port.setDelegate(object : WebExtension.PortDelegate {
                     override fun onPortMessage(message: Any, port: WebExtension.Port) {
-                        (message as? JSONObject)?.let { onContentMessage(tab, it, port) }
+                        (message as? JSONObject)?.let { onContentMessage(tab, it, port, port.sender) }
                     }
 
                     override fun onDisconnect(port: WebExtension.Port) {
                         tab.helperPorts.remove(port)
+                        // 3.0: what is being sent to a viewer page that went stops.
+                        com.swiftbrowser.docs.Docs.onPortClosed(port)
                     }
                 })
             }
 
             override fun onMessage(nativeApp: String, message: Any, sender: WebExtension.MessageSender): GeckoResult<Any>? {
-                (message as? JSONObject)?.let { onContentMessage(tab, it, null) }
+                (message as? JSONObject)?.let { onContentMessage(tab, it, null, sender) }
                 return null
             }
         }, NATIVE_APP)
     }
+
+    /**
+     * 3.0: who sent a message, as the engine reports it (it checks that an extension page is really
+     * one of the helper's, in the extensions' process): a content script in a website's frame, the
+     * document viewer, reader view, or something else.
+     */
+    private fun senderOf(sender: WebExtension.MessageSender?): com.swiftbrowser.docs.DocRules.Sender =
+        if (sender == null) com.swiftbrowser.docs.DocRules.Sender.OTHER
+        else com.swiftbrowser.docs.DocRules.sender(
+            contentScript = sender.environmentType == WebExtension.MessageSender.ENV_TYPE_CONTENT_SCRIPT,
+            extensionPage = sender.environmentType == WebExtension.MessageSender.ENV_TYPE_EXTENSION,
+            url = sender.url,
+            base = extension?.metaData?.baseUrl,
+        )
+
+    /**
+     * 3.0: the extensions' process (uBlock Origin, this helper, the document viewer) ended more than
+     * five times in half a minute (a heavy document running it out of memory, a crash), so the engine
+     * stopped starting it: every tab would be without ad blocking until Swift restarts. It is started
+     * again after a pause that grows each time, so a process that keeps crashing doesn't keep the
+     * phone busy, and the log says so. Engine.init sets this up.
+     */
+    fun watchExtensionProcess(runtime: org.mozilla.geckoview.GeckoRuntime) {
+        val controller = runtime.webExtensionController
+        controller.setExtensionProcessDelegate(object : org.mozilla.geckoview.WebExtensionController.ExtensionProcessDelegate {
+            override fun onDisabledProcessSpawning() {
+                val wait = restartWaits[minOf(restarts, restartWaits.size - 1)]
+                restarts++
+                L.w("The extensions' process kept stopping (${restarts} time(s) now): starting it again in ${wait / 1000} s")
+                main.postDelayed({ controller.enableExtensionProcessSpawning() }, wait)
+            }
+        })
+    }
+
+    private var restarts = 0
+    private val restartWaits = longArrayOf(3_000, 20_000, 60_000, 300_000)
+
+    /** 3.0: how many video failures each tab logged in the last ten minutes (a page can repeat them endlessly). */
+    private val mediaErrors = HashMap<Long, LongArray>()
+
+    private fun mayLogMediaError(tab: Tab): Boolean {
+        val now = System.currentTimeMillis()
+        val e = mediaErrors.getOrPut(tab.id) { longArrayOf(now, 0) }
+        if (now - e[0] > 10 * 60_000L) {
+            e[0] = now
+            e[1] = 0
+        }
+        e[1]++
+        if (e[1] == MEDIA_ERRORS_LOGGED + 1) L.w("Tab ${tab.id}: more videos failed; not logged for ten minutes")
+        if (mediaErrors.size > 100) mediaErrors.keys.firstOrNull { it != tab.id }?.let { mediaErrors.remove(it) }
+        return e[1] <= MEDIA_ERRORS_LOGGED
+    }
+
+    private const val MEDIA_ERRORS_LOGGED = 5L
+
+    /** Tabs a refused message was logged for (3.0). */
+    private val refusedIn = HashSet<Long>()
 
     /** The tab's session went away (closed or suspended). */
     /** The tab's id as extensions know it (the same for all of them), once its page has said hello. */
@@ -101,10 +160,22 @@ object Helper {
     fun detachTab(tab: Tab) {
         tab.helperPorts.clear()
         tabsByExtId.entries.removeAll { it.value === tab }
+        mediaErrors.remove(tab.id)
     }
 
-    private fun onContentMessage(tab: Tab, msg: JSONObject, port: WebExtension.Port?) {
-        when (msg.optString("type")) {
+    private fun onContentMessage(tab: Tab, msg: JSONObject, port: WebExtension.Port?, sender: WebExtension.MessageSender?) {
+        val type = msg.optString("type")
+        // 3.0: each message only from those that send it (see DocRules): a website that took over its
+        // process can't read documents, save files or speak through Swift.
+        val from = senderOf(sender)
+        if (!com.swiftbrowser.docs.DocRules.allowed(type, from)) {
+            // Said once per tab (warnings skip the log's daily limit).
+            if (refusedIn.add(tab.id)) {
+                L.w("Tab ${tab.id}: a helper message (${type.filter { it in 'a'..'z' || it == '-' }.take(24)}) came from ${from.name.lowercase()}: refused")
+            }
+            return
+        }
+        when (type) {
             "hello" -> {
                 val extTabId = msg.optInt("tabId", -1)
                 if (msg.optBoolean("top") && extTabId >= 0) {
@@ -118,15 +189,17 @@ object Helper {
             }
             "click" -> tab.lastClick = NavPolicy.Click(msg.optString("href"), System.currentTimeMillis())
             "icon" -> if (!tab.incognito) Favicons.onPageIcon(msg.optString("page"), msg.optString("href").ifBlank { null })
+            // Who is signed in to Google in this tab's profile (3.0).
+            "google-account" -> if (!tab.incognito) com.swiftbrowser.core.GoogleAccounts.onSeen(tab.profileId, msg)
             "playing" -> if (!tab.videoPlaying) {
                 tab.videoPlaying = true
                 TabManager.ui?.onPlayingChanged(tab)
             }
             "video-pos" -> WatchPositions.onPosition(tab, msg)
             "reader-place" -> Unfinished.onReaderPlace(tab, msg)
-            // Swift's document viewer (2.4).
-            "doc-hello", "doc-read", "doc-range", "doc-place", "doc-action", "doc-reading", "doc-zip", "doc-save", "doc-convert" ->
-                com.swiftbrowser.docs.Docs.onMessage(tab, msg, port)
+            // Swift's document viewer (2.4); 3.0: with the page's address, for its own document only.
+            "doc-hello", "doc-read", "doc-range", "doc-place", "doc-action", "doc-reading", "doc-zip", "doc-save", "doc-convert", "doc-thumb" ->
+                com.swiftbrowser.docs.Docs.onMessage(tab, msg, port, sender?.url)
             // Read aloud, from the reader view page in this tab: it hears back how far it got.
             "tts-start", "tts-pause", "tts-resume", "tts-stop", "tts-skip", "tts-rate" -> {
                 val ctx = SwiftApp.instance ?: return
@@ -147,8 +220,9 @@ object Helper {
             }
             "video-start" -> WatchPositions.onStart(tab, msg)
             "media-ended" -> SleepTimer.onMediaEnded(tab)
-            // For the log (2.7): players failing or stopping to load.
-            "media-error" -> L.w(
+            // For the log (2.7): players failing or stopping to load. 3.0: a few per tab every ten
+            // minutes (a page can fail over and over, and warnings skip the log's daily limit).
+            "media-error" -> if (mayLogMediaError(tab)) L.w(
                 "Tab ${tab.id} (${if (tab.incognito) "incognito" else com.swiftbrowser.core.UrlUtils.siteName(tab.url)}): a video failed, " +
                     "code ${msg.optInt("code")} ${msg.optString("text").take(200)}",
             )

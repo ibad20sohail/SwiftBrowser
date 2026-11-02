@@ -67,7 +67,7 @@ class ContinueRow(context: Context, private val onOpen: (Unfinished.Item) -> Uni
         val wasShown = visibility == VISIBLE
         shown = keys
         cards.removeAllViews()
-        items.forEachIndexed { i, item -> cards.addView(card(item), LayoutParams(dp(232), ViewGroup.LayoutParams.WRAP_CONTENT).apply { if (i > 0) marginStart = dp(10) }) }
+        items.forEachIndexed { i, item -> cards.addView(card(item), LayoutParams(dp(CARD_DP), ViewGroup.LayoutParams.WRAP_CONTENT).apply { if (i > 0) marginStart = dp(10) }) }
         visibility = if (items.isEmpty()) GONE else VISIBLE
         if (!wasShown && items.isNotEmpty()) {
             alpha = 0f
@@ -78,14 +78,16 @@ class ContinueRow(context: Context, private val onOpen: (Unfinished.Item) -> Uni
 
     /** Takes [item]'s card away with a short fade, then the row closes up. */
     fun remove(item: Unfinished.Item) {
-        // Removed for good once the Undo is gone (2.6).
+        // Removed for good once the Undo is gone (2.6): 3.0, when its message goes, not after a fixed
+        // time (holding the message stops its clock, and an Undo then came too late to work).
         Unfinished.hide(item)
-        val main = android.os.Handler(android.os.Looper.getMainLooper())
-        val commit = Runnable { Unfinished.remove(item) }
-        main.postDelayed(commit, 5600)
-        (context as? android.app.Activity)?.let { a ->
-            Messages.show(a, "Removed from Continue", "Undo") {
-                main.removeCallbacks(commit)
+        val a = context as? android.app.Activity
+        if (a == null) {
+            Unfinished.remove(item)
+        } else {
+            var undone = false
+            Messages.show(a, "Removed from Continue", "Undo", onDismiss = { if (!undone) Unfinished.remove(item) }) {
+                undone = true
                 Unfinished.unhide(item)
                 shown = emptyList()
                 refresh()
@@ -129,7 +131,7 @@ class ContinueRow(context: Context, private val onOpen: (Unfinished.Item) -> Uni
             if (doc != null) {
                 // The document's whole first page (or its own picture), small on the tinted band (2.6):
                 // the top of a white page filled the card with white, glaring in dark mode.
-                com.swiftbrowser.docs.DocThumbs.load(context, doc.uri, doc.kind, dp(232)) { bmp ->
+                com.swiftbrowser.docs.DocThumbs.load(context, doc.uri, doc.kind, dp(CARD_DP)) { bmp ->
                     picture.scaleType = ImageView.ScaleType.FIT_CENTER
                     picture.setPadding(0, dp(8), 0, dp(10))
                     picture.setImageBitmap(bmp)
@@ -139,7 +141,8 @@ class ContinueRow(context: Context, private val onOpen: (Unfinished.Item) -> Uni
             }
             item.image?.let { url ->
                 // Small and kept in memory a while (PreviewLoader); none on mobile data with Data saver.
-                PreviewLoader.load(context as android.app.Activity, url, dp(PICTURE_DP)) { bmp ->
+                // Just big enough to cover the card's picture (3.0: decoded to its size).
+                PreviewLoader.load(context as android.app.Activity, url, dp(PICTURE_DP), dp(CARD_DP)) { bmp ->
                     picture.scaleType = ImageView.ScaleType.CENTER_CROP
                     picture.setImageBitmap(bmp)
                     picture.alpha = 0f
@@ -195,5 +198,6 @@ class ContinueRow(context: Context, private val onOpen: (Unfinished.Item) -> Uni
     private companion object {
         /** A 16:9 picture on a 232 dp card. */
         const val PICTURE_DP = 130
+        const val CARD_DP = 232
     }
 }

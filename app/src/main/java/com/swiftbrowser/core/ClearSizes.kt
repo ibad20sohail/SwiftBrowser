@@ -97,7 +97,8 @@ object ClearSizes {
                 val entries = Downloads.entriesSince(from, to)
                 post(Clearing.What.DOWNLOADS, Measure(entries.size))
                 post(Clearing.What.DOCUMENTS, Measure(db.countDocuments(profileId, from, to)))
-                post(Clearing.What.PLACES, Measure(db.countPositions(profileId, from, to)))
+                // 3.0: with the places Swift's player left off (LocalMedia), which Clearing now forgets too.
+                post(Clearing.What.PLACES, Measure(db.countPositions(profileId, from, to) + com.swiftbrowser.media.LocalMedia.clearSince(app, from, to, onlyCount = true)))
                 val settings = if (all) withSettings.size else withSettings.count { s -> hosts.any { it == s || it.endsWith(".$s") } }
                 post(Clearing.What.SITE_SETTINGS, Measure(settings))
                 post(Clearing.What.PASSWORDS, Measure(db.countLogins(profileId, from, to)))

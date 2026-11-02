@@ -3,9 +3,11 @@ package com.swiftbrowser.torrent
 import android.media.MediaCodecInfo
 import android.media.MediaCodecList
 import android.net.Uri
+import com.swiftbrowser.core.UrlUtils
 import com.swiftbrowser.ui.PlayerActivity
 import org.libtorrent4j.Priority
 import org.libtorrent4j.TorrentInfo
+import java.io.File
 import java.util.Locale
 
 /**
@@ -89,11 +91,35 @@ object TorrentFiles {
         }
     }
 
-    /** The name a magnet link gives its download (dn=), if any. */
+    /**
+     * The name a magnet link gives its download (dn=), if any. 3.0: as a file name (no folders, no
+     * hidden characters that turn text round), the way the row shows it.
+     */
     fun magnetName(magnet: String): String? = try {
-        Uri.parse(magnet.replaceFirst("magnet:?", "magnet:/?")).getQueryParameter("dn")?.takeIf { it.isNotBlank() }
+        Uri.parse(magnet.replaceFirst("magnet:?", "magnet:/?")).getQueryParameter("dn")?.takeIf { it.isNotBlank() }?.let { UrlUtils.sanitizeFileName(it) }
     } catch (_: Exception) {
         null
+    }
+
+    /**
+     * 3.0: [name] (a link's dn=, or a torrent's own name) as one file or folder name inside the
+     * torrent's folder: never a path up and out of it ("../../WhatsApp/…"), never empty or "..".
+     */
+    fun safeName(name: String, fallback: String): String =
+        // Separators become "_", and dots at either end go (so ".." is never left).
+        UrlUtils.sanitizeFileName(name.ifBlank { fallback })
+
+    /** 3.0: [f] is [folder] itself or inside it, once ".." and links are resolved (before anything is deleted). */
+    fun within(folder: File, f: File): Boolean {
+        val root = runCatching { folder.canonicalPath }.getOrNull() ?: return false
+        val path = runCatching { f.canonicalPath }.getOrNull() ?: return false
+        return isWithin(root, path, File.separatorChar)
+    }
+
+    /** [path] is [root] or under it (both already resolved). */
+    fun isWithin(root: String, path: String, separator: Char = '/'): Boolean {
+        val r = root.trimEnd(separator)
+        return r.isNotEmpty() && (path == r || path.startsWith(r + separator))
     }
 
     /**

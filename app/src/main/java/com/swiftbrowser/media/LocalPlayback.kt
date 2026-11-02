@@ -3,7 +3,11 @@ package com.swiftbrowser.media
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.media.AudioDeviceCallback
+import android.media.AudioDeviceInfo
+import android.media.AudioManager
 import android.net.Uri
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -18,7 +22,6 @@ import androidx.media3.common.Player
 import androidx.media3.common.Tracks
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
-import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
@@ -58,7 +61,15 @@ object LocalPlayback {
         val headers: Map<String, String> = emptyMap(),
         /** From an incognito tab: nothing about it is remembered, logged or shown on the lock screen. */
         val incognito: Boolean = false,
+        /**
+         * 3.0: a file of Private (Files): like [incognito], nothing about it is remembered or shown on
+         * the lock screen, and its screen is always kept out of screenshots.
+         */
+        val secure: Boolean = false,
     ) {
+        /** 3.0: nothing about it is kept or shown outside the player (incognito, or Private's). */
+        val private: Boolean get() = incognito || secure
+
         /** What a log line may say about it: the kind of file, never its name, path or address. */
         val logName: String
             get() = when {
@@ -128,11 +139,16 @@ object LocalPlayback {
     private var artFrom: Any? = null
     private var artToken = 0
 
-    /** Playing, or about to (buffering, or held up by a seek-bar drag): what buttons and the notification show. */
+    /**
+     * Playing, or about to (buffering, or held up by a seek-bar drag): what buttons and the
+     * notification show. 3.0: not during a phone call (Android has taken the sound away for a while:
+     * the player waits with "play" still on, and goes on by itself after the call).
+     */
     val playing: Boolean
         get() {
             val p = player ?: return false
-            return p.playWhenReady && p.playbackState != Player.STATE_ENDED && p.playbackState != Player.STATE_IDLE
+            return p.playWhenReady && p.playbackState != Player.STATE_ENDED && p.playbackState != Player.STATE_IDLE &&
+                p.playbackSuppressionReason != Player.PLAYBACK_SUPPRESSION_REASON_TRANSIENT_AUDIO_FOCUS_LOSS
         }
 
     fun watch(w: Watcher) {
@@ -187,15 +203,14 @@ object LocalPlayback {
         .setContentType(if (video) C.AUDIO_CONTENT_TYPE_MOVIE else C.AUDIO_CONTENT_TYPE_MUSIC)
         .build()
 
-    /** Files, shared files and website videos (with the page's headers: cookies, referrer). */
-    private fun sourcesFor(ctx: Context, headers: Map<String, String>): MediaSource.Factory {
+    /**
+     * Files, shared files and website videos (with the page's headers: cookies, referrer). 3.0:
+     * website videos through the engine ([GeckoDataSource]: Android 7's own HTTPS fails for many
+     * sites), an incognito tab's in its private session ([private]).
+     */
+    private fun sourcesFor(ctx: Context, headers: Map<String, String>, private: Boolean): MediaSource.Factory {
         val agent = headers.entries.firstOrNull { it.key.equals("User-Agent", ignoreCase = true) }?.value ?: Net.USER_AGENT
-        val http = DefaultHttpDataSource.Factory()
-            .setUserAgent(agent)
-            .setAllowCrossProtocolRedirects(true)
-            .setConnectTimeoutMs(15_000)
-            .setReadTimeoutMs(20_000)
-            .setDefaultRequestProperties(headers.filterKeys { !it.equals("User-Agent", ignoreCase = true) })
+        val http = GeckoDataSource.Factory(headers.filterKeys { !it.equals("User-Agent", ignoreCase = true) } + ("User-Agent" to agent), private)
         // MP3, AAC and AMR files without a table of contents can still be skipped through.
         val extractors = DefaultExtractorsFactory().setConstantBitrateSeekingEnabled(true)
         return DefaultMediaSourceFactory(DefaultDataSource.Factory(ctx, http), extractors)
@@ -224,7 +239,9 @@ object LocalPlayback {
         dismissed = false
         inBackground = false
         val first = list[start]
-        val factory = sourcesFor(a, first.headers).also { sources = it }
+        // 3.0: the volume boost belongs to what it was set for, not to the next file opened.
+        if (boost > 0f) setBoost(0f)
+        val factory = sourcesFor(a, first.headers, first.incognito).also { sources = it }
         p.setMediaSources(list.map { factory.createMediaSource(mediaItem(it)) }, start, positionMs)
         p.setWakeMode(if (first.stream) C.WAKE_MODE_NETWORK else C.WAKE_MODE_LOCAL)
         p.setAudioAttributes(attributes(first.video), true)
@@ -319,7 +336,7 @@ object LocalPlayback {
     private fun resumeAt(e: Entry): Long? {
         val a = app ?: return null
         val f = e.file ?: return null
-        return if (e.incognito) null else LocalMedia.position(a, f)
+        return if (e.private) null else LocalMedia.position(a, f)
     }
 
     /**
@@ -333,18 +350,61 @@ object LocalPlayback {
         p.trackSelectionParameters = params.buildUpon().setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, off).build()
     }
 
-    /** Stops for good: the place is remembered, the notification goes, and the screen closes. */
     /**
      * 2.9.2: sound above the phone's loudest, from 0 (none) to 1 (about twice as loud), for quiet
      * films on a quiet speaker. Android's loudness enhancer on the player's sound; it ends with the player.
+     * 3.0: it starts at none with each file opened (the next one in the list keeps it, and the player
+     * shows it while it is on), and with headphones it stops at [HEADPHONE_BOOST]: +10 dB in the
+     * ears is a risk for hearing.
      */
     var boost = 0f
         private set
     private var enhancer: android.media.audiofx.LoudnessEnhancer? = null
     private var enhancerSession = 0
 
+    /** 3.0: +4 dB (about 140%) at most with headphones. */
+    const val HEADPHONE_BOOST = 0.4f
+
+    /** 3.0: how far the boost may go now (less with headphones in). */
+    fun maxBoost(): Float = if (headphones()) HEADPHONE_BOOST else 1f
+
+    /** 3.0: the sound goes to headphones (wired, Bluetooth or USB). */
+    fun headphones(): Boolean {
+        val a = app ?: return false
+        val am = a.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return false
+        return try {
+            am.getDevices(AudioManager.GET_DEVICES_OUTPUTS).any { it.type in headphoneTypes }
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private val headphoneTypes: Set<Int> by lazy {
+        val t = mutableSetOf(
+            AudioDeviceInfo.TYPE_WIRED_HEADPHONES, AudioDeviceInfo.TYPE_WIRED_HEADSET,
+            AudioDeviceInfo.TYPE_BLUETOOTH_A2DP, AudioDeviceInfo.TYPE_BLUETOOTH_SCO, AudioDeviceInfo.TYPE_USB_DEVICE,
+        )
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) t += AudioDeviceInfo.TYPE_USB_HEADSET
+        t
+    }
+
+    /** 3.0: headphones plugged in while boosted: the boost comes down to what is safe for them. */
+    private val devices = object : AudioDeviceCallback() {
+        override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>?) {
+            if (boost > HEADPHONE_BOOST && addedDevices?.any { it.type in headphoneTypes } == true) {
+                L.d("Player: headphones in, the volume boost comes down")
+                setBoost(HEADPHONE_BOOST)
+                changed()
+            }
+        }
+    }
+    private var watchingDevices = false
+
     fun setBoost(amount: Float) {
-        boost = amount.coerceIn(0f, 1f)
+        val was = boost
+        boost = amount.coerceIn(0f, maxBoost())
+        watchDevices(boost > 0f)
+        if ((was > 0f) != (boost > 0f)) changed()
         val p = player ?: return
         try {
             val session = p.audioSessionId
@@ -367,11 +427,24 @@ object LocalPlayback {
         }
     }
 
+    private fun watchDevices(on: Boolean) {
+        if (on == watchingDevices) return
+        val am = app?.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+        try {
+            if (on) am.registerAudioDeviceCallback(devices, main) else am.unregisterAudioDeviceCallback(devices)
+            watchingDevices = on
+        } catch (e: Exception) {
+            L.w("Player: can't watch for headphones", e)
+        }
+    }
+
+    /** Stops for good: the place is remembered, the notification goes, and the screen closes. */
     fun release() {
         val p = player ?: return
         runCatching { enhancer?.release() }
         enhancer = null
         boost = 0f
+        watchDevices(false)
         saveNow()
         cancelSleep(notify = false)
         main.removeCallbacks(saver)
@@ -511,13 +584,13 @@ object LocalPlayback {
 
     // ------------------------------------------------------------------ where it was left off
 
-    /** Remembers where the file playing is (nothing for website videos, shared files and incognito). */
+    /** Remembers where the file playing is (nothing for website videos, shared files, incognito and Private's). */
     fun saveNow() {
         val p = player ?: return
         val a = app ?: return
         val e = current ?: return
         val f = e.file ?: return
-        if (e.incognito) return
+        if (e.private) return
         val d = p.duration
         if (d == C.TIME_UNSET || d <= 0 || p.playbackState == Player.STATE_IDLE) return
         LocalMedia.save(a, f, displayTitle(), e.video, p.currentPosition, d)
@@ -673,6 +746,12 @@ object LocalPlayback {
             if (playbackState == Player.STATE_ENDED) {
                 current?.file?.let { f -> app?.let { LocalMedia.forget(it, f.path) } }
             }
+            app?.let { MusicService.sync(it) }
+        }
+
+        // 3.0: a call took the sound away (or gave it back): the buttons and the notification follow.
+        override fun onPlaybackSuppressionReasonChanged(playbackSuppressionReason: Int) {
+            changed()
             app?.let { MusicService.sync(it) }
         }
 

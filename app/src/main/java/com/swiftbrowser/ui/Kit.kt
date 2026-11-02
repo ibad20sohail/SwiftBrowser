@@ -83,10 +83,15 @@ enum class Accent(
 
     /**
      * The hand-picked accent closest in hue: the theme of Android's own parts (a text cursor), which
-     * can't take any colour while the app runs.
+     * can't take any colour while the app runs. 3.0: a grey, white or black has no hue to go by (it
+     * came out red, with a red cursor and text handles): blue, the default, then.
      */
     val nearestPreset: Accent
-        get() = if (primaryRes != 0) this else entries.filter { it.primaryRes != 0 }.minBy { Tones.hueDistance(seedColor, it.seed) }
+        get() = when {
+            primaryRes != 0 -> this
+            Contrast.greyish(seedColor) -> BLUE
+            else -> entries.filter { it.primaryRes != 0 }.minBy { Tones.hueDistance(seedColor, it.seed) }
+        }
 
     val overlay: Int get() = nearestPreset.overlayRes
 
@@ -205,13 +210,33 @@ object Looks {
     private val handler = Handler(Looper.getMainLooper())
     private val nightCheck = Runnable {
         NightLight.refreshAll()
-        sync()
         watchClock(true)
+        syncUnlessWatching()
+    }
+
+    /** 3.0: a switch that waited for a video, tried again every minute. */
+    private val themeRetry = Runnable { syncUnlessWatching() }
+
+    /**
+     * "Dark at night" at 7 o'clock, but (3.0) not in the middle of a video: the screen would be
+     * rebuilt and the page reloaded. The switch waits until the open tab stops playing and leaves full
+     * screen, or until Swift is opened again (onStart syncs).
+     */
+    private fun syncUnlessWatching() {
+        handler.removeCallbacks(themeRetry)
+        val tab = com.swiftbrowser.tabs.TabManager.current
+        if (wantsDark() != SwiftApp.prefs.darkMode && tab != null && (tab.playing || tab.fullscreen)) {
+            handler.postDelayed(themeRetry, 60_000)
+        } else {
+            sync()
+        }
     }
 
     /** While a screen is open with "Dark at night" or the night light at night: switch at 7 o'clock even if nothing else happens. */
     fun watchClock(on: Boolean) {
         handler.removeCallbacks(nightCheck)
+        // 3.0: a switch waiting for a video goes when the screen does: it's made when Swift is back.
+        if (!on) handler.removeCallbacks(themeRetry)
         val prefs = SwiftApp.prefs
         if (!on || (prefs.themeMode != NIGHT && prefs.nightLight != NightLight.AT_NIGHT)) return
         val now = Calendar.getInstance()
@@ -388,6 +413,26 @@ object Ui {
         v.stateListAnimator = StateListAnimator().apply {
             addState(intArrayOf(android.R.attr.state_pressed), down)
             addState(intArrayOf(), up)
+        }
+    }
+
+    /**
+     * Gives [target] a finger-sized place, at least [sizeDp] square, without changing how it looks
+     * (3.0): taps just beside it, inside [host] (an ancestor with no other TouchDelegate), go to it.
+     * A button in a corner grows inward.
+     */
+    fun touchArea(target: View, host: ViewGroup, sizeDp: Int = 48) {
+        host.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+            if (target.width <= 0 || target.visibility != View.VISIBLE) return@addOnLayoutChangeListener
+            val r = android.graphics.Rect(0, 0, target.width, target.height)
+            host.offsetDescendantRectToMyCoords(target, r)
+            val min = dp(host.context, sizeDp)
+            r.inset(-((min - r.width()).coerceAtLeast(0) + 1) / 2, -((min - r.height()).coerceAtLeast(0) + 1) / 2)
+            if (r.left < 0) r.offset(-r.left, 0)
+            if (r.right > host.width) r.offset(host.width - r.right, 0)
+            if (r.top < 0) r.offset(0, -r.top)
+            if (r.bottom > host.height) r.offset(0, host.height - r.bottom)
+            host.touchDelegate = android.view.TouchDelegate(r, target)
         }
     }
 

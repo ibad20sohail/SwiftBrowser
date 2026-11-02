@@ -21,17 +21,36 @@ object ErrorPage {
     private const val ICON_SECURITY = "M12 2 4 5v6.09c0 5.05 3.41 9.76 8 10.91 4.59-1.15 8-5.86 8-10.91V5l-8-3zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"
     private const val ICON_OTHER = "M11 15h2v2h-2zm0-8h2v6h-2zm.99-5C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8z"
 
+    /**
+     * 3.0: whether a page that failed with [code] waits for the connection and loads again by itself
+     * (TabDelegates). Only when it failed for lack of one: while the phone is online, a site whose
+     * name isn't found (a typing mistake), that doesn't answer or turns the connection away won't
+     * come by waiting, and isn't loaded again every time its tab is opened.
+     */
+    fun waitsForConnection(code: Int, online: Boolean): Boolean = when (code) {
+        WebRequestError.ERROR_OFFLINE, WebRequestError.ERROR_NET_RESET, WebRequestError.ERROR_NET_INTERRUPT -> true
+        WebRequestError.ERROR_UNKNOWN_HOST, WebRequestError.ERROR_NET_TIMEOUT, WebRequestError.ERROR_CONNECTION_REFUSED -> !online
+        else -> false
+    }
+
     fun create(uri: String?, error: WebRequestError): String {
         val paused = com.swiftbrowser.engine.Engine.networkBlocked && error.category == WebRequestError.ERROR_CATEGORY_PROXY
+        val online = com.swiftbrowser.engine.DataSaver.online
         val (title, message) = if (paused) {
             "Waiting for the VPN" to "Swift holds pages back until the VPN is connected, so sites never see your own connection. Turn the VPN off to browse without it."
         } else {
-            describe(error)
+            describe(error, online)
         }
         val kind = when {
             error.category == WebRequestError.ERROR_CATEGORY_SECURITY || error.category == WebRequestError.ERROR_CATEGORY_SAFEBROWSING -> Kind.SECURITY
-            error.code in OFFLINE_CODES -> Kind.OFFLINE
+            waitsForConnection(error.code, online) -> Kind.OFFLINE
             else -> Kind.OTHER
+        }
+        // 3.0: a name that isn't found while online is most likely mistyped: a search for it finds the site.
+        val lookFor = if (!paused && online && error.code == WebRequestError.ERROR_UNKNOWN_HOST) {
+            UrlUtils.host(uri)?.removePrefix("www.")?.takeIf { it.isNotBlank() }
+        } else {
+            null
         }
         val certError = error.category == WebRequestError.ERROR_CATEGORY_SECURITY
         val site = TextUtils.htmlEncode(UrlUtils.siteName(uri).ifEmpty { uri ?: "" })
@@ -51,6 +70,12 @@ object ErrorPage {
                 "Open anyway (not safe)</button>"
         } else {
             ""
+        }
+        val buttons = if (lookFor != null) {
+            "<a class=\"button\" href=\"${TextUtils.htmlEncode(UrlUtils.searchUrl(lookFor))}\">Search for it</a>" +
+                "<button class=\"secondary\" onclick=\"location.reload()\">Try again</button>"
+        } else {
+            "<button onclick=\"location.reload()\">Try again</button>$extra"
         }
         val (light, dark) = accents()
         // The page, text and chips in the app's own colours (2.6): it sits under Swift's toolbar.
@@ -73,7 +98,7 @@ object ErrorPage {
             .site{display:inline-block;max-width:100%;box-sizing:border-box;padding:6px 12px;border-radius:14px;background:var(--chip);font-size:13px;color:var(--sub);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin:4px 0 8px}
             .wait{font-size:14px}
             .buttons{margin-top:24px;display:flex;flex-wrap:wrap;gap:12px}
-            button{padding:12px 24px;font-size:15px;font-weight:500;border:0;border-radius:24px;background:var(--a);color:var(--on);font-family:inherit}
+            button,a.button{padding:12px 24px;font-size:15px;font-weight:500;border:0;border-radius:24px;background:var(--a);color:var(--on);font-family:inherit;text-decoration:none;display:inline-block;line-height:normal}
             button.secondary{background:transparent;color:var(--sub);border:1px solid var(--sub)}
             </style></head><body>
             <div class="icon"><svg viewBox="0 0 24 24"><path d="$icon"/></svg></div>
@@ -81,16 +106,11 @@ object ErrorPage {
             <p>${TextUtils.htmlEncode(message)}</p>
             <div class="site" title="$full">$site</div>
             $waiting
-            <div class="buttons"><button onclick="location.reload()">Try again</button>$extra</div>
+            <div class="buttons">$buttons</div>
             </body></html>
         """.trimIndent()
         return "data:text/html;charset=utf-8;base64," + Base64.encodeToString(html.toByteArray(), Base64.NO_WRAP)
     }
-
-    private val OFFLINE_CODES = setOf(
-        WebRequestError.ERROR_UNKNOWN_HOST, WebRequestError.ERROR_OFFLINE, WebRequestError.ERROR_NET_RESET,
-        WebRequestError.ERROR_NET_INTERRUPT, WebRequestError.ERROR_NET_TIMEOUT, WebRequestError.ERROR_CONNECTION_REFUSED,
-    )
 
     /** The accent (strong, on it, container) as CSS colours, for light and for dark pages. */
     private fun accents(): Pair<Triple<String, String, String>, Triple<String, String, String>> {
@@ -107,16 +127,17 @@ object ErrorPage {
         return of(false) to of(true)
     }
 
-    private fun describe(e: WebRequestError): Pair<String, String> = when {
+    private fun describe(e: WebRequestError, online: Boolean): Pair<String, String> = when {
         // Offline, the engine can't look up any site's name: say what really happened (2.6).
-        e.code == WebRequestError.ERROR_UNKNOWN_HOST && !com.swiftbrowser.engine.DataSaver.online ->
+        e.code == WebRequestError.ERROR_UNKNOWN_HOST && !online ->
             "You're offline" to "Swift isn't connected to the internet. Check your Wi-Fi or mobile data."
+        // 3.0: online, a name that isn't found is a typing mistake (or a site that's gone).
+        e.code == WebRequestError.ERROR_UNKNOWN_HOST ->
+            "Check the address" to "Swift can't find a site with this name. It may be mistyped: a search can find the right one."
         else -> describeCode(e)
     }
 
     private fun describeCode(e: WebRequestError): Pair<String, String> = when (e.code) {
-        WebRequestError.ERROR_UNKNOWN_HOST ->
-            "Can't find this site" to "Check the address for typing mistakes, or check that you're connected to the internet."
         WebRequestError.ERROR_OFFLINE, WebRequestError.ERROR_NET_RESET, WebRequestError.ERROR_NET_INTERRUPT ->
             "You're offline" to "The connection dropped. Check your Wi-Fi or mobile data."
         WebRequestError.ERROR_NET_TIMEOUT ->

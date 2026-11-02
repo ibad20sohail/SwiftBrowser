@@ -37,6 +37,7 @@ import org.libtorrent4j.swig.add_torrent_params
 import org.libtorrent4j.swig.error_code
 import org.libtorrent4j.swig.info_hash_t
 import org.libtorrent4j.swig.libtorrent
+import org.libtorrent4j.swig.settings_pack
 import java.io.File
 import java.net.URLEncoder
 
@@ -53,6 +54,10 @@ import java.net.URLEncoder
  *   wait for Wi-Fi if chosen, pause below 15% battery unless charging and when storage runs out,
  *   and [TorrentSettings.atOnce] run at a time.
  * - Sharing stops the moment the chosen files are complete.
+ * - 3.0: one no one shares for half an hour waits (no wake lock) and tries again later, a few times.
+ *   Nothing is told to the local network (no LSD) or the router (no UPnP or NAT-PMP), connections
+ *   are encrypted when they can be (or only those, in Settings), and a private torrent never gets
+ *   the public trackers.
  *
  * Everything here runs on one thread of its own ([worker]); libtorrent's alerts come on another and
  * are handed over to it.
@@ -63,13 +68,17 @@ object Torrents {
     const val PAUSED_BATTERY = "Paused: battery low"
     const val WAITING_CHARGER = "Waiting for the charger"
     const val WAITING_NIGHT = "Waiting for the night (1 am to 7 am)"
-    const val PAUSED_STORAGE = "Paused: storage almost full"
+    const val PAUSED_STORAGE = "Paused: not enough free space for it"
     const val WAITING_TURN = "Waiting for another torrent to finish"
     const val GETTING_FILES = "Getting the file list…"
     const val CHECKING = "Checking the files…"
 
-    private const val MIN_FREE = 500L * 1024 * 1024
-    private const val SPARE = 100L * 1024 * 1024
+    /** 3.0: half an hour without anyone sharing it: it waits (without keeping the phone awake), and tries again later. */
+    const val NOBODY = "No one is sharing it right now. Swift tries again later."
+    const val NOBODY_FAILED = "No one shared it for hours"
+
+    /** 3.0: what's kept free beyond a torrent's files: the add panel checks for the same room. */
+    const val SPARE = 100L * 1024 * 1024
     private const val BATTERY_LOW = 15
     private const val BATTERY_OK = 20
     private const val POLL_MS = 1000L
@@ -78,6 +87,19 @@ object Torrents {
     private const val IDLE_STOP_MS = 30_000L
     private const val FETCH_SECONDS = 60
     private const val RECHECK_MS = 60_000L
+
+    /** 3.0: no one sharing it this long: [NOBODY] for [RETRY_MS], [TRIES] times, then [NOBODY_FAILED]. */
+    private const val DEAD_MS = 30 * 60_000L
+    private const val RETRY_MS = 30 * 60_000L
+    private const val TRIES = 4
+
+    /** 3.0: the reasons a torrent waits for something outside Swift, not just its turn (no lock, no notification in front). */
+    private val OUTSIDE = setOf(PAUSED_VPN, WAITING_WIFI, PAUSED_BATTERY, WAITING_CHARGER, WAITING_NIGHT, PAUSED_STORAGE, NOBODY)
+
+    fun waitsFor(reason: String): Boolean = reason in OUTSIDE
+
+    /** 3.0: [needed] more bytes fit in [free] with [SPARE] left over (the add panel's rule, and the one that pauses). */
+    fun roomFor(needed: Long, free: Long): Boolean = needed + SPARE <= free
 
     private lateinit var app: Context
     private val worker by lazy { Handler(HandlerThread("torrents").apply { start() }.looper) }
@@ -98,7 +120,11 @@ object Torrents {
     private var batteryBlocked = false
     private var lastSave = 0L
     private var lastStorage = 0L
+    private var lastState = 0L
     private var polling = false
+
+    /** 3.0: since when (uptime) each running torrent has had no one sharing it. */
+    private val quietSince = HashMap<String, Long>()
 
     fun init(ctx: Context) {
         app = ctx.applicationContext
@@ -109,6 +135,9 @@ object Torrents {
     private fun dir(): File = File(app.filesDir, "torrents").apply { mkdirs() }
     private fun torrentFile(hash: String) = File(dir(), "$hash.torrent")
     private fun resumeFile(hash: String) = File(dir(), "$hash.resume")
+
+    /** 3.0: libtorrent's state between runs (the DHT's known nodes: magnet links find their files sooner). */
+    private fun stateFile() = File(dir(), "session.state")
 
     /** Where torrents save their files: the Torrents folder of the download folder. */
     fun saveDir(): File = File(Downloads.directory(), "Torrents")
@@ -168,15 +197,24 @@ object Torrents {
                 L.w("Couldn't keep the torrent file", e)
                 return null
             }
-            return Downloads.addTorrent(ti.name(), link, File(folder, ti.name()).path, total, extra)
+            return Downloads.addTorrent(ti.name(), link, pathIn(folder, ti.name(), hash).path, total, extra)
         }
         magnet ?: return null
         val hash = TorrentFiles.magnetHash(magnet) ?: return null
         Downloads.findTorrent(hash)?.let { return it }
         val name = TorrentFiles.magnetName(magnet) ?: hash
         val extra = JSONObject().put("hash", hash).put("dir", folder.path)
-        return Downloads.addTorrent(name, magnet, File(folder, name).path, -1, extra)
+        // 3.0: the name a link gives ("dn=") is the site's: as a path it never leaves the folder
+        // ("../../WhatsApp/…" would have made deleting the torrent delete that file).
+        return Downloads.addTorrent(name, magnet, File(folder, TorrentFiles.safeName(name, hash)).path, -1, extra)
     }
+
+    /**
+     * 3.0: where a torrent named [name] is in [folder]: libtorrent's own path for it (it cleans the
+     * names it saves under), and never anywhere outside the folder.
+     */
+    private fun pathIn(folder: File, name: String, hash: String): File =
+        File(folder, name).takeIf { TorrentFiles.within(folder, it) } ?: File(folder, TorrentFiles.safeName(name, hash))
 
     private fun priorities(ti: TorrentInfo, wanted: Set<Int>): Array<Priority> =
         Array(ti.numFiles()) { if (it in wanted) Priority.DEFAULT else Priority.IGNORE }
@@ -263,7 +301,7 @@ object Torrents {
     fun applySettings() {
         if (!::app.isInitialized) return
         worker.post {
-            session?.applySettings(limits(SettingsPack()))
+            session?.applySettings(settings(SettingsPack()))
             applyRules()
         }
     }
@@ -271,13 +309,16 @@ object Torrents {
     private fun applyRules() {
         val torrents = Downloads.all().filter { it.kind == Downloads.KIND_TORRENT }
         val block = blockReason()
+        val now = System.currentTimeMillis()
         // Those running keep their place; then oldest first.
         val waiting = torrents.filter { it.status == Downloads.RUNNING || it.status == Downloads.QUEUED }
             .sortedWith(compareBy({ hashOf(it) !in active }, { it.created }))
         var slots = TorrentSettings.atOnce
         for (item in waiting) {
             val hash = hashOf(item) ?: continue
-            val reason = block ?: storageBlock(item) ?: if (slots > 0) null else WAITING_TURN
+            // 3.0: one no one shared waits for its next try, without a turn.
+            val later = item.extra.optLong("retryAt", 0).takeIf { it > now }?.let { NOBODY }
+            val reason = block ?: storageBlock(item) ?: later ?: if (slots > 0) null else WAITING_TURN
             if (reason == null) {
                 slots--
                 if (hash !in active) start(item, hash)
@@ -287,14 +328,22 @@ object Torrents {
                     item.status = Downloads.QUEUED
                     item.error = reason
                     item.bytesPerSecond = 0
+                    item.peers = 0
                     Downloads.torrentChanged(item, persist = true)
                 }
             }
         }
         worker.removeCallbacks(recheck)
-        if (waiting.any { it.status == Downloads.QUEUED && (it.error == WAITING_NIGHT || it.error == PAUSED_STORAGE) }) {
+        val queued = waiting.filter { it.status == Downloads.QUEUED }
+        if (queued.any { it.error == WAITING_NIGHT || it.error == PAUSED_STORAGE || it.error == NOBODY }) {
             worker.postDelayed(recheck, RECHECK_MS)
         }
+        // 3.0: those waiting for a time get Swift woken for it, also with the phone asleep and Swift closed.
+        val wakes = listOfNotNull(
+            if (queued.any { it.error == WAITING_NIGHT }) TorrentSettings.nextNight(now) else null,
+            queued.filter { it.error == NOBODY }.minOfOrNull { it.extra.optLong("retryAt", 0) }?.takeIf { it > now },
+        )
+        main.post { DownloadService.wakeAt(app, wakes.minOrNull()) }
         // Paused, failed or removed ones leave libtorrent.
         for ((hash, id) in active.toList()) {
             val item = Downloads.get(id)
@@ -310,10 +359,16 @@ object Torrents {
     /** The file Play opens: a torrent's film (or its biggest file), once its file list is known. */
     fun mainFile(item: Downloads.Item): File? {
         val main = item.extra.optString("main").takeIf { it.isNotEmpty() } ?: return null
-        return File(item.extra.optString("dir").ifEmpty { return null }, main)
+        val folder = File(item.extra.optString("dir").ifEmpty { return null })
+        // 3.0: a path from the torrent's file list never leads out of its folder.
+        return File(folder, main).takeIf { TorrentFiles.within(folder, it) }
     }
 
-    /** Free space for what is left of [item], with some to spare; else why it waits. */
+    /**
+     * Free space for what is left of [item], with some to spare; else why it waits. 3.0: the add
+     * panel's rule ([roomFor]): a torrent it let through doesn't pause near its end. Before 3.0 the
+     * panel allowed "just enough" while this wanted 500 MB free.
+     */
     private fun storageBlock(item: Downloads.Item): String? {
         val folder = File(item.extra.optString("dir").ifEmpty { saveDir().path })
         val free = try {
@@ -322,9 +377,10 @@ object Torrents {
         } catch (_: Exception) {
             return null
         }
-        if (free >= MIN_FREE) return null
-        val left = if (item.total > 0) (item.total - item.done).coerceAtLeast(0) else Long.MAX_VALUE
-        return if (left > 0 && left > free - SPARE) PAUSED_STORAGE else null
+        // Its size isn't known before its file list: it can't be checked yet.
+        if (item.total <= 0) return null
+        val left = (item.total - item.done).coerceAtLeast(0)
+        return if (left > 0 && !roomFor(left, free)) PAUSED_STORAGE else null
     }
 
     private fun start(item: Downloads.Item, hash: String) {
@@ -373,12 +429,16 @@ object Torrents {
             p.getFlags().and_(TorrentFlags.AUTO_MANAGED.inv()).and_(TorrentFlags.PAUSED.inv())
                 .and_(TorrentFlags.UPLOAD_MODE.inv()).and_(TorrentFlags.SEED_MODE.inv()),
         )
-        if (TorrentSettings.extraTrackers) {
+        // 3.0: never for a private torrent (one from a private tracker): its owners decide where it is
+        // announced, and only their tracker may know who downloads it.
+        val private = runCatching { p.ti_ptr()?.priv() == true }.getOrDefault(false)
+        if (TorrentSettings.extraTrackers && !private) {
             val trackers = p.getTrackers()
             for (t in TorrentFiles.TRACKERS) if (t !in trackers) trackers.add(t)
             p.setTrackers(trackers)
         }
         active[hash] = item.id
+        quietSince[hash] = SystemClock.uptimeMillis()
         s.swig().async_add_torrent(p)
         item.status = Downloads.RUNNING
         item.error = if (torrentFile(hash).exists() || p.ti_ptr() != null) null else GETTING_FILES
@@ -402,6 +462,7 @@ object Torrents {
         val leave = leaving.remove(hash)
         val th = handles.remove(hash)
         val id = active.remove(hash)
+        quietSince.remove(hash)
         if (th != null) runCatching { session?.remove(th) }
         val item = id?.let { Downloads.get(it) }
         if (leave == Leave.FINISHED && item != null) finished(item)
@@ -419,9 +480,9 @@ object Torrents {
         // Galleries and music apps see the new files.
         val ti = infoOf(item)
         if (ti != null) {
-            val folder = item.extra.optString("dir")
+            val folder = File(item.extra.optString("dir"))
             val wanted = wantedOf(item, ti)
-            val paths = TorrentFiles.list(ti).filter { it.index in wanted }.map { File(folder, it.path).path }
+            val paths = TorrentFiles.list(ti).filter { it.index in wanted }.map { File(folder, it.path) }.filter { TorrentFiles.within(folder, it) }.map { it.path }
             if (paths.isNotEmpty()) MediaScannerConnection.scanFile(app, paths.toTypedArray(), null, null)
         }
         main.post { DownloadService.notifyFinished(app, item) }
@@ -445,6 +506,7 @@ object Torrents {
             val th = handles.remove(hash)
             active.remove(hash)
             leaving.remove(hash)
+            quietSince.remove(hash)
             if (th != null) {
                 runCatching { if (deleteFiles) session?.remove(th, SessionHandle.DELETE_FILES) else session?.remove(th) }
             } else if (deleteFiles) {
@@ -460,18 +522,25 @@ object Torrents {
         }
     }
 
-    /** The files [item] downloaded (never anything else in its folder), and the folders left empty. */
+    /**
+     * The files [item] downloaded (never anything else in its folder), and the folders left empty.
+     * 3.0: nothing outside the torrent's own folder, whatever its link's name or its file list say.
+     */
     private fun deleteFilesOf(item: Downloads.Item, hash: String) {
         val folder = File(item.extra.optString("dir").ifEmpty { return })
         val ti = infoOf(item)
         if (ti == null) {
             // Never got its file list: at most a single file of its name.
-            File(item.filePath).takeIf { it.isFile }?.delete()
+            File(item.filePath).takeIf { it.isFile && TorrentFiles.within(folder, it) }?.delete()
             return
         }
         val dirs = HashSet<File>()
         for (e in TorrentFiles.list(ti)) {
             val f = File(folder, e.path)
+            if (!TorrentFiles.within(folder, f)) {
+                L.w("A torrent's file list points outside its folder: left alone")
+                continue
+            }
             f.delete()
             var d = f.parentFile
             while (d != null && d != folder && d.path.startsWith(folder.path)) {
@@ -485,9 +554,23 @@ object Torrents {
 
     // ------------------------------------------------------------------ libtorrent
 
-    private fun limits(sp: SettingsPack): SettingsPack {
+    /** The settings that may change while torrents run: speed limits, and (3.0) privacy and encryption. */
+    private fun settings(sp: SettingsPack): SettingsPack {
         sp.downloadRateLimit(TorrentSettings.downLimitKb * 1024)
         sp.uploadRateLimit(TorrentSettings.upLimitKb * 1024)
+        // 3.0: never Local Peer Discovery (it tells everyone on the same Wi-Fi what is being
+        // downloaded), and no opening of ports on the router (UPnP, NAT-PMP): a phone on public Wi-Fi
+        // stays quiet there.
+        sp.setEnableLsd(false)
+        sp.setBoolean(settings_pack.bool_types.enable_upnp.swigValue(), false)
+        sp.setBoolean(settings_pack.bool_types.enable_natpmp.swigValue(), false)
+        // 3.0: encrypted connections first (the phone company can't see what they are), or only those.
+        val only = TorrentSettings.encryptedOnly
+        val policy = (if (only) settings_pack.enc_policy.pe_forced else settings_pack.enc_policy.pe_enabled).swigValue()
+        sp.setInteger(settings_pack.int_types.out_enc_policy.swigValue(), policy)
+        sp.setInteger(settings_pack.int_types.in_enc_policy.swigValue(), policy)
+        sp.setInteger(settings_pack.int_types.allowed_enc_level.swigValue(), (if (only) settings_pack.enc_level.pe_rc4 else settings_pack.enc_level.pe_both).swigValue())
+        sp.setBoolean(settings_pack.bool_types.prefer_rc4.swigValue(), true)
         return sp
     }
 
@@ -496,23 +579,39 @@ object Torrents {
         return try {
             val s = SessionManager(false)
             s.addListener(listener)
-            val sp = limits(SettingsPack())
+            val sp = settings(SettingsPack())
             // A 2 GB phone: fewer connections than a computer's client.
             sp.connectionsLimit(80)
             sp.setEnableDht(true)
-            sp.setEnableLsd(true)
             sp.alertQueueSize(2000)
-            val params = SessionParams(sp)
+            // 3.0: with the DHT's nodes from last time (magnet links find their files sooner); Swift's
+            // settings always replace those that were kept with them.
+            val kept = stateFile().takeIf { it.isFile }?.let { f ->
+                runCatching { SessionParams(f.readBytes()) }.onFailure { L.w("Torrents: the kept state can't be read", it) }.getOrNull()
+            }
+            val params = kept?.also { it.settings = sp } ?: SessionParams(sp)
             // Plain file reads and writes: libtorrent's default maps whole files into memory, which a
             // 32-bit phone can't do for big films.
             params.setPosixDiskIO()
             s.start(params)
             session = s
-            L.d("Torrents started")
+            L.d("Torrents started" + if (kept != null) " (with the DHT's nodes from last time)" else "")
             s
         } catch (e: Throwable) {
             L.w("Couldn't start torrents", e)
             null
+        }
+    }
+
+    /** 3.0: libtorrent's state (the DHT's nodes) kept for the next start. */
+    private fun saveState(s: SessionManager) {
+        try {
+            val bytes = s.saveState() ?: return
+            val tmp = File(dir(), "session.state.tmp")
+            tmp.writeBytes(bytes)
+            tmp.renameTo(stateFile())
+        } catch (e: Throwable) {
+            L.w("Torrents: couldn't keep the state", e)
         }
     }
 
@@ -526,6 +625,7 @@ object Torrents {
         if (active.isNotEmpty() || fetching > 0) return@Runnable
         val s = session ?: return@Runnable
         session = null
+        saveState(s)
         try {
             s.removeListener(listener)
             s.stop()
@@ -577,6 +677,19 @@ object Torrents {
                     TorrentStatus.State.DOWNLOADING_METADATA -> GETTING_FILES
                     else -> null
                 }
+                // 3.0: half an hour with no one sharing it (often a dead magnet link): it stops keeping
+                // the phone awake, and waits for a try later.
+                val checking = st.state() == TorrentStatus.State.CHECKING_FILES || st.state() == TorrentStatus.State.CHECKING_RESUME_DATA
+                if (item.peers > 0 || checking) {
+                    quietSince[hash] = now
+                    if (item.extra.has("idle")) {
+                        item.extra.remove("idle")
+                        item.extra.remove("retryAt")
+                    }
+                } else if (now - quietSince.getOrPut(hash) { now } > DEAD_MS) {
+                    nobody(item, hash)
+                    continue
+                }
                 if (save) {
                     Downloads.torrentChanged(item, persist = true)
                     if (th.needSaveResumeData()) runCatching { th.saveResumeData(TorrentHandle.SAVE_INFO_DICT) }
@@ -585,10 +698,44 @@ object Torrents {
             Downloads.torrentChanged(null, persist = false)
             if (now - lastStorage > STORAGE_EVERY_MS) {
                 lastStorage = now
-                if (active.values.any { id -> Downloads.get(id)?.let { storageBlock(it) } != null }) applyRules()
+                // 3.0: also the rules that changed meanwhile: the night ending at 7, the VPN, the
+                // charger, Wi-Fi (before, the night's end waited for a battery broadcast).
+                if (blockReason() != null || active.values.any { id -> Downloads.get(id)?.let { storageBlock(it) } != null }) applyRules()
+            }
+            // 3.0: the DHT's nodes are kept now and then (Swift may be closed without a goodbye).
+            if (now - lastState > STATE_EVERY_MS) {
+                lastState = now
+                session?.let { saveState(it) }
             }
             worker.postDelayed(this, POLL_MS)
         }
+    }
+
+    private const val STATE_EVERY_MS = 10 * 60_000L
+
+    /**
+     * 3.0: no one shared [item] for half an hour: out of libtorrent until its next try in half an
+     * hour, a few times; then it stops with a note (↻ tries again).
+     */
+    private fun nobody(item: Downloads.Item, hash: String) {
+        val tries = item.extra.optInt("idle", 0) + 1
+        quietSince.remove(hash)
+        item.bytesPerSecond = 0
+        item.peers = 0
+        if (tries > TRIES) {
+            item.extra.remove("idle")
+            item.extra.remove("retryAt")
+            L.d("Torrents: no one shared one for hours, stopped")
+            fail(item, NOBODY_FAILED)
+        } else {
+            item.extra.put("idle", tries)
+            item.extra.put("retryAt", System.currentTimeMillis() + RETRY_MS)
+            item.status = Downloads.QUEUED
+            item.error = NOBODY
+            L.d("Torrents: no one shares one, waiting (try $tries of $TRIES)")
+            Downloads.torrentChanged(item, persist = true)
+        }
+        stop(hash, Leave.STOP)
     }
 
     private val listener = object : AlertListener {
@@ -667,7 +814,14 @@ object Torrents {
         item.extra.put("prio", prioText(prio)).put("files", entries.size)
         TorrentFiles.main(entries) { prio[it.index] != Priority.IGNORE }?.let { item.extra.put("main", it.path) }
         item.fileName = ti.name()
-        item.filePath = File(item.extra.optString("dir"), ti.name()).path
+        item.filePath = pathIn(File(item.extra.optString("dir")), ti.name(), hash).path
+        // 3.0: a magnet link turned out to be a private torrent's: the public trackers Swift added go.
+        if (ti.isPrivate) {
+            runCatching {
+                val own = th.trackers().filter { t -> TorrentFiles.TRACKERS.none { it == t.url() } }
+                th.replaceTrackers(own)
+            }.onFailure { L.w("Torrents: couldn't take the extra trackers off a private torrent", it) }
+        }
         item.total = entries.filter { prio[it.index] != Priority.IGNORE }.sumOf { it.size }
         item.error = null
         Downloads.torrentChanged(item, persist = true)

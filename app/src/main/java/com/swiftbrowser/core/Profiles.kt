@@ -37,6 +37,9 @@ object Profiles {
         list = rows
     }
 
+    /** 3.0: reads the profiles again (a restore that failed took back the ones it had added). */
+    fun refresh() = reload()
+
     fun all(): List<ProfileRow> = list
 
     fun get(id: Long): ProfileRow = list.firstOrNull { it.id == id } ?: list.first()
@@ -66,6 +69,7 @@ object Profiles {
         if (list.size <= 1) return
         db.deleteProfile(id)
         prefs.sp.edit().remove("pinned_tiles_$id").apply()
+        GoogleAccounts.forget(id)
         reload()
         if (prefs.currentProfileId == id) prefs.currentProfileId = list.first().id
     }

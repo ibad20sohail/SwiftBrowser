@@ -57,6 +57,10 @@ object AdBlock {
     var ready = false
         private set
 
+    /** When it got ready (uptime ms; 0 before), 3.0. */
+    var readyAt = 0L
+        private set
+
     val uboVersion: String get() = extension?.metaData?.version ?: ""
 
     /** uBlock Origin's "page blocked" screen (a phishing or malware site stopped before it loaded). */
@@ -126,12 +130,22 @@ object AdBlock {
     fun setGlobal(level: AdLevel) {
         if (prefs.adLevel != level) prefs.adLevel = level
         push()
+        // 3.0: with ad blocking off, pages waiting for uBO load now.
+        if (level == AdLevel.OFF) runWaiting()
         notifyListeners()
     }
 
     fun setOverride(site: String, level: AdLevel?) {
         if (level == null) overrides.remove(site) else overrides[site] = level
-        db.setSiteLevel(site, level?.key)
+        // 3.0: written off the main thread (the levels are only read back at the next start).
+        val key = level?.key
+        com.swiftbrowser.tabs.TabManager.io.execute {
+            try {
+                db.setSiteLevel(site, key)
+            } catch (e: Exception) {
+                L.w("Couldn't save a site's ad blocking", e)
+            }
+        }
         push()
         notifyListeners()
     }
@@ -174,11 +188,14 @@ object AdBlock {
     private val readyWaiters = ArrayList<() -> Unit>()
 
     /**
-     * Runs [action] once uBlock Origin has its filters loaded (or after [timeoutMs]), so pages
-     * restored at app start don't load unfiltered.
+     * Runs [action] once uBlock Origin has its filters loaded, so pages restored at app start don't
+     * load unfiltered. [timeoutMs] > 0: after that long at most (a page the user just asked for);
+     * 0: however long it takes, until [loadWaitingNow] (3.0: before, pages restored at start gave up
+     * after 8 s, and once one had, later ones didn't wait at all; uBO was ready 26 s after a cold start
+     * in a test).
      */
     fun whenReady(timeoutMs: Long, action: () -> Unit) {
-        if (ready || gaveUp || global == AdLevel.OFF) {
+        if (ready || global == AdLevel.OFF) {
             action()
             return
         }
@@ -190,26 +207,38 @@ object AdBlock {
             }
         }
         readyWaiters.add(run)
-        main.postDelayed({
-            if (readyWaiters.remove(run)) {
-                // Wait only once: if uBO is stuck, later pages shouldn't be delayed too.
-                gaveUp = true
-                L.w("uBO not ready after ${timeoutMs}ms; loading anyway")
-            }
-            run()
-        }, timeoutMs)
+        if (timeoutMs > 0) {
+            main.postDelayed({
+                if (readyWaiters.remove(run)) L.w("uBO not ready after ${timeoutMs}ms; loading anyway")
+                run()
+            }, timeoutMs)
+        }
     }
 
-    private var gaveUp = false
+    /**
+     * 3.0: "Load now" on the start-up screen: the pages waiting for uBO ([whenReady]) load at once,
+     * without ad blocking. Returns how many there were.
+     */
+    fun loadWaitingNow(): Int {
+        val n = readyWaiters.size
+        if (n > 0) L.w("Loading $n page${if (n == 1) "" else "s"} before uBO is ready (Load now)")
+        runWaiting()
+        return n
+    }
+
+    private fun runWaiting() {
+        val waiting = ArrayList(readyWaiters)
+        readyWaiters.clear()
+        waiting.forEach { it() }
+    }
 
     private fun onBridgeMessage(msg: JSONObject) {
         when (msg.optString("type")) {
             "ready" -> {
                 ready = true
+                if (readyAt == 0L) readyAt = android.os.SystemClock.uptimeMillis()
                 L.d("uBO ready, lists=${msg.optJSONArray("lists")?.length()}")
-                val waiting = ArrayList(readyWaiters)
-                readyWaiters.clear()
-                waiting.forEach { it() }
+                runWaiting()
                 notifyListeners()
             }
             "applied" -> L.d("uBO config applied (lists reloaded=${msg.optBoolean("reloaded")})")

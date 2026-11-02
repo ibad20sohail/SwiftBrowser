@@ -66,6 +66,24 @@ object Vpn {
     @Volatile var seenAs: String? = null
         private set
 
+    /**
+     * 3.0: Swift is turning the VPN back on by itself at start (it was on when Swift closed: an
+     * update, a crash, Android closing it; or "Turn on the VPN every time Swift starts"). Until it is
+     * connected, or the user chooses to go on without it, pages wait even if "Pause pages if the VPN
+     * drops" is off: nothing goes over the real connection.
+     */
+    @Volatile var resuming = false
+        private set
+
+    /** 3.0: why the VPN didn't come back on at start, for the VPN sheet (the message says what to do). */
+    @Volatile var resumeReason: String? = null
+        private set
+
+    /** 3.0: locations whose file can't be opened any more (Android's keystore lost Swift's key): added again from their .conf. */
+    private val unreadable = java.util.Collections.synchronizedSet(HashSet<String>())
+
+    fun isUnreadable(loc: Location): Boolean = loc.id in unreadable
+
     private val io = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
     private val listeners = LinkedHashSet<() -> Unit>()
@@ -124,14 +142,19 @@ object Vpn {
         return list.firstOrNull { it.id == id } ?: list.firstOrNull()
     }
 
-    /** Whether the user wants the VPN on (kept across restarts for "Connect when Swift starts"). */
+    /** Whether the user wants the VPN on (kept across restarts: 3.0, Swift turns it back on at start). */
     var wanted: Boolean
         get() = SwiftApp.prefs.sp.getBoolean(KEY_WANTED, false)
         private set(v) = SwiftApp.prefs.sp.edit().putBoolean(KEY_WANTED, v).apply()
 
+    /**
+     * 3.0: the VPN turns on every time Swift starts, even if it was off when Swift closed (if it was
+     * on, it always comes back on). A key of its own: before 3.0 "Connect when Swift starts" meant
+     * only "back on if it was on" (now always so), and those who had it on didn't ask for this.
+     */
     var connectAtStart: Boolean
-        get() = SwiftApp.prefs.sp.getBoolean(KEY_AT_START, false)
-        set(v) = SwiftApp.prefs.sp.edit().putBoolean(KEY_AT_START, v).apply()
+        get() = SwiftApp.prefs.sp.getBoolean(KEY_EVERY_START, false)
+        set(v) = SwiftApp.prefs.sp.edit().putBoolean(KEY_EVERY_START, v).apply()
 
     /** 2.2: when a server doesn't answer (or stops answering), move on to another location by itself. */
     var autoSwitch: Boolean
@@ -173,17 +196,32 @@ object Vpn {
         return loc
     }
 
-    fun remove(ctx: Context, loc: Location) {
-        if (current()?.id == loc.id && wanted) turnOff()
+    /**
+     * Removes [loc]. 3.0: the location in use, removed while the VPN is on, makes way for another
+     * one (the same country first; pages wait meanwhile) instead of turning the VPN off; only with
+     * none left does it go off. Returns the location it moved to, if any.
+     */
+    fun remove(ctx: Context, loc: Location): Location? {
+        val inUse = current()?.id == loc.id && wanted
+        val next = if (inUse) spareFor(loc) else null
         File(dir(ctx), "${loc.id}.bin").delete()
+        unreadable -= loc.id
         saveLocations(locations().filter { it.id != loc.id })
+        if (inUse) {
+            if (next != null) turnOn(ctx, next) else turnOff()
+        }
         changed()
+        return next
     }
 
-    /** Undo of [remove]: the file is kept by the caller until the Undo is gone. */
-    fun restore(ctx: Context, loc: Location, sealed: ByteArray) {
+    /**
+     * Undo of [remove]: the file is kept by the caller until the Undo is gone. [inUse]: it was the
+     * one in use, so it is chosen again (the caller reconnects to it).
+     */
+    fun restore(ctx: Context, loc: Location, sealed: ByteArray, inUse: Boolean = false) {
         File(dir(ctx), "${loc.id}.bin").writeBytes(sealed)
         saveLocations(locations() + loc)
+        if (inUse) choose(loc)
         changed()
     }
 
@@ -220,8 +258,7 @@ object Vpn {
         val attempt = ++attempts
         io.execute {
             try {
-                val sealed = File(dir(app), "${target.id}.bin").readBytes()
-                val text = String(Secret.open(sealed))
+                val text = String(Secret.open(readSealed(app, target)))
                 val config = Config.parse(onlySwift(text, app.packageName).byteInputStream())
                 val b = backend ?: GoBackend(app).also { backend = it }
                 b.setState(tunnel, Tunnel.State.UP, config)
@@ -234,6 +271,9 @@ object Vpn {
                 main.post {
                     if (attempt != attempts) return@post
                     state = State.ON
+                    // 3.0: back on: from now on "Pause pages if the VPN drops" decides, as usual.
+                    resuming = false
+                    resumeReason = null
                     applyBlock()
                     changed()
                     checkCountry()
@@ -245,12 +285,21 @@ object Vpn {
                 L.w("VPN didn't connect", e)
                 main.post {
                     if (attempt != attempts) return@post
+                    if (e is Unreadable) unreadable += target.id
                     if (e is NoAnswer && switchAway(app, target)) return@post
                     state = State.FAILED
-                    error = if (e is NoAnswer && failedInChain.size > 1) {
+                    val reason = if (e is NoAnswer && failedInChain.size > 1) {
                         "None of your locations answered. Check your connection, or try again in a while."
                     } else {
-                        describe(e)
+                        describe(e, target)
+                    }
+                    // 3.0: coming back on at start, the message says what can be done (the VPN sheet
+                    // offers Try again and Continue without VPN, and gives the reason).
+                    if (resuming) {
+                        resumeReason = reason
+                        error = RESUME_FAILED
+                    } else {
+                        error = reason
                     }
                     failedInChain.clear()
                     applyBlock()
@@ -259,6 +308,19 @@ object Vpn {
             }
         }
     }
+
+    /**
+     * Blocking: a location's sealed file. 3.0: a missing one is unreadable, like one the keystore
+     * can't open (it said "check your internet connection").
+     */
+    private fun readSealed(ctx: Context, loc: Location): ByteArray = try {
+        File(dir(ctx), "${loc.id}.bin").readBytes()
+    } catch (_: java.io.IOException) {
+        throw Unreadable()
+    }
+
+    /** 3.0: a location's file that can't be opened: its key went with a reset of Android's secure storage. */
+    private class Unreadable : Exception("The location's file can't be opened")
 
     /** Turning on, off or to another location counts up: an older attempt still running gives way. */
     @Volatile private var attempts = 0
@@ -292,6 +354,8 @@ object Vpn {
         testing = false
         testStep = null
         wanted = false
+        resuming = false
+        resumeReason = null
         state = State.OFF
         seenAs = null
         error = null
@@ -307,10 +371,22 @@ object Vpn {
         }
     }
 
-    /** At start-up: on again if it was on and "Connect when Swift starts" is set. */
+    /**
+     * At start-up (3.0): the VPN comes back on by itself when it was on as Swift closed (an update, a
+     * crash, Android closing it), and always with "Turn on the VPN every time Swift starts"; pages
+     * wait until it is connected ([resuming]). Before, it stayed off unless "Connect when Swift
+     * starts" (off at first) was set, and the tabs loaded over the real connection.
+     */
     fun onAppStart(ctx: Context) {
         Engine.resetNetworkBlock()
-        if (wanted && connectAtStart && current() != null) turnOn(ctx) else if (wanted) {
+        // Before 3.0's own key: what it meant is always so now.
+        if (SwiftApp.prefs.sp.contains(KEY_AT_START)) SwiftApp.prefs.sp.edit().remove(KEY_AT_START).apply()
+        val loc = current()
+        if ((wanted || connectAtStart) && loc != null) {
+            resuming = true
+            L.d("VPN: turning it back on at start" + if (wanted) "" else " (on every start)")
+            turnOn(ctx, loc)
+        } else if (wanted) {
             wanted = false
         }
         applyBlock()
@@ -469,7 +545,12 @@ object Vpn {
                     changed()
                 }
                 val ms = try {
-                    val text = String(Secret.open(File(dir(app), "${loc.id}.bin").readBytes()))
+                    val text = try {
+                        String(Secret.open(readSealed(app, loc)))
+                    } catch (e: Unreadable) {
+                        unreadable += loc.id
+                        throw e
+                    }
                     val config = Config.parse(onlySwift(text, app.packageName).byteInputStream())
                     val start = android.os.SystemClock.elapsedRealtime()
                     b.setState(tunnel, Tunnel.State.UP, config)
@@ -507,9 +588,12 @@ object Vpn {
         }
     }
 
-    /** Pages wait while the VPN should be on but isn't (and "Pause pages if the VPN drops" is set). */
+    /**
+     * Pages wait while the VPN should be on but isn't (and "Pause pages if the VPN drops" is set;
+     * 3.0: or while it comes back on at start, whatever that says).
+     */
     private fun applyBlock() {
-        val block = wanted && pauseWhenDown && state != State.ON
+        val block = wanted && (pauseWhenDown || resuming) && state != State.ON
         try {
             Engine.setNetworkBlocked(block)
         } catch (_: UninitializedPropertyAccessException) {
@@ -570,10 +654,13 @@ object Vpn {
         return lines.joinToString("\n")
     }
 
-    private fun describe(e: Exception): String {
+    private fun describe(e: Exception, loc: Location): String {
         val msg = (e.message ?: "").lowercase(Locale.ROOT)
         return when {
             e is NoAnswer -> "${e.server} didn't answer. Free servers are sometimes full: try another location, or again in a while."
+            // 3.0: it said "Check your internet connection" when the keystore had lost the key.
+            e is Unreadable -> "${loc.server} can't be opened any more: Android's secure storage was reset. " +
+                "Remove it and add it again from its .conf file (from Proton's page if you don't have it)."
             e is com.wireguard.android.backend.BackendException && e.reason == com.wireguard.android.backend.BackendException.Reason.VPN_NOT_AUTHORIZED ->
                 "Android didn't allow the VPN. Turn it on again and tap OK when Android asks."
             msg.contains("permission") || msg.contains("authorized") -> "Android didn't allow the VPN. Turn it on again and tap OK when Android asks."
@@ -583,6 +670,9 @@ object Vpn {
 
     /** [seenAs] when nothing came back through the VPN (the server took the key but passes nothing). */
     const val CHECK_FAILED = "not known (the address service didn't answer)"
+
+    /** 3.0: the message when the VPN didn't come back on at start ([resumeReason] says why). */
+    const val RESUME_FAILED = "The VPN didn't come back on, so pages are waiting. Tap VPN to try again or continue without it."
 
     /** Proton's free WireGuard files work for a year unless extended on its downloads page. */
     const val PROTON_DOWNLOADS = "https://account.protonvpn.com/downloads"
@@ -603,19 +693,39 @@ object Vpn {
     private const val KEY_CURRENT = "vpn_current"
     private const val KEY_WANTED = "vpn_wanted"
     private const val KEY_AT_START = "vpn_at_start"
+    private const val KEY_EVERY_START = "vpn_every_start"
     private const val KEY_PAUSE = "vpn_pause_when_down"
     private const val KEY_AUTO_SWITCH = "vpn_auto_switch"
 
     /** Settings that stay on this phone (Backup leaves them out; the files themselves never go). */
-    val PREF_KEYS = setOf(KEY_LOCATIONS, KEY_CURRENT, KEY_WANTED, KEY_AT_START, KEY_PAUSE, KEY_REMINDED, KEY_AUTO_SWITCH)
+    val PREF_KEYS = setOf(KEY_LOCATIONS, KEY_CURRENT, KEY_WANTED, KEY_AT_START, KEY_EVERY_START, KEY_PAUSE, KEY_REMINDED, KEY_AUTO_SWITCH)
 
-    /** AES-GCM with a key that never leaves Android's keystore. */
+    /**
+     * AES-GCM with a key that never leaves Android's keystore. 3.0: Android can lose the key (a reset
+     * of its secure storage); a new one is only made for new files, as it can't open the old ones,
+     * which then count as unreadable instead of failing like a bad connection.
+     */
     private object Secret {
         private const val ALIAS = "swift_vpn"
 
+        private fun keyStore(): KeyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+
+        /**
+         * The key the files were sealed with, or null when the keystore no longer has a usable one.
+         * The keystore itself failing throws instead: a new key must never take a working one's place.
+         */
+        private fun existingKey(ks: KeyStore): SecretKey? {
+            if (!ks.containsAlias(ALIAS)) return null
+            return try {
+                ks.getKey(ALIAS, null) as? SecretKey
+            } catch (_: java.security.UnrecoverableKeyException) {
+                null
+            }
+        }
+
         private fun key(): SecretKey {
-            val ks = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-            (ks.getKey(ALIAS, null) as? SecretKey)?.let { return it }
+            val ks = keyStore()
+            existingKey(ks)?.let { return it }
             val gen = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
             gen.init(
                 KeyGenParameterSpec.Builder(ALIAS, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
@@ -634,11 +744,20 @@ object Vpn {
         }
 
         fun open(sealed: ByteArray): ByteArray {
-            val ivLen = sealed[0].toInt()
-            val iv = sealed.copyOfRange(1, 1 + ivLen)
-            val c = Cipher.getInstance("AES/GCM/NoPadding")
-            c.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, iv))
-            return c.doFinal(sealed, 1 + ivLen, sealed.size - 1 - ivLen)
+            val key = existingKey(keyStore()) ?: throw Unreadable()
+            return try {
+                val ivLen = sealed[0].toInt()
+                val iv = sealed.copyOfRange(1, 1 + ivLen)
+                val c = Cipher.getInstance("AES/GCM/NoPadding")
+                c.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, iv))
+                c.doFinal(sealed, 1 + ivLen, sealed.size - 1 - ivLen)
+            } catch (e: java.security.GeneralSecurityException) {
+                // Sealed with a key the keystore lost (a new one can't open it), or the file is damaged.
+                L.w("VPN: a location's file can't be opened", e)
+                throw Unreadable()
+            } catch (e: IndexOutOfBoundsException) {
+                throw Unreadable()
+            }
         }
     }
 }

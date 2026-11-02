@@ -77,10 +77,18 @@ function onNative(msg) {
     // and/or to given), only those made then; an article's id is the time it was made (base 36).
     const from = typeof msg.from === 'number' ? msg.from : null;
     const to = typeof msg.to === 'number' ? msg.to : null;
+    // 3.0: where articles were left goes too (kept with when it was read), and, when everything is
+    // cleared, what e-books' pages were worked out to be. Places kept the old way, in the pages' own
+    // storage, have no time: any clearing takes them.
+    const inTime = t => typeof t !== 'number' || ((from === null || t >= from) && (to === null || t <= to));
+    try {
+      for (const k of Object.keys(localStorage)) { if (k.startsWith('place:')) { localStorage.removeItem(k); } }
+    } catch (e) { }
     if (from === null && to === null) {
       articles.clear();
       browser.storage.local.get(null).then(all => {
-        const keys = Object.keys(all || {}).filter(k => k === 'articleIds' || k.startsWith('article:'));
+        const keys = Object.keys(all || {}).filter(k => k === 'articleIds' || k.startsWith('article:') || k.startsWith('place:') ||
+          k === 'epub-locs' || k.startsWith('epub-loc:'));
         return keys.length ? browser.storage.local.remove(keys) : null;
       }).catch(() => { });
       return;
@@ -94,7 +102,8 @@ function onNative(msg) {
     }
     browser.storage.local.get(null).then(all => {
       const ids = ((all && all.articleIds) || []);
-      const gone = Object.keys(all || {}).filter(k => k.startsWith('article:') && goes(k.substring(8)));
+      const gone = Object.keys(all || {}).filter(k => (k.startsWith('article:') && goes(k.substring(8))) ||
+        (k.startsWith('place:') && inTime(all[k] && all[k].at)));
       const left = ids.filter(id => !goes(id));
       return browser.storage.local.set({ articleIds: left }).then(() => gone.length ? browser.storage.local.remove(gone) : null);
     }).catch(() => { });
@@ -318,15 +327,21 @@ browser.webNavigation.onCommitted.addListener(details => {
 browser.tabs.onRemoved.addListener(tabId => { seen.delete(tabId); });
 
 // Content scripts ask which tab they are in, so the app can match media reports to tabs.
+// 3.0: each question only from those that ask it, by the sender's address (the engine fills it in,
+// a page can't): a web page's content script starts reader view; only Swift's reader page gets the
+// articles kept, not a content script in some site.
+const READER_PAGE = browser.runtime.getURL('reader/view.html');
 browser.runtime.onMessage.addListener((msg, sender) => {
+  const from = (sender && sender.url) || '';
   if (msg && msg.type === 'whoami') {
     return Promise.resolve({ tabId: sender.tab ? sender.tab.id : -1 });
   }
-  if (msg && msg.type === 'reader-start' && sender.tab) {
+  if (msg && msg.type === 'reader-start' && sender.tab && /^https?:/i.test(from)) {
     startReader(sender.tab.id, sender.tab.incognito === true);
     return undefined;
   }
   if (msg && msg.type === 'reader-get') {
+    if (!from.startsWith(READER_PAGE)) { return Promise.resolve(null); }
     const id = String(msg.id);
     if (articles.has(id)) { return Promise.resolve(articles.get(id)); }
     return browser.storage.local.get('article:' + id).then(r => (r && r['article:' + id]) || null, () => null);

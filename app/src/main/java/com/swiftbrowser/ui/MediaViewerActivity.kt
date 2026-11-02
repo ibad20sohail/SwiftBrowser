@@ -126,12 +126,22 @@ class MediaViewerActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         Looks.apply(this)
         super.onCreate(savedInstanceState)
+        // 3.0: another app's link (or path) to Swift's own private files is refused: shown here, it
+        // could then be shared or copied out.
+        if (refused(intent)) {
+            L.w("Picture viewer: refused a link to Swift's own files")
+            android.widget.Toast.makeText(applicationContext, ViewerAccess.REFUSED, android.widget.Toast.LENGTH_LONG).show()
+            finish()
+            return
+        }
         val first = firstPicture(intent)
         if (first == null) {
             Messages.show(this, "Swift can't show this picture")
             finish()
             return
         }
+        // 3.0: a picture of Private (or one Files asks to protect) stays out of screenshots and recent apps.
+        if (ViewerAccess.secure(this, intent, first.file)) SecureScreen.set(this, true)
         // Black from the first frame (the window is in Swift's background colour otherwise).
         window.setBackgroundDrawable(ColorDrawable(Color.BLACK))
         blackBars()
@@ -160,6 +170,13 @@ class MediaViewerActivity : AppCompatActivity() {
         // When Swift isn't full screen, the phone's bars match the picture's background.
         window.statusBarColor = Color.BLACK
         window.navigationBarColor = Color.BLACK
+    }
+
+    /** 3.0: what this screen won't show: see ViewerAccess. */
+    private fun refused(i: Intent): Boolean {
+        if (i.action == Intent.ACTION_VIEW) return i.data?.let { ViewerAccess.refused(this, it) } == true
+        val f = i.getStringExtra(EXTRA_PATH)?.let { File(it) } ?: return false
+        return !ViewerAccess.mayOpen(this, i, f)
     }
 
     /** The picture asked for: a file of Swift's (Files), or one from another app ("Open with"). */
@@ -758,7 +775,8 @@ class MediaViewerActivity : AppCompatActivity() {
         val p = current()
         val f = p.file ?: return
         val delete = {
-            withChanges(listOf(f)) {
+            // 3.0: the recycle bin on a memory card needs Swift's access to that card too.
+            withChanges(listOf(f) + com.swiftbrowser.files.RecycleBin.binsFor(this, listOf(f))) {
                 MediaDelete.delete(this, listOf(f)) { deleted ->
                     if (isDestroyed) return@delete
                     if (deleted == 0) say("Swift couldn't delete “${p.name}”") else removed(p)
@@ -799,7 +817,7 @@ class MediaViewerActivity : AppCompatActivity() {
     private fun turn(p: Pic, turns: Int, undo: Boolean = false) {
         val f = p.file ?: return
         val info = p.info ?: return say("The picture is still opening. Try again in a moment.")
-        if (!PictureEdit.keepsKind(info)) return say("Swift can turn JPEG, PNG and WebP pictures. Edit can save a turned copy of this one.", long = true)
+        if (!PictureEdit.keepsKind(info)) return say(PictureEdit.whyNotInPlace(info), long = true)
         withChanges(listOf(f)) {
             // A JPEG only changes a tag (at once); others are written again, which takes a moment.
             val note = if (info.mime == "image/jpeg") null else Messages.sticky(this, "Turning the picture…")
@@ -933,19 +951,19 @@ class MediaViewerActivity : AppCompatActivity() {
                 ed?.setBusy(false)
                 val s = saved ?: return@post say(problem ?: "Swift couldn't save the picture", long = true)
                 if (editor === ed) closeEditor()
-                edited(p, s, replace)
+                edited(p, s, replace, PictureEdit.pngForLossless(info))
             }
         }
     }
 
-    private fun edited(p: Pic, s: PictureEdit.Saved, replace: Boolean) {
+    private fun edited(p: Pic, s: PictureEdit.Saved, replace: Boolean, asPng: Boolean = false) {
         // A picture too big to edit at full size on this phone was saved smaller: said, not hidden.
         val smaller = when (s.sample) {
             1 -> ""
             2 -> " It is half the size (${s.width} × ${s.height}): the full picture is too big for this phone to edit."
             4 -> " It is a quarter of the size (${s.width} × ${s.height}): the full picture is too big for this phone to edit."
             else -> " It is ${s.width} × ${s.height}, smaller than the original: the full picture is too big for this phone to edit."
-        }
+        } + if (asPng) " It's a PNG: this phone can't save a WebP picture without losing some quality." else ""
         val long = smaller.isNotEmpty()
         when {
             replace -> {
@@ -1190,16 +1208,23 @@ class MediaViewerActivity : AppCompatActivity() {
             else -> null
         }
 
-        /** Shows picture [file] with its folder around it. */
-        fun open(from: Context, file: File) {
+        /**
+         * Shows picture [file] with its folder around it. 3.0: [secure] for a picture of Private (kept
+         * out of screenshots); Swift's own opens are marked as such (ViewerAccess).
+         */
+        fun open(from: Context, file: File, secure: Boolean = false) {
             if (kindOf(file.name) != Kind.IMAGE) {
                 // 2.9: not a picture (a video or a song, until callers send those to the player): another app.
                 if (from is Activity) FileOpener.openWith(from, file) else L.w("Not a picture for the picture viewer")
                 return
             }
-            val i = Intent(from, MediaViewerActivity::class.java).putExtra(EXTRA_PATH, file.path)
+            val i = intentFor(from, file)
+            if (secure) i.putExtra(com.swiftbrowser.core.AppFiles.EXTRA_SECURE, true)
             if (from !is Activity) i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             from.startActivity(i)
         }
+
+        /** 3.0: what shows picture [file] (a finished download's notification too). */
+        fun intentFor(ctx: Context, file: File): Intent = ViewerAccess.mark(Intent(ctx, MediaViewerActivity::class.java).putExtra(EXTRA_PATH, file.path))
     }
 }

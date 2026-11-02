@@ -78,8 +78,12 @@ class SuggestionAdapter(
     override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
         val item = rows[position]
         if (item is Header) {
-            (holder.itemView as TextView).text = item.title
-            holder.itemView.contentDescription = item.title
+            (holder.itemView as TextView).apply {
+                text = item.title
+                contentDescription = item.title
+                // 3.0: the light look's accent was about 3.3:1 on the dark incognito list.
+                setTextColor(if (incognito) incognitoHeading(context) else Ui.accent(context))
+            }
             return
         }
         val s = item as Suggestion
@@ -119,6 +123,16 @@ class SuggestionAdapter(
             h.setAction(R.drawable.ic_fill, "Put in the address box") { onFill(s) }
         }
         h.itemView.setOnClickListener { onPick(s) }
+    }
+
+    /**
+     * Headings on the incognito list (dark in both looks): the accent as it is at night when that
+     * reads well there, else the list's own light text.
+     */
+    private fun incognitoHeading(ctx: android.content.Context): Int {
+        val bg = Ui.color(ctx, R.color.incognito_bg)
+        val night = Palette.colorFor(ctx, true, R.color.accent)
+        return if (Contrast.ratio(night, bg) >= Contrast.TEXT) night else Ui.color(ctx, R.color.incognito_text)
     }
 
     /** The words typed, in bold where they appear. */

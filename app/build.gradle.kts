@@ -21,8 +21,8 @@ android {
         applicationId = "com.swiftbrowser.app"
         minSdk = 24
         targetSdk = 35
-        versionCode = 21
-        versionName = "2.9.2"
+        versionCode = 22
+        versionName = "3.0"
     }
 
     flavorDimensions += "abi"
@@ -167,6 +167,12 @@ dependencies {
     "phoneImplementation"("org.libtorrent4j:libtorrent4j-android-arm:$libtorrent4j")
     "emuImplementation"("org.libtorrent4j:libtorrent4j-android-x86_64:$libtorrent4j")
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
+    // 3.0: pictures' EXIF (orientation, details) read the same way on every Android version, with
+    // the fixes Android 7's own reader lacks.
+    implementation("androidx.exifinterface:exifinterface:1.4.2")
+
+    // 3.0: tests of the plain logic (addresses, file names, playlists, backups) that run on the PC.
+    testImplementation("junit:junit:4.13.2")
 
     // Reports leaked screens and objects in test builds on the PC emulator only.
     emuDebugImplementation("com.squareup.leakcanary:leakcanary-android:2.14")

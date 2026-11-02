@@ -20,11 +20,32 @@ class RowHolder(view: View) : RecyclerView.ViewHolder(view) {
     /** The ripple this row was given, so it isn't made again on every bind (2.6). */
     private var ripple: android.graphics.drawable.Drawable? = null
 
+    /** The icon's round badge and padding while a picture fills its place (3.0, see setPicture). */
+    private var badge: android.graphics.drawable.Drawable? = null
+    private var badgePadding = 0
+    private var pictured = false
+
+    /** The subtitle shows two lines (3.0, see setSubtitleLines); binds are counted so a late fit is dropped. */
+    private var twoLines = false
+    private var binds = 0
+
     fun set(iconRes: Int, title: CharSequence, subtitle: CharSequence?) {
+        binds++
         icon.tag = null
+        // A recycled row that showed a picture gets its badge back.
+        if (pictured) {
+            icon.background = badge
+            icon.setPadding(badgePadding, badgePadding, badgePadding, badgePadding)
+            pictured = false
+        }
         icon.setImageResource(iconRes)
         icon.imageTintList = android.content.res.ColorStateList.valueOf(Palette.color(icon.context, R.color.text_secondary))
         this.title.text = title
+        if (twoLines) {
+            this.subtitle.setSingleLine(true)
+            this.subtitle.ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
+            twoLines = false
+        }
         this.subtitle.text = subtitle ?: ""
         this.subtitle.visibility = if (subtitle.isNullOrEmpty()) View.GONE else View.VISIBLE
         action.visibility = View.GONE
@@ -45,6 +66,43 @@ class RowHolder(view: View) : RecyclerView.ViewHolder(view) {
                 icon.setImageBitmap(bmp)
             }
         }
+    }
+
+    /** A picture filling the icon's place without the round badge behind it (3.0: a Google account's photo). */
+    fun setPicture(picture: android.graphics.drawable.Drawable) {
+        if (!pictured) {
+            badge = icon.background
+            badgePadding = icon.paddingLeft
+            pictured = true
+        }
+        icon.tag = null
+        icon.background = null
+        icon.setPadding(0, 0, 0, 0)
+        icon.imageTintList = null
+        icon.setImageDrawable(picture)
+    }
+
+    /**
+     * Two lines under the title (3.0, profiles: the Google account, then the tabs). The first is
+     * shortened in the middle to fit its line, so the second always shows.
+     */
+    fun setSubtitleLines(first: CharSequence, second: CharSequence) {
+        if (!twoLines) {
+            subtitle.setSingleLine(false)
+            subtitle.maxLines = 2
+            subtitle.ellipsize = android.text.TextUtils.TruncateAt.END
+            twoLines = true
+        }
+        subtitle.visibility = View.VISIBLE
+        val bind = binds
+        val fit = {
+            val width = subtitle.width - subtitle.totalPaddingLeft - subtitle.totalPaddingRight
+            val line = if (width > 0) android.text.TextUtils.ellipsize(first, subtitle.paint, width.toFloat(), android.text.TextUtils.TruncateAt.MIDDLE) else first
+            subtitle.text = android.text.TextUtils.concat(line, "\n", second)
+        }
+        fit()
+        // A new row has no width yet: fitted again once it's laid out, unless it was bound again meanwhile.
+        if (subtitle.width == 0) subtitle.post { if (binds == bind && twoLines) fit() }
     }
 
     fun setAction(iconRes: Int, description: String, onClick: () -> Unit) {

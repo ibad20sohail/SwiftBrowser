@@ -86,14 +86,22 @@
         <activity android:name=".ui.HistoryActivity" android:exported="false" android:windowSoftInputMode="stateAlwaysHidden" />
         <activity android:name=".ui.BookmarksActivity" android:exported="false" android:windowSoftInputMode="stateAlwaysHidden" />
         <!-- 2.8: a document on a screen of its own, over whatever opened it. No task affinity: from
-             another app it joins that app's task (Back returns there), or a task of its own. -->
+             another app it joins that app's task (Back returns there), or a task of its own.
+             3.0: the screen (DocumentScreen) is Swift's alone. Other apps and home screen shortcuts
+             come in through the alias below, which keeps the screen's old name, so "Always open
+             with Swift" and shortcuts made by 2.8 and 2.9 keep working; what they ask for is checked
+             (never Swift's own private files, only recent documents for a shortcut). -->
         <activity
-            android:name=".ui.DocumentActivity"
+            android:name=".ui.DocumentScreen"
             android:autoRemoveFromRecents="true"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation"
-            android:exported="true"
+            android:exported="false"
             android:taskAffinity=""
-            android:windowSoftInputMode="adjustResize|stateHidden">
+            android:windowSoftInputMode="adjustResize|stateHidden" />
+        <activity-alias
+            android:name=".ui.DocumentActivity"
+            android:exported="true"
+            android:targetActivity=".ui.DocumentScreen">
             <!-- 2.4: "Open with Swift" for documents from other apps; since 2.8 straight to the viewer's screen. -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
@@ -123,7 +131,7 @@
                 <action android:name="com.swiftbrowser.action.OPEN_DOC" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
-        </activity>
+        </activity-alias>
         <!-- 2.8: pictures opened from Files, on a screen of their own. 2.9: pictures only, and
              "Open with Swift" for pictures from other apps (no task affinity: Back returns there).
              Only the kinds Android 7 can show (not SVG or HEIC). -->
@@ -227,6 +235,12 @@
         <!-- 2.7: copying, moving, extracting and compressing files go on with the screen left. -->
         <service
             android:name=".files.FileJobService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+        <!-- 3.0: Wi-Fi transfer going on in the background while files are being sent. -->
+        <service
+            android:name=".files.WifiTransferService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 

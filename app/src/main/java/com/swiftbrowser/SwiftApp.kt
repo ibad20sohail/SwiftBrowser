@@ -47,6 +47,7 @@ class SwiftApp : Application() {
         AdBlock.init(prefs, db)
         Downloads.init(this, db, prefs)
         Favicons.init(this)
+        com.swiftbrowser.core.GoogleAccounts.init(this)
         Thumbnails.init(this)
         TabManager.init(db, prefs)
         Thumbnails.cleanup(TabManager.tabs.map { it.id }.toSet())

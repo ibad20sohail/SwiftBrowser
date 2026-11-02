@@ -17,8 +17,16 @@ import java.util.Locale
  */
 object DataUsage {
     private const val PREF = "data_usage"
+    private const val DAYS = "days"
     private const val KEEP_DAYS = 60
     private const val EVERY_MS = 60_000L
+
+    /**
+     * 3.0: kept in a small file of its own ([PREF], the same name), not in the settings: written
+     * every minute, the whole settings file was written again with it.
+     */
+    private val sp: android.content.SharedPreferences?
+        get() = SwiftApp.instance?.getSharedPreferences(PREF, android.content.Context.MODE_PRIVATE)
 
     private val main = Handler(Looper.getMainLooper())
     private val uid = Process.myUid()
@@ -77,12 +85,19 @@ object DataUsage {
         days.keys.retainAll(keep)
         val o = JSONObject()
         for ((d, v) in days) o.put(d, org.json.JSONArray().put(v[0]).put(v[1]))
-        SwiftApp.prefs.sp.edit().putString(PREF, o.toString()).apply()
+        sp?.edit()?.putString(DAYS, o.toString())?.apply()
     }
 
     private fun load() {
+        val own = sp ?: return
+        // 3.0: the counts move out of the settings once (or again after an old backup put them back).
+        val settings = SwiftApp.prefs.sp
+        settings.getString(PREF, null)?.let { old ->
+            if (!own.contains(DAYS)) own.edit().putString(DAYS, old).apply()
+            settings.edit().remove(PREF).apply()
+        }
         val o = try {
-            JSONObject(SwiftApp.prefs.sp.getString(PREF, null) ?: return)
+            JSONObject(own.getString(DAYS, null) ?: return)
         } catch (_: Exception) {
             return
         }

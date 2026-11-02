@@ -5,6 +5,7 @@ import android.content.ClipData
 import android.content.ComponentName
 import android.content.Intent
 import android.net.Uri
+import com.swiftbrowser.core.AppFiles
 import com.swiftbrowser.core.L
 import com.swiftbrowser.docs.Docs
 import com.swiftbrowser.tabs.TabManager
@@ -19,17 +20,25 @@ import java.io.File
  *
  * 2.8: documents, pictures, videos and music open on screens of their own over Files (Back returns
  * to the folder), no longer in browser tabs.
+ *
+ * 3.0: a file of Private's opens in Swift's viewers marked secure (AppFiles.EXTRA_SECURE): the
+ * player, the picture viewer and the document viewer keep themselves out of screenshots and the
+ * recent-apps picture then.
  */
 object FileOpener {
     /**
      * Opens [f]. True when Swift's browser now shows it (the Files screen closes then; Back in
-     * that tab brings it back).
+     * that tab brings it back). 3.0: [secure] for a file of Private's.
      */
-    fun open(a: Activity, f: File, name: String = f.name): Boolean {
+    fun open(a: Activity, f: File, name: String = f.name, secure: Boolean = false): Boolean {
         val ext = FileKind.extension(name)
         return when {
             ext == "apk" -> {
                 install(a, f)
+                false
+            }
+            secure && Docs.kindOf(name, null) != null -> {
+                if (!openDocumentSecurely(a, f, name)) Messages.show(a, "Swift can't show “$name”")
                 false
             }
             Docs.kindOf(name, null) != null -> {
@@ -37,11 +46,20 @@ object FileOpener {
                 false
             }
             com.swiftbrowser.ui.PlayerActivity.kindOf(name) != null -> {
-                com.swiftbrowser.ui.PlayerActivity.open(a, f)
+                if (secure) a.startActivity(com.swiftbrowser.ui.PlayerActivity.intentFor(a, f).putExtra(AppFiles.EXTRA_SECURE, true))
+                else com.swiftbrowser.ui.PlayerActivity.open(a, f)
                 false
             }
             com.swiftbrowser.ui.MediaViewerActivity.kindOf(name) == com.swiftbrowser.ui.MediaViewerActivity.Kind.IMAGE -> {
-                com.swiftbrowser.ui.MediaViewerActivity.open(a, f)
+                if (secure) {
+                    a.startActivity(
+                        Intent(a, com.swiftbrowser.ui.MediaViewerActivity::class.java)
+                            .putExtra(com.swiftbrowser.ui.MediaViewerActivity.EXTRA_PATH, f.path)
+                            .putExtra(AppFiles.EXTRA_SECURE, true),
+                    )
+                } else {
+                    com.swiftbrowser.ui.MediaViewerActivity.open(a, f)
+                }
                 false
             }
             FileKind.showsInTab(name) -> inSwift(a, name) {
@@ -54,6 +72,22 @@ object FileOpener {
                 false
             }
         }
+    }
+
+    /**
+     * 3.0: a document of Private's in Swift's viewer: as an incognito one (kept out of the recent
+     * documents) and marked secure. False when Swift can't show it.
+     */
+    fun openDocumentSecurely(a: Activity, f: File, name: String = f.name): Boolean {
+        val uri = Docs.shareUri(a, f) ?: return false
+        val id = Docs.register(a, uri, name, incognito = true) ?: return false
+        a.startActivity(
+            Intent(a, com.swiftbrowser.ui.DocumentActivity::class.java)
+                .putExtra(com.swiftbrowser.ui.DocumentActivity.EXTRA_ID, id)
+                .putExtra(com.swiftbrowser.ui.DocumentActivity.EXTRA_INCOGNITO, true)
+                .putExtra(AppFiles.EXTRA_SECURE, true),
+        )
+        return true
     }
 
     private fun inSwift(a: Activity, name: String, show: () -> Boolean): Boolean {
@@ -82,7 +116,17 @@ object FileOpener {
         val intent = Intent(Intent.ACTION_VIEW).setDataAndType(uri, FileOps.mimeOf(name)).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         try {
             val chooser = Intent.createChooser(intent, "Open with")
-            chooser.putExtra(Intent.EXTRA_EXCLUDE_COMPONENTS, arrayOf(ComponentName(a, MainActivity::class.java)))
+            // Swift's own screens too (3.0): they refuse links to Swift's own files coming "from another
+            // app", and Files opens these files in them directly anyway.
+            chooser.putExtra(
+                Intent.EXTRA_EXCLUDE_COMPONENTS,
+                arrayOf(
+                    ComponentName(a, MainActivity::class.java),
+                    ComponentName(a, com.swiftbrowser.ui.DocumentActivity::class.java),
+                    ComponentName(a, com.swiftbrowser.ui.MediaViewerActivity::class.java),
+                    ComponentName(a, com.swiftbrowser.ui.PlayerActivity::class.java),
+                ),
+            )
             a.startActivity(chooser)
         } catch (e: Exception) {
             Messages.show(a, "No app on this phone can open this file")

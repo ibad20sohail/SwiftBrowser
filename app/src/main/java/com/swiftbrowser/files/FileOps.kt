@@ -4,6 +4,8 @@ import android.content.Context
 import android.media.MediaScannerConnection
 import android.provider.MediaStore
 import com.swiftbrowser.R
+import com.swiftbrowser.core.AppFiles
+import com.swiftbrowser.core.Background
 import com.swiftbrowser.core.L
 import com.swiftbrowser.core.UrlUtils
 import com.swiftbrowser.docs.Docs
@@ -182,6 +184,9 @@ object FileOps {
         var files = 0
         var folders = 0
         var bytes = 0L
+
+        /** 3.0: the biggest single file (a FAT32 card can't take one over 4 GB). */
+        var biggest = 0L
     }
 
     fun measure(files: Collection<File>, stop: () -> Boolean = { false }, progress: ((Totals) -> Unit)? = null): Totals {
@@ -194,7 +199,9 @@ object FileOps {
                 f.listFiles()?.forEach { walk(it) }
             } else {
                 t.files++
-                t.bytes += f.length()
+                val n = f.length()
+                t.bytes += n
+                if (n > t.biggest) t.biggest = n
             }
             if (progress != null && System.currentTimeMillis() - last > 250) {
                 last = System.currentTimeMillis()
@@ -205,12 +212,15 @@ object FileOps {
         return t
     }
 
-    /** "photo (1).jpg", "photo (2).jpg"…: a name not taken in [f]'s folder. */
-    fun freeName(f: File): File {
+    /**
+     * "photo (1).jpg", "photo (2).jpg"…: a name not taken in [f]'s folder. 3.0: [isDir] is what will
+     * have the name (a file keeps its ending even where a folder of that name is in the way).
+     */
+    fun freeName(f: File, isDir: Boolean = f.isDirectory): File {
         if (!f.exists()) return f
         val dir = f.parentFile
         val name = f.name
-        val ext = if (f.isDirectory) "" else FileKind.extension(name).let { if (it.isEmpty()) "" else ".$it" }
+        val ext = if (isDir) "" else FileKind.extension(name).let { if (it.isEmpty()) "" else ".$it" }
         val base = name.substring(0, name.length - ext.length).replace(Regex(" \\(\\d+\\)$"), "")
         var n = 1
         while (true) {
@@ -220,45 +230,125 @@ object FileOps {
         }
     }
 
-    /** A name a user typed, as a safe file name ("" when nothing is left). */
+    /** Characters a memory card (FAT) or Windows can't have in a name, and the ones that end a path. */
+    private val BAD_CHARS = Regex("[\\\\/:*?\"<>|\\u0000-\\u001f]")
+
+    /** Invisible characters that turn text around or hide it ("report‮fdp.apk" showing as "reportkpa.pdf"). */
+    private val HIDDEN_CHARS = Regex("[\\u200B-\\u200F\\u202A-\\u202E\\u2066-\\u2069\\uFEFF]")
+
+    private const val MAX_NAME = 120
+
+    /**
+     * A name a user typed, as a safe file name ("" when nothing is left). 3.0: Files' own cleaning,
+     * which keeps a dot at the start (".nomedia", hidden folders): the download names' cleaning takes
+     * it off. Characters a memory card can't have become "_", invisible ones that turn text around
+     * go, and spaces and dots at the end go (memory cards and Windows drop those themselves).
+     */
     fun cleanName(input: String): String {
-        val t = input.trim()
-        if (t.isEmpty() || t == "." || t == "..") return ""
-        return UrlUtils.sanitizeFileName(t)
+        val t = input.replace(HIDDEN_CHARS, "").replace(BAD_CHARS, "_").trim().trimEnd('.', ' ')
+        if (t.isEmpty() || t.all { it == '.' }) return ""
+        if (t.length <= MAX_NAME) return t
+        // Too long: shortened before the ending, which stays.
+        val dot = t.lastIndexOf('.')
+        val ext = if (dot > 0) t.substring(dot + 1).takeIf { it.length in 1..10 && ' ' !in it } else null
+        return if (ext == null) t.take(MAX_NAME) else t.take(MAX_NAME - 1 - ext.length).trimEnd() + "." + ext
     }
 
     /** Whether [f] is [dir] or inside it. */
     fun isInside(f: File, dir: File): Boolean {
         val a = runCatching { f.canonicalPath }.getOrDefault(f.absolutePath)
         val b = runCatching { dir.canonicalPath }.getOrDefault(dir.absolutePath)
-        return a == b || a.startsWith("$b/")
+        return a == b || a.startsWith(b + File.separator)
     }
+
+    /**
+     * 3.0: whether [a] and [b] are one file: the same path, or the same name in other capitals on a
+     * storage that ignores capitals (the phone's storage, memory cards). On one that doesn't (Swift's
+     * own, where Private is), "photo.jpg" and "Photo.jpg" can be two files: their folder lists both.
+     */
+    fun sameFile(a: File, b: File): Boolean {
+        if (a.path == b.path) return true
+        if (a.parentFile?.path != b.parentFile?.path || !a.name.equals(b.name, ignoreCase = true)) return false
+        val names = a.parentFile?.list() ?: return false
+        return sameByNames(a.name, b.name, names.asList())
+    }
+
+    /** [a] and [b] (the same but for capitals) are one file unless their folder's [names] has both. */
+    fun sameByNames(a: String, b: String, names: List<String>): Boolean =
+        a.equals(b, ignoreCase = true) && !(a != b && a in names && b in names)
 
     fun mimeOf(name: String): String = UrlUtils.mimeFromName(name) ?: "*/*"
 
     // ------------------------------------------------------------------ the phone's media index
 
-    /** New or changed files show in the Gallery and music apps (at most a few hundred at a time). */
+    /** 3.0: the media index is told on a thread of its own, a batch at a time. */
+    private val scanner = Background.single("media-scan")
+
+    /** At most this many files are handed to the media index at once. */
+    private const val SCAN_BATCH = 500
+
+    /**
+     * New or changed files show in the Gallery and music apps. 3.0: every one of them (moving the
+     * camera's 2,000 photos used to bring back only the first 500), [SCAN_BATCH] at a time, each batch
+     * waiting for the one before, off the main thread; never Private's or Swift's own files.
+     */
     fun scan(ctx: Context, paths: Collection<String>) {
         if (paths.isEmpty()) return
+        val app = ctx.applicationContext
+        val list = paths.toList()
+        scanner.execute {
+            val own = ownRoots(app)
+            val shared = list.filter { p -> own.none { p == it || p.startsWith("$it/") } }
+            for (batch in shared.chunked(SCAN_BATCH)) scanBatch(app, batch)
+        }
+    }
+
+    /** Swift's data folder by each of its names (Private is in it): never told to the media index. */
+    private fun ownRoots(app: Context): List<String> = listOfNotNull(
+        app.applicationInfo.dataDir,
+        runCatching { File(app.applicationInfo.dataDir).canonicalPath }.getOrNull(),
+        "/data/data/${app.packageName}",
+        "/data/user/0/${app.packageName}",
+    ).distinct()
+
+    /** 3.0: every file in [root] (a folder renamed, restored or moved) back in the Gallery, not just the folder. */
+    fun scanTree(ctx: Context, root: File) {
+        val app = ctx.applicationContext
+        scanner.execute {
+            if (AppFiles.isPrivate(app, root)) return@execute
+            val all = if (root.isDirectory) root.walkTopDown().filter { it.isFile }.map { it.path }.toList() else listOf(root.path)
+            for (batch in all.chunked(SCAN_BATCH)) scanBatch(app, batch)
+        }
+    }
+
+    private fun scanBatch(app: Context, batch: List<String>) {
+        val done = java.util.concurrent.CountDownLatch(batch.size)
         try {
-            MediaScannerConnection.scanFile(ctx.applicationContext, paths.take(500).toTypedArray(), null, null)
+            MediaScannerConnection.scanFile(app, batch.toTypedArray(), null) { _, _ -> done.countDown() }
+            // The media index answers for each file; a stuck one doesn't hold up the rest for long.
+            done.await(SCAN_WAIT_S + batch.size / 10, java.util.concurrent.TimeUnit.SECONDS)
         } catch (e: Exception) {
             L.w("Couldn't tell the media index", e)
         }
     }
 
+    private const val SCAN_WAIT_S = 30L
+
+    /** 3.0: [s] for a LIKE question, its "%" and "_" (and "\") as themselves (with ESCAPE '\'). */
+    fun likeEscaped(s: String) = s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
     /**
      * Deleted files (and everything in a deleted folder) leave the Gallery and music apps. 2.9: only
      * the index's rows: Android 9 and older otherwise delete a picture, video or song still at that
-     * path along with its row ("deletedata=false" tells them not to).
+     * path along with its row ("deletedata=false" tells them not to). 3.0: the folder's "_" and "%"
+     * mean themselves (deleting "My_Pics" no longer forgot "MyXPics" too).
      */
     fun forget(ctx: Context, f: File) {
         try {
             ctx.contentResolver.delete(
                 MediaStore.Files.getContentUri("external").buildUpon().appendQueryParameter("deletedata", "false").build(),
-                MediaStore.Files.FileColumns.DATA + "=? OR " + MediaStore.Files.FileColumns.DATA + " LIKE ?",
-                arrayOf(f.path, f.path + "/%"),
+                MediaStore.Files.FileColumns.DATA + "=? OR " + MediaStore.Files.FileColumns.DATA + " LIKE ? ESCAPE '\\'",
+                arrayOf(f.path, likeEscaped(f.path) + "/%"),
             )
         } catch (_: Exception) {
         }

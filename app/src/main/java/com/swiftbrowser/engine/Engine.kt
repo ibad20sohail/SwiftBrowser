@@ -90,6 +90,10 @@ object Engine {
         applySecureDns()
         runtime.delegate = GeckoRuntime.Delegate {
             L.e("Gecko runtime shut down")
+            // 3.0: the open tabs are saved first (their pages and history), as when Swift goes to
+            // the background, and the log is written.
+            TabManager.flushSavesAndWait()
+            L.flushNow()
             Diagnostics.markCleanExit()
             Process.killProcess(Process.myPid())
         }
@@ -112,6 +116,8 @@ object Engine {
                 ?: GeckoResult.fromException(IllegalStateException("No activity"))
         }
         applyPerformancePrefs(prefs)
+        // 3.0: the extensions' process started again if the engine gives up on it (see Helper).
+        Helper.watchExtensionProcess(runtime)
         installExtensions(app)
     }
 
@@ -215,6 +221,8 @@ object Engine {
             append("  dom.timeout.background_throttling_max_budget: 20\n")
             append("  dom.timeout.background_budget_regeneration_rate: 200\n")
             append("  dom.timeout.budget_throttling_max_delay: 60000\n")
+            // 3.0: Safer browsing, see saferPrefs.
+            if (prefs.saferBrowsing) for ((name, value) in saferPrefs(true)) append("  $name: $value\n")
         }
         try {
             if (!file.exists() || file.readText() != text) file.writeText(text)
@@ -295,11 +303,46 @@ object Engine {
             // 1: click "Reject" (or hide the banner) where Firefox knows the site's banner.
             SetGeckoPreference.setIntPref("cookiebanners.service.mode", banners, BRANCH),
             SetGeckoPreference.setIntPref("cookiebanners.service.mode.privateBrowsing", banners, BRANCH),
+            // 3.0: site names in other alphabets show as the engine's code for them ("xn--pple-43d.com"),
+            // so a lookalike ("аpple.com" with a Cyrillic а) can't pass for the real site.
+            SetGeckoPreference.setBoolPref("network.IDN_show_punycode", true, BRANCH),
         )
     }
 
     fun applyPrivacyPrefs() {
         GeckoPreferenceController.setGeckoPrefs(privacyPrefs(SwiftApp.prefs))
+    }
+
+    /**
+     * 3.0: Safer browsing (Settings → Privacy & security, off at first). The engine (Firefox 143, the
+     * last for Android 7) gets no more security fixes, and attacks on old browsers mostly go through
+     * what makes pages' scripts fast: the JavaScript compilers (Baseline, Ion; asm.js goes through
+     * them) and WebAssembly. With it on, web pages go without them. Extensions and the engine's own
+     * code keep them (the *_trustedprincipals prefs count extension pages as trusted), so uBlock
+     * Origin keeps its speed. The compilers are chosen when the engine's processes start, so it comes
+     * in the start-up config and applies after a restart; those values are defaults (not the
+     * profile's own), so nothing is left behind when it's turned off again.
+     */
+    private fun saferPrefs(on: Boolean): Map<String, Boolean> = linkedMapOf(
+        "javascript.options.baselinejit" to !on,
+        "javascript.options.ion" to !on,
+        "javascript.options.asmjs" to !on,
+        "javascript.options.wasm" to !on,
+        "javascript.options.jit_trustedprincipals" to on,
+        "javascript.options.wasm_trustedprincipals" to true,
+    )
+
+    /** Prefs.saferBrowsing changed: from the next start (and in a page process the engine starts again). */
+    fun applySaferBrowsing() {
+        writeStartupConfig()
+        val list = saferPrefs(prefs.saferBrowsing).map { (name, value) ->
+            SetGeckoPreference.setBoolPref(name, value, GeckoPreferenceController.PREF_BRANCH_DEFAULT)
+        }
+        GeckoPreferenceController.setGeckoPrefs(list).accept({ result ->
+            val failed = result?.filterValues { !it }?.keys.orEmpty()
+            if (failed.isNotEmpty()) L.w("Safer browsing prefs not set: $failed")
+        }, { e -> L.w("Safer browsing prefs failed", e) })
+        L.d("Safer browsing ${if (prefs.saferBrowsing) "on" else "off"} from the next start")
     }
 
     /**

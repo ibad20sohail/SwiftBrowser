@@ -112,11 +112,17 @@ object PageActions {
                     a.snack("Couldn't save this page")
                     return@accept
                 }
+                // 3.0: from an incognito tab, an incognito download, opened in an incognito tab.
                 Downloads.saveFile(tab.profileId, name, "application/pdf", tab.url, write = { file ->
                     stream.use { input -> file.outputStream().use { input.copyTo(it) } }
-                }) { item ->
-                    if (item == null) a.snack("Couldn't save this page")
-                    else a.snack("Saved for offline reading", "Open") { a.openFileInTab(item.filePath) }
+                }, incognito = tab.incognito) { item ->
+                    when {
+                        item == null -> a.snack("Couldn't save this page")
+                        tab.incognito -> a.snack("Saved for offline reading", "Open") {
+                            com.swiftbrowser.tabs.TabManager.newTab(android.net.Uri.fromFile(File(item.filePath)).toString(), incognito = true)
+                        }
+                        else -> a.snack("Saved for offline reading", "Open") { a.openFileInTab(item.filePath) }
+                    }
                 }
             }, { _ -> a.snack("Couldn't save this page") })
         }
@@ -153,6 +159,8 @@ object PageActions {
             addView(android.widget.ImageView(a).apply {
                 setImageBitmap(code)
                 background = Ui.shape(a, android.graphics.Color.WHITE, Ui.R_MEDIUM)
+                // 3.0: the dialog's recolouring leaves it white (it took your light background's colour).
+                setTag(com.swiftbrowser.R.id.palette_keep, true)
                 setPadding(Ui.dp(a, 12), Ui.dp(a, 12), Ui.dp(a, 12), Ui.dp(a, 12))
                 contentDescription = "QR code of $url"
             })

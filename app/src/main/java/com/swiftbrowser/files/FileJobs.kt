@@ -11,6 +11,8 @@ import java.io.File
 import java.io.FilterOutputStream
 import java.io.InputStream
 import java.io.OutputStream
+import java.nio.ByteBuffer
+import java.nio.channels.SeekableByteChannel
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -210,7 +212,8 @@ object FileJobs {
                 if (job.cancelled) throw Cancelled()
                 if (job.message == null) job.message = job.kind.done
             } catch (_: Cancelled) {
-                job.message = "Cancelled"
+                // 3.0: how far it got, and where that is ("Cancelled after 12 of 40 files…").
+                job.message = w.cancelledText()
             } catch (e: FileProblem) {
                 job.failed = true
                 job.message = e.message
@@ -225,6 +228,7 @@ object FileJobs {
                 L.w("File job failed (${job.kind.name.lowercase()}, ${job.current})", e)
             } finally {
                 w.finish()
+                runCatching { Parts.compactIfBig(ctx) }
             }
             L.d("File job ${job.kind.name.lowercase()} over in ${SystemClock.uptimeMillis() - started} ms: ${job.filesDone} files, ${job.skipped} skipped, ${if (job.failed) "failed" else "ok"}")
         } else {
@@ -280,8 +284,25 @@ object FileJobs {
 
         private var lastTick = 0L
 
+        /** 3.0: where the job puts things, for the outcome of a Cancel ("…are in “Download”"). */
+        private var destination: File? = null
+
+        /** 3.0: the bytes of the file being written now, before it (for "FAT32 can't hold files over 4 GB"). */
+        private var fileStart = 0L
+
+        /** 3.0: files a move copied but couldn't take from where they were (they're in both places). */
+        internal var stayedBehind = 0
+
+        /** 3.0: the watchdog gave up on this job's archive reader: it stops at its next step. */
+        @Volatile
+        internal var abandoned = false
+
         fun check() {
-            if (job.cancelled) throw Cancelled()
+            if (job.cancelled || abandoned) throw Cancelled()
+        }
+
+        fun destination(dir: File?) {
+            destination = dir
         }
 
         fun current(name: String) {
@@ -302,6 +323,13 @@ object FileJobs {
             job.bytesTotal = bytes
             job.counting = false
             byFiles = bytes <= 0 && files > 0
+            changed()
+        }
+
+        /** 3.0: more to do than counted at first (a move that couldn't rename copies after all). */
+        fun addTotals(files: Int, bytes: Long) {
+            if (job.filesTotal >= 0) job.filesTotal = (job.filesTotal + files).coerceAtLeast(job.filesDone)
+            if (bytes > 0) job.bytesTotal = job.bytesTotal.coerceAtLeast(0) + bytes
             changed()
         }
 
@@ -361,7 +389,7 @@ object FileJobs {
             // Pasted into its own folder: a copy beside it ("photo (1).jpg", "Holiday (1)").
             if (sameAsSource) return FileOps.freeName(target)
             if (isDir && target.isDirectory) return target
-            if (isDir != target.isDirectory) return FileOps.freeName(target)
+            if (isDir != target.isDirectory) return FileOps.freeName(target, isDir)
             val choice = job.forAll ?: run {
                 val a = ask(Question(false, target.name, target.parentFile?.name.orEmpty(), false, isDir)) as? Answer ?: throw Cancelled()
                 if (a.forAll) job.forAll = a.choice
@@ -399,29 +427,64 @@ object FileJobs {
         /**
          * Writes [target] through [access]: [fill] writes its bytes. Bytes written count towards
          * [limit] (and the progress, when [counted]); what was written is deleted when it fails or
-         * is cancelled. A file being replaced is written aside first and swapped in at the end, so
-         * a failure (no space, a wrong password, Cancel) keeps the old one.
+         * is cancelled. 3.0: always written aside first, under a hidden name (".swift-….part", see
+         * Parts), and given its own name only once whole: a copy cut off half-way (Swift closed, the
+         * battery) never shows as the file, and a file being replaced stays until the new one is
+         * there, so a failure (no space, a wrong password, Cancel) keeps the old one.
          */
         fun write(target: File, access: FileAccess, time: Long, counted: Boolean = true, fill: (OutputStream) -> Unit) {
-            val replacing = target.exists()
-            val out = if (replacing) File(target.parentFile, ".swift-" + System.nanoTime() + ".part") else target
+            val part = Parts.newIn(target.parentFile)
+            beginPart(part)
+            fileStart = written
             var ok = false
             try {
-                Guarded(access.output(out), counted).use { fill(it) }
+                Guarded(access.output(part), counted).use { fill(it) }
                 ok = true
             } finally {
-                if (!ok) runCatching { access.delete(out) }
+                if (!ok) dropPart(part, access)
             }
-            if (replacing) {
-                if (!access.delete(target)) {
-                    runCatching { access.delete(out) }
-                    throw FileProblem("Swift couldn't replace “${target.name}”.")
-                }
-                // Left as it is if this fails (rare): the new copy isn't lost.
-                if (!access.rename(out, target.name)) throw FileProblem("Swift couldn't replace “${target.name}”. The new copy is “${out.name}”.")
-            }
+            swapIn(part, target, access, written - fileStart)
             access.setTime(target, time)
             made += target.path
+        }
+
+        /** 3.0: [part] is being written (see Parts). */
+        internal fun beginPart(part: File) = Parts.begin(ctx, part)
+
+        /** 3.0: [part] wasn't finished: it goes. */
+        internal fun dropPart(part: File, access: FileAccess) {
+            runCatching { access.delete(part) }
+            Parts.end(ctx, part)
+        }
+
+        /**
+         * 3.0: [part], written whole ([length] bytes; -1: not known), takes [target]'s name. It must be
+         * there with every byte first; a file being replaced goes only then. If the last rename fails
+         * (rare), the part is left as it is: the new copy isn't lost, and the message says its name.
+         */
+        internal fun swapIn(part: File, target: File, access: FileAccess, length: Long) {
+            try {
+                if (!part.isFile || (length >= 0 && part.length() != length)) {
+                    runCatching { access.delete(part) }
+                    throw FileProblem("Swift couldn't finish “${target.name}”: the copy didn't come out whole. The storage may be full or failing.")
+                }
+                val replacing = target.exists()
+                if (replacing) {
+                    // Never a folder in a file's place (one may have been made there meanwhile).
+                    if (target.isDirectory || !access.delete(target)) {
+                        runCatching { access.delete(part) }
+                        throw FileProblem("Swift couldn't replace “${target.name}”.")
+                    }
+                }
+                if (!access.rename(part, target.name)) {
+                    throw FileProblem(
+                        if (replacing) "Swift couldn't replace “${target.name}”. The new copy is “${part.name}”, a hidden file in the same folder."
+                        else "Swift couldn't give “${target.name}” its name. It is “${part.name}”, a hidden file in the same folder.",
+                    )
+                }
+            } finally {
+                Parts.end(ctx, part)
+            }
         }
 
         /** Copies [input] to [out] in large pieces. */
@@ -451,7 +514,7 @@ object FileJobs {
         inner class Guarded(out: OutputStream, private val counted: Boolean) : FilterOutputStream(out) {
             override fun write(b: ByteArray, off: Int, len: Int) {
                 check()
-                if (written + len > limit) throw FileProblem("There isn't enough free space for this.")
+                if (written + len > limit) throw FileProblem(NO_ROOM)
                 out.write(b, off, len)
                 written += len
                 if (counted) progress(len.toLong())
@@ -460,16 +523,71 @@ object FileJobs {
             override fun write(b: Int) = write(byteArrayOf(b.toByte()), 0, 1)
         }
 
+        /**
+         * 3.0: a file opened for writing anywhere in it (7z goes back to its start at the end), its
+         * bytes counted against [limit] as [Guarded]'s; [extent] is how long the file is.
+         */
+        inner class GuardedChannel(private val ch: SeekableByteChannel) : SeekableByteChannel {
+            var extent = 0L
+                private set
+
+            override fun write(src: ByteBuffer): Int {
+                check()
+                val len = src.remaining()
+                if (written + len > limit) throw FileProblem(NO_ROOM)
+                val n = ch.write(src)
+                written += n
+                extent = maxOf(extent, ch.position())
+                return n
+            }
+
+            override fun read(dst: ByteBuffer): Int = ch.read(dst)
+
+            override fun position(): Long = ch.position()
+
+            override fun position(newPosition: Long): SeekableByteChannel {
+                ch.position(newPosition)
+                return this
+            }
+
+            override fun size(): Long = ch.size()
+
+            override fun truncate(size: Long): SeekableByteChannel {
+                ch.truncate(size)
+                extent = minOf(extent, size)
+                return this
+            }
+
+            override fun isOpen(): Boolean = ch.isOpen
+
+            override fun close() = ch.close()
+        }
+
+        /** 3.0: the usual reasons in words (FileErrors): "The phone is full", "FAT32 can't hold files over 4 GB"… */
         internal fun failureText(e: Throwable): String {
-            val text = e.message.orEmpty()
             val name = job.current.ifBlank { null }
+            val onCard = destination?.let { Volumes.isCard(ctx, it) } == true
+            FileErrors.text(e, written - fileStart, onCard)?.let { return it }
             return when {
-                text.contains("ENOSPC") || text.contains("No space", true) -> "The storage is full."
-                text.contains("EACCES") || text.contains("EROFS") || e is SecurityException ->
-                    "Swift isn't allowed to change files there."
                 name != null -> "Swift couldn't finish with “$name”. It may be damaged, or no longer there."
                 else -> "Swift couldn't finish this."
             }
+        }
+
+        /** 3.0: what a Cancel left: "Cancelled after 12 of 40 files. They're in “Download”…". */
+        internal fun cancelledText(): String {
+            val n = job.filesDone
+            val to = destination
+            if (n <= 0 || to == null || job.kind !in setOf(Kind.COPY, Kind.MOVE, Kind.EXTRACT)) return "Cancelled"
+            val of = if (job.filesTotal > n) " of ${job.filesTotal}" else ""
+            val place = when {
+                PrivateFolder.isInside(ctx, to) -> "Private"
+                Volumes.of(ctx, to) == null -> to.name
+                else -> FileIndex.placeOf(ctx, to)
+            }
+            val rest = if (job.kind == Kind.EXTRACT) "" else " The rest are where they were."
+            return "Cancelled after $n$of " + (if (n == 1 && of.isEmpty()) "file" else "files") + ". " +
+                (if (n == 1) "It's" else "They're") + " in “$place”." + rest
         }
 
         internal fun finish() {
@@ -479,6 +597,11 @@ object FileJobs {
 
     /** "12 items", "1 item". */
     fun items(n: Int) = if (n == 1) "1 item" else "$n items"
+
+    /** 3.0: room always left for the phone itself when copying, extracting, compressing or receiving files. */
+    const val MARGIN = 50L * 1_048_576
+
+    private const val NO_ROOM = "There isn't enough free space for this."
 
     /** "3 of 12 files · 45 MB of 120 MB" and the like, for the progress. */
     fun detail(job: Job): String = buildString {

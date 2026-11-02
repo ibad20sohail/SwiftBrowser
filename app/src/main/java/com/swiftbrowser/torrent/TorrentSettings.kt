@@ -16,6 +16,7 @@ object TorrentSettings {
     private const val EXTRA_TRACKERS = "torrent_extra_trackers"
     private const val CHARGING_ONLY = "torrent_charging_only"
     private const val NIGHT_ONLY = "torrent_night_only"
+    private const val ENCRYPTED_ONLY = "torrent_encrypted_only"
 
     /** "At night only": from 1 am to 7 am, when some data plans are cheaper. */
     const val NIGHT_FROM = 1
@@ -52,10 +53,23 @@ object TorrentSettings {
         get() = sp.getBoolean(BATTERY_PAUSE, true)
         set(v) = sp.edit { putBoolean(BATTERY_PAUSE, v) }
 
-    /** Well-known public trackers are added to every torrent, so ones with few sharers start sooner. */
+    /**
+     * Well-known public trackers are added to every torrent, so ones with few sharers start sooner.
+     * 3.0: never to private torrents (from private trackers, which forbid it).
+     */
     var extraTrackers: Boolean
         get() = sp.getBoolean(EXTRA_TRACKERS, true)
         set(v) = sp.edit { putBoolean(EXTRA_TRACKERS, v) }
+
+    /**
+     * 3.0: off ("Prefer encrypted connections"): encrypted with those that can, plain with the others.
+     * On ("Encrypted only"): plain connections are refused, so fewer people can share with the phone.
+     */
+    var encryptedOnly: Boolean
+        get() = sp.getBoolean(ENCRYPTED_ONLY, false)
+        set(v) = sp.edit { putBoolean(ENCRYPTED_ONLY, v) }
+
+    val ENCRYPTION_CHOICES = listOf("Prefer encrypted connections", "Encrypted only (fewer people to download from)")
 
     /** Torrents only run while the phone charges (it stays cool, the battery full). */
     var chargingOnly: Boolean
@@ -68,6 +82,19 @@ object TorrentSettings {
         set(v) = sp.edit { putBoolean(NIGHT_ONLY, v) }
 
     fun isNight(): Boolean = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY) in NIGHT_FROM until NIGHT_TO
+
+    /** 3.0: when the next night starts (1 am, wall clock), for the alarm that starts waiting torrents. */
+    fun nextNight(now: Long): Long {
+        val c = java.util.Calendar.getInstance().apply {
+            timeInMillis = now
+            set(java.util.Calendar.HOUR_OF_DAY, NIGHT_FROM)
+            set(java.util.Calendar.MINUTE, 0)
+            set(java.util.Calendar.SECOND, 5)
+            set(java.util.Calendar.MILLISECOND, 0)
+        }
+        if (c.timeInMillis <= now) c.add(java.util.Calendar.DAY_OF_YEAR, 1)
+        return c.timeInMillis
+    }
 
     fun speedLabel(kb: Int): String = when {
         kb <= 0 -> "No limit"

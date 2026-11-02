@@ -120,7 +120,13 @@ class PlaybackService : Service() {
             // Paused: the notification stays (to go on), but Android may close the app again.
             ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_DETACH)
             foreground = false
-            NotificationManagerCompat.from(this).notify(NOTIFICATION_ID, notification(look))
+            // 3.0: Android 13 and later ask before showing notifications.
+            try {
+                val nm = NotificationManagerCompat.from(this)
+                if (nm.areNotificationsEnabled()) nm.notify(NOTIFICATION_ID, notification(look))
+            } catch (e: SecurityException) {
+                L.w("Playback notification not allowed", e)
+            }
             shownLook = look
         }
         updateLocks()
@@ -216,29 +222,58 @@ class PlaybackService : Service() {
      */
     private fun updateLocks() = holdLocks(session != null && Playback.tab?.playing == true && !onScreen)
 
+    /** 3.0: when the wake lock was last taken (it has a time limit, renewed while the page plays). */
+    private var renewedAt = 0L
+    private val handler = android.os.Handler(android.os.Looper.getMainLooper())
+
+    /** 3.0: pages don't report while they just play on: the lock is taken again every few minutes. */
+    private val renew = Runnable {
+        // Taken again (and this posted again) while it is still wanted.
+        if (wakeLock != null) updateLocks()
+    }
+
     @Suppress("DEPRECATION")
     private fun holdLocks(on: Boolean) {
-        try {
-            if (on) {
-                if (wakeLock == null) {
-                    val pm = getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
-                    wakeLock = pm.newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "swift:playback").apply {
-                        setReferenceCounted(false)
-                        acquire()
-                    }
-                }
-                if (wifiLock == null) {
-                    val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
-                    wifiLock = wm.createWifiLock(android.net.wifi.WifiManager.WIFI_MODE_FULL_HIGH_PERF, "swift:playback").apply {
-                        setReferenceCounted(false)
-                        acquire()
-                    }
-                }
-            } else {
+        handler.removeCallbacks(renew)
+        if (on) handler.postDelayed(renew, LOCK_RENEW_MS * 4)
+        if (!on) {
+            // 3.0: each let go of on its own: one failing never keeps the other.
+            try {
                 wakeLock?.let { if (it.isHeld) it.release() }
+            } catch (e: Exception) {
+                L.w("Playback wake lock", e)
+            } finally {
                 wakeLock = null
+            }
+            try {
                 wifiLock?.let { if (it.isHeld) it.release() }
+            } catch (e: Exception) {
+                L.w("Playback Wi-Fi lock", e)
+            } finally {
                 wifiLock = null
+            }
+            return
+        }
+        try {
+            val now = SystemClock.uptimeMillis()
+            val lock = wakeLock ?: (getSystemService(Context.POWER_SERVICE) as android.os.PowerManager)
+                .newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "swift:playback").apply { setReferenceCounted(false) }
+                .also {
+                    wakeLock = it
+                    renewedAt = 0L
+                }
+            // 3.0: with a time limit (it goes by itself if Swift is stopped), taken again while playing:
+            // when the page reports, and every few minutes ([renew]).
+            if (!lock.isHeld || now - renewedAt > LOCK_RENEW_MS) {
+                lock.acquire(LOCK_MS)
+                renewedAt = now
+            }
+            if (wifiLock == null) {
+                val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
+                wifiLock = wm.createWifiLock(android.net.wifi.WifiManager.WIFI_MODE_FULL_HIGH_PERF, "swift:playback").apply {
+                    setReferenceCounted(false)
+                    acquire()
+                }
             }
         } catch (e: Exception) {
             L.w("Playback locks", e)
@@ -263,6 +298,7 @@ class PlaybackService : Service() {
 
     override fun onDestroy() {
         if (running === this) running = null
+        handler.removeCallbacks(renew)
         holdLocks(false)
         setNoisyWatch(false)
         session?.release()
@@ -327,6 +363,8 @@ class PlaybackService : Service() {
     companion object {
         private const val CHANNEL = "playback"
         private const val NOTIFICATION_ID = 4100
+        private const val LOCK_MS = 10 * 60_000L
+        private const val LOCK_RENEW_MS = 60_000L
         private const val ACTION_SYNC = "sync"
         private const val ACTION_PLAY = "play"
         private const val ACTION_PAUSE = "pause"

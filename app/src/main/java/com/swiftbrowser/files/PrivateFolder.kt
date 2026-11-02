@@ -12,11 +12,7 @@ import com.swiftbrowser.core.UrlUtils
 import org.json.JSONObject
 import java.io.File
 import java.io.FileInputStream
-import java.io.FileOutputStream
-import java.security.MessageDigest
 import java.security.SecureRandom
-import javax.crypto.SecretKeyFactory
-import javax.crypto.spec.PBEKeySpec
 
 /**
  * Private (2.9): files moved into Swift's own storage (its files folder, "private"), where no other
@@ -25,12 +21,26 @@ import javax.crypto.spec.PBEKeySpec
  * is left, or after a minute out of sight (a file opened from it, Android's own lock question).
  * The files aren't encrypted: they are as safe as Swift's own data, and they go when Swift is
  * uninstalled or its data cleared, which the screen says.
+ *
+ * 3.0: once Private has a PIN, it keeps it: a screen lock added to the phone later no longer opens
+ * Private nor removes the PIN (phones that had a screen lock when Private was first set up go on using
+ * it, with no PIN). A forgotten PIN can be reset after a day's wait ("Forgot PIN"), with a new one or
+ * the screen lock; opening Private with the right PIN meanwhile shows that a reset was asked for. Wrong
+ * PINs wait longer and longer (PinWait), and the PIN is kept with a slower hash (PinHash).
  */
 object PrivateFolder {
     private const val DIR = "private"
     private const val PREF_PIN = "files_private_pin"
     private const val PREF_TRIES = "files_private_tries"
-    private const val PREF_WAIT = "files_private_wait_until"
+
+    /** 2.9's wait (a time on the clock, which could be put forward): no longer used. */
+    private const val PREF_WAIT_OLD = "files_private_wait_until"
+
+    /** 3.0: the wait after wrong PINs (a Wait). */
+    private const val PREF_WAIT = "files_private_wait"
+
+    /** 3.0: a PIN reset asked for: when (on the clock), then its Wait ("<time>|<wait>"). */
+    private const val PREF_RESET = "files_private_reset"
     private const val PREF_ORIGINS = "files_private_origins"
 
     /** The first time Private opens, what it is is explained once. */
@@ -38,12 +48,6 @@ object PrivateFolder {
 
     /** Out of sight this long (a file opened from Private, another app), Private locks. */
     private const val AWAY_MS = 60_000L
-
-    /** Wrong PINs in a row before a wait, and the wait. */
-    private const val TRIES = 5
-    private const val WAIT_MS = 30_000L
-
-    private const val ITERATIONS = 4000
 
     private val sp get() = SwiftApp.prefs.sp
     private val worker = Background.single("private-folder")
@@ -80,6 +84,8 @@ object PrivateFolder {
         open = false
         awaySince = 0L
         FileThumbs.trim()
+        // 3.0: a document from Private open in the viewer closes too, and can't be opened again by its id.
+        com.swiftbrowser.docs.Docs.forgetPrivate()
     }
 
     /** Files went out of sight while Private stays open for a minute (a file opened from it). */
@@ -93,65 +99,115 @@ object PrivateFolder {
         awaySince = 0L
     }
 
-    // ------------------------------------------------------------------ the PIN (phones without a screen lock)
+    // ------------------------------------------------------------------ the PIN
 
     fun hasPin(): Boolean = !sp.getString(PREF_PIN, null).isNullOrEmpty()
 
     /** A PIN is 4 to 8 digits. */
     fun validPin(pin: String) = pin.length in 4..8 && pin.all { it in '0'..'9' }
 
-    /** Keeps [pin] as a salted hash; [done] on the main thread. */
+    /** Keeps [pin] as a salted hash (a reset asked for is over then); [done] on the main thread. */
     fun setPin(pin: String, done: () -> Unit) {
         worker.execute {
             val salt = ByteArray(16).also { SecureRandom().nextBytes(it) }
-            val hash = hash(pin, salt)
-            sp.edit().putString(PREF_PIN, "1:" + hex(salt) + ":" + hex(hash)).putInt(PREF_TRIES, 0).remove(PREF_WAIT).apply()
+            sp.edit().putString(PREF_PIN, PinHash.make(pin, salt)).putInt(PREF_TRIES, 0)
+                .remove(PREF_WAIT).remove(PREF_WAIT_OLD).remove(PREF_RESET).apply()
             main.post(done)
         }
     }
 
-    /** The PIN is no longer needed (the phone has a screen lock now, which opens Private instead). */
+    /** 3.0: Private opens with the phone's screen lock from now on (a forgotten PIN reset that way). */
     fun clearPin() {
-        sp.edit().remove(PREF_PIN).putInt(PREF_TRIES, 0).remove(PREF_WAIT).apply()
+        sp.edit().remove(PREF_PIN).putInt(PREF_TRIES, 0).remove(PREF_WAIT).remove(PREF_WAIT_OLD).remove(PREF_RESET).apply()
+    }
+
+    /** Now, as the phone tells it (which start of the phone, the time since, the clock). */
+    private fun now(): Moment {
+        val boot = try {
+            SwiftApp.instance?.contentResolver?.let { android.provider.Settings.Global.getInt(it, android.provider.Settings.Global.BOOT_COUNT, -1) } ?: -1
+        } catch (_: Exception) {
+            -1
+        }
+        return Moment(boot, SystemClock.elapsedRealtime(), System.currentTimeMillis())
+    }
+
+    /** [key]'s wait as it stands now (kept so), or null when it is over. */
+    private fun waitNow(key: String, prefix: String = ""): Wait? {
+        val raw = sp.getString(key, null) ?: return null
+        val w = Wait.decode(raw.removePrefix(prefix)) ?: return null
+        val now = now()
+        val rolled = w.at(now)
+        sp.edit().putString(key, prefix + rolled.encode()).apply()
+        return rolled
     }
 
     /** How long before another PIN may be tried (0: now). */
-    fun waitLeft(): Long = (sp.getLong(PREF_WAIT, 0L) - System.currentTimeMillis()).coerceIn(0L, WAIT_MS)
+    fun waitLeft(): Long {
+        val left = waitNow(PREF_WAIT)?.left ?: 0L
+        if (left == 0L && sp.contains(PREF_WAIT)) sp.edit().remove(PREF_WAIT).apply()
+        return left
+    }
+
+    /** 3.0: how many wrong PINs there have been since the right one was last typed. */
+    val wrongTries: Int get() = sp.getInt(PREF_TRIES, 0)
 
     /**
      * Checks [pin] off the main thread (the hash takes a moment, on purpose); [done] on the main
-     * thread. After [TRIES] wrong ones in a row the next has to wait half a minute.
+     * thread. 3.0: after [PinWait.FREE_TRIES] wrong ones, each one more brings a longer wait, and
+     * none is even tried while one lasts. A PIN kept the 2.9 way is kept the new way once right.
      */
     fun checkPin(pin: String, done: (Boolean) -> Unit) {
         worker.execute {
-            val stored = sp.getString(PREF_PIN, null).orEmpty().split(':')
-            val ok = stored.size == 3 && stored[0] == "1" && runCatching {
-                MessageDigest.isEqual(hash(pin, unhex(stored[1])), unhex(stored[2]))
-            }.getOrDefault(false)
+            val stored = sp.getString(PREF_PIN, null)
+            val waiting = waitLeft() > 0
+            val ok = !waiting && PinHash.matches(pin, stored)
             if (ok) {
-                sp.edit().putInt(PREF_TRIES, 0).remove(PREF_WAIT).apply()
-            } else {
-                val tries = sp.getInt(PREF_TRIES, 0) + 1
-                val e = sp.edit().putInt(PREF_TRIES, if (tries >= TRIES) 0 else tries)
-                if (tries >= TRIES) e.putLong(PREF_WAIT, System.currentTimeMillis() + WAIT_MS)
+                val e = sp.edit().putInt(PREF_TRIES, 0).remove(PREF_WAIT).remove(PREF_WAIT_OLD)
+                if (PinHash.outdated(stored)) {
+                    e.putString(PREF_PIN, PinHash.make(pin, ByteArray(16).also { SecureRandom().nextBytes(it) }))
+                    L.d("Private: the PIN is kept the 3.0 way now")
+                }
                 e.apply()
+            } else if (!waiting) {
+                val tries = sp.getInt(PREF_TRIES, 0) + 1
+                val wait = PinWait.after(tries)
+                val e = sp.edit().putInt(PREF_TRIES, tries)
+                if (wait > 0) e.putString(PREF_WAIT, Wait(wait, now()).encode())
+                e.apply()
+                if (wait > 0) L.w("Private: $tries wrong PINs, a wait of ${wait / 1000} s")
             }
             main.post { done(ok) }
         }
     }
 
-    private fun hash(pin: String, salt: ByteArray): ByteArray {
-        val spec = PBEKeySpec(pin.toCharArray(), salt, ITERATIONS, 256)
-        return try {
-            SecretKeyFactory.getInstance("PBKDF2WithHmacSHA1").generateSecret(spec).encoded
-        } finally {
-            spec.clearPassword()
-        }
+    // ------------------------------------------------------------------ a forgotten PIN (3.0)
+
+    /** When a PIN reset was asked for (on the clock), or null when none was. */
+    fun resetAskedAt(): Long? = sp.getString(PREF_RESET, null)?.substringBefore('|')?.toLongOrNull()
+
+    /** How long before the PIN can be reset (0: it can be now), or null when no reset was asked for. */
+    fun resetLeft(): Long? {
+        val asked = resetAskedAt() ?: return null
+        waitNow(PREF_RESET, "$asked|")?.let { return it.left }
+        // Its wait can't be read (never by Swift's own writing): a whole day from now, never none.
+        val now = now()
+        sp.edit().putString(PREF_RESET, "$asked|" + Wait(PinWait.RESET_MS, now).encode()).apply()
+        return PinWait.RESET_MS
     }
 
-    private fun hex(b: ByteArray) = b.joinToString("") { String.format(java.util.Locale.ROOT, "%02x", it.toInt() and 0xFF) }
+    /** "Forgot PIN": the PIN can be reset once a day has passed (the PIN still opens Private meanwhile). */
+    fun askReset() {
+        if (resetAskedAt() != null) return
+        val now = now()
+        sp.edit().putString(PREF_RESET, "${now.wall}|" + Wait(PinWait.RESET_MS, now).encode()).apply()
+        L.d("Private: a PIN reset was asked for")
+    }
 
-    private fun unhex(s: String) = ByteArray(s.length / 2) { i -> s.substring(i * 2, i * 2 + 2).toInt(16).toByte() }
+    /** The reset asked for is called off (the right PIN was typed meanwhile). */
+    fun cancelReset() {
+        if (sp.contains(PREF_RESET)) L.d("Private: the PIN reset was called off")
+        sp.edit().remove(PREF_RESET).apply()
+    }
 
     // ------------------------------------------------------------------ where things came from
 
@@ -197,66 +253,94 @@ object PrivateFolder {
      * Moves [files] into Private's top folder (a copy, then the original goes: Swift's storage is
      * another place than the shared one), a free name for each ("photo (1).jpg"). The originals
      * leave the media index, and where each came from is remembered for "Move out".
+     *
+     * 3.0: an original leaves its folder file by file, once all of it is in Private; a file that came
+     * into its folder meanwhile (a download finishing) stays there with the folder. One that can't
+     * leave (the card refused) stays where it was and its copy in Private goes again (only when the
+     * original is there whole), so each file is in one place: Private's copy of what did leave is
+     * never deleted. Where each came from is kept as soon as it is in.
      */
     fun moveIn(w: FileJobs.Work, files: List<File>) {
         val ctx = w.ctx
         val root = root(ctx)
         if (!root.isDirectory && !root.mkdirs()) throw FileProblem("Swift couldn't make its Private folder.")
+        w.destination(root)
         w.counting()
         val totals = FileOps.measure(files, { w.job.cancelled })
         w.check()
         w.totals(totals.files, totals.bytes)
         val free = runCatching { StatFs(root.path).availableBytes }.getOrDefault(Long.MAX_VALUE)
         // Some room is left for Swift itself to run.
-        val margin = 50L * 1_048_576
+        val margin = FileJobs.MARGIN
         if (totals.bytes > free - margin) {
             throw FileProblem("There isn't enough free space: this needs ${UrlUtils.formatBytes(totals.bytes)}, and ${UrlUtils.formatBytes((free - margin).coerceAtLeast(0))} is free.")
         }
         var done = 0
         var kept = 0
-        val origins = HashMap<String, String>()
+        var stayed = 0
         for (src in files) {
             w.check()
             if (isInside(ctx, src)) continue
             val access = Volumes.accessFor(ctx, src) ?: throw FileProblem(Transfers.CARD_TEXT)
             val target = FileOps.freeName(File(root, src.name))
             w.touched(src.parentFile)
-            var copied = false
+            val copied = Originals()
+            var whole = false
             try {
-                copyIn(w, src, target)
-                copied = true
+                copyIn(w, src, target, copied)
+                whole = true
             } finally {
-                if (!copied) target.deleteRecursively()
+                // Cut off (Cancel, no room, a file that can't be read): its copy goes; the original wasn't touched.
+                if (!whole) target.deleteRecursively()
             }
-            // Only what was copied whole leaves its folder; one that can't leave stays where it was, uncopied.
-            if (!runCatching { access.delete(src) }.getOrDefault(false) && src.exists()) {
-                target.deleteRecursively()
+            val left = copied.remove(access)
+            // The ones that couldn't leave: their copies go from Private again, so each file is in one place.
+            for (orig in left.stayed) {
+                val copy = copied.copyOf[orig] ?: continue
+                if (orig.isFile && copy.isFile && orig.length() == copy.length()) copy.delete()
+            }
+            for (orig in copied.folders) {
+                val copy = copied.copyOf[orig] ?: continue
+                if (orig.exists() && copy.list()?.isEmpty() == true) copy.delete()
+            }
+            FileOps.forgetPaths(ctx, left.gone.map { it.path })
+            stayed += left.stayed.size
+            if (!target.exists()) {
                 kept++
                 continue
             }
-            FileOps.forget(ctx, src)
-            src.parentFile?.let { origins[target.name] = it.path }
+            // 3.0: kept at once, for "Move out" (a job cut off later doesn't lose it).
+            src.parentFile?.let { rememberOrigins(mapOf(target.name to it.path)) }
             done++
         }
-        rememberOrigins(origins)
         w.result(root)
-        L.d("Moved into Private: $done, $kept couldn't leave their folders")
+        L.d("Moved into Private: $done, $kept couldn't leave their folders, $stayed files stayed")
         if (done == 0) throw FileProblem("Nothing was moved: Android didn't let Swift take them from their folder.")
         w.message("Moved " + (if (files.size == 1 && done == 1) "“${files[0].name}”" else FileJobs.items(done)) + " to Private" +
-            if (kept > 0) ". $kept couldn't leave their folder." else "")
+            when {
+                kept > 0 -> ". $kept couldn't leave their folder."
+                stayed > 0 -> ". " + (if (stayed == 1) "1 file" else "$stayed files") + " couldn't leave " + (if (stayed == 1) "its" else "their") + " folder and stayed there."
+                else -> ""
+            })
     }
 
-    private fun copyIn(w: FileJobs.Work, src: File, target: File) {
+    private fun copyIn(w: FileJobs.Work, src: File, target: File, copied: Originals) {
         w.check()
         if (src.isDirectory) {
+            // 3.0: a folder that can't be read (a failing card) stops the move, rather than counting as empty.
+            val children = src.listFiles() ?: throw FileProblem("Swift couldn't read the folder “${src.name}”. The memory card may be failing.")
             if (!target.mkdir() && !target.isDirectory) throw FileProblem("Swift couldn't make a folder in Private.")
-            for (c in src.listFiles().orEmpty()) copyIn(w, c, File(target, c.name))
+            for (c in children) copyIn(w, c, File(target, c.name), copied)
             target.setLastModified(src.lastModified())
+            copied.folder(src, target)
             return
         }
         w.current(src.name)
-        FileInputStream(src).use { input -> FileOutputStream(target).use { out -> w.copyCountingInput(input, out) } }
-        target.setLastModified(src.lastModified())
+        val length = src.length()
+        val time = src.lastModified()
+        // 3.0: written under a hidden name until it is whole, as every copy.
+        w.write(target, PlainAccess, time) { out -> FileInputStream(src).use { input -> w.copy(input, out) } }
         w.fileDone()
+        copied.file(src, target, length, time)
     }
 }

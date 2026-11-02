@@ -235,13 +235,50 @@ window.addEventListener('pagehide', () => {
 // ---------------------------------------------------------------- where you stopped reading
 
 // Each article opens where it was left, as a share of its length (the text size may have changed).
+// 3.0: kept in the extension's storage with when it was read, which clearing browsing data clears
+// (the page's own storage it didn't); a place kept the old way moves over the first time it is read.
 let articleKey = null;
 let saveTimer = 0;
 
-function restorePlace(url, title) {
+// An incognito tab's page keeps its places as before, in its own storage that goes with the tab.
+const incognito = !!(browser.extension && browser.extension.inIncognitoContext);
+
+/** [share] of [key]'s article read; null: read to the end (it opens at the top next time). */
+function keepPlace(key, share) {
+  if (incognito) {
+    try {
+      if (share == null) { localStorage.removeItem(key); } else { localStorage.setItem(key, share.toFixed(4)); }
+    } catch (e) { }
+    return;
+  }
+  (share == null ? browser.storage.local.remove(key)
+    : browser.storage.local.set({ [key]: { share: Number(share.toFixed(4)), at: Date.now() } })).catch(() => { });
+}
+
+async function keptPlace(key) {
+  if (incognito) {
+    try { return Number(localStorage.getItem(key)) || 0; } catch (e) { return 0; }
+  }
+  try {
+    const r = await browser.storage.local.get(key);
+    const kept = r && r[key];
+    if (kept && typeof kept.share === 'number') { return kept.share; }
+  } catch (e) { }
+  try {
+    const old = Number(localStorage.getItem(key));
+    localStorage.removeItem(key);
+    if (old > 0) {
+      browser.storage.local.set({ [key]: { share: old, at: Date.now() } }).catch(() => { });
+      return old;
+    }
+  } catch (e) { }
+  return 0;
+}
+
+async function restorePlace(url, title) {
   articleKey = url ? 'place:' + url.split('#')[0] : null;
   if (!articleKey) { return; }
-  const share = Number(localStorage.getItem(articleKey));
+  const share = await keptPlace(articleKey);
   if (share > 0.02) {
     requestAnimationFrame(() => window.scrollTo(0, share * document.documentElement.scrollHeight));
   }
@@ -250,12 +287,10 @@ function restorePlace(url, title) {
     saveTimer = setTimeout(() => {
       const h = document.documentElement.scrollHeight;
       const share = h > 0 ? window.scrollY / h : 0;
-      try {
-        // Near the end counts as read: next time it opens at the top.
-        if (window.scrollY + window.innerHeight >= h - 40) { localStorage.removeItem(articleKey); } else { localStorage.setItem(articleKey, share.toFixed(4)); }
-      } catch (e) { }
-      // Swift lists articles left half-way on its home page (2.3).
+      // Near the end counts as read: next time it opens at the top.
       const done = window.scrollY + window.innerHeight >= h - 40;
+      keepPlace(articleKey, done ? null : share);
+      // Swift lists articles left half-way on its home page (2.3).
       const picture = document.querySelector('#content img');
       const img = picture && /^https?:/.test(picture.src) && picture.src.length < 2000 ? picture.src : '';
       send({ type: 'reader-place', url: url.split('#')[0], title: title || '', share: done ? 1 : (h > 0 ? (window.scrollY + window.innerHeight) / h : 0), done, img });

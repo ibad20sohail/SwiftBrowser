@@ -38,17 +38,23 @@ class NewsSection(context: Context, private val listener: Listener) : LinearLayo
     }
 
     private companion object {
-        const val PAGE = 15
+        /**
+         * Rows made when the stories show, then how many more each time the end comes near (3.0: 15
+         * and 15; the home page measures everything in it again whenever rows are added).
+         */
+        const val FIRST = 5
+        const val PAGE = 10
         const val PICTURE_DP = 76
 
-        /** A card's picture is decoded to about this many dp on its short side (sharp, still light). */
+        /** A card's picture is decoded to this many dp high, and 16:9 wide (sharp, still light). */
         const val CARD_PICTURE_DP = 180
 
         /** Sites whose icon was asked for in this run (a site without one isn't asked again). */
         val askedIcons = HashSet<String>()
     }
 
-    private var topic = "top"
+    /** 3.0: kept in the settings, so it stays when the screen is made again (dark mode, colours). */
+    private var topic = com.swiftbrowser.SwiftApp.prefs.newsTopic
     private var stories: List<Story> = emptyList()
     private var shown = 0
     private val chips = ChipGroup(context)
@@ -64,11 +70,14 @@ class NewsSection(context: Context, private val listener: Listener) : LinearLayo
     private var refreshing = false
     private val pictureSize = Ui.dp(context, PICTURE_DP)
     private val cardPictureSize = Ui.dp(context, CARD_PICTURE_DP)
+    private val cardPictureWidth = cardPictureSize * 16 / 9
 
     /** The look the rows were made in (Settings can change it while the home page is away). */
     private var builtCards = com.swiftbrowser.SwiftApp.prefs.newsCards
 
+    /** The box a picture is decoded for: a row's square, or a card's 16:9 band (3.0). */
     private fun pictureSize() = if (builtCards) cardPictureSize else pictureSize
+    private fun pictureWidth() = if (builtCards) cardPictureWidth else pictureSize
 
     private val iconListener: (String) -> Unit = { key ->
         for (i in 0 until body.childCount) {
@@ -138,15 +147,19 @@ class NewsSection(context: Context, private val listener: Listener) : LinearLayo
         if (signature == chipsFor) return
         chipsFor = signature
         chips.removeAllViews()
+        // 3.0: the chosen topic filled with the accent and ticked; its soft accent of before was hardly
+        // told from the others in the light look.
         val states = arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf())
-        val bg = ColorStateList(states, intArrayOf(Ui.accentContainer(context), Ui.color(context, R.color.surface_alt)))
-        val fg = ColorStateList(states, intArrayOf(Ui.onAccentContainer(context), Ui.text(context)))
+        val bg = ColorStateList(states, intArrayOf(Ui.accent(context), Ui.color(context, R.color.surface_alt)))
+        val fg = ColorStateList(states, intArrayOf(Ui.onAccent(context), Ui.text(context)))
         for (t in topics) {
             chips.addView(Chip(context).apply {
                 id = View.generateViewId()
                 text = if (t.key == "nation") News.countryName() else t.label
                 isCheckable = true
-                isCheckedIconVisible = false
+                isCheckedIconVisible = true
+                checkedIcon = androidx.core.content.ContextCompat.getDrawable(context, R.drawable.ic_check)
+                checkedIconTint = fg
                 chipBackgroundColor = bg
                 setTextColor(fg)
                 chipStrokeWidth = 0f
@@ -155,6 +168,7 @@ class NewsSection(context: Context, private val listener: Listener) : LinearLayo
                     if (!isChecked) isChecked = true
                     if (topic != t.key) {
                         topic = t.key
+                        com.swiftbrowser.SwiftApp.prefs.newsTopic = t.key
                         load(switched = true)
                     }
                 }
@@ -170,19 +184,38 @@ class NewsSection(context: Context, private val listener: Listener) : LinearLayo
 
     /** [switched]: another topic was chosen, so its stories come in with a short fade (2.3). */
     private fun load(switched: Boolean = false) {
-        val kept = News.cached(context, topic)
+        val kept = News.cached(topic)
         if (kept != null) {
-            // Opening the home page again doesn't rebuild the same rows.
-            if (kept != stories || body.childCount == 0 || builtCards != com.swiftbrowser.SwiftApp.prefs.newsCards) setStories(kept, animate = switched)
-            if (News.stale(topic)) refresh(force = false)
-        } else {
-            stories = emptyList()
-            body.removeAllViews()
-        lastScan = Int.MIN_VALUE
-            message.visibility = View.GONE
-            skeleton.visibility = View.VISIBLE
-            refresh(force = false)
+            showKept(kept, switched)
+            return
         }
+        // 3.0: the stories kept on the phone are read on the news thread; grey shapes meanwhile
+        // (the stories already shown stay, unless another topic was chosen).
+        if (switched || stories.isEmpty()) showSkeleton()
+        val asked = topic
+        News.loadKept(context, asked) { list ->
+            if (asked != topic) return@loadKept
+            if (list != null) {
+                showKept(list, switched)
+            } else {
+                showSkeleton()
+                refresh(force = false)
+            }
+        }
+    }
+
+    private fun showKept(kept: List<Story>, switched: Boolean) {
+        // Opening the home page again doesn't rebuild the same rows.
+        if (kept != stories || body.childCount == 0 || builtCards != com.swiftbrowser.SwiftApp.prefs.newsCards) setStories(kept, animate = switched)
+        if (News.stale(topic)) refresh(force = false)
+    }
+
+    private fun showSkeleton() {
+        stories = emptyList()
+        body.removeAllViews()
+        lastScan = Int.MIN_VALUE
+        message.visibility = View.GONE
+        skeleton.visibility = View.VISIBLE
     }
 
     /** Fetches the topic's stories again ([force]: also when they are fresh: pull or the refresh button). */
@@ -239,7 +272,7 @@ class NewsSection(context: Context, private val listener: Listener) : LinearLayo
     private fun build(s: Story): View = if (builtCards) card(s) else row(s)
 
     private fun showMore() {
-        val end = (shown + PAGE).coerceAtMost(stories.size)
+        val end = (shown + if (shown == 0) FIRST else PAGE).coerceAtMost(stories.size)
         val prebuilt = if (readyFrom == shown) ready.toList() else emptyList()
         ready.clear()
         readyFrom = -1
@@ -254,7 +287,7 @@ class NewsSection(context: Context, private val listener: Listener) : LinearLayo
 
     /**
      * The next rows, built ahead one at a time while the phone has nothing else to do (2.6), so
-     * reaching the end of the news doesn't stop the scroll to build 15 of them at once.
+     * reaching the end of the news doesn't stop the scroll to build them all at once.
      */
     private val ready = ArrayList<View>()
     private var readyFrom = -1
@@ -323,7 +356,7 @@ class NewsSection(context: Context, private val listener: Listener) : LinearLayo
             val pending = row.getTag(R.id.row_action) as? String ?: continue
             row.setTag(R.id.row_action, null)
             val picture = row.findViewById<ImageView>(R.id.row_icon)
-            PreviewLoader.load(context as Activity, pending, pictureSize()) { bmp ->
+            PreviewLoader.load(context as Activity, pending, pictureSize(), pictureWidth()) { bmp ->
                 picture.setImageBitmap(bmp)
                 picture.alpha = 0f
                 picture.animate().alpha(1f).setDuration(Motion.NORMAL).start()
@@ -353,7 +386,7 @@ class NewsSection(context: Context, private val listener: Listener) : LinearLayo
             orientation = HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        meta.addView(ImageView(ctx).apply {
+        meta.addView(FixedImage(ctx).apply {
             id = R.id.tile_icon
             setImageDrawable(Ui.icon(ctx, R.drawable.ic_globe, Ui.textSecondary(ctx)))
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
@@ -364,7 +397,7 @@ class NewsSection(context: Context, private val listener: Listener) : LinearLayo
         texts.addView(Ui.text(ctx, Ui.Type.SUBTITLE, s.title, lines = 3).apply { setPadding(0, Ui.dp(ctx, 6), 0, 0) })
         row.addView(texts, LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         if (s.image != null && !DataSaver.active) {
-            val picture = ImageView(ctx).apply {
+            val picture = FixedImage(ctx).apply {
                 id = R.id.row_icon
                 scaleType = ImageView.ScaleType.CENTER_CROP
                 background = Ui.shape(ctx, Ui.color(ctx, R.color.skeleton), Ui.R_SMALL)
@@ -410,7 +443,7 @@ class NewsSection(context: Context, private val listener: Listener) : LinearLayo
                 importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
             }
             card.addView(picture, LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-            val kept = PreviewLoader.cached(s.image, cardPictureSize)
+            val kept = PreviewLoader.cached(s.image, cardPictureSize, cardPictureWidth)
             if (kept != null) picture.setImageBitmap(kept) else card.setTag(R.id.row_action, s.image)
             card.setTag(R.id.row_image, s.image)
         }
@@ -422,7 +455,7 @@ class NewsSection(context: Context, private val listener: Listener) : LinearLayo
             orientation = HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        meta.addView(ImageView(ctx).apply {
+        meta.addView(FixedImage(ctx).apply {
             id = R.id.tile_icon
             setImageDrawable(Ui.icon(ctx, R.drawable.ic_globe, Ui.textSecondary(ctx)))
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
@@ -436,8 +469,30 @@ class NewsSection(context: Context, private val listener: Listener) : LinearLayo
         return card
     }
 
+    /**
+     * A picture or icon whose size never depends on what it shows (3.0): a picture arriving only
+     * redraws it. Before, each one (an icon, then a picture, in every row) had the whole home page,
+     * hundreds of views with the news, measured again.
+     */
+    private open class FixedImage(ctx: Context) : ImageView(ctx) {
+        private var settingImage = false
+
+        override fun setImageDrawable(drawable: android.graphics.drawable.Drawable?) {
+            settingImage = true
+            try {
+                super.setImageDrawable(drawable)
+            } finally {
+                settingImage = false
+            }
+        }
+
+        override fun requestLayout() {
+            if (!settingImage) super.requestLayout()
+        }
+    }
+
     /** A picture as wide as its card and 16:9 high. */
-    private class WidePicture(ctx: Context) : ImageView(ctx) {
+    private class WidePicture(ctx: Context) : FixedImage(ctx) {
         override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
             val w = MeasureSpec.getSize(widthMeasureSpec)
             setMeasuredDimension(w, w * 9 / 16)

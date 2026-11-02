@@ -3,7 +3,6 @@ package com.swiftbrowser.ui
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
-import android.media.ExifInterface
 import android.net.Uri
 import android.text.format.DateUtils
 import android.view.Gravity
@@ -11,6 +10,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.ImageView
 import android.widget.LinearLayout
+import androidx.exifinterface.media.ExifInterface
 import com.google.android.material.button.MaterialButton
 import com.swiftbrowser.R
 import com.swiftbrowser.core.UrlUtils
@@ -52,8 +52,9 @@ object PictureInfo {
             make == null || model.startsWith(make, ignoreCase = true) -> model
             else -> "$make $model"
         }
-        val latLong = FloatArray(2)
-        val located = exif?.getLatLong(latLong) == true && !(latLong[0] == 0f && latLong[1] == 0f)
+        // 3.0: AndroidX's reader gives the place as two doubles (or nothing).
+        val latLong = exif?.latLong
+        val located = latLong != null && latLong.size >= 2 && !(latLong[0] == 0.0 && latLong[1] == 0.0)
         return Details(
             name = name,
             folder = src.file?.parent,
@@ -64,8 +65,8 @@ object PictureInfo {
             taken = takenAt > 0,
             camera = camera,
             settings = exif?.let { settings(it) },
-            latitude = if (located) latLong[0].toDouble() else null,
-            longitude = if (located) latLong[1].toDouble() else null,
+            latitude = if (located) latLong?.get(0) else null,
+            longitude = if (located) latLong?.get(1) else null,
         )
     }
 

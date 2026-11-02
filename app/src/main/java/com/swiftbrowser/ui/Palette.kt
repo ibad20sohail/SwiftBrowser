@@ -57,6 +57,12 @@ object Palette {
     /** The colours that follow the accent. */
     private val ACCENT_ROLES = intArrayOf(R.color.accent, R.color.on_accent, R.color.accent_container, R.color.on_accent_container, R.color.toggle_selected)
 
+    /**
+     * 3.0: text colours worked out for the background, so grey text stays readable on your own
+     * (its stock value is used for nothing else, so text in it can be recoloured safely).
+     */
+    private val TEXT_ROLES = intArrayOf(R.color.text_secondary)
+
     /** The colours that follow the background. */
     private val BACKGROUND_ROLES = intArrayOf(
         R.color.page_bg, R.color.home_bg, R.color.toolbar_bg, R.color.sheet_bg, R.color.card_bg, R.color.tab_card_bg,
@@ -72,7 +78,10 @@ object Palette {
     private val lightSwap = HashMap<Int, Int>()
     private val darkSwap = HashMap<Int, Int>()
 
-    /** The same for the accent only: text and icons are never swapped for a background colour (white text isn't a white page). */
+    /**
+     * The same for the accent (and, 3.0, grey text) only: text and icons are never swapped for a
+     * background colour (white text isn't a white page).
+     */
     private val lightAccentSwap = HashMap<Int, Int>()
     private val darkAccentSwap = HashMap<Int, Int>()
 
@@ -98,8 +107,11 @@ object Palette {
     /** A colour for one mode, whatever [ctx]'s mode is (previews of both modes side by side). */
     fun colorFor(ctx: Context, night: Boolean, res: Int): Int {
         ensure(ctx)
-        return (if (night) dark else light)[res] ?: modeContext(ctx, night).getColor(res)
+        return (if (night) dark else light)[res] ?: resourcesFor(ctx, night).getColor(res)
     }
+
+    /** A colour's own value (as in the resources) in one mode, whatever was chosen. */
+    fun stockColor(ctx: Context, night: Boolean, res: Int): Int = resourcesFor(ctx, night).getColor(res)
 
     private fun modeContext(ctx: Context, night: Boolean): Context {
         val config = Configuration(ctx.resources.configuration)
@@ -108,14 +120,24 @@ object Palette {
         return ctx.createConfigurationContext(config)
     }
 
+    // 3.0: the app's resources in light and in dark mode, made once. Colours asked for one mode were
+    // read through a new configuration context each time (20 of them for every finger move in the
+    // colour maker's preview).
+    @Volatile private var dayResources: Context? = null
+    @Volatile private var nightResources: Context? = null
+
+    private fun resourcesFor(ctx: Context, night: Boolean): Context =
+        (if (night) nightResources else dayResources) ?: modeContext(ctx.applicationContext ?: ctx, night).also {
+            if (night) nightResources = it else dayResources = it
+        }
+
     @Synchronized
     private fun ensure(ctx: Context) {
         if (built) return
         built = true
         val prefs = SwiftApp.prefs
-        val app = ctx.applicationContext ?: ctx
-        val day = modeContext(app, false)
-        val night = modeContext(app, true)
+        val day = resourcesFor(ctx, false)
+        val night = resourcesFor(ctx, true)
         light.clear()
         dark.clear()
         lightSwap.clear()
@@ -123,10 +145,13 @@ object Palette {
         lightAccentSwap.clear()
         darkAccentSwap.clear()
         val accent = Accent.of(prefs.accent)
-        fill(light, accentRoles(day, accent, false))
-        fill(dark, accentRoles(night, accent, true))
-        backgroundRoles(false)?.let { fill(light, it) }
-        backgroundRoles(true)?.let { fill(dark, it) }
+        val lightBg = backgroundRoles(day, false)
+        val darkBg = backgroundRoles(night, true)
+        // 3.0: accent text and switches readable on the chosen background (your own colours; presets as made).
+        fill(light, accentRoles(day, accent, false, textBackgrounds(day, lightBg).takeIf { accent == Accent.CUSTOM || prefs.lightBg == CUSTOM }))
+        fill(dark, accentRoles(night, accent, true, textBackgrounds(night, darkBg).takeIf { accent == Accent.CUSTOM || prefs.darkBg == CUSTOM }))
+        lightBg?.let { fill(light, it) }
+        darkBg?.let { fill(dark, it) }
         // What XML layouts and the theme's own colours become.
         for ((map, swap, c) in listOf(Triple(light, lightSwap, day), Triple(dark, darkSwap, night))) {
             val accentSwap = if (swap === lightSwap) lightAccentSwap else darkAccentSwap
@@ -134,7 +159,7 @@ object Palette {
                 val original = c.getColor(res)
                 if (original == value) continue
                 swap[original] = value
-                if (res in ACCENT_ROLES) accentSwap[original] = value
+                if (res in ACCENT_ROLES || res in TEXT_ROLES) accentSwap[original] = value
             }
             // Material's own parts take the theme's accent (the nearest preset for other accents).
             val overlay = accent.nearestPreset
@@ -156,37 +181,58 @@ object Palette {
         map.putAll(values)
     }
 
-    /** The accent's four colours for one mode: the preset's own, or worked out from its seed. */
-    private fun accentRoles(c: Context, accent: Accent, night: Boolean): Map<Int, Int> {
-        val (p, onP, cont, onCont) = accentColors(c, accent, night)
+    /**
+     * The accent's four colours for one mode: the preset's own, or worked out from its seed. [bgs]:
+     * the backgrounds its text has to read on (3.0), or null to leave it as it is.
+     */
+    private fun accentRoles(c: Context, accent: Accent, night: Boolean, bgs: List<Int>?): Map<Int, Int> {
+        val (p, onP, cont, onCont) = accentColors(c, accent, night, bgs)
         return mapOf(
             R.color.accent to p, R.color.on_accent to onP, R.color.accent_container to cont,
             R.color.on_accent_container to onCont, R.color.toggle_selected to cont,
         )
     }
 
-    /** [primary, on primary, container, on container] of [accent] in one mode. */
-    fun accentColors(c: Context, accent: Accent, night: Boolean): List<Int> {
+    /**
+     * [primary, on primary, container, on container] of [accent] in one mode. 3.0: with [bgs], the
+     * primary is deepened (light mode) or lightened (dark mode) until it reads as text on all of them.
+     */
+    fun accentColors(c: Context, accent: Accent, night: Boolean, bgs: List<Int>? = null): List<Int> {
+        val toward = if (night) Color.WHITE else Color.BLACK
         if (accent.primaryRes != 0) {
-            val m = if (isNight(c) == night) c else modeContext(c, night)
-            return listOf(m.getColor(accent.primaryRes), m.getColor(accent.onPrimaryRes), m.getColor(accent.containerRes), m.getColor(accent.onContainerRes))
+            val m = if (isNight(c) == night) c else resourcesFor(c, night)
+            val primary = m.getColor(accent.primaryRes).let { if (bgs != null) Contrast.readable(it, bgs, Contrast.TEXT, toward) else it }
+            return listOf(primary, m.getColor(accent.onPrimaryRes), m.getColor(accent.containerRes), m.getColor(accent.onContainerRes))
         }
         val seed = accent.seedColor
         if (accent == Accent.CUSTOM) {
             // Your own colour stays as you made it (2.5); only nudged when text on it would be hard to read.
-            val (primary, on) = customAccent(seed, night)
+            val (primary, on) = if (bgs != null) customAccent(seed, night, bgs) else customAccent(seed, night)
             return if (night) listOf(primary, on, Tones.tone(seed, 30.0), Tones.tone(seed, 90.0))
             else listOf(primary, on, Tones.tone(seed, 90.0), Tones.tone(seed, 10.0))
         }
+        val primary = Tones.tone(seed, if (night) 80.0 else 40.0).let { if (bgs != null) Contrast.readable(it, bgs, Contrast.TEXT, toward) else it }
         return if (night) {
-            listOf(Tones.tone(seed, 80.0), Tones.tone(seed, 20.0), Tones.tone(seed, 30.0), Tones.tone(seed, 90.0))
+            listOf(primary, Tones.tone(seed, 20.0), Tones.tone(seed, 30.0), Tones.tone(seed, 90.0))
         } else {
-            listOf(Tones.tone(seed, 40.0), Color.WHITE, Tones.tone(seed, 90.0), Tones.tone(seed, 10.0))
+            listOf(primary, Color.WHITE, Tones.tone(seed, 90.0), Tones.tone(seed, 10.0))
         }
     }
 
-    /** The chosen background's colours for one mode, or null for the default (the resources as they are). */
-    private fun backgroundRoles(night: Boolean): Map<Int, Int>? {
+    /**
+     * The colours text sits on in one mode (3.0): the page and the most tinted surface (chips, the
+     * address box), as chosen (or the stock ones). Accent and grey text must read on both.
+     */
+    fun textBackgrounds(ctx: Context, night: Boolean): List<Int> {
+        val c = resourcesFor(ctx, night)
+        return textBackgrounds(c, backgroundRoles(c, night))
+    }
+
+    private fun textBackgrounds(c: Context, roles: Map<Int, Int>?): List<Int> =
+        listOf(roles?.get(R.color.page_bg) ?: c.getColor(R.color.page_bg), roles?.get(R.color.surface_alt) ?: c.getColor(R.color.surface_alt))
+
+    /** The chosen background's colours for one mode ([c] in that mode), or null for the default (the resources as they are). */
+    private fun backgroundRoles(c: Context, night: Boolean): Map<Int, Int>? {
         val prefs = SwiftApp.prefs
         val key = if (night) prefs.darkBg else prefs.lightBg
         val seed = when {
@@ -194,11 +240,14 @@ object Palette {
             night -> darkBackgrounds.firstOrNull { it.key == key }?.takeIf { it != darkBackgrounds[0] }?.seed ?: return null
             else -> lightBackgrounds.firstOrNull { it.key == key }?.takeIf { it != lightBackgrounds[0] }?.seed ?: return null
         }
-        return if (night) darkRoles(seed) else lightRoles(seed)
+        return if (night) darkRoles(seed, c.getColor(R.color.text_secondary)) else lightRoles(seed, c.getColor(R.color.text_secondary))
     }
 
-    /** Light mode from its main colour: pages, bars and cards in it, the rest a little darker. */
-    fun lightRoles(s: Int): Map<Int, Int> {
+    /**
+     * Light mode from its main colour: pages, bars and cards in it, the rest a little darker. 3.0:
+     * and the grey text ([secondary], the stock one) deepened where it would be hard to read on them.
+     */
+    fun lightRoles(s: Int, secondary: Int): Map<Int, Int> {
         val shade = { t: Double -> Tones.mix(s, Color.BLACK, t) }
         return mapOf(
             R.color.page_bg to s, R.color.home_bg to s, R.color.toolbar_bg to s, R.color.sheet_bg to s,
@@ -207,11 +256,15 @@ object Palette {
             R.color.surface_alt to shade(0.062), R.color.home_search_bg to shade(0.062), R.color.tile_bg to shade(0.062),
             R.color.tab_thumb_bg to shade(0.085), R.color.skeleton to shade(0.085),
             R.color.divider to shade(0.095), R.color.outline to shade(0.165),
+            R.color.text_secondary to Contrast.readable(secondary, listOf(s, shade(0.062)), Contrast.TEXT, Color.BLACK),
         )
     }
 
-    /** Dark mode from its main colour (the page behind everything): bars, sheets and cards a little lighter. */
-    fun darkRoles(s: Int): Map<Int, Int> {
+    /**
+     * Dark mode from its main colour (the page behind everything): bars, sheets and cards a little
+     * lighter. 3.0: and the grey text ([secondary]) lightened where it would be hard to read on them.
+     */
+    fun darkRoles(s: Int, secondary: Int): Map<Int, Int> {
         val lift = { t: Double -> Tones.mix(s, Color.WHITE, t) }
         return mapOf(
             R.color.page_bg to s, R.color.home_bg to s,
@@ -221,6 +274,7 @@ object Palette {
             R.color.surface_alt to lift(0.09), R.color.home_search_bg to lift(0.09), R.color.tile_bg to lift(0.09), R.color.ptr_bg to lift(0.09),
             R.color.tab_thumb_bg to lift(0.065), R.color.skeleton to lift(0.065),
             R.color.divider to lift(0.07), R.color.outline to lift(0.14),
+            R.color.text_secondary to Contrast.readable(secondary, listOf(s, lift(0.09)), Contrast.TEXT, Color.WHITE),
         )
     }
 
@@ -228,29 +282,22 @@ object Palette {
     fun limitLight(c: Int): Int {
         var v = c or 0xFF000000.toInt()
         var i = 0
-        while (Color.luminance(v) < 0.6f && i++ < 60) v = Tones.mix(v, Color.WHITE, 0.05)
+        while (Contrast.luminance(v) < 0.6 && i++ < 60) v = Tones.mix(v, Color.WHITE, 0.05)
         return v
     }
 
-    private fun contrast(a: Int, b: Int): Double {
-        val la = Color.luminance(a) + 0.05
-        val lb = Color.luminance(b) + 0.05
-        return if (la > lb) la / lb else lb / la
-    }
-
     /**
-     * Your own accent and the colour of text on it: the colour exactly as made, unless it would
-     * vanish on the page (light mode: darkened just enough; dark mode: lightened just enough).
+     * Your own accent and the colour of text on it: the colour exactly as made, unless it would be
+     * hard to read on the page (light mode: darkened just enough; dark mode: lightened just enough).
+     * 3.0: checked against the background chosen ([bgs]: page and surface) and to 4.5:1, as text
+     * needs; it was 3:1 against the stock page, so accent text could drop to 2:1 on your own colour.
      */
-    fun customAccent(color: Int, night: Boolean): Pair<Int, Int> {
-        var c = color or 0xFF000000.toInt()
-        val page = if (night) 0xFF15171C.toInt() else Color.WHITE
-        var i = 0
-        while (contrast(c, page) < 3.0 && i++ < 40) c = Tones.mix(c, if (night) Color.WHITE else Color.BLACK, 0.05)
-        // Text on it: white in light mode (the 3:1 above is against white, so white reads on it too) and a
-        // deep shade of it in dark mode. Never another fixed colour: Palette.paint swaps colours by
-        // value, and the stock text-on-accent white is also the white of cards (2.5: a light accent
-        // with dark text turned every card black).
+    fun customAccent(color: Int, night: Boolean, bgs: List<Int> = listOf(if (night) 0xFF15171C.toInt() else Color.WHITE)): Pair<Int, Int> {
+        val c = Contrast.readable(color, bgs, Contrast.TEXT, if (night) Color.WHITE else Color.BLACK)
+        // Text on it: white in light mode (it has 4.5:1 against a light background, and white is
+        // lighter still, so white reads on it too) and a deep shade of it in dark mode. Never another
+        // fixed colour: Palette.paint swaps colours by value, and the stock text-on-accent white is also
+        // the white of cards (2.5: a light accent with dark text turned every card black).
         val on = if (night) Tones.tone(c, 10.0) else Color.WHITE
         return c to on
     }
@@ -259,7 +306,7 @@ object Palette {
     fun limitDark(c: Int): Int {
         var v = c or 0xFF000000.toInt()
         var i = 0
-        while (Color.luminance(v) > 0.07f && i++ < 60) v = Tones.mix(v, Color.BLACK, 0.05)
+        while (Contrast.luminance(v) > 0.07 && i++ < 60) v = Tones.mix(v, Color.BLACK, 0.05)
         return v
     }
 
@@ -286,6 +333,8 @@ object Palette {
             is ProgressBar -> {
                 v.progressDrawable?.let { repaint(it, swap) }
                 v.progressTintList?.let { t -> accentSwap[t.defaultColor]?.let { v.progressTintList = ColorStateList.valueOf(it) } }
+                // 3.0: spinners too (their XML tint kept the nearest preset's colour).
+                v.indeterminateTintList?.let { t -> accentSwap[t.defaultColor]?.let { v.indeterminateTintList = ColorStateList.valueOf(it) } }
             }
             is ImageView -> v.imageTintList?.let { t -> accentSwap[t.defaultColor]?.let { v.imageTintList = ColorStateList.valueOf(it) } }
             is MaterialButton -> paintButton(v, accentSwap)
@@ -349,16 +398,65 @@ object Palette {
     }
 }
 
-/** Colour maths for [Palette]: mixing, and lighter or darker tones of one colour (CIELAB lightness). */
-object Tones {
+/**
+ * How readable one colour is on another (3.0), as WCAG measures it, on plain ARGB numbers: no
+ * Android classes, so the maths is tested on the PC (PaletteContrastTest).
+ */
+internal object Contrast {
+    /** What text needs (WCAG AA for body text). */
+    const val TEXT = 4.5
+
+    /** Relative luminance, 0 (black) to 1 (white); the same as Android's Color.luminance. */
+    fun luminance(c: Int): Double {
+        fun channel(v: Int): Double {
+            val s = v / 255.0
+            return if (s < 0.03928) s / 12.92 else ((s + 0.055) / 1.055).pow(2.4)
+        }
+        return 0.2126 * channel((c shr 16) and 0xFF) + 0.7152 * channel((c shr 8) and 0xFF) + 0.0722 * channel(c and 0xFF)
+    }
+
+    /** The contrast ratio of two colours, 1 (the same) to 21 (black on white). */
+    fun ratio(a: Int, b: Int): Double {
+        val la = luminance(a) + 0.05
+        val lb = luminance(b) + 0.05
+        return if (la > lb) la / lb else lb / la
+    }
+
+    /** [a] with [t] (0..1) of [b] mixed in; always opaque. */
     fun mix(a: Int, b: Int, t: Double): Int {
         val u = 1 - t
-        return Color.rgb(
-            (Color.red(a) * u + Color.red(b) * t + 0.5).toInt(),
-            (Color.green(a) * u + Color.green(b) * t + 0.5).toInt(),
-            (Color.blue(a) * u + Color.blue(b) * t + 0.5).toInt(),
-        )
+        fun channel(shift: Int) = ((((a shr shift) and 0xFF) * u + ((b shr shift) and 0xFF) * t) + 0.5).toInt().coerceIn(0, 255)
+        return (0xFF shl 24) or (channel(16) shl 16) or (channel(8) shl 8) or channel(0)
     }
+
+    /**
+     * [fg], moved toward [toward] (black on light backgrounds, white on dark ones) a little at a time
+     * until it has [min]:1 against every one of [bgs]; unchanged when it already has.
+     */
+    fun readable(fg: Int, bgs: List<Int>, min: Double, toward: Int): Int {
+        var c = fg or 0xFF000000.toInt()
+        var i = 0
+        while (bgs.any { ratio(c, it) < min } && i++ < 60) c = mix(c, toward, 0.05)
+        return c
+    }
+
+    /**
+     * A colour with hardly any hue (grey, white, black, 3.0): its hue says nothing, so it can't
+     * pick the nearest preset by hue.
+     */
+    fun greyish(c: Int): Boolean {
+        val r = (c shr 16) and 0xFF
+        val g = (c shr 8) and 0xFF
+        val b = c and 0xFF
+        val max = maxOf(r, g, b)
+        val spread = max - minOf(r, g, b)
+        return spread < 10 || spread < max * 0.12
+    }
+}
+
+/** Colour maths for [Palette]: mixing, and lighter or darker tones of one colour (CIELAB lightness). */
+object Tones {
+    fun mix(a: Int, b: Int, t: Double): Int = Contrast.mix(a, b, t)
 
     fun withAlpha(c: Int, alpha: Int) = (c and 0x00FFFFFF) or (alpha shl 24)
 

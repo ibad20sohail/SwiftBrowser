@@ -57,6 +57,7 @@ import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.swiftbrowser.R
 import com.swiftbrowser.SwiftApp
+import com.swiftbrowser.core.AppFiles
 import com.swiftbrowser.core.L
 import com.swiftbrowser.core.UrlUtils
 import com.swiftbrowser.docs.Docs
@@ -120,6 +121,7 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
     private lateinit var subtitlesButton: ImageButton
     private lateinit var playlistButton: ImageButton
     private lateinit var unlockButton: ImageButton
+    private lateinit var boostBadge: TextView
     private var problem: View? = null
 
     /** Icon buttons: white over a video, in the text colour on the music screen. */
@@ -147,6 +149,7 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
     // Gestures in progress.
     private var swipeFrom = 0f
     private var lastVolume = -1
+    private var boostLimit = 1f
     private var seekFrom = 0L
     private var seekTarget = 0L
     private var holdSpeed = 0f
@@ -172,7 +175,15 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         volumeControlStream = AudioManager.STREAM_MUSIC
         buildViews()
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
-            override fun handleOnBackPressed() = close()
+            override fun handleOnBackPressed() {
+                // 3.0: a locked screen stays (a pocket or a child's hand pressing Back).
+                if (locked) {
+                    showUnlock()
+                    say("Unlock first: tap the lock")
+                    return
+                }
+                close()
+            }
         })
         SystemBars.keepHidden(this) { !videoMode }
         LocalPlayback.watch(this)
@@ -203,17 +214,32 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         return when (i?.action) {
             ACTION_PLAY_FILE -> {
                 val path = i.getStringExtra(EXTRA_PATH) ?: return false
-                playFile(File(path), folder = true)
+                val f = File(path)
+                // 3.0: a path into Swift's own storage only from Swift itself (this screen is open to all apps).
+                if (!ViewerAccess.mayOpen(this, i, f)) {
+                    refuse(kindOf(f.name) != Kind.AUDIO)
+                    return true
+                }
+                playFile(f, folder = true, incognito = i.getBooleanExtra(EXTRA_INCOGNITO, false), secure = ViewerAccess.secure(this, i, f))
                 true
             }
             ACTION_PLAY_STREAM -> {
                 val url = i.getStringExtra(EXTRA_URL) ?: return false
+                // 3.0: a website video only from Swift's own pages (this run of Swift: one restored after
+                // Android closed Swift isn't played again), and only from the web, never a file:// path.
+                if (!ViewerAccess.isOwn(i) || !UrlUtils.isHttp(url)) return false
                 val headers = i.getBundleExtra(EXTRA_HEADERS)?.let { b -> b.keySet().associateWith { b.getString(it).orEmpty() } } ?: emptyMap()
                 playStream(url, i.getStringExtra(EXTRA_TITLE), headers, i.getBooleanExtra(EXTRA_INCOGNITO, false))
                 true
             }
             Intent.ACTION_VIEW -> {
                 val data = i.data ?: return false
+                // 3.0: another app's link to Swift's own files (its data folder, its file provider).
+                if (ViewerAccess.refused(this, data)) {
+                    L.w("Player: refused a link to Swift's own files from another app")
+                    refuse(i.type?.startsWith("audio/") != true)
+                    return true
+                }
                 playShared(data, i.type)
                 true
             }
@@ -221,10 +247,27 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         }
     }
 
-    private fun entryFor(f: File, kind: Kind) = LocalPlayback.Entry(Uri.fromFile(f), f.nameWithoutExtension, kind == Kind.VIDEO, file = f)
+    /** 3.0: what this screen won't open, said on it (as for a file that can't be read). */
+    private fun refuse(video: Boolean) {
+        if (LocalPlayback.current != null) {
+            // What plays goes on; the message says why the other wasn't opened.
+            say("${ViewerAccess.REFUSED}.")
+            return
+        }
+        applyMode(video)
+        titleView.text = ""
+        showProblem("${ViewerAccess.REFUSED}.", openWith = false, retry = false)
+    }
 
-    /** A file on the phone, where it was left off; with [folder], the folder's others are the playlist. */
-    private fun playFile(f: File, folder: Boolean) {
+    private fun entryFor(f: File, kind: Kind, incognito: Boolean = false, secure: Boolean = false) =
+        LocalPlayback.Entry(Uri.fromFile(f), f.nameWithoutExtension, kind == Kind.VIDEO, file = f, incognito = incognito, secure = secure)
+
+    /**
+     * A file on the phone, where it was left off; with [folder], the folder's others are the playlist.
+     * 3.0: [incognito] (an incognito download) and [secure] (a file of Private): nothing about them is
+     * remembered or shown on the lock screen, and the screen is kept out of screenshots.
+     */
+    private fun playFile(f: File, folder: Boolean, incognito: Boolean = false, secure: Boolean = false) {
         val kind = kindOf(f.name) ?: Kind.VIDEO
         if (!f.canRead()) {
             applyMode(kind == Kind.VIDEO)
@@ -232,8 +275,8 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
             showProblem("Swift can't open this file. It may have been moved, or Swift isn't allowed to read it.", openWith = false, retry = false)
             return
         }
-        val resume = LocalMedia.position(this, f)
-        val token = LocalPlayback.load(this, listOf(entryFor(f, kind)), 0, resume ?: C.TIME_UNSET)
+        val resume = if (incognito || secure) null else LocalMedia.position(this, f)
+        val token = LocalPlayback.load(this, listOf(entryFor(f, kind, incognito, secure)), 0, resume ?: C.TIME_UNSET)
         attach()
         // Once the controls are laid out, so the message sits above them.
         if (resume != null) root.post { say("Going on from ${time(resume)}", "Start over") { LocalPlayback.seekTo(0) } }
@@ -241,7 +284,9 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         // The rest of the folder is read without holding up the start, then put around it.
         LocalPlayback.io.execute {
             val (before, after) = folderAround(f, kind)
-            mainHandler.post { LocalPlayback.addAround(token, before.map { entryFor(it, kind) }, after.map { entryFor(it, kind) }) }
+            mainHandler.post {
+                LocalPlayback.addAround(token, before.map { entryFor(it, kind, incognito, secure) }, after.map { entryFor(it, kind, incognito, secure) })
+            }
         }
     }
 
@@ -329,7 +374,13 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
 
     private val events = object : Player.Listener {
         override fun onEvents(player: Player, events: Player.Events) {
-            if (events.containsAny(Player.EVENT_PLAY_WHEN_READY_CHANGED, Player.EVENT_PLAYBACK_STATE_CHANGED, Player.EVENT_IS_PLAYING_CHANGED)) updatePlaying()
+            if (events.containsAny(
+                    Player.EVENT_PLAY_WHEN_READY_CHANGED, Player.EVENT_PLAYBACK_STATE_CHANGED, Player.EVENT_IS_PLAYING_CHANGED,
+                    Player.EVENT_PLAYBACK_SUPPRESSION_REASON_CHANGED,
+                )
+            ) {
+                updatePlaying()
+            }
             if (events.containsAny(Player.EVENT_REPEAT_MODE_CHANGED, Player.EVENT_SHUFFLE_MODE_ENABLED_CHANGED)) updateModes()
             if (events.containsAny(Player.EVENT_TIMELINE_CHANGED, Player.EVENT_POSITION_DISCONTINUITY)) updateProgress()
         }
@@ -370,15 +421,33 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
             hideProblem()
             applyMode(e.video)
             loadSubtitles(e)
+            // 3.0: a file of Private is kept out of screenshots and recent apps; an incognito one too
+            // unless Settings allow screenshots in incognito.
+            if (e.secure) SecureScreen.set(this, true) else SecureScreen.forIncognito(this, e.incognito)
         }
         updateInfo()
         updateProgress()
+        updateBoost()
     }
 
     override fun onInfoChanged() {
         val e = LocalPlayback.current ?: return
         if (e === shownEntry && e.video != videoMode) applyMode(e.video)
         updateInfo()
+        updateBoost()
+        // 3.0: a call taking the sound away (or giving it back) shows on the play button.
+        updatePlaying()
+    }
+
+    /** 3.0: the volume boost's sign, in a corner while it is on (a tap turns it off). */
+    private fun updateBoost() {
+        val b = LocalPlayback.boost
+        if (b <= 0f) {
+            boostBadge.visibility = View.GONE
+            return
+        }
+        boostBadge.text = "Boost ${100 + (b * 100).roundToInt()}%"
+        boostBadge.visibility = View.VISIBLE
     }
 
     override fun onReleased() {
@@ -443,6 +512,25 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         buildHud()
         buildTopBar()
         buildControls()
+
+        // 3.0: shown while the volume boost is on, also with the controls hidden.
+        boostBadge = TextView(this).apply {
+            setTextColor(Color.WHITE)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+            typeface = Ui.MEDIUM
+            background = Ui.ripple(this@PlayerActivity, Ui.shape(this@PlayerActivity, 0x99000000.toInt(), 12), 12)
+            setPadding(dp(10), dp(4), dp(10), dp(5))
+            contentDescription = "Volume boost on. Tap to turn it off"
+            visibility = View.GONE
+            setOnClickListener {
+                LocalPlayback.setBoost(0f)
+                updateBoost()
+                say("Volume boost off")
+            }
+        }
+        root.addView(boostBadge, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.END).apply {
+            setMargins(0, dp(64), dp(14), 0)
+        })
 
         unlockButton = ImageButton(this).apply {
             setImageResource(R.drawable.ic_lock_open)
@@ -992,6 +1080,8 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
                 val max = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
                 swipeFrom = audio.getStreamVolume(AudioManager.STREAM_MUSIC) + LocalPlayback.boost * max
                 lastVolume = -1
+                // Looked at once a swipe (it asks Android about the phone's outputs).
+                boostLimit = LocalPlayback.maxBoost()
             }
             PlayerGestures.SEEK -> {
                 val p = player ?: return
@@ -1022,13 +1112,18 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
                         L.w("Player: volume not allowed", e)
                     }
                 }
-                val boost = ((at - max) / max).coerceIn(0f, 1f)
+                // 3.0: with headphones in, no further than +4 dB (140%), and the HUD says why.
+                val limit = boostLimit
+                val wanted = ((at - max) / max).coerceIn(0f, 1f)
+                val boost = wanted.coerceAtMost(limit)
                 if (abs(boost - LocalPlayback.boost) >= 0.02f || (boost == 0f) != (LocalPlayback.boost == 0f)) LocalPlayback.setBoost(boost)
                 if (boost > 0f) {
-                    showHud(R.drawable.ic_volume, "Volume boost", "${100 + (boost * 100).roundToInt()}%", boost)
+                    val held = limit < 1f && wanted > limit
+                    showHud(R.drawable.ic_volume, "Volume boost", "${100 + (boost * 100).roundToInt()}%" + if (held) " · the most with headphones" else "", boost / limit)
                 } else {
                     showHud(R.drawable.ic_volume, "Volume", if (v == 0) "Off" else "${v * 100 / max}%", v.toFloat() / max)
                 }
+                updateBoost()
             }
             PlayerGestures.SEEK -> {
                 val p = player ?: return
@@ -1143,9 +1238,17 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
 
     /** Leaves the player: a video stops (where it was is kept); music goes on unless Settings say otherwise. */
     private fun close() {
-        closing = true
         val e = LocalPlayback.current
-        if (e == null || e.video || !PlayerSettings.backgroundAudio) LocalPlayback.release()
+        val goesOn = e != null && !e.video && PlayerSettings.backgroundAudio
+        // 3.0: a song another app opened (its content:// link) may only be read while this screen
+        // lives: it goes behind instead of closing, so seeking, repeating and the next song still
+        // work. Closing the music (the notification's Close) closes it then.
+        if (goesOn && e?.file == null && e?.stream == false) {
+            moveTaskToBack(true)
+            return
+        }
+        closing = true
+        if (!goesOn) LocalPlayback.release()
         finish()
     }
 
@@ -1177,7 +1280,7 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
             actions += Sheets.Action(R.drawable.ic_headphones, if (LocalPlayback.background) "Stop playing in background" else "Play in background", primary = true) { toggleBackground() }
             actions += Sheets.Action(if (p.repeatMode == Player.REPEAT_MODE_ONE) R.drawable.ic_repeat_one else R.drawable.ic_repeat, "Repeat: ${repeatLabel(p.repeatMode)}") { nextRepeat() }
         }
-        if (videoMode && !e.incognito) actions += Sheets.Action(R.drawable.ic_image, "Screenshot") { screenshot() }
+        if (videoMode && !e.private) actions += Sheets.Action(R.drawable.ic_image, "Screenshot") { screenshot() }
         if (n > 1) actions += Sheets.Action(R.drawable.ic_view_list, "Playlist") { playlistSheet() }
         actions += Sheets.Action(R.drawable.ic_reopen, "Open with another app") { openWith() }
         if (f != null) {
@@ -1188,12 +1291,27 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
             }
         }
         actions += Sheets.Action(R.drawable.ic_info, "Details") { details() }
-        Sheets.actions(this, e.title, sub, actions, icon = if (videoMode || e.incognito) null else LocalPlayback.smallArt, iconRes = if (videoMode) R.drawable.ic_movie else R.drawable.ic_music_note)
+        Sheets.actions(this, e.title, sub, actions, icon = if (videoMode || e.private) null else LocalPlayback.smallArt, iconRes = if (videoMode) R.drawable.ic_movie else R.drawable.ic_music_note)
+    }
+
+    /** 3.0: Android 7 asks for storage access the first time a screenshot is saved in Pictures. */
+    private val askStorage = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) screenshot() else say("Swift needs access to your files to save screenshots")
     }
 
     /** 2.9.2: the picture on screen, saved in Pictures › Swift (the video's own size, up to 1920 wide). */
     private fun screenshot() {
         val p = player ?: return
+        if (android.os.Build.VERSION.SDK_INT <= 28 &&
+            androidx.core.content.ContextCompat.checkSelfPermission(this, android.Manifest.permission.WRITE_EXTERNAL_STORAGE) != android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            try {
+                askStorage.launch(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
+            } catch (_: Exception) {
+                say("Swift needs access to your files to save screenshots")
+            }
+            return
+        }
         val size = p.videoSize
         if (size.width <= 0 || size.height <= 0) {
             say("There's no picture to save yet")
@@ -1377,6 +1495,7 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         subFile = null
         subFiles = emptyList()
         subAdded.clear()
+        subReaders.clear()
         subOff = false
         subDelayMs = 0
         handler.removeCallbacks(subTicker)
@@ -1389,17 +1508,58 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
             val beside = Subtitles.besideVideo(f)
             // 2.9.2: also a torrent's Subs folder; from there only an English file shows by itself.
             val found = beside + Subtitles.inSubsFolder(f)
-            val first = (beside.firstOrNull() ?: found.firstOrNull { Subtitles.isEnglish(it) })?.let { Subtitles.read(it) }
+            val firstFile = beside.firstOrNull() ?: found.firstOrNull { Subtitles.isEnglish(it) }
+            val first = firstFile?.let { Subtitles.read(it) }
             handler.post {
                 if (token != subToken || isDestroyed) return@post
                 subFiles = found
                 // A subtitle file named like the video is what its owner wants: shown rather than the video's own.
                 if (first != null && !subOff && subFile == null) {
+                    firstFile?.let { ff -> subReaders[first] = { enc -> Subtitles.read(ff, enc) } }
                     useSubtitles(first)
                     L.d("Player: showing a subtitle file found next to the video")
                 }
             }
         }
+    }
+
+    /** 3.0: how each subtitle file shown can be read again in another encoding (the subtitle sheet's choice). */
+    private val subReaders = HashMap<Subtitles.Track, (String) -> Subtitles.Track?>()
+
+    /** 3.0: the encodings to read the subtitles in, when their letters come out wrong. */
+    private fun encodingSheet() {
+        val track = subFile ?: return
+        val reader = subReaders[track] ?: return
+        val col = Sheets.column(this)
+        col.addView(Sheets.header(this, "Text encoding", "Choose another when letters show as boxes or strange signs"))
+        lateinit var d: BottomSheetDialog
+        for ((name, label) in Subtitles.ENCODINGS) {
+            col.addView(choiceRow(label, name.equals(track.encoding, ignoreCase = true), R.drawable.ic_translate) {
+                d.dismiss()
+                val token = subToken
+                LocalPlayback.io.execute {
+                    val again = try {
+                        reader(name)
+                    } catch (e: Exception) {
+                        L.w("Player: subtitles in another encoding", e)
+                        null
+                    }
+                    handler.post {
+                        if (token != subToken || isDestroyed) return@post
+                        if (again == null) {
+                            say("Swift can't read these subtitles that way")
+                            return@post
+                        }
+                        subReaders[again] = reader
+                        val at = subAdded.indexOf(track)
+                        if (at >= 0) subAdded[at] = again
+                        useSubtitles(again)
+                    }
+                }
+            })
+        }
+        d = Sheets.sheet(this, col)
+        d.showImmersive()
     }
 
     /** The player's own subtitles of the video on or off, [override] choosing which. */
@@ -1441,7 +1601,12 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
             val track = Subtitles.read(f)
             handler.post {
                 if (token != subToken || isDestroyed) return@post
-                if (track == null) say("Swift can't read “${f.name}” as subtitles") else useSubtitles(track)
+                if (track == null) {
+                    say("Swift can't read “${f.name}” as subtitles")
+                } else {
+                    subReaders[track] = { enc -> Subtitles.read(f, enc) }
+                    useSubtitles(track)
+                }
             }
         }
     }
@@ -1467,6 +1632,7 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
                     say("Swift can't read “$name” as subtitles. It reads .srt, .vtt, .ass and .ssa files.", long = true)
                 } else {
                     subAdded += track
+                    subReaders[track] = { enc -> contentResolver.openInputStream(uri)?.use { Subtitles.read(it, name, enc) } }
                     useSubtitles(track)
                     say("Showing $name")
                 }
@@ -1538,6 +1704,15 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         col.addView(Sheets.label(this, "Timing", top = 16))
         col.addView(delayRow(subFile != null))
         col.addView(Sheets.note(this, if (subFile != null) "Earlier if the words come after the voices, later if they come before." else "Timing can be changed for subtitle files. The video's own subtitles keep its timing."))
+        // 3.0: a subtitle file's letters garbled (an old file in another alphabet's encoding): read it another way.
+        val shown = subFile
+        if (shown != null && subReaders[shown] != null) {
+            col.addView(Sheets.label(this, "Letters", top = 16))
+            col.addView(Sheets.row(this, R.drawable.ic_translate, "Text encoding: ${Subtitles.encodingLabel(shown.encoding)}") {
+                d.dismiss()
+                encodingSheet()
+            })
+        }
         d = Sheets.sheet(this, col)
         d.showImmersive()
     }
@@ -1715,7 +1890,9 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
             PlaybackException.ERROR_CODE_IO_INVALID_HTTP_CONTENT_TYPE,
             -> "The site didn't let Swift play this video outside its page."
             PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND -> "This file isn't there any more."
-            PlaybackException.ERROR_CODE_IO_NO_PERMISSION -> "Swift isn't allowed to read this file."
+            // 3.0: another app's song whose access ended (that app took it back): opened again, it plays.
+            PlaybackException.ERROR_CODE_IO_NO_PERMISSION ->
+                if (e != null && e.file == null && !e.stream) "Swift can't read this any more. Open it again from its app to play it." else "Swift isn't allowed to read this file."
             PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED,
             PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED,
             PlaybackException.ERROR_CODE_PARSING_MANIFEST_UNSUPPORTED,
@@ -1842,7 +2019,7 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         val lines = ArrayList<String>()
         e.file?.let { f ->
             lines += "Size: ${UrlUtils.formatBytes(f.length())}"
-            if (!e.incognito) lines += "Folder: ${f.parent}"
+            if (!e.private) lines += "Folder: ${f.parent}"
         }
         if (e.stream && !e.incognito) UrlUtils.host(e.uri.toString())?.let { lines += "From: $it" + if (e.hls) " (stream)" else "" }
         p.duration.takeIf { it != C.TIME_UNSET && it > 0 }?.let { lines += "Length: ${time(it)}" }
@@ -2016,15 +2193,27 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
             else -> null
         }
 
-        /** 2.9.2: what plays [file] from outside an activity (a finished download's Play). */
-        fun intentFor(ctx: Context, file: File): Intent =
-            Intent(ctx, PlayerActivity::class.java).setAction(ACTION_PLAY_FILE).putExtra(EXTRA_PATH, file.path).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        /**
+         * 2.9.2: what plays [file] from outside an activity (a finished download's Play). 3.0:
+         * [incognito] for an incognito download (nothing about it is remembered).
+         */
+        fun intentFor(ctx: Context, file: File, incognito: Boolean = false): Intent =
+            ViewerAccess.mark(
+                Intent(ctx, PlayerActivity::class.java).setAction(ACTION_PLAY_FILE).putExtra(EXTRA_PATH, file.path)
+                    .putExtra(EXTRA_INCOGNITO, incognito).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
 
-        /** Plays [file] (a video or song on the phone); the others of its folder are the playlist. */
-        fun open(from: Context, file: File) {
+        /**
+         * Plays [file] (a video or song on the phone); the others of its folder are the playlist.
+         * 3.0: [incognito] as for [intentFor]; [secure]: a file of Private (kept out of screenshots,
+         * nothing remembered, nothing on the lock screen).
+         */
+        fun open(from: Context, file: File, incognito: Boolean = false, secure: Boolean = false) {
             val i = Intent(from, PlayerActivity::class.java).setAction(ACTION_PLAY_FILE).putExtra(EXTRA_PATH, file.path)
+                .putExtra(EXTRA_INCOGNITO, incognito)
+            if (secure) i.putExtra(AppFiles.EXTRA_SECURE, true)
             if (from !is Activity) i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            from.startActivity(i)
+            from.startActivity(ViewerAccess.mark(i))
         }
 
         /**
@@ -2040,6 +2229,8 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
                 .putExtra(EXTRA_TITLE, title)
                 .putExtra(EXTRA_HEADERS, h)
                 .putExtra(EXTRA_INCOGNITO, incognito)
+            // 3.0: only Swift's pages hand over a website video (with their cookies' session).
+            ViewerAccess.mark(i)
             if (from !is Activity) i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             from.startActivity(i)
         }

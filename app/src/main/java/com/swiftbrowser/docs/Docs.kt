@@ -25,6 +25,7 @@ import androidx.core.content.pm.ShortcutInfoCompat
 import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.core.graphics.drawable.IconCompat
 import com.swiftbrowser.SwiftApp
+import com.swiftbrowser.core.AppFiles
 import com.swiftbrowser.core.L
 import com.swiftbrowser.core.Profiles
 import com.swiftbrowser.core.UrlUtils
@@ -42,13 +43,17 @@ import org.mozilla.geckoview.WebResponse
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.IOException
 import java.io.InputStream
+import java.io.OutputStream
 import java.nio.ByteBuffer
 import java.nio.charset.Charset
 import java.security.MessageDigest
 import java.util.Locale
 import java.util.concurrent.Executors
 import java.util.concurrent.Semaphore
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.zip.ZipInputStream
 
 /**
@@ -60,6 +65,11 @@ import java.util.zip.ZipInputStream
  *
  * 2.5: ZIP files list what they hold; documents from the web open without a copy (Save a copy keeps
  * one); Save as PDF, Print, filled-in PDFs saved to Downloads; home screen shortcuts; reading mode.
+ *
+ * 3.0: a viewer page is answered only about its own document (see DocRules); Swift's own private
+ * files open only from Swift itself, and are forgotten when Private locks; old Office files are laid
+ * out each on a thread of its own; ZIPs are listed from their central directory (ZipIndex); long
+ * reads stop when the viewer goes; documents from the web show their progress and can be stopped.
  */
 object Docs {
     enum class Kind(val key: String, val label: String, val color: Int, private val exts: String, private val mimes: String) {
@@ -121,6 +131,15 @@ object Docs {
 
     private val io = Executors.newSingleThreadExecutor()
 
+    /**
+     * 3.0: the long jobs (a whole file, a ZIP's list, a file taken out of a ZIP, a copy to print) off
+     * [io], which meanwhile answers hello and the pieces a PDF asks for at once.
+     */
+    private val bulk = com.swiftbrowser.core.Background.pool("docs-bulk", 2)
+
+    /** 3.0: the pieces of a file the viewer saves, one after another in their order. */
+    private val saving = com.swiftbrowser.core.Background.single("docs-save")
+
     /** Documents being copied from the web (2.6): their own thread, so open viewers keep reading meanwhile. */
     private val web = com.swiftbrowser.core.Background.single("docs-web")
     private val main = Handler(Looper.getMainLooper())
@@ -128,8 +147,42 @@ object Docs {
     /** Documents opened in incognito tabs, gone when the last incognito tab closes. */
     private val incognitoDocs = java.util.concurrent.ConcurrentHashMap<String, Doc>()
 
-    /** The document with [id]: an incognito one in memory, or one in the documents table. */
-    fun find(id: String): Doc? = incognitoDocs[id] ?: SwiftApp.db.document(id)
+    /**
+     * 3.0: the documents of Files' Private folder open now (incognito ones), and those taken out of
+     * its ZIPs: forgotten when Private locks ([forgetPrivate]), their screens kept out of screenshots.
+     */
+    private val privateIds: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
+    /** Whether document [id] is one of Private's (see [privateIds]). */
+    fun isPrivate(id: String?): Boolean = id != null && id in privateIds
+
+    /** A link to a file in Private, as Files hands them to the viewer (content://<package>.files/private/…). */
+    private fun isPrivateLink(ctx: Context, uri: Uri): Boolean =
+        AppFiles.isOwnProvider(ctx, uri) && uri.pathSegments.firstOrNull() == "private"
+
+    /**
+     * 3.0: Private locked (PrivateFolder.lock calls this): its documents are forgotten, so opening one
+     * again needs Private open; what was taken out of its ZIPs is deleted, and screens still showing
+     * one close.
+     */
+    fun forgetPrivate() {
+        val ids = privateIds.toSet()
+        if (ids.isEmpty()) return
+        privateIds.removeAll(ids)
+        ids.forEach { incognitoDocs.remove(it) }
+        SwiftApp.instance?.let { ctx -> web.execute { ids.forEach { File(tempDir(ctx), "private/zip/$it").deleteRecursively() } } }
+        main.post { com.swiftbrowser.ui.DocumentActivity.closeShowing(ids) }
+        L.d("Private locked: ${ids.size} document(s) of it closed")
+    }
+
+    /**
+     * The document with [id]: an incognito one in memory, or one in the documents table. 3.0: never a
+     * recent one in Private (2.9 kept those opened through another app's "Open with"): Private's
+     * files open only from Files, unlocked.
+     */
+    fun find(id: String): Doc? = incognitoDocs[id] ?: SwiftApp.db.document(id)?.takeUnless { d ->
+        SwiftApp.instance?.let { isPrivateLink(it, Uri.parse(d.uri)) } == true
+    }
 
     /** The viewer page for [id] (null until the helper extension is ready). */
     fun viewerUrl(id: String): String? = Helper.extension?.metaData?.baseUrl?.let { base ->
@@ -157,22 +210,38 @@ object Docs {
      * Opens [uri] in Swift's viewer, on its own screen over [ctx] (2.8: not in a tab). [web]: the page
      * link it was downloaded from (for "Exact view (online)"). Returns false when Swift can't show it.
      * [from] and [backTo] are no longer needed: Back returns to the screen it was opened from.
+     * [secure] (3.0): the screen stays out of screenshots (a file of Files' Private folder).
      */
     @Suppress("UNUSED_PARAMETER")
     fun open(
         ctx: Context, uri: Uri, nameHint: String? = null, mimeHint: String? = null, web: String? = null,
-        from: Tab? = null, incognito: Boolean = from?.incognito ?: false, backTo: String? = null,
+        from: Tab? = null, incognito: Boolean = from?.incognito ?: false, backTo: String? = null, secure: Boolean = false,
     ): Boolean {
-        val id = register(ctx, uri, nameHint, mimeHint, web, incognito) ?: return false
-        com.swiftbrowser.ui.DocumentActivity.open(ctx, id, incognito)
+        val id = registerOwn(ctx, uri, nameHint, mimeHint, web, incognito) ?: return false
+        com.swiftbrowser.ui.DocumentActivity.open(ctx, id, incognito, secure = secure || isPrivate(id))
         return true
     }
 
     /**
      * Remembers [uri] as a document (in Documents, unless incognito) and gives its id; null when
      * Swift can't show it (2.8: split from [open], for the viewer screen opened by other apps).
+     * 3.0: this is for what other apps send (their "Open with", a link sent to the browser), so never
+     * one of Swift's own files: its data folder (cached copies of web documents, incognito ones too)
+     * and its own provider's links (Private's files) are refused (AppFiles.refusedFromOutside). Swift's
+     * own screens open those through [open].
      */
     fun register(ctx: Context, uri: Uri, nameHint: String? = null, mimeHint: String? = null, web: String? = null, incognito: Boolean = false): String? {
+        if (AppFiles.refusedFromOutside(ctx, uri)) {
+            L.w("Another app asked to show one of Swift's own files: refused")
+            return null
+        }
+        return registerOwn(ctx, uri, nameHint, mimeHint, web, incognito)
+    }
+
+    /** [register] for Swift's own screens, which may open its own files. */
+    private fun registerOwn(ctx: Context, uri: Uri, nameHint: String? = null, mimeHint: String? = null, web: String? = null, incognito: Boolean = false): String? {
+        // 3.0: Private's files are opened only as incognito documents (never in the recent ones).
+        if (!incognito && isPrivateLink(ctx, uri)) return null
         if (!readable(ctx, uri)) return null
         val (name, size) = describe(ctx, uri, nameHint)
         val mime = mimeHint ?: if (uri.scheme == ContentResolver.SCHEME_CONTENT) ctx.contentResolver.getType(uri) else null
@@ -192,6 +261,7 @@ object Docs {
             id = idFor("incognito|$key")
             val now = System.currentTimeMillis()
             incognitoDocs[id] = Doc(id, key, name, kind, size, web, null, 0f, 0, now, now, incognito = true)
+            if (isPrivateLink(ctx, uri)) privateIds += id
         } else {
             id = idFor(key, profile)
             io.execute { SwiftApp.db.saveDocument(id, key, name, kind.key, size, web, profile) }
@@ -203,6 +273,11 @@ object Docs {
     /**
      * A document link on a website (2.5): read into Swift's cache and shown, without a copy in
      * Downloads. The viewer's Save a copy keeps one.
+     *
+     * 3.0: one too big for the viewer (60 MB, a PDF 300 MB) or for the room left on the phone is
+     * refused before it is read, or as soon as it gets there; the progress shows with Cancel.
+     * [done]: true once it is shown or Swift said why not, false when it couldn't be read; not
+     * called when it is cancelled.
      */
     fun openFromWeb(a: Activity, tab: Tab, response: WebResponse, name: String, mime: String?, done: (Boolean) -> Unit) {
         val body = response.body
@@ -211,21 +286,85 @@ object Docs {
             return
         }
         val incognito = tab.incognito
+        val limit = if (kindOf(name, mime) == Kind.PDF) MAX_ENTRY else MAX_WHOLE
+        val length = response.headers.entries.firstOrNull { it.key.equals("Content-Length", ignoreCase = true) }?.value?.trim()?.toLongOrNull() ?: -1L
+        val room = a.cacheDir.usableSpace - FREE_MARGIN
+        val refusal = when {
+            length > limit -> tooBigText(limit)
+            length > 0 && length > room -> NO_ROOM
+            else -> null
+        }
+        if (refusal != null) {
+            closeQuietly(body)
+            com.swiftbrowser.ui.Messages.show(a, refusal)
+            done(true)
+            return
+        }
+        val cancelled = AtomicBoolean(false)
+        val progress = com.swiftbrowser.ui.Messages.sticky(a, "Opening $name…", "Cancel") {
+            cancelled.set(true)
+            // A read waiting for the network ends when its stream closes (not on the main thread).
+            Thread { closeQuietly(body) }.start()
+        }
         web.execute {
             val dir = File(tempDir(a), (if (incognito) "private/" else "web/") + idFor(response.uri).take(12))
             val file = File(dir, UrlUtils.sanitizeFileName(name).ifBlank { "document" })
+            var problem: String? = null
             val ok = try {
                 dir.mkdirs()
-                body.use { input -> FileOutputStream(file).use { input.copyTo(it, 65536) } }
-                true
+                body.use { input ->
+                    FileOutputStream(file).use { out ->
+                        val buf = ByteArray(65536)
+                        var total = 0L
+                        var shown = 0L
+                        while (!cancelled.get()) {
+                            val n = input.read(buf)
+                            if (n < 0) break
+                            total += n
+                            if (total > limit) problem = tooBigText(limit)
+                            else if (total > room) problem = NO_ROOM
+                            if (problem != null) break
+                            out.write(buf, 0, n)
+                            if (length > 0 && total - shown >= 262_144) {
+                                shown = total
+                                val f = total.toFloat() / length
+                                main.post {
+                                    progress?.setProgress(f)
+                                    progress?.setText("Opening $name… ${(f * 100).toInt().coerceIn(0, 99)}%")
+                                }
+                            }
+                        }
+                    }
+                }
+                problem == null && !cancelled.get()
             } catch (e: Exception) {
-                L.w("Couldn't read the document from the web", e)
-                file.delete()
+                if (!cancelled.get()) L.w("Couldn't read the document from the web (${e.javaClass.simpleName})")
                 false
             }
+            if (!ok) file.delete()
             main.post {
-                done(ok && !a.isFinishing && open(a, Uri.fromFile(file), name, mime, response.uri.takeIf { UrlUtils.isHttp(it) }, from = tab.takeIf { it in TabManager.tabs }, incognito = incognito))
+                progress?.dismiss()
+                when {
+                    cancelled.get() -> {}
+                    problem != null -> {
+                        if (!a.isFinishing) com.swiftbrowser.ui.Messages.show(a, problem!!)
+                        done(true)
+                    }
+                    else -> done(ok && !a.isFinishing && open(a, Uri.fromFile(file), name, mime, response.uri.takeIf { UrlUtils.isHttp(it) }, from = tab.takeIf { it in TabManager.tabs }, incognito = incognito))
+                }
             }
+        }
+    }
+
+    private fun tooBigText(limit: Long) =
+        "This document is too big for Swift's viewer (over ${limit / 1_048_576} MB). Download it instead, and open it with another app."
+
+    private const val NO_ROOM = "There isn't enough free space on the phone to open this document. Free up some space, or download it instead."
+
+    private fun closeQuietly(s: java.io.Closeable) {
+        try {
+            s.close()
+        } catch (_: Exception) {
         }
     }
 
@@ -263,6 +402,13 @@ object Docs {
             if (f.isFile && f.lastModified() < old) f.delete()
             else if (f.isDirectory && f != tempDir(ctx) && f.list()?.isEmpty() == true) f.delete()
         }
+        // 3.0: Private's files kept among the recent documents by 2.9 (see find) leave the lists too.
+        try {
+            SwiftApp.db.recentDocuments(Profiles.currentId, 200).filter { isPrivateLink(ctx, Uri.parse(it.uri)) }
+                .forEach { SwiftApp.db.forgetDocumentUri(it.uri) }
+        } catch (e: Exception) {
+            L.w("Couldn't tidy the recent documents (${e.javaClass.simpleName})")
+        }
     }
 
     /**
@@ -270,7 +416,7 @@ object Docs {
      * over [ctx] (2.8). [leaveSwift]: Back goes out of Swift (a home screen shortcut).
      */
     fun reopen(ctx: Context, id: String, incognito: Boolean = false, leaveSwift: Boolean = false): Boolean {
-        com.swiftbrowser.ui.DocumentActivity.open(ctx, id, incognito, leaveSwift)
+        com.swiftbrowser.ui.DocumentActivity.open(ctx, id, incognito, leaveSwift, secure = isPrivate(id))
         return true
     }
 
@@ -354,12 +500,21 @@ object Docs {
 
     // ------------------------------------------------------------------ the viewer's messages
 
-    /** From the viewer page in [tab] (see docs/view.js). */
-    fun onMessage(tab: Tab, msg: JSONObject, port: WebExtension.Port?) {
+    /**
+     * From the viewer page in [tab] (see docs/view.js). [senderUrl]: the page's address as the engine
+     * reports it (Helper takes these messages only from the helper's viewer page).
+     */
+    fun onMessage(tab: Tab, msg: JSONObject, port: WebExtension.Port?, senderUrl: String? = null) {
         val id = msg.optString("id")
+        // 3.0: a viewer page reads, saves and acts only on the document it was opened with (its id is
+        // in its address), never on another one it names. This also keeps ids to their 20 hex digits.
+        if (!DocRules.ownDocument(id, senderUrl, com.swiftbrowser.ui.DocumentActivity.docIdOf(tab) ?: DocRules.idInUrl(tab.url))) {
+            L.w("The document viewer asked for another document: refused")
+            return
+        }
         when (msg.optString("type")) {
             "doc-hello" -> if (port != null) io.execute { hello(id, port) }
-            "doc-read" -> if (port != null) io.execute { sendWhole(id, port) }
+            "doc-read" -> if (port != null) bulk.execute { sendWhole(id, port) }
             "doc-range" -> if (port != null) {
                 val req = msg.optInt("req")
                 val begin = msg.optLong("begin")
@@ -368,54 +523,107 @@ object Docs {
             }
             "doc-place" -> {
                 if (tab.incognito) return
-                val place = msg.optString("place")
+                val place = msg.optString("place").take(2000)
                 val progress = msg.optDouble("progress", 0.0).toFloat()
                 val total = msg.optInt("total", 0)
                 io.execute { SwiftApp.db.setDocumentPlace(id, place, progress, total) }
             }
             "doc-reading" -> (TabManager.ui as? MainActivity)?.setDocumentReading(tab, msg.optBoolean("on"), msg.optBoolean("auto"))
-            "doc-zip" -> if (port != null) io.execute { listZip(id, port) }
+            "doc-zip" -> if (port != null) bulk.execute { listZip(id, port) }
             "doc-convert" -> if (port != null) convertOld(id, port)
             "doc-save" -> {
-                val part = Saving(id, msg.optString("name"), msg.optString("mime"), msg.optInt("seq"), msg.optString("data"), msg.optBoolean("last"))
-                io.execute { savePart(tab, part) }
+                val part = Saving(id, msg.optString("name"), msg.optInt("seq"), msg.optString("data"), msg.optBoolean("last"))
+                saving.execute { savePart(tab, part) }
             }
             "doc-action" -> main.post { act(tab, id, msg.optString("action"), msg) }
+            // 3.0: the first page of a PDF as the viewer drew it, for its small picture in Files and Continue.
+            "doc-thumb" -> if (!tab.incognito) {
+                val data = msg.optString("data")
+                bulk.execute {
+                    val doc = find(id)?.takeIf { it.kind == Kind.PDF && !it.incognito } ?: return@execute
+                    SwiftApp.instance?.let { DocThumbs.fromViewer(it, doc.uri, data) }
+                }
+            }
         }
     }
 
-    /** Old Word and PowerPoint files being laid out (2.8): a thread of their own, it can take seconds. */
-    private val converting = com.swiftbrowser.core.Background.single("docs-convert")
+    /** 3.0: viewer pages' ports that closed (the page went): what is being sent to them stops. */
+    private val closedPorts: MutableSet<WebExtension.Port> = java.util.Collections.synchronizedSet(java.util.Collections.newSetFromMap(java.util.WeakHashMap()))
+
+    /** A port of the helper extension closed (Helper tells). */
+    fun onPortClosed(port: WebExtension.Port) {
+        closedPorts += port
+    }
+
+    private fun isClosed(port: WebExtension.Port) = port in closedPorts
+
+    /**
+     * Old Word and PowerPoint files being laid out (2.8). 3.0: each on a thread of its own. POI 5.0.0
+     * can go round in circles or swell on a damaged file; the viewer gives up after 45 seconds and
+     * shows the text alone, and the stuck thread is left to end by itself (Java can't stop it
+     * safely) without holding up the next old file opened. With a few stuck at once, files get their
+     * text alone straight away.
+     */
+    private val converting = AtomicInteger()
 
     /**
      * An old Word or PowerPoint file as [OldOffice] lays it out (pages, slides, their pictures), sent
      * to the viewer in pieces (2.8). A password, or a file it can't read, is said instead; the viewer
-     * then shows the text alone.
+     * then shows the text alone. 3.0: a file that is really another kind (RTF, a web page, a newer
+     * Office file) says which, and the viewer shows it as that.
      */
-    private fun convertOld(id: String, port: WebExtension.Port) = converting.execute {
+    private fun convertOld(id: String, port: WebExtension.Port) {
+        if (converting.get() >= MAX_CONVERTING) {
+            L.w("Old Office files: ${converting.get()} still being laid out, this one gets its text alone")
+            post(port, JSONObject().put("type", "doc-html").put("error", "busy"))
+            return
+        }
+        converting.incrementAndGet()
+        Thread({
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
+            try {
+                layOut(id, port)
+            } finally {
+                converting.decrementAndGet()
+            }
+        }, "docs-convert").apply { isDaemon = true }.start()
+    }
+
+    private fun layOut(id: String, port: WebExtension.Port) {
         val doc = find(id)
         val ctx = SwiftApp.instance
         if (doc == null || ctx == null) {
             post(port, JSONObject().put("type", "doc-html").put("error", "gone"))
-            return@execute
+            return
         }
         val uri = Uri.parse(doc.uri)
         var copy: File? = null
         try {
-            // The converter reads a file: another app's document is copied into the cache first.
+            // The converter reads a file: another app's document is copied into the cache first
+            // (3.0: no further than the converter reads, OldOffice.MAX_FILE).
             val file = if (uri.scheme == ContentResolver.SCHEME_FILE) {
                 File(uri.path.orEmpty())
             } else {
                 File(File(tempDir(ctx), "convert").apply { mkdirs() }, id.take(16)).also { f ->
                     copy = f
-                    stream(ctx, uri).use { input -> FileOutputStream(f).use { input.copyTo(it, 65536) } }
+                    stream(ctx, uri).use { input -> FileOutputStream(f).use { copyCapped(input, it, OldOffice.MAX_FILE) } }
                 }
             }
-            val r = if (doc.kind == Kind.OLD_SLIDES) OldOffice.slides(file) else OldOffice.word(file)
+            val r = try {
+                if (doc.kind == Kind.OLD_SLIDES) OldOffice.slides(file) else OldOffice.word(file)
+            } catch (e: OldOffice.WrongFormat) {
+                // 3.0: a Word file named .ppt (or a PowerPoint file named .doc) is laid out as what it is.
+                when {
+                    e.looksLike == "doc" && doc.kind == Kind.OLD_SLIDES -> OldOffice.word(file)
+                    e.looksLike == "ppt" && doc.kind == Kind.OLD_WORD -> OldOffice.slides(file)
+                    else -> throw e
+                }
+            }
             L.d("Laid out an old ${doc.kind.label} file (${r.pages} pages, ${r.html.length / 1024} KB)")
             val html = r.html
             var from = 0
             do {
+                if (isClosed(port)) return
                 val to = minOf(html.length, from + CHUNK)
                 val msg = JSONObject().put("type", "doc-html").put("data", html.substring(from, to)).put("last", to >= html.length)
                 if (to >= html.length && r.note != null) msg.put("note", r.note)
@@ -424,26 +632,43 @@ object Docs {
             } while (from < html.length)
         } catch (e: OldOffice.PasswordProtected) {
             post(port, JSONObject().put("type", "doc-html").put("error", "password"))
+        } catch (e: OldOffice.WrongFormat) {
+            L.d("An old Office file is really ${e.looksLike ?: "something else"}")
+            post(port, JSONObject().put("type", "doc-html").put("error", "format").put("looksLike", e.looksLike ?: JSONObject.NULL))
         } catch (e: Exception) {
-            L.w("Couldn't lay out an old Office file", e)
+            L.w("Couldn't lay out an old Office file (${e.javaClass.simpleName})")
             post(port, JSONObject().put("type", "doc-html").put("error", "convert"))
         } finally {
             copy?.delete()
         }
     }
 
+    /** Copies at most [max] bytes; one byte more and it throws (a file bigger than what reads it). */
+    private fun copyCapped(input: InputStream, out: OutputStream, max: Long) {
+        val buf = ByteArray(65536)
+        var total = 0L
+        while (true) {
+            val n = input.read(buf)
+            if (n < 0) return
+            total += n
+            if (total > max) throw IOException("Over ${max / 1_048_576} MB")
+            out.write(buf, 0, n)
+        }
+    }
+
     private fun post(port: WebExtension.Port, msg: JSONObject) = main.post {
+        if (isClosed(port)) return@post
         try {
             port.postMessage(msg)
         } catch (e: Exception) {
-            L.w("Document viewer went away", e)
+            L.w("Document viewer went away (${e.javaClass.simpleName})")
         }
     }
 
     private fun hello(id: String, port: WebExtension.Port) {
         val doc = find(id)
         if (doc == null) {
-            problem(port, "Swift doesn't have this document any more. Open it again from Documents.")
+            problem(port, "Swift doesn't have this document any more. Open it again from Files.")
             return
         }
         val ctx = SwiftApp.instance ?: return
@@ -452,7 +677,8 @@ object Docs {
         val size = try {
             descriptor(ctx, uri).use { it.statSize }
         } catch (e: Exception) {
-            L.w("Can't open the document", e)
+            // 3.0: the exception's message names the file: only its kind goes in the log.
+            L.w("Can't open the document (${e.javaClass.simpleName})")
             problem(port, "Swift can't open this file now. It may have been moved or deleted, or the app it came from no longer shares it.")
             return
         }
@@ -468,13 +694,19 @@ object Docs {
             .put("size", if (size > 0) size else doc.size).put("ranges", size > 0).put("place", doc.place ?: "")
             .put("progress", doc.progress.toDouble()).put("web", doc.web != null).put("where", where(ctx, doc))
             .put("copy", copy).put("accentLight", Helper.accentColor(false)).put("accentDark", Helper.accentColor(true))
-            .put("colorsLight", Helper.pageColors(false)).put("colorsDark", Helper.pageColors(true)))
+            .put("colorsLight", Helper.pageColors(false)).put("colorsDark", Helper.pageColors(true))
+            // 3.0: what the details panel says it is; incognito ones keep nothing (e-book pages);
+            // a PDF without its small picture yet gets one drawn by the viewer (DocThumbs).
+            .put("label", doc.kind.label).put("incognito", doc.incognito)
+            .put("thumb", doc.kind == Kind.PDF && !doc.incognito && !DocThumbs.hasViewerPicture(ctx, doc.uri)))
         if (!doc.incognito) updateShortcuts(ctx)
     }
 
     private fun where(ctx: Context, doc: Doc): String {
         val uri = Uri.parse(doc.uri)
         return when {
+            // 3.0: Private's documents open as incognito ones, but from Files.
+            isPrivate(doc.id) -> "In Files' Private folder (not added to recent documents)"
             doc.incognito -> "Opened in an incognito tab (not kept)"
             isTemp(ctx, uri) && doc.web != null -> "From " + (UrlUtils.host(doc.web) ?: "the web") + " (not kept: Save a copy keeps one)"
             isTemp(ctx, uri) -> "From a ZIP file (not kept: Save a copy keeps one)"
@@ -485,35 +717,50 @@ object Docs {
     }
 
     private fun problem(port: WebExtension.Port, text: String) {
+        // 2.9: documents are found in Files (the "documents" action opens it).
         post(port, JSONObject().put("type", "doc-problem").put("text", text)
-            .put("actions", JSONArray().put(JSONObject().put("label", "Documents").put("action", "documents"))))
+            .put("actions", JSONArray().put(JSONObject().put("label", "Files").put("action", "documents"))))
     }
 
     fun descriptor(ctx: Context, uri: Uri) = ctx.contentResolver.openFileDescriptor(uri, "r")
         ?: throw java.io.FileNotFoundException(uri.toString())
 
-    /** The whole file, in pieces; at most a few pieces wait to be sent at a time. */
+    /**
+     * The whole file, in pieces; at most a few pieces wait to be sent at a time. 3.0: a file known to
+     * be too big is refused before anything is sent, and the reading stops when the viewer goes.
+     */
     private fun sendWhole(id: String, port: WebExtension.Port) {
         val ctx = SwiftApp.instance ?: return
         val doc = find(id) ?: return
+        val uri = Uri.parse(doc.uri)
+        val known = try {
+            descriptor(ctx, uri).use { it.statSize }
+        } catch (_: Exception) {
+            -1L
+        }
+        if (known > MAX_WHOLE) {
+            problem(port, tooBigForViewer())
+            return
+        }
         val inFlight = Semaphore(3)
         try {
-            stream(ctx, Uri.parse(doc.uri)).use { input ->
+            stream(ctx, uri).use { input ->
                 val buf = ByteArray(CHUNK)
                 var total = 0L
                 while (true) {
+                    if (isClosed(port)) return
                     val n = readFully(input, buf)
                     if (n <= 0) break
                     total += n
                     if (total > MAX_WHOLE) {
-                        problem(port, "This file is too big for Swift's viewer (over ${MAX_WHOLE / 1_048_576} MB). Open it with another app.")
+                        problem(port, tooBigForViewer())
                         return
                     }
                     inFlight.acquire()
                     val data = Base64.encodeToString(buf, 0, n, Base64.NO_WRAP)
                     main.post {
                         try {
-                            port.postMessage(JSONObject().put("type", "doc-data").put("data", data))
+                            if (!isClosed(port)) port.postMessage(JSONObject().put("type", "doc-data").put("data", data))
                         } catch (_: Exception) {
                         }
                         inFlight.release()
@@ -522,10 +769,12 @@ object Docs {
             }
             post(port, JSONObject().put("type", "doc-data").put("last", true))
         } catch (e: Exception) {
-            L.w("Couldn't read the document", e)
+            L.w("Couldn't read the document (${e.javaClass.simpleName})")
             problem(port, "Swift couldn't read this file.")
         }
     }
+
+    private fun tooBigForViewer() = "This file is too big for Swift's viewer (over ${MAX_WHOLE / 1_048_576} MB). Open it with another app."
 
     private fun readFully(input: InputStream, buf: ByteArray): Int {
         var got = 0
@@ -545,6 +794,7 @@ object Docs {
     private fun sendRange(id: String, req: Int, begin: Long, end: Long, port: WebExtension.Port) {
         val ctx = SwiftApp.instance ?: return
         val doc = find(id) ?: return
+        if (isClosed(port) || begin < 0) return
         val length = (end - begin).coerceIn(0, MAX_RANGE.toLong()).toInt()
         try {
             descriptor(ctx, Uri.parse(doc.uri)).use { pfd ->
@@ -561,7 +811,7 @@ object Docs {
                 }
             }
         } catch (e: Exception) {
-            L.w("Couldn't read part of the PDF", e)
+            L.w("Couldn't read part of the PDF (${e.javaClass.simpleName})")
             // The page says so instead of waiting for ever.
             post(port, JSONObject().put("type", "doc-range-data").put("req", req).put("error", true))
         }
@@ -572,17 +822,53 @@ object Docs {
     /** The code page each ZIP's names were read in (see listZip), for taking files out of it. */
     private val zipCharsets = java.util.concurrent.ConcurrentHashMap<String, Charset>()
 
-    /** What a ZIP file holds (names and sizes), read by Swift: the file itself can be large. */
+    /**
+     * [read] on [doc]'s ZIP where it is (3.0): its own bytes at any place, which needs a real file
+     * (one on the phone, or one another app shares as such). Throws when it can't be read that way.
+     */
+    private fun <T> withZip(ctx: Context, doc: Doc, read: (ZipIndex.Source) -> T): T =
+        descriptor(ctx, Uri.parse(doc.uri)).use { pfd ->
+            FileInputStream(pfd.fileDescriptor).channel.use { ch -> read(ZipIndex.ChannelSource(ch)) }
+        }
+
+    /** A ZipInputStream's way of saying an entry is locked with a password. */
+    private fun lockedEntry(e: Exception) = e is java.util.zip.ZipException && e.message.orEmpty().contains("encrypted", ignoreCase = true)
+
+    /**
+     * What a ZIP file holds (names and sizes), read by Swift: the file itself can be large. 3.0: from
+     * its central directory (ZipIndex), which lists a big ZIP at once and knows the files locked with
+     * a password. One that can't be read that way (a stream another app sends) is read through, as before.
+     */
     private fun listZip(id: String, port: WebExtension.Port) {
         val ctx = SwiftApp.instance ?: return
         val doc = find(id) ?: return
         val reply = JSONObject().put("type", "doc-zip-list")
         val entries = JSONArray()
+        val listing = try {
+            withZip(ctx, doc) { ZipIndex.list(it, MAX_ZIP_ENTRIES) }
+        } catch (e: Exception) {
+            L.d("ZIP file read through instead (${e.javaClass.simpleName})")
+            null
+        }
+        if (listing != null) {
+            val files = listing.entries.filter { !it.isDirectory }
+            if (files.isNotEmpty() && files.all { it.encrypted }) {
+                post(port, reply.put("entries", entries).put("locked", true).put("error", LOCKED_ZIP))
+                return
+            }
+            for (e in listing.entries) {
+                entries.put(JSONObject().put("name", e.name).put("size", e.size).put("kind", kindOf(e.name, null)?.key ?: JSONObject.NULL).put("locked", e.encrypted))
+            }
+            if (listing.truncated) reply.put("truncated", true)
+            post(port, reply.put("entries", entries))
+            return
+        }
         // Most ZIPs name their files in UTF-8; older Windows ones in the DOS code page.
         for (charset in listOf(Charsets.UTF_8, Charset.forName("CP437"))) {
             try {
                 ZipInputStream(stream(ctx, Uri.parse(doc.uri)), charset).use { zip ->
                     while (true) {
+                        if (isClosed(port)) return
                         val e = zip.nextEntry ?: break
                         if (entries.length() >= MAX_ZIP_ENTRIES) {
                             reply.put("truncated", true)
@@ -597,85 +883,149 @@ object Docs {
                 // A name that isn't UTF-8: read the list again in the other code page.
                 while (entries.length() > 0) entries.remove(entries.length() - 1)
             } catch (e: Exception) {
-                L.w("Couldn't read the ZIP file", e)
-                reply.put("error", "Swift couldn't read this ZIP file. It may be damaged, or not a ZIP file.")
+                if (lockedEntry(e)) {
+                    reply.put("locked", true).put("error", LOCKED_ZIP)
+                } else {
+                    L.w("Couldn't read the ZIP file (${e.javaClass.simpleName})")
+                    reply.put("error", "Swift couldn't read this ZIP file. It may be damaged, or not a ZIP file.")
+                }
                 break
             }
         }
         post(port, reply.put("entries", entries))
     }
 
+    private enum class Taken { OK, TOO_BIG, LOCKED, FAILED }
+
     /** A document inside a ZIP: taken out into Swift's cache and opened over it (Back returns to the ZIP). */
     private fun openEntry(a: Activity, tab: Tab, doc: Doc, entry: String) {
-        io.execute {
+        bulk.execute {
             val dir = File(tempDir(a), (if (doc.incognito) "private/zip/" else "zip/") + doc.id)
             val name = entry.substringAfterLast('/').ifBlank { "document" }
             val file = File(dir, idFor(entry).take(6) + "-" + UrlUtils.sanitizeFileName(name))
-            var found = false
-            var tooBig = false
-            val ok = try {
+            // A file that would unpack into more than the room left (or 300 MB) is refused.
+            val limit = minOf(MAX_ENTRY, a.cacheDir.usableSpace - FREE_MARGIN)
+            val taken = try {
                 dir.mkdirs()
-                ZipInputStream(stream(a, Uri.parse(doc.uri)), zipCharsets[doc.id] ?: Charsets.UTF_8).use { zip ->
-                    while (true) {
-                        val e = zip.nextEntry ?: break
-                        if (e.name != entry) continue
-                        found = true
-                        // A file that would unpack into more than the room left (or 300 MB) is refused.
-                        val limit = minOf(MAX_ENTRY, a.cacheDir.usableSpace - 50L * 1_048_576)
-                        FileOutputStream(file).use { out ->
-                            val buf = ByteArray(65536)
-                            var total = 0L
-                            while (true) {
-                                val n = zip.read(buf)
-                                if (n < 0) break
-                                total += n
-                                if (total > limit) {
-                                    tooBig = true
-                                    break
-                                }
-                                out.write(buf, 0, n)
-                            }
-                        }
-                        break
-                    }
-                }
-                found && !tooBig
+                takeOut(a, doc, entry, file, limit)
             } catch (e: Exception) {
-                L.w("Couldn't take a file out of the ZIP", e)
-                false
+                L.w("Couldn't take a file out of the ZIP (${e.javaClass.simpleName})")
+                if (lockedEntry(e)) Taken.LOCKED else Taken.FAILED
             }
-            if (!ok) file.delete()
+            if (taken != Taken.OK) file.delete()
             main.post {
                 if (a.isFinishing) return@post
-                when {
-                    tooBig -> com.swiftbrowser.ui.Messages.show(a, "This file is too big to take out of the ZIP here. Open the ZIP with another app.")
-                    !ok || !open(a, Uri.fromFile(file), name, null, from = tab.takeIf { it in TabManager.tabs }, incognito = doc.incognito) ->
-                        com.swiftbrowser.ui.Messages.show(a, "Swift couldn't open this file from the ZIP. It may be protected by a password.")
+                val text = when (taken) {
+                    Taken.TOO_BIG -> "This file is too big to take out of the ZIP here. Open the ZIP with another app."
+                    Taken.LOCKED -> LOCKED_ENTRY
+                    Taken.FAILED -> "Swift couldn't take this file out of the ZIP. It may be damaged."
+                    Taken.OK -> if (openTaken(a, doc, file, name)) null else "Swift can't show this kind of file."
                 }
+                if (text != null) com.swiftbrowser.ui.Messages.show(a, text)
             }
         }
     }
 
+    /**
+     * [entry] of [doc]'s ZIP into [file], [limit] bytes at most. 3.0: straight from its own bytes, found
+     * in the ZIP's list; the whole ZIP is read through only when that can't be done.
+     */
+    private fun takeOut(ctx: Context, doc: Doc, entry: String, file: File, limit: Long): Taken {
+        val direct = try {
+            withZip(ctx, doc) { src ->
+                val e = ZipIndex.list(src, MAX_ZIP_ENTRIES).entries.firstOrNull { it.name == entry }
+                when {
+                    e == null -> null
+                    e.encrypted -> Taken.LOCKED
+                    e.size > limit -> Taken.TOO_BIG
+                    else -> ZipIndex.open(src, e).use { input -> FileOutputStream(file).use { out -> if (copyUpTo(input, out, limit)) Taken.OK else Taken.TOO_BIG } }
+                }
+            }
+        } catch (e: ZipIndex.Locked) {
+            Taken.LOCKED
+        } catch (e: ZipIndex.Unsupported) {
+            // Packed in a way only Files unpacks.
+            Taken.FAILED
+        } catch (e: Exception) {
+            null
+        }
+        if (direct != null) return direct
+        var found = false
+        ZipInputStream(stream(ctx, Uri.parse(doc.uri)), zipCharsets[doc.id] ?: Charsets.UTF_8).use { zip ->
+            while (true) {
+                val e = zip.nextEntry ?: break
+                if (e.name != entry) continue
+                found = true
+                if (!FileOutputStream(file).use { out -> copyUpTo(zip, out, limit) }) return Taken.TOO_BIG
+                break
+            }
+        }
+        return if (found) Taken.OK else Taken.FAILED
+    }
+
+    /** Copies all of [input], unless it is over [limit] bytes: then false (what was written is left to delete). */
+    private fun copyUpTo(input: InputStream, out: OutputStream, limit: Long): Boolean {
+        val buf = ByteArray(65536)
+        var total = 0L
+        while (true) {
+            val n = input.read(buf)
+            if (n < 0) return true
+            total += n
+            if (total > limit) return false
+            out.write(buf, 0, n)
+        }
+    }
+
+    /** Opens a file taken out of [zip]'s ZIP; one out of Private's is Private's too (3.0). */
+    private fun openTaken(a: Activity, zip: Doc, file: File, name: String): Boolean {
+        val id = registerOwn(a, Uri.fromFile(file), name, null, incognito = zip.incognito) ?: return false
+        if (isPrivate(zip.id)) privateIds += id
+        com.swiftbrowser.ui.DocumentActivity.open(a, id, zip.incognito, secure = isPrivate(id))
+        return true
+    }
+
     // ------------------------------------------------------------------ saving (2.5)
 
-    private class Saving(val id: String, val name: String, val mime: String, val seq: Int, val data: String, val last: Boolean)
+    private class Saving(val id: String, val name: String, val seq: Int, val data: String, val last: Boolean)
 
-    /** A file the viewer made (a filled-in PDF), arriving in pieces: put together, then saved to Downloads. */
+    /** 3.0: the saves under way (with how many bytes each has so far), and those that failed part-way. */
+    private val savedBytes = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private val failedSaves: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
+    /**
+     * A file the viewer made (a filled-in PDF), arriving in pieces: put together, then saved to Downloads.
+     * 3.0: it must be a PDF, and is saved as one whatever name the page gives; once a piece fails, the
+     * rest of that save is dropped, so a broken file is never saved.
+     */
     private fun savePart(tab: Tab, part: Saving) {
         val ctx = SwiftApp.instance ?: return
+        if (part.seq == 0) {
+            failedSaves.remove(part.id)
+            savedBytes[part.id] = 0L
+        } else if (part.id in failedSaves || !savedBytes.containsKey(part.id)) {
+            return
+        }
         val dir = File(tempDir(ctx), "out").apply { mkdirs() }
         val file = File(dir, part.id + ".part")
         try {
-            FileOutputStream(file, part.seq > 0).use { it.write(Base64.decode(part.data, Base64.NO_WRAP)) }
+            val bytes = Base64.decode(part.data, Base64.NO_WRAP)
+            if (part.seq == 0 && !DocRules.looksLikePdf(bytes)) throw IOException("Not a PDF")
+            val total = (savedBytes[part.id] ?: 0L) + bytes.size
+            if (total > MAX_ENTRY || bytes.size > dir.usableSpace - FREE_MARGIN) throw IOException("Too big")
+            savedBytes[part.id] = total
+            FileOutputStream(file, part.seq > 0).use { it.write(bytes) }
         } catch (e: Exception) {
-            L.w("Couldn't save the document", e)
+            L.w("Couldn't save the document (${e.javaClass.simpleName})")
+            failedSaves += part.id
+            savedBytes.remove(part.id)
             file.delete()
             main.post { screenOf(tab)?.let { com.swiftbrowser.ui.Messages.show(it, "Couldn't save the file") } }
             return
         }
         if (!part.last) return
-        val name = UrlUtils.sanitizeFileName(part.name).ifBlank { "document.pdf" }
-        main.post { saveToDownloads(tab, name, part.mime.ifBlank { "application/pdf" }, null, { out -> file.copyTo(out, true) }) { file.delete() } }
+        savedBytes.remove(part.id)
+        val name = DocRules.savedPdfName(UrlUtils.sanitizeFileName(part.name))
+        main.post { saveToDownloads(tab, name, "application/pdf", null, { out -> file.copyTo(out, true) }) { file.delete() } }
     }
 
     /** Where [tab]'s viewer is on screen: its own screen (2.8), or the browser for a viewer in a tab. */
@@ -775,11 +1125,33 @@ object Docs {
                 }
 
                 override fun onWrite(pages: Array<out PageRange>?, destination: ParcelFileDescriptor, cancel: CancellationSignal?, callback: WriteResultCallback) {
-                    try {
-                        open().use { input -> FileOutputStream(destination.fileDescriptor).use { input.copyTo(it) } }
-                        callback.onWriteFinished(arrayOf(PageRange.ALL_PAGES))
-                    } catch (e: Exception) {
-                        callback.onWriteFailed(e.message)
+                    // 3.0: copied in the background (a big PDF held up the screen), then said done.
+                    val stop = AtomicBoolean(false)
+                    cancel?.setOnCancelListener { stop.set(true) }
+                    bulk.execute {
+                        val failure = try {
+                            open().use { input ->
+                                FileOutputStream(destination.fileDescriptor).use { out ->
+                                    val buf = ByteArray(65536)
+                                    while (!stop.get()) {
+                                        val n = input.read(buf)
+                                        if (n < 0) break
+                                        out.write(buf, 0, n)
+                                    }
+                                }
+                            }
+                            null
+                        } catch (e: Exception) {
+                            L.w("Couldn't hand the PDF to printing (${e.javaClass.simpleName})")
+                            "Swift couldn't read this document"
+                        }
+                        main.post {
+                            when {
+                                stop.get() -> callback.onWriteCancelled()
+                                failure != null -> callback.onWriteFailed(failure)
+                                else -> callback.onWriteFinished(arrayOf(PageRange.ALL_PAGES))
+                            }
+                        }
                     }
                 }
             }, null)
@@ -856,6 +1228,20 @@ object Docs {
                 TabManager.newTab(EXACT_VIEW + Uri.encode(web), parent = tab.takeIf { it in TabManager.tabs }, incognito = tab.incognito)
                 if (screen != null) screen.startActivity(Intent(screen, MainActivity::class.java))
             }
+            // 3.0: a link tapped in an e-book (web pages in a new tab, e-mail and phone links to the phone's apps).
+            "link" -> {
+                val url = msg.optString("url").take(8000)
+                if (screen != null) screen.openLink(url)
+                else if (UrlUtils.isHttp(url)) TabManager.newTab(url, parent = tab.takeIf { it in TabManager.tabs }, incognito = tab.incognito)
+            }
+            // 3.0: a ZIP locked with a password: Files opens it (with its password), at its folder.
+            "files" -> {
+                val doc = find(id) ?: return
+                val uri = Uri.parse(doc.uri)
+                val folder = if (uri.scheme == ContentResolver.SCHEME_FILE && !isTemp(a, uri)) File(uri.path.orEmpty()).parentFile else null
+                com.swiftbrowser.ui.FilesActivity.open(a, folder)
+                screen?.finish()
+            }
             "share", "open-with", "save-copy", "print", "save-pdf", "shortcut", "open-entry" -> io.execute {
                 val doc = find(id) ?: return@execute
                 main.post {
@@ -889,8 +1275,14 @@ object Docs {
         }.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         try {
             val chooser = Intent.createChooser(intent, if (share) "Share ${doc.name}" else "Open with")
-            // Not Swift itself (it would just open the file here again).
-            if (!share) chooser.putExtra(Intent.EXTRA_EXCLUDE_COMPONENTS, arrayOf(android.content.ComponentName(a, MainActivity::class.java)))
+            // Not Swift itself (it would just open the file here again). 3.0: nor its document screen's
+            // entrance for other apps, which refuses Swift's own links anyway.
+            if (!share) {
+                chooser.putExtra(Intent.EXTRA_EXCLUDE_COMPONENTS, arrayOf(
+                    android.content.ComponentName(a, MainActivity::class.java),
+                    android.content.ComponentName(a, com.swiftbrowser.ui.DocumentActivity::class.java),
+                ))
+            }
             a.startActivity(chooser)
         } catch (e: Exception) {
             com.swiftbrowser.ui.Messages.show(a, "No app on this phone can open this file")
@@ -927,6 +1319,15 @@ object Docs {
     private const val MAX_WHOLE = 60L * 1_048_576
     private const val MAX_ZIP_ENTRIES = 2000
     private const val MAX_ENTRY = 300L * 1_048_576
+
+    /** Room left free on the phone when Swift copies a document (3.0, as for files out of ZIPs). */
+    private const val FREE_MARGIN = 50L * 1_048_576
+
+    /** Old Office files laid out at once (3.0): more means some are stuck, and the next gets its text alone. */
+    private const val MAX_CONVERTING = 3
+
+    private const val LOCKED_ZIP = "This ZIP file is locked with a password, so Swift's viewer can't open it. Files can: open it there and type its password."
+    private const val LOCKED_ENTRY = "This file in the ZIP is locked with a password. Open the ZIP in Files to take it out with its password."
 
     /** new_tab, incognito and scan in res/xml/shortcuts.xml. */
     private const val STATIC_SHORTCUTS = 3

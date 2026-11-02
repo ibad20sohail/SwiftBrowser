@@ -51,13 +51,15 @@
                 android:textColor="@color/text_secondary"
                 android:textSize="11sp" />
 
+            <!-- 3.0: 40 dp like a tab card's (the same 18 dp cross); TabSwitcherView makes its
+                 touch area 48 dp. -->
             <ImageButton
                 android:id="@+id/group_close"
-                android:layout_width="36dp"
-                android:layout_height="36dp"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
                 android:background="?attr/selectableItemBackgroundBorderless"
                 android:contentDescription="Close group"
-                android:padding="9dp"
+                android:padding="11dp"
                 android:scaleType="fitCenter"
                 android:src="@drawable/ic_close"
                 app:tint="@color/text_secondary" />

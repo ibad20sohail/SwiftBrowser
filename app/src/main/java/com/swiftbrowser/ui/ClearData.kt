@@ -64,9 +64,11 @@ object ClearData {
     fun show(a: Activity, preset: Set<Clearing.What>? = null, done: (() -> Unit)? = null) {
         val prefs = SwiftApp.prefs
         var days = savedDays()
-        var choice = prefs.sp.getInt(PREF_RANGE, Clearing.Range.ALL.ordinal).let {
-            if (it in Clearing.Range.entries.indices || (it == CHOSEN_DAYS && days != null)) it else Clearing.Range.ALL.ordinal
+        // 3.0: the time chosen last; the last hour the first time (it opened on all time, one tap from clearing everything).
+        var choice = prefs.sp.getInt(PREF_RANGE, Clearing.Range.HOUR.ordinal).let {
+            if (it in Clearing.Range.entries.indices || (it == CHOSEN_DAYS && days != null)) it else Clearing.Range.HOUR.ordinal
         }
+        val profiles = Profiles.all().size
         val ticked = (preset?.map { it.name }?.toSet() ?: saved(PREF_WHAT, Clearing.DEFAULTS.map { it.name }.toSet())).toMutableSet()
         val profile = Profiles.current()
         fun span(): Clearing.Span {
@@ -142,7 +144,7 @@ object ClearData {
 
         val list = column(a)
         for (w in Clearing.What.entries) {
-            val r = sizedRow(a, w.label, hint(w), w.name in ticked) { on ->
+            val r = sizedRow(a, w.label, hint(w, span().isAll, profiles), w.name in ticked) { on ->
                 if (on) ticked += w.name else ticked -= w.name
                 // The files can only go with their entries.
                 if (w == Clearing.What.DOWNLOADS && !on && deleteFiles) filesRow.box.isChecked = false
@@ -155,7 +157,7 @@ object ClearData {
                 filesRow = sizedRow(a, "Delete the downloaded files too", "Only the files Swift downloaded then", false, indent = true) { on ->
                     deleteFiles = on
                     if (on && Clearing.What.DOWNLOADS.name !in ticked) rows[Clearing.What.DOWNLOADS]?.box?.isChecked = true
-                    rows[Clearing.What.DOWNLOADS]?.setHint(if (on) "The files are deleted too" else hint(Clearing.What.DOWNLOADS))
+                    rows[Clearing.What.DOWNLOADS]?.setHint(if (on) "The files are deleted too" else hint(Clearing.What.DOWNLOADS, span().isAll, profiles))
                     showTotal()
                 }
                 filesRow.view.visibility = View.GONE
@@ -169,6 +171,8 @@ object ClearData {
             files = null
             if (deleteFiles) filesRow.box.isChecked = false
             filesRow.view.visibility = View.GONE
+            // 3.0: for a time, cookies go for those sites in every profile (the engine clears a site for all of them).
+            rows[Clearing.What.COOKIES]?.setHint(hint(Clearing.What.COOKIES, span().isAll, profiles))
             for (w in Clearing.What.entries) showSize(w)
             showTotal()
             ClearSizes.measure(a, profile.id, span(), onPart = { w, m ->
@@ -214,15 +218,23 @@ object ClearData {
                     done?.invoke()
                 }
             }
-            if (f != null && f.ids.isNotEmpty()) {
+            val n = f?.ids?.size ?: 0
+            when {
+                // 3.0: everything goes only after a question (it took one tap, also from History's Clear).
+                span.isAll -> Dialogs.confirm(
+                    a, "Clear everything from all time?",
+                    "All of it goes: " + what.sortedBy { it.ordinal }.joinToString(", ") { it.label.lowercase() } +
+                        (if (profiles > 1) ", in the profile ${profile.name}" else "") +
+                        (if (n > 0) "; and ${if (n == 1) "1 downloaded file" else "${number(n)} downloaded files"}" else "") +
+                        ". This can't be undone.",
+                    "Clear everything", danger = true,
+                ) { go() }
                 // Files can't come back: asked first.
-                val n = f.ids.size
-                Dialogs.confirm(
-                    a, "Delete ${if (n == 1) "1 file" else "${number(n)} files"} (${UrlUtils.formatBytes(f.bytes)})?",
+                n > 0 -> Dialogs.confirm(
+                    a, "Delete ${if (n == 1) "1 file" else "${number(n)} files"} (${UrlUtils.formatBytes(f!!.bytes)})?",
                     "This can't be undone.", "Delete", danger = true,
                 ) { go() }
-            } else {
-                go()
+                else -> go()
             }
         }
         col.addView(clearButton)
@@ -274,10 +286,31 @@ object ClearData {
             setOnClickListener { onClick() }
         }
 
-    private fun hint(w: Clearing.What): String = when (w) {
-        Clearing.What.COOKIES -> "Signs you out of the sites (for a time: the sites you visited then)"
-        Clearing.What.CACHE -> "Pages load them again when needed"
+    /**
+     * What a row means for the time chosen ([all]: all time). 3.0: for a time, cookies go for the
+     * sites visited then in every profile, as the engine clears a site for all of them: said so
+     * when there are several profiles (the sheet names one).
+     */
+    private fun hint(w: Clearing.What, all: Boolean = true, profiles: Int = 1): String = when (w) {
+        Clearing.What.COOKIES -> when {
+            all -> "Signs you out of every site" + if (profiles > 1) " in this profile" else ""
+            profiles > 1 -> "Signs you out of the sites visited then, in all your profiles"
+            else -> "Signs you out of the sites visited then"
+        }
+        Clearing.What.CACHE -> "Copies of pages' pictures and files; pages load them again when needed"
         else -> w.hint
+    }
+
+    /** 3.0: TalkBack says a row is a tick box and whether it is ticked (it only read the row's text). */
+    private class TickAccessibility(private val box: CheckBox) : View.AccessibilityDelegate() {
+        override fun onInitializeAccessibilityNodeInfo(host: View, info: android.view.accessibility.AccessibilityNodeInfo) {
+            super.onInitializeAccessibilityNodeInfo(host, info)
+            info.className = CheckBox::class.java.name
+            info.isCheckable = true
+            // The only way on Android 7 (the newer one taking a number is Android 16's).
+            @Suppress("DEPRECATION")
+            info.isChecked = box.isChecked
+        }
     }
 
     /** Settings → When you quit: what ≡ → Quit clears (all of it), open tabs included. */
@@ -308,7 +341,8 @@ object ClearData {
         val go = {
             val what = choices.mapNotNull { n -> Clearing.What.entries.firstOrNull { it.name == n } }.toSet()
             TabManager.closeTabs(TabManager.incognitoTabs())
-            if (TABS in choices) TabManager.closeTabs(TabManager.profileTabs())
+            // 3.0: and they don't come back in Recently closed either, as the hint says.
+            if (TABS in choices) TabManager.closeTabs(TabManager.profileTabs(), remember = false)
             TabManager.flushSaves()
             val main = android.os.Handler(android.os.Looper.getMainLooper())
             val finish = {
@@ -368,6 +402,7 @@ object ClearData {
             if (indent) setPadding(Ui.dp(a, 32), 0, 0, 0)
             setBackgroundResource(RowHolder.selectableBackground(a))
             setOnClickListener { box.isChecked = !box.isChecked }
+            accessibilityDelegate = TickAccessibility(box)
             addView(box)
             addView(LinearLayout(a).apply {
                 orientation = LinearLayout.VERTICAL
@@ -397,6 +432,7 @@ object ClearData {
             setBackgroundResource(RowHolder.selectableBackground(a))
             setOnClickListener { box.isChecked = !box.isChecked }
             contentDescription = "$title, $hint"
+            accessibilityDelegate = TickAccessibility(box)
             addView(box)
             addView(LinearLayout(a).apply {
                 orientation = LinearLayout.VERTICAL

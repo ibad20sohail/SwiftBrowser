@@ -11,6 +11,11 @@ object Hls {
         val width: Int,
         val height: Int,
         val name: String?,
+        /**
+         * 3.0: the playlist of its sound when that comes separately (#EXT-X-MEDIA:TYPE=AUDIO with a
+         * URI): without it the video is silent. Null when the sound is in the video's own parts.
+         */
+        val audio: String? = null,
     ) {
         val label: String
             get() {
@@ -77,13 +82,45 @@ object Hls {
         return out
     }
 
-    fun parseMaster(text: String, base: String): List<Variant> {
+    /** 3.0: one of a master playlist's sound tracks (#EXT-X-MEDIA:TYPE=AUDIO). */
+    class Rendition(
+        val group: String,
+        val name: String?,
+        val language: String?,
+        /** Its own playlist; null when the sound is inside the video's parts. */
+        val uri: String?,
+        val default: Boolean,
+        val autoselect: Boolean,
+        /** An audio description for the blind ("public.accessibility.describes-video"). */
+        val describes: Boolean,
+    )
+
+    /**
+     * [language]: the phone's (its sound track is chosen when a stream has several). 3.0: each
+     * quality knows its separate sound track, if it has one ([Variant.audio]).
+     */
+    fun parseMaster(text: String, base: String, language: String = Locale.getDefault().language): List<Variant> {
         val out = ArrayList<Variant>()
+        val renditions = ArrayList<Rendition>()
         var pending: Map<String, String>? = null
         for (raw in text.lines()) {
             val line = raw.trim()
             when {
                 line.startsWith("#EXT-X-STREAM-INF:") -> pending = attributes(line.substringAfter(':'))
+                line.startsWith("#EXT-X-MEDIA:") -> {
+                    val a = attributes(line.substringAfter(':'))
+                    if (a["TYPE"].equals("AUDIO", ignoreCase = true)) {
+                        renditions += Rendition(
+                            group = a["GROUP-ID"].orEmpty(),
+                            name = a["NAME"],
+                            language = a["LANGUAGE"],
+                            uri = a["URI"]?.takeIf { it.isNotBlank() }?.let { resolve(base, it) },
+                            default = a["DEFAULT"].equals("YES", ignoreCase = true),
+                            autoselect = a["AUTOSELECT"].equals("YES", ignoreCase = true),
+                            describes = a["CHARACTERISTICS"]?.contains("describes-video", ignoreCase = true) == true,
+                        )
+                    }
+                }
                 line.isEmpty() || line.startsWith("#") -> Unit
                 pending != null -> {
                     val a = pending
@@ -95,13 +132,34 @@ object Hls {
                             width = res?.getOrNull(0)?.toIntOrNull() ?: 0,
                             height = res?.getOrNull(1)?.toIntOrNull() ?: 0,
                             name = a["NAME"],
+                            audio = a["AUDIO"],
                         ),
                     )
                     pending = null
                 }
             }
         }
-        return out.distinctBy { it.url }.sortedByDescending { if (it.height > 0) it.height * 1_000_000_000L + it.bandwidth else it.bandwidth }
+        // The EXT-X-MEDIA lines may come after the qualities: their sound is matched once all are read.
+        val chosen = renditions.groupBy { it.group }.mapValues { (_, list) -> soundOf(list, language) }
+        return out.map { v -> v.copy(audio = v.audio?.let { chosen[it] }) }
+            .distinctBy { it.url }.sortedByDescending { if (it.height > 0) it.height * 1_000_000_000L + it.bandwidth else it.bandwidth }
+    }
+
+    /**
+     * 3.0: the separate sound track to download with a quality whose AUDIO group is [group]: the
+     * phone's language first, then the stream's default, never an audio description when there is
+     * another. Null when the sound is in the video's own parts (a rendition of the group without a
+     * playlist of its own), or the group is unknown.
+     */
+    fun soundOf(group: List<Rendition>, language: String): String? {
+        if (group.isEmpty() || group.any { it.uri == null }) return null
+        fun lang(r: Rendition) = r.language?.substringBefore('-')?.lowercase(Locale.ROOT)
+        val phone = language.lowercase(Locale.ROOT)
+        // Playlists write "en" or "eng".
+        val phone3 = runCatching { Locale.forLanguageTag(phone).isO3Language }.getOrDefault(phone)
+        return group.withIndex().maxByOrNull { (i, r) ->
+            (if (lang(r) == phone || lang(r) == phone3) 8 else 0) + (if (r.default) 4 else 0) + (if (r.autoselect) 2 else 0) - (if (r.describes) 16 else 0) - i * 0.001
+        }?.value?.uri
     }
 
     fun parseMedia(text: String, base: String): Media {
@@ -215,6 +273,33 @@ object Hls {
 
     fun isTransportStream(buf: ByteArray): Boolean =
         buf.size >= 188 * 2 && buf[0] == 0x47.toByte() && buf[188] == 0x47.toByte()
+
+    /**
+     * 3.0: a separate sound track's parts are often "packed audio" (.aac, .mp3): plain audio frames,
+     * each part starting with an ID3 tag that holds its time. Joined, the tags in between would stop
+     * Android's reader, so each part goes in without its leading tags.
+     */
+    fun stripId3(buf: ByteArray): ByteArray {
+        var at = 0
+        while (at + 10 <= buf.size && buf[at] == 'I'.code.toByte() && buf[at + 1] == 'D'.code.toByte() && buf[at + 2] == '3'.code.toByte()) {
+            // The size is "syncsafe": 7 bits a byte; a footer (flag 0x10) adds 10 bytes.
+            val size = ((buf[at + 6].toInt() and 0x7F) shl 21) or ((buf[at + 7].toInt() and 0x7F) shl 14) or
+                ((buf[at + 8].toInt() and 0x7F) shl 7) or (buf[at + 9].toInt() and 0x7F)
+            val footer = if (buf[at + 5].toInt() and 0x10 != 0) 10 else 0
+            at += 10 + size + footer
+        }
+        return if (at == 0) buf else if (at >= buf.size) ByteArray(0) else buf.copyOfRange(at, buf.size)
+    }
+
+    /** 3.0: what a sound track's file is, from its first bytes: the ending it gets when kept as it is. */
+    fun soundExtension(head: ByteArray, fragmented: Boolean): String = when {
+        fragmented -> "m4a"
+        isTransportStream(head) -> "ts"
+        head.size >= 2 && head[0] == 0xFF.toByte() && (head[1].toInt() and 0xF6) == 0xF0 -> "aac"
+        head.size >= 2 && head[0] == 0x0B.toByte() && head[1] == 0x77.toByte() -> "ac3"
+        head.size >= 2 && head[0] == 0xFF.toByte() && (head[1].toInt() and 0xE0) == 0xE0 -> "mp3"
+        else -> "aac"
+    }
 
     fun formatDuration(seconds: Double): String {
         val s = seconds.toLong()

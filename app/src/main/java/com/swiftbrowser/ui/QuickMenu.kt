@@ -61,12 +61,14 @@ object MenuButtons {
         Button("recent", R.drawable.ic_reopen, "Closed tabs"),
         Button("vpn", R.drawable.ic_vpn, "VPN"),
         Button("scan", R.drawable.ic_qr, "Scan QR"),
-        Button("home_screen", R.drawable.ic_home_add, "Home screen"),
-        Button("ad_blocker", R.drawable.ic_shield, "Ad blocking"),
+        // 3.0: names that say what they do ("Home screen", "Tap to hide" sounded like the menu's own
+        // hiding of buttons), and the ad blocker named as on its button.
+        Button("home_screen", R.drawable.ic_home_add, "Add to Home"),
+        Button("ad_blocker", R.drawable.ic_shield, "Ad blocker"),
         Button("speed", R.drawable.ic_speed, "Play speed"),
         Button("sleep", R.drawable.ic_timer, "Sleep timer"),
         Button("group", R.drawable.ic_layers, "Add to group"),
-        Button("hide", R.drawable.ic_block, "Tap to hide"),
+        Button("hide", R.drawable.ic_block, "Hide an ad"),
         Button("close_all", R.drawable.ic_close, "Close all tabs"),
         Button("text_size", R.drawable.ic_text_size, "Text size"),
         // 2.6
@@ -235,6 +237,12 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
     /** The "Hidden (3)" tile on the last page, when buttons are hidden. */
     private val hiddenTile: TextView
 
+    /** Measures buttons' names (3.0: the ones a little too long are drawn a little smaller). */
+    private val labelPaint = android.text.TextPaint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+
+    /** The page ("profile address") last found bookmarked: its star is filled at once next time (3.0). */
+    private var starredPage: String? = null
+
     init {
         panel.orientation = LinearLayout.VERTICAL
         panel.background = GradientDrawable().apply {
@@ -243,7 +251,8 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
             cornerRadii = floatArrayOf(r, r, r, r, 0f, 0f, 0f, 0f)
         }
         panel.elevation = dp(16).toFloat()
-        panel.setPadding(0, dp(8), 0, dp(12))
+        // 3.0: no space under the page dots: their finger-sized places take it.
+        panel.setPadding(0, dp(8), 0, 0)
         // Touches between the buttons stay in the menu instead of reaching the page.
         panel.isClickable = true
         panel.visibility = View.GONE
@@ -276,7 +285,12 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
         }
         forward = iconAction(actions, R.drawable.ic_forward, "Forward") { TabManager.goForward(it) }
         reload = iconAction(actions, R.drawable.ic_refresh, "Reload") { if (it.loading) it.session?.stop() else TabManager.reload(it) }
-        bookmark = iconAction(actions, R.drawable.ic_star_border, "Bookmark") { a.toggleBookmark(it) }
+        bookmark = iconAction(actions, R.drawable.ic_star_border, "Bookmark") { tab ->
+            // The star shown next time is the new one straight away (3.0).
+            val key = "${tab.profileId} ${tab.url}"
+            starredPage = if (starredPage == key) null else key
+            a.toggleBookmark(tab)
+        }
         share = iconAction(actions, R.drawable.ic_share, "Share") { a.share(it.url) }
         find = iconAction(actions, R.drawable.ic_find, "Find in page") { a.openFind() }
         actionsRow = actions
@@ -319,7 +333,7 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
 
         dots.orientation = LinearLayout.HORIZONTAL
         dots.gravity = Gravity.CENTER
-        content.addView(dots, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(20)))
+        content.addView(dots, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(DOT_PLACE)))
         render(animate = false)
         pager.reset()
 
@@ -368,7 +382,8 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
             "files" -> FilesActivity.open(a)
             "text_size" -> Sheets.textSize(a, tab)
             "home_screen" -> PageActions.addToHomeScreen(a, tab)
-            "ad_blocker" -> Sheets.shield(a)
+            // 3.0: the page loaded before the ad blocker was ready: the button reloads it, now filtered.
+            "ad_blocker" -> if (unfiltered(tab)) TabManager.reload(tab) else Sheets.shield(a)
             "speed" -> Sheets.speed(a, tab)
             "sleep" -> Sheets.sleepTimer(a)
             "group" -> Sheets.chooseGroup(a, tab)
@@ -394,8 +409,9 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
     private fun render(animate: Boolean) {
         val pages = layout.pages.map { page -> page.map { items.getValue(it).view as View }.toMutableList() }.toMutableList()
         if (layout.hidden.isNotEmpty()) {
-            hiddenTile.text = "Hidden (${layout.hidden.size})"
-            hiddenTile.contentDescription = "${layout.hidden.size} hidden buttons"
+            val n = layout.hidden.size
+            hiddenTile.text = "Hidden ($n)"
+            hiddenTile.contentDescription = if (n == 1) "1 hidden button" else "$n hidden buttons"
             if (pages.last().size < MenuButtons.PER_PAGE) pages.last().add(hiddenTile) else pages.add(mutableListOf(hiddenTile))
         }
         if (dragKey != null) pages.add(mutableListOf())
@@ -412,10 +428,11 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
         if (dots.childCount != count) {
             dots.removeAllViews()
             repeat(count) { i ->
+                // 3.0: a finger-sized place (48 dp) round the same small dot; it was 18 by 20.
                 dots.addView(View(a).apply {
                     contentDescription = "Page ${i + 1}"
                     setOnClickListener { pager.goTo(i) }
-                }, LinearLayout.LayoutParams(dp(18), dp(20)))
+                }, LinearLayout.LayoutParams(dp(DOT_PLACE), dp(DOT_PLACE)))
             }
         }
         if (pager.page >= count) pager.goTo(count - 1) else showPage(pager.page)
@@ -508,9 +525,21 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
 
         forward.set(R.drawable.ic_forward, enabled = tab.canGoForward)
         reload.set(if (tab.loading) R.drawable.ic_close else R.drawable.ic_refresh, enabled = !tab.isBlank)
-        val bookmarked = http && SwiftApp.db.isBookmarked(tab.profileId, tab.url)
-        bookmark.set(if (bookmarked) R.drawable.ic_star else R.drawable.ic_star_border, enabled = http, active = bookmarked)
-        bookmark.view.contentDescription = if (bookmarked) "Remove bookmark" else "Bookmark"
+        // 3.0: asked of the database off the main thread (it was read each time the menu opened); the
+        // star shows the last answer for this page meanwhile and fills in when the answer comes.
+        val pageKey = "${tab.profileId} ${tab.url}"
+        showBookmark(http && starredPage == pageKey, http)
+        if (http) {
+            val pid = tab.profileId
+            val url = tab.url
+            TabManager.io.execute {
+                val on = SwiftApp.db.isBookmarked(pid, url)
+                a.runOnUiThread {
+                    starredPage = if (on) pageKey else starredPage.takeIf { it != pageKey }
+                    if (isOpen && TabManager.current === tab && tab.url == url) showBookmark(on, true)
+                }
+            }
+        }
         share.set(R.drawable.ic_share, enabled = http)
         find.set(R.drawable.ic_find, enabled = page)
 
@@ -521,22 +550,38 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
         items["fullscreen"]?.set(R.drawable.ic_fullscreen, "Full screen", active = prefs.fullScreen)
         items["reader"]?.set(R.drawable.ic_reader, if (inReader) "Exit reader" else "Reader view", active = inReader, enabled = (http && page) || inReader)
         items["save"]?.set(R.drawable.ic_offline, "Save offline", enabled = http && page)
-        items["home_screen"]?.set(R.drawable.ic_home_add, "Home screen", enabled = http)
+        items["home_screen"]?.set(R.drawable.ic_home_add, "Add to Home", enabled = http)
         val level = AdBlock.levelFor(tab.url)
         val blocked = tab.badge?.takeIf { level != AdLevel.OFF && it.isNotBlank() && it != "0" }
+        // 3.0: uBlock Origin's "!" is no count ("! blocked"): the page loaded before it could filter it.
+        val unfiltered = unfiltered(tab)
         items["ad_blocker"]?.set(
             if (level == AdLevel.OFF) R.drawable.ic_shield_off else R.drawable.ic_shield,
-            if (blocked != null) "$blocked blocked" else if (level == AdLevel.OFF) "Ads allowed" else "Ad blocker",
+            when {
+                unfiltered -> "Reload to block"
+                blocked != null -> "$blocked blocked"
+                level == AdLevel.OFF -> "Ads allowed"
+                else -> "Ad blocker"
+            },
+            description = if (unfiltered) "Reload to block ads. This page loaded before the ad blocker was ready." else null,
         )
         items["speed"]?.set(R.drawable.ic_speed, "Speed ${a.formatSpeed(tab.speed)}", active = tab.speed.toDouble() != 1.0)
         items["close_all"]?.set(R.drawable.ic_close, if (tab.incognito) "Close incognito" else "Close all tabs")
         items["group"]?.set(R.drawable.ic_layers, if (tab.groupId != null) "Move to group" else "Add to group")
-        items["hide"]?.set(R.drawable.ic_block, "Tap to hide", enabled = http && page && AdBlock.global != AdLevel.OFF)
+        items["hide"]?.set(R.drawable.ic_block, "Hide an ad", enabled = http && page && AdBlock.global != AdLevel.OFF)
         val timer = com.swiftbrowser.media.SleepTimer.label()
         items["sleep"]?.set(R.drawable.ic_timer, timer ?: "Sleep timer", active = timer != null)
         val vpnOn = com.swiftbrowser.vpn.Vpn.state == com.swiftbrowser.vpn.Vpn.State.ON
         items["vpn"]?.set(R.drawable.ic_vpn, if (vpnOn) "VPN · " + (com.swiftbrowser.vpn.Vpn.current()?.country ?: "on") else "VPN", active = vpnOn)
     }
+
+    private fun showBookmark(on: Boolean, enabled: Boolean) {
+        bookmark.set(if (on) R.drawable.ic_star else R.drawable.ic_star_border, enabled = enabled, active = on)
+        bookmark.view.contentDescription = if (on) "Remove bookmark" else "Bookmark"
+    }
+
+    /** uBlock Origin's "!" (3.0): the tab's page loaded before the ad blocker could filter it. */
+    private fun unfiltered(tab: Tab) = tab.badge == "!" && AdBlock.levelFor(tab.url) != AdLevel.OFF
 
     /** Normal tabs close at once, with Undo (2.3); incognito ones ask first, as their data goes for good. */
     private fun confirmCloseAll(tab: Tab) {
@@ -578,13 +623,14 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
             val target = color(if (i == index) Looks.accent.primary else R.color.outline)
             val shape = dot.getTag(R.id.motion_icon) as? GradientDrawable
             if (shape == null) {
-                // A small dot in a finger-sized place.
+                // A small dot (6 dp) in a finger-sized place.
                 val fresh = GradientDrawable().apply {
                     this.shape = GradientDrawable.OVAL
                     setColor(target)
                 }
                 dot.setTag(R.id.motion_icon, fresh)
-                dot.background = InsetDrawable(fresh, dp(6), dp(7), dp(6), dp(7))
+                val inset = dp((DOT_PLACE - 6) / 2)
+                dot.background = InsetDrawable(fresh, inset, inset, inset, inset)
                 dot.scaleX = if (i == index) 1.3f else 1f
                 dot.scaleY = dot.scaleX
                 continue
@@ -744,7 +790,8 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
             ghost.drop(null) { view.visibility = View.VISIBLE }
             val from = dragFrom
             val label = MenuButtons.button(key).label
-            a.snack("$label is hidden. It's under Hidden on the last page.", "Undo") {
+            // In quotes (3.0): "“Hide an ad” is hidden" reads as a button's name.
+            a.snack("“$label” is hidden. It's under Hidden on the last page.", "Undo") {
                 layout.hidden.remove(key)
                 val p = from?.first?.coerceAtMost(layout.pages.size) ?: layout.pages.size
                 while (layout.pages.size <= p) layout.pages.add(mutableListOf())
@@ -1136,8 +1183,10 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
             })
             addView(headerSite.apply {
                 textSize = 12.5f
-                maxLines = 1
-                ellipsize = TextUtils.TruncateAt.END
+                // 3.0: a long address is cut at its start, so its end, the real site, always shows
+                // ("…verify-session.example.ru", not "accounts.google.com.verif…").
+                isSingleLine = true
+                ellipsize = TextUtils.TruncateAt.START
                 setTextColor(color(R.color.text_secondary))
             })
         }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
@@ -1197,18 +1246,24 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
         private var active = false
         private var colors: android.animation.ValueAnimator? = null
 
-        fun set(icon: Int, label: String, active: Boolean = false, enabled: Boolean = true) {
+        /** The switches (Lite mode, Dark mode, Desktop, Full screen) show a tick while on (3.0). */
+        private val ticks = key in MenuButtons.switches
+
+        /** [description]: what screen readers say, when the name alone doesn't. */
+        fun set(icon: Int, label: String, active: Boolean = false, enabled: Boolean = true, description: String? = null) {
             if (icon == this.icon && active != this.active && view.isShown) {
-                // A switch turned on or off: its circle takes the new colour smoothly (2.3).
+                // A switch turned on or off: its circle takes the new colour smoothly (2.3), and its tick
+                // comes or goes (3.0).
                 this.active = active
                 val layers = view.compoundDrawablesRelative[1] as? LayerDrawable
                 val circle = layers?.getDrawable(0) as? GradientDrawable
                 val glyph = layers?.getDrawable(1)
                 if (circle != null && glyph != null) {
-                    val fromFill = color(if (active) R.color.surface_alt else Looks.accent.container)
-                    val toFill = color(if (active) Looks.accent.container else R.color.surface_alt)
-                    val fromInk = color(if (active) R.color.text_primary else Looks.accent.onContainer)
-                    val toInk = color(if (active) Looks.accent.onContainer else R.color.text_primary)
+                    val fromFill = color(if (active) R.color.surface_alt else Looks.accent.primary)
+                    val toFill = color(if (active) Looks.accent.primary else R.color.surface_alt)
+                    val fromInk = color(if (active) R.color.text_primary else Looks.accent.onPrimary)
+                    val toInk = color(if (active) Looks.accent.onPrimary else R.color.text_primary)
+                    val tick = (2 until layers.numberOfLayers).map { layers.getDrawable(it) }
                     val argb = android.animation.ArgbEvaluator()
                     colors?.cancel()
                     colors = android.animation.ValueAnimator.ofFloat(0f, 1f).apply {
@@ -1218,22 +1273,25 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
                             val f = it.animatedFraction
                             circle.setColor(argb.evaluate(f, fromFill, toFill) as Int)
                             glyph.setTint(argb.evaluate(f, fromInk, toInk) as Int)
+                            val shown = ((if (active) f else 1f - f) * 255).toInt()
+                            tick.forEach { d -> d.alpha = shown }
                         }
                         start()
                     }
                     Motion.bump(view, 1.06f)
                 } else {
-                    view.setCompoundDrawablesRelativeWithIntrinsicBounds(null, roundIcon(icon, active), null, null)
+                    view.setCompoundDrawablesRelativeWithIntrinsicBounds(null, roundIcon(icon, active, tick = ticks), null, null)
                 }
             } else if (icon != this.icon || active != this.active) {
                 colors?.cancel()
                 this.icon = icon
                 this.active = active
-                view.setCompoundDrawablesRelativeWithIntrinsicBounds(null, roundIcon(icon, active), null, null)
+                view.setCompoundDrawablesRelativeWithIntrinsicBounds(null, roundIcon(icon, active, tick = ticks), null, null)
             }
             if (view.text.toString() != label) view.text = label
+            fitLabel(view, label)
             // Screen readers hear whether a switch is on (2.6): its colour alone doesn't say.
-            view.contentDescription = if (key in MenuButtons.switches) "$label, ${if (active) "on" else "off"}" else label
+            view.contentDescription = description ?: if (key in MenuButtons.switches) "$label, ${if (active) "on" else "off"}" else label
             if (view.isEnabled != enabled) {
                 view.isEnabled = enabled
                 // Fades rather than jumps (2.3).
@@ -1242,12 +1300,37 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
         }
     }
 
+    /** How wide a button's name may be: a quarter of the menu, less the pages' and the button's sides. */
+    private fun labelRoom(): Float {
+        val w = (panel.layoutParams as? FrameLayout.LayoutParams)?.width?.takeIf { it > 0 } ?: root.width
+        return ((w - dp(12)) / MenuButtons.COLUMNS - dp(4)).toFloat()
+    }
+
+    /**
+     * 3.0: a name a little too long for its button is drawn a little smaller ("Close incognito",
+     * "Reload to block"), down to 11 sp; longer ones are still cut short at the end.
+     */
+    private fun fitLabel(view: TextView, label: String) {
+        val dm = a.resources.displayMetrics
+        val room = labelRoom()
+        var size = LABEL_SP
+        if (room > 0) {
+            labelPaint.textSize = android.util.TypedValue.applyDimension(android.util.TypedValue.COMPLEX_UNIT_SP, LABEL_SP, dm)
+            labelPaint.typeface = view.typeface
+            val wide = labelPaint.measureText(label)
+            // A little to spare: the text's own layout rounds up.
+            if (wide > room) size = maxOf(MIN_LABEL_SP, kotlin.math.floor(LABEL_SP * room / wide * 0.97f * 4f) / 4f)
+        }
+        val px = android.util.TypedValue.applyDimension(android.util.TypedValue.COMPLEX_UNIT_SP, size, dm)
+        if (abs(view.textSize - px) > 0.5f) view.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, size)
+    }
+
     private fun item(key: String, icon: Int, label: String, closes: Boolean, action: ((Tab) -> Unit)? = null): Item {
         val view = TextView(a).apply {
             gravity = Gravity.CENTER_HORIZONTAL
             setPadding(dp(2), dp(8), dp(2), dp(6))
             compoundDrawablePadding = dp(8)
-            textSize = 12.5f
+            textSize = LABEL_SP
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.END
             setTextColor(color(R.color.text_primary))
@@ -1268,17 +1351,44 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
         return item
     }
 
-    private fun roundIcon(icon: Int, active: Boolean, size: Int = 48, fill: Int? = null): Drawable {
+    /**
+     * A button's round icon. 3.0: on, it is filled with the accent and the icon takes the colour on
+     * it (the soft accent of before was hardly told from off in the light look, about 1.1:1); with
+     * [tick], a small tick at its top corner says it too, shown only while on.
+     */
+    private fun roundIcon(icon: Int, active: Boolean, size: Int = 48, fill: Int? = null, tick: Boolean = false): Drawable {
         val circle = GradientDrawable().apply {
             shape = GradientDrawable.OVAL
-            setColor(fill ?: color(if (active) Looks.accent.container else R.color.surface_alt))
+            setColor(fill ?: color(if (active) Looks.accent.primary else R.color.surface_alt))
         }
         val glyph = ContextCompat.getDrawable(a, icon)!!.mutate()
-        glyph.setTint(color(if (active) Looks.accent.onContainer else R.color.text_primary))
-        return LayerDrawable(arrayOf(circle, glyph)).apply {
+        glyph.setTint(color(if (active) Looks.accent.onPrimary else R.color.text_primary))
+        val layers = if (!tick) arrayOf(circle, glyph) else {
+            // The tick's badge has a ring in the menu's colour, so it stands apart from the filled circle.
+            val badge = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(color(Looks.accent.primary))
+                setStroke(dp(2), color(R.color.sheet_bg))
+            }
+            val check = ContextCompat.getDrawable(a, R.drawable.ic_check)!!.mutate().apply { setTint(color(Looks.accent.onPrimary)) }
+            if (!active) {
+                badge.alpha = 0
+                check.alpha = 0
+            }
+            arrayOf(circle, glyph, badge, check)
+        }
+        return LayerDrawable(layers).apply {
             setLayerSize(0, dp(size), dp(size))
             setLayerSize(1, dp(size * 22 / 48), dp(size * 22 / 48))
             setLayerGravity(1, Gravity.CENTER)
+            if (tick) {
+                // At the circle's top end corner: the badge 18 dp, its tick 10 dp in its middle.
+                setLayerSize(2, dp(18), dp(18))
+                setLayerGravity(2, Gravity.TOP or Gravity.END)
+                setLayerSize(3, dp(10), dp(10))
+                setLayerGravity(3, Gravity.TOP or Gravity.END)
+                setLayerInsetRelative(3, 0, dp(4), dp(4), 0)
+            }
         }
     }
 
@@ -1297,5 +1407,12 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
         /** How long a button is held before it lifts (Android's own long press is 500 ms). */
         const val HOLD_MS = 320L
         const val HINT_SEEN = "menu_move_hint_seen"
+
+        /** A page dot's finger-sized place (dp, 3.0). */
+        const val DOT_PLACE = 48
+
+        /** The buttons' names (sp), and the smallest a long one is drawn (3.0). */
+        const val LABEL_SP = 12.5f
+        const val MIN_LABEL_SP = 11f
     }
 }

@@ -35,6 +35,25 @@ object VpnUi {
     /** It should be on but isn't (it dropped, or didn't connect): Reconnect, or Turn off. */
     fun dropped(): Boolean = Vpn.wanted && Vpn.state == Vpn.State.FAILED
 
+    /** 3.0: it didn't come back on when Swift started, and pages wait: Try again, or Continue without VPN. */
+    fun resumeFailed(): Boolean = dropped() && Vpn.resuming
+
+    /** The buttons of a VPN that should be on but isn't: [first] reconnects, [second] turns it off. */
+    fun reconnectLabel(): String = if (Vpn.resuming) "Try again" else "Reconnect"
+
+    fun turnOffLabel(): String = if (Vpn.resuming) "Continue without VPN" else "Turn off"
+
+    /**
+     * Turns the VPN off from a sheet or Settings; 3.0: a page that was waiting for it loads now, over
+     * the phone's own connection (it waited until the VPN connected).
+     */
+    fun turnOff(a: Activity) {
+        val waited = Vpn.resuming || (Vpn.wanted && Vpn.state != Vpn.State.ON)
+        Vpn.turnOff()
+        if (waited) com.swiftbrowser.tabs.TabManager.onOnline()
+        Messages.show(a, if (waited) "VPN off. Pages load over your own connection." else "VPN off")
+    }
+
     /** A line about the state for sheets and Settings. */
     fun status(): String = if (Vpn.testing) {
         val step = Vpn.testStep
@@ -43,9 +62,16 @@ object VpnUi {
     } else when (Vpn.state) {
         Vpn.State.ON -> "Connected to " + (Vpn.current()?.let { "${it.flag} ${it.countryName}" } ?: "the VPN") +
             (Vpn.seenAs?.let { "\nSites see: $it" } ?: "\nChecking what sites see…")
-        Vpn.State.CONNECTING -> "Connecting to " + (Vpn.current()?.countryName ?: "the VPN") + "…" +
-            if (Vpn.pauseWhenDown) "\nPages wait until it's connected." else ""
-        Vpn.State.FAILED -> (Vpn.error ?: "Not connected.") + if (Vpn.wanted && Vpn.pauseWhenDown) "\nPages are paused until it connects or you turn it off." else ""
+        Vpn.State.CONNECTING -> (if (Vpn.resuming) "Turning the VPN back on: " else "Connecting to ") +
+            (Vpn.current()?.countryName ?: "the VPN") + "…" +
+            if (Vpn.pauseWhenDown || Vpn.resuming) "\nPages wait until it's connected." else ""
+        // 3.0: it didn't come back on at start: why, and what the buttons do.
+        Vpn.State.FAILED -> if (resumeFailed()) {
+            "The VPN didn't come back on when Swift started. " + (Vpn.resumeReason ?: "") +
+                "\nPages wait until it connects, or until you continue without it."
+        } else {
+            (Vpn.error ?: "Not connected.") + if (Vpn.wanted && Vpn.pauseWhenDown) "\nPages are paused until it connects or you turn it off." else ""
+        }
         Vpn.State.OFF -> if (Vpn.locations().isEmpty()) "No locations yet. Add a free Proton VPN location to start." else "Off. Sites see your own connection."
     }
 
@@ -122,10 +148,20 @@ object VpnUi {
         }
     }
 
-    /** The reminder at start: which location stops working when, and what to do. */
+    /**
+     * The reminder at start: which location stops working when, and what to do. 3.0: the reminder has
+     * "I extended it" itself (it sent people to a button that only showed when a location was held).
+     */
     fun expiryText(loc: Vpn.Location): String =
         "VPN ${loc.flag} ${loc.countryName} (${loc.server}): ${renewText(loc).replaceFirstChar { it.lowercase() }}. " +
-            "Tap Extend next to it on Proton's page, then \"I extended it\" in Settings → VPN."
+            "Tap Extend next to it on Proton's page, then come back and tap \"I extended it\"."
+
+    /** 3.0: "I extended it" (the reminder, the location's sheet in Settings): another year from now. */
+    fun markExtended(a: Activity, loc: Vpn.Location) {
+        Vpn.markExtended(loc)
+        val now = Vpn.locations().firstOrNull { it.id == loc.id } ?: loc
+        Messages.show(a, "${loc.countryName}: ${renewText(now).replaceFirstChar { it.lowercase() }}")
+    }
 
     /** A WireGuard setup file (.conf) downloaded in Swift (Android 7's file picker hardly finds them). */
     fun isSetupFile(d: Downloads.Item) = d.status == Downloads.DONE && d.fileName.endsWith(".conf", ignoreCase = true)
@@ -229,26 +265,25 @@ object VpnUi {
                 orientation = LinearLayout.VERTICAL
                 setPadding(Ui.dp(a, 24), Ui.dp(a, 4), Ui.dp(a, 24), Ui.dp(a, 8))
                 addView(com.google.android.material.button.MaterialButton(a).apply {
-                    text = if (Vpn.testing) "Stop testing" else if (dropped) "Reconnect" else if (on) "Turn off" else "Turn on"
+                    text = if (Vpn.testing) "Stop testing" else if (dropped) reconnectLabel() else if (on) "Turn off" else "Turn on"
                     setOnClickListener {
                         dialog.dismiss()
                         if (Vpn.testing) {
                             if (on) turnOn(a, permission) else Vpn.turnOff()
                         } else if (on && !dropped) {
-                            Vpn.turnOff()
-                            Messages.show(a, "VPN off")
+                            turnOff(a)
                         } else {
                             turnOn(a, permission)
                         }
                     }
                 }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(a, 52)))
                 if (dropped) {
+                    // 3.0: after a start that didn't bring it back, "Continue without VPN".
                     addView(com.google.android.material.button.MaterialButton(a, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
-                        text = "Turn off"
+                        text = turnOffLabel()
                         setOnClickListener {
                             dialog.dismiss()
-                            Vpn.turnOff()
-                            Messages.show(a, "VPN off")
+                            turnOff(a)
                         }
                     }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(a, 52)).apply { topMargin = Ui.dp(a, 4) })
                 }

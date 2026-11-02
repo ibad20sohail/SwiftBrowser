@@ -10,7 +10,8 @@ import java.io.InputStream
  * connections lack for many sites today. Without cookies. Blocking: call off the main thread.
  */
 object Net {
-    const val USER_AGENT = "Mozilla/5.0 (Android 7.1.2; Mobile; rv:143.0) Gecko/143.0 Firefox/143.0"
+    /** 3.0: the engine's own (it says Android 10 on older phones), with the newer version when that's chosen. */
+    val USER_AGENT: String get() = UserAgent.mobile
 
     /** What came back: the address after redirects, its type and the bytes. */
     class Result(val url: String, val type: String, val bytes: ByteArray)

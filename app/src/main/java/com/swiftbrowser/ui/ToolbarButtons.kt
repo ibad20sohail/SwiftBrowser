@@ -24,8 +24,8 @@ import kotlin.math.hypot
 
 /**
  * The buttons next to the address (2.2): which ones, and on which side of it (Settings → Look &
- * screen → Address bar buttons). The menu button always stays; the video download button and the
- * VPN mark still come and go by themselves.
+ * screen → Address bar buttons). The menu button always stays, and (3.0) the tabs button, the only
+ * way to the tab grid; the video download button and the VPN mark still come and go by themselves.
  */
 object ToolbarButtons {
     class Button(val key: String, val icon: Int, val label: String)
@@ -46,6 +46,9 @@ object ToolbarButtons {
     /** More would leave too little room for the address on a small phone. */
     const val MAX = 4
 
+    /** The buttons that can move but not be removed (3.0: tabs too; without it the tab grid couldn't be opened). */
+    val KEPT = setOf("menu", "tabs")
+
     fun button(key: String) = all.first { it.key == key }
 
     class Layout(val left: MutableList<String>, val right: MutableList<String>) {
@@ -64,9 +67,11 @@ object ToolbarButtons {
     fun defaultLayout() = Layout(mutableListOf("profile", "home"), mutableListOf("tabs", "menu"))
 
     /** As arranged; from before 2.2, the profile and (if it was on) the home button, then tabs and menu. */
-    fun layout(): Layout {
+    fun layout(): Layout = fromSaved(SwiftApp.prefs.toolbarLayout) { SwiftApp.prefs.showHomeButton }
+
+    /** The layout [saved] in Settings ("profile,home|tabs,menu"), or the one before 2.2 ([homeButton]: it was on). */
+    internal fun fromSaved(saved: String?, homeButton: () -> Boolean): Layout {
         val keys = all.map { it.key }
-        val saved = SwiftApp.prefs.toolbarLayout
         val l = if (saved != null && '|' in saved) {
             val (left, right) = saved.split('|', limit = 2)
             Layout(
@@ -74,13 +79,18 @@ object ToolbarButtons {
                 right.split(',').filter { it in keys }.distinct().toMutableList(),
             )
         } else {
-            Layout(listOfNotNull("profile", "home".takeIf { SwiftApp.prefs.showHomeButton }).toMutableList(), mutableListOf("tabs", "menu"))
+            Layout(listOfNotNull("profile", "home".takeIf { homeButton() }).toMutableList(), mutableListOf("tabs", "menu"))
         }
         l.right.removeAll { it in l.left }
         if (!l.has("menu")) l.right.add("menu")
+        // 3.0: a bar arranged without the tabs button gets it back, just before the menu button.
+        if (!l.has("tabs")) {
+            val menu = l.right.indexOf("menu")
+            if (menu >= 0) l.right.add(menu, "tabs") else l.right.add("tabs")
+        }
         while (l.size > MAX) {
-            val side = if (l.left.any { it != "menu" }) l.left else l.right
-            side.removeAt(side.indexOfFirst { it != "menu" })
+            val side = if (l.left.any { it !in KEPT }) l.left else l.right
+            side.removeAt(side.indexOfFirst { it !in KEPT })
         }
         return l
     }
@@ -156,7 +166,7 @@ class ToolbarEditor(private val a: Activity) : FrameLayout(a) {
 
     /** The usual hint, or a short warning in its place. */
     private fun say(warning: String?) {
-        note.text = warning ?: "Hold a button and drag it to either side of the address, or down to remove it. Up to ${ToolbarButtons.MAX} fit; the menu button always stays."
+        note.text = warning ?: "Hold a button and drag it to either side of the address, or down to remove it. Up to ${ToolbarButtons.MAX} fit; the menu and tabs buttons always stay."
         note.setTextColor(if (warning != null) Ui.danger(a) else color(R.color.text_secondary))
     }
 
@@ -218,17 +228,22 @@ class ToolbarEditor(private val a: Activity) : FrameLayout(a) {
     private fun barButton(key: String): View {
         val b = ToolbarButtons.button(key)
         val v: View = if (key == "profile") {
-            // The profile's coloured letter, as in the bar.
+            // The profile's coloured letter (or its Google account's photo, 3.0), as in the bar.
             FrameLayout(a).apply {
                 val p = Profiles.current()
+                val photo = com.swiftbrowser.core.GoogleAccounts.picture(a, p.id)
                 addView(TextView(a).apply {
-                    text = Profiles.initial(p)
                     gravity = Gravity.CENTER
                     textSize = 14f
                     setTypeface(typeface, Typeface.BOLD)
                     setTextColor(0xFFFFFFFF.toInt())
-                    background = ContextCompat.getDrawable(a, R.drawable.bg_circle)
-                    backgroundTintList = ColorStateList.valueOf(p.color)
+                    if (photo != null) {
+                        background = photo
+                    } else {
+                        text = Profiles.initial(p)
+                        background = ContextCompat.getDrawable(a, R.drawable.bg_circle)
+                        backgroundTintList = ColorStateList.valueOf(p.color)
+                    }
                 }, LayoutParams(dp(30), dp(30), Gravity.CENTER))
             }
         } else {
@@ -311,11 +326,19 @@ class ToolbarEditor(private val a: Activity) : FrameLayout(a) {
             if (toLeft) other.add(key) else other.add(0, key)
             changed()
         }
-        if (key != "menu") actions += Sheets.Action(R.drawable.ic_close, "Remove from the bar") {
+        if (key !in ToolbarButtons.KEPT) actions += Sheets.Action(R.drawable.ic_close, "Remove from the bar") {
             layout.remove(key)
             changed()
         }
-        Sheets.actions(a, b.label, null, actions, iconRes = b.icon)
+        Sheets.actions(a, b.label, keptReason(key), actions, iconRes = b.icon)
+    }
+
+    /** Why a button can't leave the bar, or null when it can. */
+    private fun keptReason(key: String): String? = when (key) {
+        "menu" -> "The menu button always stays in the bar."
+        // 3.0: it's the only way to the tab grid.
+        "tabs" -> "The tabs button always stays in the bar: it's the only way to the tab grid."
+        else -> null
     }
 
     private fun changed() {
@@ -404,8 +427,8 @@ class ToolbarEditor(private val a: Activity) : FrameLayout(a) {
             say(null)
             render(animate = true)
         } else if (within(trayBox, x, y)) {
-            if (key == "menu") {
-                say("The menu button always stays in the bar.")
+            keptReason(key)?.let {
+                say(it)
                 return
             }
             if (layout.has(key)) {

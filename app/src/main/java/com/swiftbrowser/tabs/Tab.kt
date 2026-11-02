@@ -35,6 +35,29 @@ class Tab(
     var session: GeckoSession? = null
 
     /**
+     * 3.0: the engine is still to open [session] itself: a pop-up's new window, or a page an
+     * extension opened (TabManager.openedByEngine). Meanwhile it is kept as it is, not taken for a
+     * dead session and replaced.
+     */
+    var sessionOpening = false
+
+    /**
+     * 3.0: opened by a page (window.open, a link to a new window) or by an extension. Its page is the
+     * engine's from the start, even while blank (a pop-up a script writes into), so the home page
+     * never covers it.
+     */
+    var popup = false
+
+    /**
+     * 3.0: the page restore waiting to run (for the ad blocker at start, or for the tab's history to
+     * be read), 0 when none. What the user asks for meanwhile cancels it (TabManager.load).
+     */
+    var restoreToken = 0
+
+    /** 3.0: that restore waits for the ad blocker however long it takes (a page Swift restores, not one the user just opened). */
+    var restoreUntilReady = false
+
+    /**
      * The engine's latest back/forward history, scroll and form state. Kept as the engine's
      * object and only turned into text when saved, off the main thread.
      */
@@ -112,8 +135,8 @@ class Tab(
 
     val isBlank: Boolean get() = UrlUtils.isBlank(url)
 
-    /** A blank tab with nothing to restore shows the home page and needs no engine session. */
-    val isHome: Boolean get() = isBlank && sessionState == null && state == null
+    /** A blank tab with nothing to restore shows the home page and needs no engine session (not a pop-up, 3.0). */
+    val isHome: Boolean get() = isBlank && sessionState == null && state == null && !popup
 
     val displayTitle: String
         get() = title.ifBlank { if (isBlank) (if (incognito) "Incognito tab" else "New tab") else UrlUtils.display(url) }
@@ -141,6 +164,21 @@ class TabGroup(val id: Long, val profileId: Long, var name: String, var color: I
 /** What the browser screen does for the engine. Implemented by MainActivity. */
 interface BrowserUi {
     val activity: AppCompatActivity
+
+    /** 3.0: Swift's browser screen is on screen (between onStart and onStop). */
+    val onScreen: Boolean
+
+    /**
+     * 3.0: the open tab's page can be seen: Swift is on screen, and neither the home page nor the tab
+     * grid covers it. Pages are made active (drawn, their scripts at full speed) only then.
+     */
+    val pageOnScreen: Boolean
+
+    /**
+     * 3.0: [tab] is being left for another tab: its picture for the tab grid is taken while its page
+     * is still drawn, then [done] runs (it lets the page rest). The new tab's page goes on screen after.
+     */
+    fun onLeavingTab(tab: Tab, done: () -> Unit) = done()
 
     fun onTabSelected(tab: Tab)
     fun onTabsChanged()

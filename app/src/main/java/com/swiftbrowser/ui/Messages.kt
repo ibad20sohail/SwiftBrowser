@@ -46,7 +46,9 @@ object Messages {
 
     /**
      * Shows [text] at the bottom of [activity]. [action] (such as "Undo") runs [onAction] when tapped.
-     * [bottomOffset] lifts it above a bar at the bottom of the screen (px).
+     * [bottomOffset] lifts it above a bar at the bottom of the screen (px). [onDismiss] (3.0) runs
+     * once when the message is gone, however it went (after its action too, or at once when it can't
+     * be shown): what waits for an Undo is done then, not after a fixed time.
      */
     fun show(
         activity: Activity,
@@ -55,6 +57,7 @@ object Messages {
         icon: Int? = null,
         long: Boolean = false,
         bottomOffset: Int = 0,
+        onDismiss: (() -> Unit)? = null,
         onAction: (() -> Unit)? = null,
     ) {
         // Long texts stay longer (2.6): about as long as they take to read.
@@ -64,7 +67,7 @@ object Messages {
             action != null -> maxOf(ACTION_MS, reading).coerceAtMost(LONG_MS)
             else -> maxOf(SHORT_MS, reading).coerceAtMost(LONG_MS)
         }
-        present(activity, text, action, icon, duration, bottomOffset, onAction)
+        if (present(activity, text, action, icon, duration, bottomOffset, onAction, onDismiss) == null) onDismiss?.invoke()
     }
 
     /** A message that stays (an update downloading): change it through the handle, dismiss when done. */
@@ -84,13 +87,14 @@ object Messages {
         duration: Long,
         bottomOffset: Int,
         onAction: (() -> Unit)?,
+        onDismiss: (() -> Unit)? = null,
     ): Pill? {
         if (activity.isFinishing) return null
         val host = activity.findViewById<FrameLayout>(android.R.id.content) ?: return null
         current?.let { old ->
             if (old.context === activity) old.dismiss(quick = true) else old.removeNow()
         }
-        val pill = Pill(activity, text, action, icon, duration, onAction)
+        val pill = Pill(activity, text, action, icon, duration, onAction, onDismiss)
         current = pill
         val m = Ui.dp(activity, 12)
         host.addView(pill, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM).apply {
@@ -116,6 +120,7 @@ object Messages {
         icon: Int?,
         private val duration: Long,
         onAction: (() -> Unit)?,
+        private var onDismiss: (() -> Unit)?,
     ) : FrameLayout(ctx) {
         val text: TextView
         private val line: View
@@ -149,20 +154,25 @@ object Messages {
             text = Ui.text(ctx, Ui.Type.BODY, message, fg, lines = 3)
             row.addView(text, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             if (action != null) {
+                // 3.0: 48 dp to tap (it was 40), reaching into the pill's own padding so the pill keeps
+                // its height; the touch highlight is drawn 40 dp high as before.
+                val reach = Ui.dp(ctx, 4)
                 row.addView(TextView(ctx).apply {
                     this.text = action
                     Ui.style(this, Ui.Type.LABEL, accent)
                     gravity = Gravity.CENTER
                     minWidth = Ui.dp(ctx, 64)
-                    minHeight = Ui.dp(ctx, 40)
+                    minHeight = Ui.dp(ctx, 48)
                     setPadding(Ui.dp(ctx, 14), 0, Ui.dp(ctx, 14), 0)
-                    background = Ui.ripple(ctx, null, 20)
+                    background = android.graphics.drawable.InsetDrawable(Ui.ripple(ctx, null, 20), 0, reach, 0, reach)
                     setOnClickListener {
                         onAction?.invoke()
                         dismiss()
                     }
                 }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
                     marginStart = Ui.dp(ctx, 4)
+                    topMargin = -reach
+                    bottomMargin = -reach
                 })
             }
             addView(row)
@@ -216,6 +226,7 @@ object Messages {
             leaving = true
             mainHandler.removeCallbacks(timeout)
             if (current === this) current = null
+            gone()
             val a = animate().alpha(0f).setDuration(if (quick) 120 else Motion.NORMAL).setInterpolator(Motion.exit)
             if (toSide != 0f) a.translationX(toSide) else a.translationY(Ui.dpf(context, if (quick) 12f else 24f))
             a.withEndAction { removeNow() }.start()
@@ -224,7 +235,24 @@ object Messages {
         fun removeNow() {
             mainHandler.removeCallbacks(timeout)
             if (current === this) current = null
+            gone()
             (parent as? ViewGroup)?.removeView(this)
+        }
+
+        /** The message is going: what waited for it is told, once. */
+        private fun gone() {
+            val f = onDismiss ?: return
+            onDismiss = null
+            f()
+        }
+
+        override fun onDetachedFromWindow() {
+            // 3.0: its screen closed (or was made again) with it on: nothing keeps that screen in
+            // memory any more (a message that stays never timed out), and an Undo can't come now.
+            mainHandler.removeCallbacks(timeout)
+            if (current === this) current = null
+            gone()
+            super.onDetachedFromWindow()
         }
 
         // Swiping sideways takes it away; holding it keeps it on screen.

@@ -116,6 +116,23 @@ class SettingsActivity : AppCompatActivity() {
 
     private val defs: List<Def> by lazy { buildDefs() }
 
+    /**
+     * 3.0: what each setting's rows say (titles and summaries), for search; read once, the first
+     * time something is searched, without making the rows.
+     */
+    private val rowTexts: Map<Def, String> by lazy {
+        val scratch = LinearLayout(this)
+        defs.associateWith { d ->
+            val text = StringBuilder()
+            try {
+                d.build(Section(scratch, ArrayList(), probe = text))
+            } catch (e: Exception) {
+                com.swiftbrowser.core.L.w("Settings search couldn't read ${d.title}", e)
+            }
+            text.toString()
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         Looks.apply(this)
         super.onCreate(savedInstanceState)
@@ -320,13 +337,9 @@ class SettingsActivity : AppCompatActivity() {
         results.removeAllViews()
         resultRefreshers.clear()
         if (query.isEmpty()) return
-        val q = query.lowercase()
         // Everyday words find the settings they are about ("battery" finds Lite mode and Data saver).
-        val words = listOf(q) + SYNONYMS.filterKeys { q.contains(it) || it.startsWith(q) && q.length >= 3 }.values.flatten()
-        val found = defs.filter { d ->
-            val title = d.title.lowercase()
-            words.any { w -> title.contains(w) || d.keywords.contains(w) || d.topic.title.lowercase().contains(w) }
-        }
+        // 3.0: whole words, every word of the search, and what the rows say (SettingsSearch).
+        val found = defs.filter { d -> SettingsSearch.matches(query, SettingsSearch.Entry(d.title, rowTexts[d].orEmpty(), d.keywords, d.topic.title)) }
         // Each new word brings its results in with a short fade (2.3). No layer: the list can be
         // taller than the GPU's biggest picture.
         results.animate().cancel()
@@ -442,7 +455,7 @@ class SettingsActivity : AppCompatActivity() {
         Topic.FILES -> "File manager and the media player"
         Topic.VPN -> VpnUi.label().let { if (com.swiftbrowser.vpn.Vpn.locations().isEmpty()) "Change your country for free (Proton VPN)" else it }
         Topic.STORAGE -> (usage?.let { "Swift uses ${UrlUtils.formatBytes(it.total)} · " } ?: "") + "Clear data · Back up"
-        Topic.ABOUT -> "Swift ${BuildConfig.VERSION_NAME} · Updates · Problem report"
+        Topic.ABOUT -> "Swift ${BuildConfig.VERSION_NAME} · Updates · Problem report · Licences"
     }
 
     // ------------------------------------------------------------------ all the settings
@@ -458,7 +471,7 @@ class SettingsActivity : AppCompatActivity() {
             action(R.drawable.ic_dark, "Theme", { themeText() }) { chooseTheme() }
         }
         def(Topic.LOOK, "Colours", "Colours", "color colour accent background black amoled navy warm blue green purple orange red teal pink indigo amber cyan brown graphite custom own personal") {
-            custom(ColoursPanel.build(this@SettingsActivity))
+            custom { ColoursPanel.build(this@SettingsActivity) }
         }
         def(Topic.LOOK, null, "Night light", "night light warm amber blue light eyes sleep evening") {
             action(R.drawable.ic_night_light, "Night light", {
@@ -559,7 +572,30 @@ class SettingsActivity : AppCompatActivity() {
         def(Topic.FILES, "Recycle bin", "Keep deleted files", "recycle bin days keep") {
             action(R.drawable.ic_history, "Keep deleted files", { "${FilesSettings.binDays} days, then they go for good" }) {
                 choose("Keep deleted files", FilesSettings.BIN_DAY_CHOICES.map { "$it days" }, FilesSettings.BIN_DAY_CHOICES.indexOf(FilesSettings.binDays)) { i ->
-                    FilesSettings.binDays = FilesSettings.BIN_DAY_CHOICES[i]
+                    val days = FilesSettings.BIN_DAY_CHOICES[i]
+                    if (days >= FilesSettings.binDays) {
+                        FilesSettings.setBinDays(this@SettingsActivity, days)
+                    } else {
+                        // 3.0: a shorter time deletes the older things for good at once: asked first, with how many and how much.
+                        FilesSettings.binDue(this@SettingsActivity, days) { due ->
+                            if (isFinishing) return@binDue
+                            if (due.count == 0) {
+                                FilesSettings.setBinDays(this@SettingsActivity, days)
+                                refreshAll()
+                                return@binDue
+                            }
+                            val what = if (due.count == 1) "1 item" else "${due.count} items"
+                            Dialogs.confirm(
+                                this@SettingsActivity, "Delete $what for good?",
+                                "$what (${UrlUtils.formatBytes(due.bytes)}) " + (if (due.count == 1) "has" else "have") +
+                                    " been in the recycle bin longer than $days days and will be deleted for good.",
+                                "Delete", danger = true,
+                            ) {
+                                FilesSettings.setBinDays(this@SettingsActivity, days)
+                                refreshAll()
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -570,16 +606,23 @@ class SettingsActivity : AppCompatActivity() {
                 }
             }
         }
-        def(Topic.FILES, "Private", "Private folder lock", "private folder lock pin screen lock") {
+        def(Topic.FILES, "Private", "Private folder lock", "private folder lock pin screen lock forgot reset") {
+            // 3.0: each state in words (it said "screen lock" with no screen lock and no PIN); a PIN keeps Private once chosen.
             action(R.drawable.ic_lock, "Private folder lock", {
                 when (FilesSettings.privateLockKind(this@SettingsActivity)) {
+                    FilesSettings.LOCK_PIN -> FilesSettings.privateResetLeft()?.let { left ->
+                        if (left > 0) "Swift's PIN · a reset was asked for: it can be done in ${PrivateLock.duration(left)}"
+                        else "Swift's PIN · a reset was asked for: open Private and tap Forgot PIN to choose a new one"
+                    } ?: "Swift's PIN · tap to change it"
                     FilesSettings.LOCK_SCREEN -> "Your phone's screen lock"
-                    FilesSettings.LOCK_PIN -> "Swift's PIN · tap to change it"
-                    else -> "Not set up yet: open Private in Files"
+                    else -> "Not set up yet: tap to choose a PIN"
                 }
             }) {
-                if (FilesSettings.privateLockKind(this@SettingsActivity) == FilesSettings.LOCK_PIN) FilesSettings.changePin(this@SettingsActivity)
-                else snack("Private uses your phone's screen lock. Set or change it in Android's settings.")
+                when (FilesSettings.privateLockKind(this@SettingsActivity)) {
+                    FilesSettings.LOCK_SCREEN -> snack("Private opens with your phone's screen lock. Set or change it in Android's settings.")
+                    // A PIN: change it (the old one first). None yet: choose one.
+                    else -> FilesSettings.changePin(this@SettingsActivity)
+                }
             }
         }
         // 2.9: Swift's video and music player (PlayerSettings).
@@ -716,10 +759,10 @@ class SettingsActivity : AppCompatActivity() {
 
         // Ad blocking
         def(Topic.ADBLOCK, "This week", "Blocked this week", "stats count numbers trackers blocked week") {
-            custom(AdStatsCard.build(this@SettingsActivity))
+            custom { AdStatsCard.build(this@SettingsActivity) }
         }
         def(Topic.ADBLOCK, "How much to block", "Blocking level", "ads off balanced high extreme ublock") {
-            custom(levelChooser(refresh))
+            custom { levelChooser(refresh) }
         }
         def(Topic.ADBLOCK, "More", "Hide cookie pop-ups", "cookies consent gdpr accept notices banner") {
             switch(
@@ -945,8 +988,17 @@ class SettingsActivity : AppCompatActivity() {
             }
         }
         def(Topic.VIDEO, "Torrents", "Extra trackers", "torrent trackers public peers faster start") {
-            switch(R.drawable.ic_speed, "Extra trackers", { "Well-known public trackers help torrents with few sharers start sooner" }, checked = { TorrentSettings.extraTrackers }) {
+            switch(R.drawable.ic_speed, "Extra trackers", { "Well-known public trackers help torrents with few sharers start sooner (never private ones)" }, checked = { TorrentSettings.extraTrackers }) {
                 TorrentSettings.extraTrackers = it
+            }
+        }
+        // 3.0: torrents' connections encrypted when they can be, or only encrypted ones.
+        def(Topic.VIDEO, "Torrents", "Encryption", "torrent encryption encrypted privacy isp throttle obfuscation") {
+            action(R.drawable.ic_lock, "Encryption", { TorrentSettings.ENCRYPTION_CHOICES[if (TorrentSettings.encryptedOnly) 1 else 0] }) {
+                choose("Torrent encryption", TorrentSettings.ENCRYPTION_CHOICES, if (TorrentSettings.encryptedOnly) 1 else 0) { i ->
+                    TorrentSettings.encryptedOnly = i == 1
+                    Torrents.applySettings()
+                }
             }
         }
 
@@ -979,6 +1031,58 @@ class SettingsActivity : AppCompatActivity() {
                 Engine.applyPrivacyPrefs()
             }
         }
+        // 3.0: Swift's engine gets no more security fixes (the last Firefox for Android 7).
+        def(
+            Topic.PRIVACY, "Security", "Safer browsing",
+            "safer security secure safe javascript scripts jit compiler webassembly wasm attack attacks exploit hack hacked virus old engine protect",
+        ) {
+            switch(
+                R.drawable.ic_shield, "Safer browsing",
+                { if (prefs.saferBrowsing) "Pages run their scripts more slowly, and some games or video players may not work" else "Off: pages run their scripts at full speed" },
+                details = "Swift is built on Firefox 143, the last version for Android 7, and it doesn't get security fixes any more. " +
+                    "Most attacks on old browsers go through the parts that make pages' scripts run fast.\n\n" +
+                    "With this on, pages run their scripts without them: more slowly, and some games or video players may not " +
+                    "work. It closes a common way old browsers are attacked. The ad blocker keeps its full speed.\n\n" +
+                    "It starts when Swift starts again.",
+                checked = { prefs.saferBrowsing },
+            ) {
+                prefs.saferBrowsing = it
+                Engine.applySaferBrowsing()
+                confirmRestart(if (it) "Pages run their scripts the safer way after Swift restarts." else "Pages run their scripts at full speed again after Swift restarts.")
+            }
+        }
+        def(
+            Topic.PRIVACY, "Security", "Tell sites a newer Firefox version",
+            "user agent useragent firefox version browser out of date outdated old update upgrade unsupported not supported sites esr",
+            advanced = true,
+        ) {
+            switch(
+                R.drawable.ic_globe, "Tell sites a newer Firefox version",
+                { if (prefs.newerFirefoxVersion) "Sites are told Firefox ${com.swiftbrowser.engine.UserAgent.NEWER}, so fewer say Swift is out of date" else "Off: sites are told Firefox 143, as it is" },
+                details = "Swift is built on Firefox 143, the last version for Android 7. Some sites refuse versions that old, " +
+                    "or keep saying the browser is out of date. With this on, sites are told it's Firefox " +
+                    "${com.swiftbrowser.engine.UserAgent.NEWER} instead.\n\nA site may then use something Swift can't do and not " +
+                    "work right; turn this off again if one does. It applies to pages you open from now on.",
+                checked = { prefs.newerFirefoxVersion },
+            ) {
+                prefs.newerFirefoxVersion = it
+                com.swiftbrowser.engine.UserAgent.applyToOpenTabs()
+            }
+        }
+        def(
+            Topic.PRIVACY, "Incognito", "Allow screenshots in incognito",
+            "screenshot screenshots screen capture shot record recording incognito private recent apps recents picture",
+        ) {
+            switch(
+                R.drawable.ic_incognito, "Allow screenshots in incognito",
+                { if (prefs.allowIncognitoScreenshots) "Incognito pages can be in screenshots and in Android's recent apps" else "Off: incognito pages stay out of screenshots and Android's recent apps" },
+                checked = { prefs.allowIncognitoScreenshots },
+            ) {
+                prefs.allowIncognitoScreenshots = it
+                // At once, on the browser's screen behind this one.
+                (TabManager.ui as? MainActivity)?.applySecureScreen()
+            }
+        }
         def(Topic.PRIVACY, "Passwords", "Offer to save passwords", "password login sign in autofill fill in remember") {
             switch(
                 R.drawable.ic_password, "Offer to save passwords",
@@ -1004,13 +1108,17 @@ class SettingsActivity : AppCompatActivity() {
         def(Topic.PRIVACY, "Sites", "Site settings", "desktop location sound permissions per site") {
             action(R.drawable.ic_tune, "Site settings", { siteSettingsText() }) { chooseSite() }
         }
+        // 3.0: also here, where people look for it (it was only under Storage & data).
+        def(Topic.PRIVACY, "Sites", "Clear browsing data", "history cookies cache delete last hour day week time") {
+            action(R.drawable.ic_delete, "Clear browsing data", { "History, cookies, the cache and more, for the time you choose" }) { clearData() }
+        }
 
         // VPN
         def(Topic.VPN, null, "VPN", "vpn proton wireguard country ip hide location change country") {
-            custom(vpnCard(refresh))
+            custom { vpnCard(refresh) }
         }
         def(Topic.VPN, "Locations", "VPN locations", "location server country proton") {
-            custom(vpnLocations(refresh))
+            custom { vpnLocations(refresh) }
         }
         def(Topic.VPN, "Locations", "Test the locations", "test speed fastest working server ping answer") {
             action(R.drawable.ic_speed, "Test the locations", { vpnTestText() }) { testVpnLocations() }
@@ -1021,8 +1129,16 @@ class SettingsActivity : AppCompatActivity() {
         def(Topic.VPN, "Locations", "How to get free locations", "proton free account download wireguard") {
             action(R.drawable.ic_info, "How to get free locations", { "Free from Proton VPN, in a few minutes" }) { vpnHowTo() }
         }
-        def(Topic.VPN, "Options", "Connect when Swift starts", "vpn automatic start") {
-            switch(R.drawable.ic_vpn, "Connect when Swift starts", { "If it was on when you left Swift" }, checked = { com.swiftbrowser.vpn.Vpn.connectAtStart }) {
+        // 3.0: if it was on, it always comes back on now; this turns it on even when it was off.
+        def(Topic.VPN, "Options", "Turn on the VPN every time Swift starts", "vpn automatic start always every time on") {
+            switch(
+                R.drawable.ic_vpn, "Turn on the VPN every time Swift starts",
+                { "Even if it was off when you left Swift" },
+                details = "If the VPN was on when Swift closed (an update, a crash, or Android closing it), Swift always turns " +
+                    "it back on by itself, and pages wait until it's connected.\n\nWith this on, Swift also turns the VPN on " +
+                    "when it was off.",
+                checked = { com.swiftbrowser.vpn.Vpn.connectAtStart },
+            ) {
                 com.swiftbrowser.vpn.Vpn.connectAtStart = it
             }
         }
@@ -1041,23 +1157,24 @@ class SettingsActivity : AppCompatActivity() {
                 { "Sites never see your own connection by accident" },
                 details = "While the VPN is connecting, or if it stops (another VPN app started, or Android stopped it), " +
                     "pages wait instead of loading over your own connection. They load by themselves once it is connected " +
-                    "again; turning the VPN off lets them load normally.",
+                    "again; turning the VPN off lets them load normally.\n\nWhen Swift starts again with the VPN on (after " +
+                    "an update or a crash), pages always wait until it's back, even with this off.",
                 checked = { com.swiftbrowser.vpn.Vpn.pauseWhenDown },
             ) { com.swiftbrowser.vpn.Vpn.pauseWhenDown = it }
         }
 
         // Storage
         def(Topic.STORAGE, null, "Storage used", "space size phone memory") {
-            custom(storageBreakdown(refresh))
+            custom { storageBreakdown(refresh) }
         }
         def(Topic.STORAGE, "Clear data", "Clear browsing data", "history cookies cache delete last hour day week time") {
-            action(R.drawable.ic_delete, "Clear browsing data", { "The last hour, day, week, days you choose or all of it: history, cookies, saved files and more" }) { clearData() }
+            action(R.drawable.ic_delete, "Clear browsing data", { "The last hour, day, week, days you choose or all of it: history, cookies, the cache and more" }) { clearData() }
         }
         def(Topic.STORAGE, "Clear data", "When you quit", "quit exit close clear on exit") {
             action(R.drawable.ic_quit, "When you quit", { ClearData.quitSummary() }) { ClearData.chooseForQuit(this@SettingsActivity) { refreshAll() } }
         }
-        def(Topic.STORAGE, "Free up space", "Clear the cache", "cache files space") {
-            action(R.drawable.ic_delete, "Clear the cache", { usage?.let { "${UrlUtils.formatBytes(it.cache)} of files sites reuse" } }) { clearCache() }
+        def(Topic.STORAGE, "Free up space", "Clear the cache", "cache files space pictures") {
+            action(R.drawable.ic_delete, "Clear the cache", { usage?.let { "${UrlUtils.formatBytes(it.cache)}: copies of pages' pictures and files" } }) { clearCache() }
         }
         def(Topic.STORAGE, "Free up space", "Data sites stored", "site storage sites space clear") {
             action(R.drawable.ic_globe, "Data sites stored", { usage?.let { "${UrlUtils.formatBytes(it.sites)} · see and clear each site" } }) { showSiteStorage() }
@@ -1085,9 +1202,16 @@ class SettingsActivity : AppCompatActivity() {
         def(Topic.ABOUT, null, "Check for updates", "new version github update") {
             action(R.drawable.ic_update, "Check for updates", { "Your tabs and settings stay when you update" }) { checkForUpdates() }
         }
-        def(Topic.ABOUT, null, "Send a problem report", "crash bug report") {
-            action(R.drawable.ic_report, "Send a problem report", { "Share what Swift noted about crashes, to help fix them" }) {
+        // 3.0: it sends three days of Swift's log, not only crashes: said so, and shown first.
+        def(Topic.ABOUT, null, "Send a problem report", "crash bug report log freeze") {
+            action(R.drawable.ic_report, "Send a problem report", { "Crashes, freezes and Swift's log of the last 3 days. You see it before it's sent." }) {
                 Diagnostics.shareReport(this@SettingsActivity)
+            }
+        }
+        // 3.0: what Swift is made of, and the licences it comes under.
+        def(Topic.ABOUT, null, "Open-source licences", "licence license open source credits gpl mpl apache notice components libraries") {
+            action(R.drawable.ic_info, "Open-source licences", { "The projects Swift is built from, and their licences" }) {
+                Licences.show(this@SettingsActivity) { openInBrowser(it) }
             }
         }
         return list
@@ -1146,7 +1270,18 @@ class SettingsActivity : AppCompatActivity() {
         })
     }
 
-    private inner class Section(val card: LinearLayout, val refresh: MutableList<() -> Unit> = refreshers) {
+    /**
+     * [probe] (3.0): no rows are made; the titles and summaries the rows would show are written
+     * there instead, so search finds settings by what their rows say.
+     */
+    private inner class Section(val card: LinearLayout, val refresh: MutableList<() -> Unit> = refreshers, val probe: StringBuilder? = null) {
+        /** For search: what a row would show. */
+        private fun noted(title: String, summary: () -> String?): Boolean {
+            val p = probe ?: return false
+            p.append(title).append(" · ").append(summary().orEmpty()).append(" · ")
+            return true
+        }
+
         fun add(view: View) {
             if (card.childCount > 0) {
                 card.addView(View(this@SettingsActivity).apply { setBackgroundColor(color(R.color.divider)) },
@@ -1158,6 +1293,7 @@ class SettingsActivity : AppCompatActivity() {
         /** A row that opens something; its summary shows the current value. */
         /** [icon]: a row whose icon follows a setting (the search engine's logo). */
         fun action(iconRes: Int, title: String, summary: () -> String?, badge: Boolean = false, icon: (() -> Int)? = null, onClick: () -> Unit) {
+            if (noted(title, summary)) return
             val (row, sub) = row(iconRes, title, summary(), badge)
             if (icon != null) {
                 val image = row.getChildAt(0) as ImageView
@@ -1175,6 +1311,7 @@ class SettingsActivity : AppCompatActivity() {
         }
 
         fun info(icon: Int, title: String, summary: () -> String?) {
+            if (noted(title, summary)) return
             val (row, sub) = row(icon, title, summary())
             refresh += { setSummary(sub, summary()) }
             add(row)
@@ -1189,6 +1326,7 @@ class SettingsActivity : AppCompatActivity() {
             checked: () -> Boolean,
             onChange: (Boolean) -> Unit,
         ) {
+            if (noted(title, summary)) return
             val (row, sub) = row(icon, title, summary())
             if (details != null) {
                 row.addView(ImageButton(this@SettingsActivity).apply {
@@ -1231,7 +1369,14 @@ class SettingsActivity : AppCompatActivity() {
             add(row)
         }
 
-        fun custom(view: View) = add(view)
+        fun custom(view: View) {
+            if (probe == null) add(view)
+        }
+
+        /** 3.0: a row of its own made only when shown (not while search reads what rows say). */
+        fun custom(make: () -> View) {
+            if (probe == null) add(make())
+        }
     }
 
     private fun setSummary(sub: TextView, text: String?) {
@@ -1787,13 +1932,11 @@ class SettingsActivity : AppCompatActivity() {
         box.addView(status)
         val button = com.google.android.material.button.MaterialButton(this)
         box.addView(button, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(52)))
-        // After the VPN dropped: Reconnect above, and Turn off here.
+        // After the VPN dropped: Reconnect above, and Turn off here (3.0: after a start that didn't
+        // bring it back, Try again and Continue without VPN).
         val off = com.google.android.material.button.MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
             text = "Turn off"
-            setOnClickListener {
-                com.swiftbrowser.vpn.Vpn.turnOff()
-                snack("VPN off")
-            }
+            setOnClickListener { VpnUi.turnOff(this@SettingsActivity) }
         }
         box.addView(off, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(52)).apply { topMargin = dp(4) })
         val update = {
@@ -1810,10 +1953,11 @@ class SettingsActivity : AppCompatActivity() {
             val dropped = VpnUi.dropped()
             if (dropped && off.visibility != View.VISIBLE) Motion.fadeIn(off, fromDy = 6)
             if (!dropped && off.visibility == View.VISIBLE) Motion.fadeOut(off, toDy = 0)
+            if (dropped) Motion.swapText(off, VpnUi.turnOffLabel())
             Motion.swapText(button, when {
                 empty -> "How to get free locations"
                 vpn.testing -> "Stop testing"
-                dropped -> "Reconnect"
+                dropped -> VpnUi.reconnectLabel()
                 vpn.wanted -> "Turn off"
                 else -> "Turn on"
             })
@@ -1823,10 +1967,7 @@ class SettingsActivity : AppCompatActivity() {
                     // Stopping a test: back to how it was (on, or off).
                     vpn.testing -> if (vpn.wanted) VpnUi.turnOn(this, vpnPermission) else vpn.turnOff()
                     dropped -> VpnUi.turnOn(this, vpnPermission)
-                    vpn.wanted -> {
-                        vpn.turnOff()
-                        snack("VPN off")
-                    }
+                    vpn.wanted -> VpnUi.turnOff(this)
                     else -> VpnUi.turnOn(this, vpnPermission)
                 }
             }
@@ -1836,7 +1977,11 @@ class SettingsActivity : AppCompatActivity() {
         return box
     }
 
-    /** The locations: tap one to use it (it connects at once when the VPN is on), ✕ removes it. */
+    /**
+     * The locations: tap one to use it (it connects at once when the VPN is on). 3.0: ⋮ opens what
+     * else can be done with it (I extended it, Proton's page, Remove), which was only behind a hold;
+     * one that needs extending says "I extended it" on its row.
+     */
     private fun vpnLocations(target: MutableList<() -> Unit>): View {
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val update = {
@@ -1854,7 +1999,14 @@ class SettingsActivity : AppCompatActivity() {
                     minimumHeight = dp(64)
                     setPadding(dp(14), dp(8), dp(4), dp(8))
                     background = Ui.ripple(this@SettingsActivity, null, 0)
-                    contentDescription = loc.countryName + if (loc.id == chosen) ", chosen" else ""
+                    // 2.2: how it did in the last test, and when it needs extending at Proton.
+                    val result = VpnUi.testResult(loc)
+                    val soon = loc.renewBy - System.currentTimeMillis() < 14L * 24 * 3600 * 1000
+                    // 3.0: its file can't be opened any more (Android's secure storage was reset).
+                    val unreadable = vpn.isUnreadable(loc)
+                    val state = if (unreadable) "Can't be opened any more: remove it and add it again" else listOfNotNull(result, VpnUi.renewText(loc)).joinToString(" · ")
+                    // 3.0: TalkBack also says the server, the test and when it stops working.
+                    contentDescription = listOf(loc.countryName, loc.server + if (loc.id == chosen) ", in use" else "", state).joinToString(", ")
                     addView(TextView(this@SettingsActivity).apply {
                         text = loc.flag
                         textSize = 24f
@@ -1864,25 +2016,31 @@ class SettingsActivity : AppCompatActivity() {
                         orientation = LinearLayout.VERTICAL
                         addView(Ui.text(this@SettingsActivity, Ui.Type.BODY, loc.countryName))
                         addView(Ui.text(this@SettingsActivity, Ui.Type.CAPTION, loc.server + if (loc.id == chosen) " · in use" else ""))
-                        // 2.2: how it did in the last test, and when it needs extending at Proton.
-                        val result = VpnUi.testResult(loc)
-                        val soon = loc.renewBy - System.currentTimeMillis() < 14L * 24 * 3600 * 1000
                         addView(Ui.text(
-                            this@SettingsActivity, Ui.Type.CAPTION,
-                            listOfNotNull(result, VpnUi.renewText(loc)).joinToString(" · "),
-                            if (soon || result == "No answer") Ui.danger(this@SettingsActivity) else null,
+                            this@SettingsActivity, Ui.Type.CAPTION, state,
+                            if (unreadable || soon || result == "No answer") Ui.danger(this@SettingsActivity) else null,
                         ))
+                        // 3.0: a visible "I extended it" when it needs extending.
+                        if (soon && !unreadable) addView(Ui.text(this@SettingsActivity, Ui.Type.LABEL, "I extended it", Ui.accent(this@SettingsActivity)).apply {
+                            setPadding(0, dp(8), dp(12), dp(4))
+                            contentDescription = "I extended ${loc.countryName} at Proton"
+                            setOnClickListener {
+                                VpnUi.markExtended(this@SettingsActivity, loc)
+                                refreshAll()
+                            }
+                        })
                     }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
                     if (loc.id == chosen) {
                         addView(ImageView(this@SettingsActivity).apply {
                             setImageDrawable(Ui.icon(this@SettingsActivity, R.drawable.ic_check, Ui.accent(this@SettingsActivity)))
+                            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
                         }, LinearLayout.LayoutParams(dp(24), dp(24)).apply { marginEnd = dp(4) })
                     }
                     addView(ImageButton(this@SettingsActivity).apply {
-                        setImageDrawable(Ui.icon(this@SettingsActivity, R.drawable.ic_close, color(R.color.text_secondary)))
+                        setImageDrawable(Ui.icon(this@SettingsActivity, R.drawable.ic_more, color(R.color.text_secondary)))
                         background = Ui.rippleBorderless(this@SettingsActivity)
-                        contentDescription = "Remove ${loc.countryName}"
-                        setOnClickListener { removeVpnLocation(loc) }
+                        contentDescription = "More for ${loc.countryName}"
+                        setOnClickListener { vpnLocationSheet(loc) }
                     }, LinearLayout.LayoutParams(dp(48), dp(48)))
                     setOnClickListener {
                         vpn.choose(loc)
@@ -1901,7 +2059,7 @@ class SettingsActivity : AppCompatActivity() {
         return box
     }
 
-    /** Held: connect, mark it extended at Proton (another year), or remove it. */
+    /** ⋮ or held: connect, mark it extended at Proton (another year), or remove it. */
     private fun vpnLocationSheet(loc: com.swiftbrowser.vpn.Vpn.Location) {
         val vpn = com.swiftbrowser.vpn.Vpn
         Sheets.actions(
@@ -1913,9 +2071,8 @@ class SettingsActivity : AppCompatActivity() {
                     refreshAll()
                 },
                 Sheets.Action(R.drawable.ic_update, "I extended it", primary = true) {
-                    vpn.markExtended(loc)
+                    VpnUi.markExtended(this, loc)
                     refreshAll()
-                    snack("${loc.countryName}: ${VpnUi.renewText(vpn.locations().firstOrNull { it.id == loc.id } ?: loc).replaceFirstChar { it.lowercase() }}")
                 },
                 Sheets.Action(R.drawable.ic_open_new, "Open Proton's page") { openInBrowser(com.swiftbrowser.vpn.Vpn.PROTON_DOWNLOADS) },
                 Sheets.Action(R.drawable.ic_close, "Remove", danger = true) { removeVpnLocation(loc) },
@@ -1950,13 +2107,27 @@ class SettingsActivity : AppCompatActivity() {
         ) { VpnUi.test(this, vpnPermission) }
     }
 
+    /**
+     * 3.0: the location in use, removed while the VPN is on, makes way for another (pages wait
+     * meanwhile) instead of the VPN going off; Undo brings it back and connects to it again.
+     */
     private fun removeVpnLocation(loc: com.swiftbrowser.vpn.Vpn.Location) {
         val vpn = com.swiftbrowser.vpn.Vpn
         val sealed = vpn.sealedFile(this, loc)
-        vpn.remove(this, loc)
+        val inUse = vpn.current()?.id == loc.id
+        val wasOn = inUse && vpn.wanted
+        val next = vpn.remove(this, loc)
         refreshAll()
-        Messages.show(this, "Removed ${loc.countryName}", if (sealed != null) "Undo" else null) {
-            if (sealed != null) vpn.restore(this, loc, sealed)
+        val text = when {
+            next != null -> "Removed ${loc.countryName}: moving to ${next.flag} ${next.countryName}…"
+            wasOn -> "Removed ${loc.countryName}: the VPN is off (no other location)"
+            else -> "Removed ${loc.countryName}"
+        }
+        Messages.show(this, text, if (sealed != null) "Undo" else null, long = wasOn) {
+            if (sealed != null) {
+                vpn.restore(this, loc, sealed, inUse)
+                if (wasOn) VpnUi.turnOn(this, vpnPermission, loc)
+            }
             refreshAll()
         }
     }
@@ -1986,27 +2157,53 @@ class SettingsActivity : AppCompatActivity() {
                     val name = contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
                         if (c.moveToFirst()) c.getString(0) else null
                     }
-                    val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() }
-                    (bytes?.takeIf { it.size < 64 * 1024 }?.let { String(it) }) to name
+                    // 3.0: only up to 64 KB is read (a video picked by mistake was read whole first).
+                    val bytes = contentResolver.openInputStream(uri)?.use { com.swiftbrowser.core.Storage.readAtMost(it, 64 * 1024) }
+                    bytes?.let { String(it) } to name
                 } catch (_: Exception) {
                     null to null
                 }
             }
             if (text == null) {
-                snack("Couldn't read that file")
+                snack("Couldn't read that file. A setup file is small and ends in .conf.")
                 return@launch
             }
-            addVpnText(text, name)
+            if (addVpnText(text, name)) offerToDeleteVpnFile(uri, name)
         }
     }
 
-    private fun addVpnText(text: String, name: String?) {
-        try {
-            val loc = com.swiftbrowser.vpn.Vpn.add(this, text, name)
-            refreshAll()
-            snack("Added ${loc.flag} ${loc.countryName}")
-        } catch (e: IllegalArgumentException) {
-            Messages.show(this, e.message ?: "That isn't a WireGuard setup file", long = true)
+    /** True when the location was added. */
+    private fun addVpnText(text: String, name: String?): Boolean = try {
+        val loc = com.swiftbrowser.vpn.Vpn.add(this, text, name)
+        refreshAll()
+        snack("Added ${loc.flag} ${loc.countryName}")
+        true
+    } catch (e: IllegalArgumentException) {
+        Messages.show(this, e.message ?: "That isn't a WireGuard setup file", long = true)
+        false
+    }
+
+    /**
+     * 3.0: the file picked holds the location's private key in plain text, where any app with
+     * storage access can read it; Swift keeps its own locked copy, so the file can go.
+     */
+    private fun offerToDeleteVpnFile(uri: android.net.Uri, name: String?) {
+        Dialogs.confirm(
+            this, "Delete the setup file?",
+            "Swift keeps its own locked copy. ${name ?: "The file"} holds the location's key in plain text, and other apps " +
+                "on the phone can read it: anyone with it can use your location.",
+            "Delete", danger = true, cancel = "Keep",
+        ) {
+            lifecycleScope.launch {
+                val deleted = withContext(Dispatchers.IO) {
+                    try {
+                        android.provider.DocumentsContract.deleteDocument(contentResolver, uri)
+                    } catch (_: Exception) {
+                        false
+                    }
+                }
+                snack(if (deleted) "Setup file deleted" else "Swift couldn't delete it: delete ${name ?: "it"} in Files")
+            }
         }
     }
 
@@ -2143,10 +2340,17 @@ class SettingsActivity : AppCompatActivity() {
                 .setMessage(
                     "Made on ${s.created}: ${s.profiles} ${if (s.profiles == 1) "profile" else "profiles"}, ${s.bookmarks} ${if (s.bookmarks == 1) "bookmark" else "bookmarks"}, " +
                         "${s.tabs} ${if (s.tabs == 1) "tab" else "tabs"} and ${s.history} ${if (s.history == 1) "history entry" else "history entries"}.\n\nThey are added to what is on this phone, its settings " +
-                        "replace these, and Swift restarts.",
+                        "replace these, and Swift restarts. Passwords, the VPN and the Private folder are never in backups.",
                 )
                 .setPositiveButton("Restore") { _, _ ->
-                    Backup.restoreThen(root) { SwiftApp.restart(this@SettingsActivity) }
+                    // 3.0: a backup that can't be restored changes nothing, and says so.
+                    Backup.restoreThen(this@SettingsActivity, root) { ok ->
+                        if (ok) {
+                            SwiftApp.restart(this@SettingsActivity)
+                        } else if (!isFinishing && !isDestroyed) {
+                            Messages.show(this@SettingsActivity, "That backup couldn't be restored. Nothing on this phone was changed.", long = true)
+                        }
+                    }
                 }
                 .setNegativeButton(android.R.string.cancel, null)
                 .showImmersive()
@@ -2172,10 +2376,15 @@ class SettingsActivity : AppCompatActivity() {
 
     private fun checkForUpdates() {
         snack("Checking for updates…")
-        Updates.latest { r ->
+        Updates.latest { c ->
+            // 3.0: Settings may have closed meanwhile (a dialog on a closed screen crashed Swift).
+            if (isFinishing || isDestroyed) return@latest
+            if (c.version != null) prefs.lastUpdateCheck = System.currentTimeMillis()
+            val r = c.release
             when {
-                r == null -> snack("Couldn't check for updates. Check your internet connection.")
-                !Updates.isNewer(r.version, BuildConfig.VERSION_NAME) -> snack("Swift ${BuildConfig.VERSION_NAME} is the newest version")
+                // 3.0: the real reason (GitHub busy, the file not up yet), not always the connection.
+                c.problem != null -> Messages.show(this, c.problem, long = true)
+                r == null || !Updates.isNewer(r.version, BuildConfig.VERSION_NAME) -> snack("Swift ${BuildConfig.VERSION_NAME} is the newest version")
                 else -> {
                     val size = if (r.size > 0) " (${UrlUtils.formatBytes(r.size)})" else ""
                     MaterialAlertDialogBuilder(this)
@@ -2291,12 +2500,18 @@ class SettingsActivity : AppCompatActivity() {
 
     private fun countPasswords() {
         lifecycleScope.launch {
-            val n = withContext(Dispatchers.IO) { try { SwiftApp.db.logins(Profiles.currentId).size } catch (e: Exception) { 0 } }
-            val text = when (n) {
-                0 -> "None yet"
-                1 -> "1 sign-in"
-                else -> "$n sign-ins"
-            }
+            // 3.0: sign-ins that can't be read any more aren't counted as ones (the list didn't show them).
+            val c = withContext(Dispatchers.IO) { try { Passwords.count(Profiles.currentId) } catch (e: Exception) { Passwords.Count(0, 0) } }
+            val n = c.readable
+            val text = listOfNotNull(
+                when {
+                    n == 0 && c.unreadable == 0 -> "None yet"
+                    n == 0 -> null
+                    n == 1 -> "1 sign-in"
+                    else -> "$n sign-ins"
+                },
+                if (c.unreadable > 0) "${c.unreadable} can't be read any more" else null,
+            ).joinToString(" · ")
             if (text != passwordsText) {
                 passwordsText = text
                 refreshAll()
@@ -2349,16 +2564,19 @@ class SettingsActivity : AppCompatActivity() {
         try {
             unlock.launch(intent)
         } catch (e: Exception) {
+            // 3.0: they show only after the screen lock (when asking for it couldn't start, they showed anyway).
             afterUnlock = null
-            then()
+            com.swiftbrowser.core.L.w("The screen lock question didn't start", e)
+            Messages.show(this, "Swift couldn't ask for your screen lock, so your passwords stay hidden. Try again in a moment.", long = true)
         }
     }
 
     private fun clearCache() {
         Dialogs.confirm(
-            this, "Free up space?",
-            "Saved pictures and files (${UrlUtils.formatBytes(usage?.cache ?: 0)}) are deleted. Pages load them again when needed; logins and settings stay.",
-            "Clear cache", danger = true,
+            this, "Clear the cache?",
+            "The cache (${UrlUtils.formatBytes(usage?.cache ?: 0)}) is deleted: copies of pages' pictures and files that make them load faster. " +
+                "Pages load them again when needed; sign-ins and settings stay.",
+            "Clear", danger = true,
         ) {
             Engine.runtime.storageController.clearData(StorageController.ClearFlags.ALL_CACHES)
             snack("Cache cleared")
@@ -2366,9 +2584,13 @@ class SettingsActivity : AppCompatActivity() {
         }
     }
 
-    private fun computeStorage() {
+    /**
+     * 3.0: measured at most once a minute (walking the engine's profile, the cache and the data folder
+     * takes seconds on this phone, and it ran on every visit to Settings), and anew after clearing.
+     */
+    private fun computeStorage(fresh: Boolean = false) {
         lifecycleScope.launch {
-            usage = withContext(Dispatchers.IO) { com.swiftbrowser.core.Storage.measure(this@SettingsActivity) }
+            usage = withContext(Dispatchers.IO) { com.swiftbrowser.core.Storage.measureRecent(this@SettingsActivity, fresh) }
             refreshAll()
         }
     }
@@ -2377,7 +2599,7 @@ class SettingsActivity : AppCompatActivity() {
     private fun remeasureSoon() {
         lifecycleScope.launch {
             delay(1500)
-            computeStorage()
+            computeStorage(fresh = true)
         }
     }
 
@@ -2553,56 +2775,7 @@ class SettingsActivity : AppCompatActivity() {
         /** With [EXTRA_TOPIC]: only that part of the settings; Back leaves rather than showing the rest (2.9). */
         const val EXTRA_ONLY = "only_topic"
 
-        /** Everyday words for what settings are about, for the search box. */
-        private val SYNONYMS = mapOf(
-            "battery" to listOf("battery saver", "lite", "data saver", "draw pages", "tabs kept", "sleep", "dark"),
-            "music" to listOf("playing", "background", "sleep", "audio"),
-            "song" to listOf("playing", "background", "sleep"),
-            "sound" to listOf("audio", "volume", "sound", "autoplay", "playing"),
-            "volume" to listOf("volume", "swipes"),
-            "ads" to listOf("ad", "block", "ublock", "cookie", "pop-up"),
-            "advert" to listOf("ad", "block", "ublock"),
-            "popup" to listOf("pop-up", "cookie", "block"),
-            "slow" to listOf("lite", "speed", "draw pages", "tabs kept", "designed"),
-            "fast" to listOf("lite", "speed", "draw pages", "tabs kept"),
-            "smooth" to listOf("lite", "draw pages", "toolbar", "designed"),
-            "internet" to listOf("data", "wi-fi", "secure", "downloads"),
-            "wifi" to listOf("wi-fi", "data"),
-            "mobile" to listOf("data", "wi-fi"),
-            "space" to listOf("storage", "cache", "download folder"),
-            "memory" to listOf("tabs kept", "storage", "memory"),
-            "font" to listOf("text size", "reader"),
-            "big" to listOf("text size", "zoom"),
-            "night" to listOf("dark"),
-            "black" to listOf("dark", "colours"),
-            "colour" to listOf("colours"),
-            "color" to listOf("colours"),
-            "background" to listOf("colours"),
-            "theme" to listOf("theme", "colours"),
-            "privacy" to listOf("clear", "secure", "cookie", "incognito", "site settings"),
-            "password" to listOf("site settings", "clear"),
-            "location" to listOf("site settings", "vpn"),
-            "desktop" to listOf("site settings", "desktop"),
-            "youtube" to listOf("playing", "background", "designed", "autoplay", "video"),
-            "film" to listOf("continue", "video", "download"),
-            "movie" to listOf("continue", "video", "download"),
-            "save" to listOf("download", "backup", "data saver"),
-            "phone" to listOf("backup", "restore", "storage"),
-            "vibrat" to listOf("vibration"),
-            "home" to listOf("address bar buttons", "address bar"),
-            "button" to listOf("address bar buttons", "arrange the menu"),
-            "toolbar" to listOf("address bar buttons", "address bar"),
-            "menu" to listOf("arrange the menu", "reset the menu"),
-            "dns" to listOf("secure dns"),
-            "test" to listOf("test the locations"),
-            "expir" to listOf("vpn locations"),
-            "search" to listOf("search engine", "suggestions"),
-            "google" to listOf("search engine", "suggestions"),
-            "update" to listOf("updates", "filter lists"),
-            "country" to listOf("vpn", "country"),
-            "ip" to listOf("vpn"),
-            "proton" to listOf("vpn"),
-        )
+        // 3.0: the everyday words for search are in SettingsSearch.
 
         private const val STATE_TOPIC = "topic"
         private const val STATE_SCROLL = "scroll"

@@ -25,6 +25,9 @@ object L {
 
     /** A day's file stops taking ordinary lines past this size; warnings and errors still go in. */
     private const val DAY_LIMIT = 4L * 1024 * 1024
+
+    /** 3.0: …up to this size; past it nothing more goes in that day (a page warning without end filled the phone). */
+    private const val WARNINGS_LIMIT = 5L * 1024 * 1024
     private const val WRITE_DELAY_MS = 2000L
 
     private val ring = ArrayDeque<String>()
@@ -99,6 +102,8 @@ object L {
             val file = File(d, "swift-$day.txt")
             val fresh = !file.exists()
             var out = text
+            // 3.0: warnings and errors have their limit too.
+            if (!fresh && file.length() > WARNINGS_LIMIT) return
             if (!fresh && file.length() > DAY_LIMIT) {
                 // A very busy day: only warnings and errors from here on.
                 out = text.lineSequence().filter { it.length > 13 && it[13] != 'D' }.joinToString("") { it + "\n" }
@@ -145,6 +150,111 @@ object L {
             pending.setLength(0)
         }
         writer.execute { files().forEach { it.delete() } }
+    }
+
+    /**
+     * 3.0: clearing history for a time: the log lines of [from]..[to] go too (they name the sites
+     * visited then). A day file is rewritten without them, or deleted when it was all in that time;
+     * the lines kept in memory for crash reports go the same way.
+     */
+    fun clearBetween(from: Long, to: Long) {
+        val now = System.currentTimeMillis()
+        val today = LogLines.startOfDay(now)
+        synchronized(this) {
+            // Lines in memory have no date: today's, or yesterday's when their time is still to come.
+            val kept = ring.filter { line ->
+                val t = LogLines.timeOfDay(line)?.let { today + it }?.let { if (it > now + 60_000) it - 24L * 3600 * 1000 else it }
+                t == null || t !in from..to
+            }
+            ring.clear()
+            ring.addAll(kept)
+        }
+        writer.execute {
+            writePending()
+            for (f in files()) {
+                try {
+                    val day = dayFmt.parse(f.name.removePrefix("swift-").removeSuffix(".txt"))?.time ?: continue
+                    val next = LogLines.startOfDay(day + 36L * 3600 * 1000)
+                    if (next <= from || day > to) continue
+                    if (from <= day && to >= next - 1) {
+                        f.delete()
+                        continue
+                    }
+                    val kept = LogLines.keepOutside(f.readLines(), day, from, to)
+                    if (kept.isEmpty()) f.delete() else f.writeText(kept.joinToString("\n", postfix = "\n"))
+                } catch (e: Exception) {
+                    android.util.Log.w(TAG, "Couldn't clear a log file", e)
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 3.0: plain work on the logs' lines ("HH:mm:ss.SSS L message"), kept apart so the PC's tests can
+ * check it: which lines belong to a time, and a problem report without the sites visited.
+ */
+object LogLines {
+    private val TIME = Regex("^(\\d{2}):(\\d{2}):(\\d{2})\\.(\\d{3}) ")
+
+    /** Milliseconds after midnight a line was written, or null for a line without a time (a message's next line). */
+    fun timeOfDay(line: String): Long? {
+        val m = TIME.find(line) ?: return null
+        val (h, min, s, ms) = m.destructured
+        return h.toLong() * 3_600_000 + min.toLong() * 60_000 + s.toLong() * 1000 + ms.toLong()
+    }
+
+    /** 00:00 of the day of [ms], local time. */
+    fun startOfDay(ms: Long): Long = java.util.Calendar.getInstance().run {
+        timeInMillis = ms
+        set(java.util.Calendar.HOUR_OF_DAY, 0)
+        set(java.util.Calendar.MINUTE, 0)
+        set(java.util.Calendar.SECOND, 0)
+        set(java.util.Calendar.MILLISECOND, 0)
+        timeInMillis
+    }
+
+    /**
+     * The lines of a day's file (the day starting at [dayStart]) written outside [from]..[to]. A line
+     * without a time goes with the line before it.
+     */
+    fun keepOutside(lines: List<String>, dayStart: Long, from: Long, to: Long): List<String> {
+        var time: Long? = null
+        return lines.filter { line ->
+            timeOfDay(line)?.let { time = dayStart + it }
+            val t = time
+            t == null || t !in from..to
+        }
+    }
+
+    /** Web addresses: the whole of each, for [withoutSites]; [trimAddress] keeps their site. */
+    private val ADDRESS = Regex("\\b(?:https?|wss?)://[^\\s\"'<>()]+", RegexOption.IGNORE_CASE)
+    private val ADDRESS_PATH = Regex("((?:https?|wss?)://[^/\\s\"'<>]+)[^\\s\"'<>]*", RegexOption.IGNORE_CASE)
+
+    /** A name like a site's: lowercase words with dots, ending in letters ("m.youtube.com", "example.co.uk:8080"). */
+    private val HOST = Regex("(?<![A-Za-z0-9._-])(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\\.)+[a-z][a-z0-9-]*[a-z](?::\\d{1,5})?(?![A-Za-z0-9_-])")
+
+    /** Names in the logs that look like sites but are code (packages, classes) or files Swift notes. */
+    private val NOT_SITES = listOf(
+        "java.", "javax.", "kotlin.", "kotlinx.", "android.", "androidx.", "dalvik.", "libcore.", "sun.", "org.json",
+        "com.android.", "com.google.", "com.swiftbrowser", "org.mozilla", "mozilla.org", "com.wireguard", "org.libtorrent4j",
+        "org.apache", "net.lingala", "org.tukaani", "com.github", "org.jellyfin", "com.journeyapps",
+    )
+    private val FILE_ENDINGS = listOf(
+        ".so", ".apk", ".odex", ".oat", ".dex", ".jar", ".js", ".mjs", ".css", ".html", ".txt", ".json", ".conf", ".bin",
+        ".db", ".kt", ".java", ".png", ".jpg", ".webp", ".mp4", ".mkv", ".m3u8", ".ts", ".xpi", ".sqlite", ".tmp",
+    )
+
+    /** An address cut to its site (as reports before 3.0 did: where, not what was read). */
+    fun trimAddress(line: String): String = ADDRESS_PATH.replace(line, "$1/…")
+
+    /** The line with every site's name and web address replaced by "a site" (the report when sites are left out). */
+    fun withoutSites(line: String): String {
+        val noAddresses = ADDRESS.replace(line, "a site")
+        return HOST.replace(noAddresses) { m ->
+            val name = m.value
+            if (NOT_SITES.any { name.startsWith(it) } || FILE_ENDINGS.any { name.endsWith(it) }) name else "a site"
+        }
     }
 }
 

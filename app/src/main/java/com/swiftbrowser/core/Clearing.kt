@@ -21,7 +21,8 @@ object Clearing {
     enum class What(val label: String, val hint: String) {
         HISTORY("History", "Pages you visited, recently closed tabs and reader view articles"),
         COOKIES("Cookies and site data", "Signs you out of those sites"),
-        CACHE("Saved pictures and files", "Pages load them again when needed"),
+        // 3.0: "Cache" everywhere (it had three names), as in Android's App info.
+        CACHE("Cache", "Copies of pages' pictures and files; pages load them again when needed"),
         DOWNLOADS("Downloads list", "The files themselves stay"),
         DOCUMENTS("Documents list", "Opened in Swift; the files themselves stay"),
         PLACES("Where you left off", "Videos, articles and documents in Continue"),
@@ -112,6 +113,10 @@ object Clearing {
                 } else {
                     for (s in sites) asked += storage.clearDataFromBaseDomain(s, StorageController.ClearFlags.COOKIES or StorageController.ClearFlags.SITE_DATA)
                 }
+                // Google's cookies went too: signed out of the account shown on the profile (3.0).
+                if (all || sites.any { GoogleAccounts.isGoogleHost(it) }) GoogleAccounts.forget(profileId)
+                // 3.0: and the cookies kept with downloads to resume them.
+                com.swiftbrowser.download.Downloads.forgetHeaders()
             }
             if (What.CACHE in what) {
                 if (all) {
@@ -131,6 +136,8 @@ object Clearing {
                     db.deleteHistorySince(profileId, since, until)
                     db.deleteClosedTabsSince(profileId, since, until)
                     Favicons.clearSince(since, hosts, until)
+                    // 3.0: the log lines of that time name its sites too (before, only all time cleared them).
+                    Diagnostics.clearLogsBetween(since, until)
                 }
                 // 2.8: for a time, only the reader view articles made then.
                 main.post { if (all) Helper.clearArticles() else Helper.clearArticles(since, until) }
@@ -146,7 +153,12 @@ object Clearing {
                 Docs.clearCache(app)
                 DocThumbs.clear(app)
             }
-            if (What.PLACES in what) db.clearPositionsSince(profileId, since, until)
+            if (What.PLACES in what) {
+                db.clearPositionsSince(profileId, since, until)
+                // 3.0: and where Swift's player left videos and songs of the phone (the home page's
+                // Continue shows them too); before, only Settings → Files & media forgot those.
+                com.swiftbrowser.media.LocalMedia.clearSince(app, since, until)
+            }
             if (What.SITE_SETTINGS in what) {
                 main.post {
                     val withSettings = SiteSettings.sites() + com.swiftbrowser.adblock.AdBlock.overrides().keys

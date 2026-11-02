@@ -166,16 +166,25 @@ class HomeView @JvmOverloads constructor(
     fun updateProfile() {
         val p = com.swiftbrowser.core.Profiles.current()
         profilePill.text = p.name
-        val dot = android.graphics.drawable.GradientDrawable().apply {
+        // The Google account's photo when the profile is signed in (3.0), otherwise its colour.
+        val photo = com.swiftbrowser.core.GoogleAccounts.picture(context, p.id)?.apply { setBounds(0, 0, dp(20), dp(20)) }
+        val dot = photo ?: android.graphics.drawable.GradientDrawable().apply {
             shape = android.graphics.drawable.GradientDrawable.OVAL
             setColor(p.color)
             setSize(dp(12), dp(12))
+            setBounds(0, 0, dp(12), dp(12))
         }
         val arrow = Ui.icon(context, R.drawable.ic_down, Ui.textSecondary(context))?.apply { setBounds(0, 0, dp(18), dp(18)) }
-        dot.setBounds(0, 0, dp(12), dp(12))
         profilePill.setCompoundDrawablesRelative(dot, null, arrow, null)
         profilePill.contentDescription = "Profile: ${p.name}. Change profile"
-        profilePill.visibility = if (incognito) View.GONE else View.VISIBLE
+        // 3.0: only when the address bar has no profile button: one way to change profile, not two.
+        profilePill.visibility = if (incognito || ToolbarButtons.layout().has("profile")) View.GONE else View.VISIBLE
+    }
+
+    override fun onWindowVisibilityChanged(visibility: Int) {
+        super.onWindowVisibilityChanged(visibility)
+        // Back from Settings, where the address bar's buttons may have changed (3.0).
+        if (visibility == View.VISIBLE) updateProfile()
     }
 
     /** The home page went out of sight: news pictures are let go until it's back (2.3). */
@@ -419,6 +428,13 @@ class HomeView @JvmOverloads constructor(
             }
             repeat(COLUMNS - rowTiles.size) { row.addView(Space(context), LinearLayout.LayoutParams(0, 1, 1f)) }
             tilesBox.addView(row)
+        }
+        // 3.0: when they are all taken, the Add button makes way for a word on why (it went without one).
+        if (tiles.size >= TopSites.MAX) {
+            tilesBox.addView(Ui.text(context, Ui.Type.CAPTION, "You can have up to ${TopSites.MAX} shortcuts. Hold one to remove it.").apply {
+                gravity = android.view.Gravity.CENTER
+                setPadding(dp(8), dp(4), dp(8), 0)
+            })
         }
         if (animateTiles) {
             animateTiles = false

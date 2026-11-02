@@ -116,15 +116,25 @@ class ContinueRow(context: Context, private val onOpen: (Unfinished.Item) -> Uni
         clipToOutline = true
         val site = UrlUtils.host(item.url)?.removePrefix("www.")?.removePrefix("m.").orEmpty()
         addView(FrameLayout(context).apply {
-            setBackgroundColor(Ui.color(context, R.color.surface_alt))
             val doc = item.doc
+            // 3.0.1: until its picture comes (or when it has none), the site's colour softly across the card
+            // and a round play (or page) mark, rather than a dim little icon on plain grey.
+            val tint = Ui.siteColor(com.swiftbrowser.core.TopSites.key(site))
+            if (doc == null) {
+                val base = Ui.color(context, R.color.surface_alt)
+                background = android.graphics.drawable.GradientDrawable(
+                    android.graphics.drawable.GradientDrawable.Orientation.TL_BR,
+                    intArrayOf(androidx.core.graphics.ColorUtils.blendARGB(base, tint, 0.55f), androidx.core.graphics.ColorUtils.blendARGB(base, tint, 0.18f)),
+                )
+            } else {
+                setBackgroundColor(Ui.color(context, R.color.surface_alt))
+            }
             val picture = ImageView(context).apply {
                 scaleType = ImageView.ScaleType.CENTER
                 if (doc != null) {
                     setImageDrawable(com.swiftbrowser.docs.DocIcon(doc.kind, dp(56)))
                 } else {
-                    setImageDrawable(Ui.icon(context, if (item.video) R.drawable.ic_movie else R.drawable.ic_reader, Ui.textSecondary(context)))
-                    alpha = 0.6f
+                    setImageDrawable(badge(item.video, tint))
                 }
             }
             addView(picture, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
@@ -179,6 +189,21 @@ class ContinueRow(context: Context, private val onOpen: (Unfinished.Item) -> Uni
             true
         }
         Ui.pressable(this, 0.96f)
+    }
+
+    /** 3.0.1: the round mark on a card without its picture: play for a video, a page for an article. */
+    private fun badge(video: Boolean, tint: Int): android.graphics.drawable.Drawable {
+        val disc = android.graphics.drawable.GradientDrawable().apply {
+            shape = android.graphics.drawable.GradientDrawable.OVAL
+            setColor(0xEBFFFFFF.toInt())
+        }
+        val glyph = androidx.core.content.ContextCompat.getDrawable(context, if (video) R.drawable.ic_play else R.drawable.ic_reader)!!.mutate()
+        glyph.setTint(tint)
+        return android.graphics.drawable.LayerDrawable(arrayOf(disc, glyph)).apply {
+            setLayerSize(0, dp(48), dp(48))
+            setLayerSize(1, dp(26), dp(26))
+            setLayerGravity(1, Gravity.CENTER)
+        }
     }
 
     /** How far the video was watched or the article read: a bar along the picture's bottom, as on YouTube. */

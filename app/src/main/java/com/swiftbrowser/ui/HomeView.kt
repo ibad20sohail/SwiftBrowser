@@ -310,8 +310,9 @@ class HomeView @JvmOverloads constructor(
 
     private fun updateTopSpace() {
         // Logo and search box sit a bit above the middle, as in Chrome; higher with the news below
-        // them, and less room when the keyboard is up.
-        val wanted = (height * if (incognito) 0.07f else if (newsOn) 0.06f else 0.15f).toInt()
+        // them, and less room when the keyboard is up. 3.0.1: a little higher still, so the page's
+        // own things (shortcuts, Continue, news) start sooner.
+        val wanted = (height * if (incognito) 0.07f else if (newsOn) 0.035f else 0.12f).toInt()
         val lp = topSpace.layoutParams
         if (lp.height != wanted) {
             lp.height = wanted
@@ -403,15 +404,13 @@ class HomeView @JvmOverloads constructor(
                 t as TopSites.Tile
                 val v = Palette.paint(inflater.inflate(R.layout.item_tile, row, false))
                 v.findViewById<TextView>(R.id.tile_label).text = t.label
-                val letter = v.findViewById<TextView>(R.id.tile_letter)
-                letter.text = t.label.take(1).uppercase()
-                // Soft, like the other tiles (2.6): a light tint of the colour, the letter in it.
-                val strong = letterColor(t.key)
-                letter.setTextColor(strong)
-                letter.background = GradientDrawable().apply {
-                    cornerRadius = dp(15).toFloat()
-                    setColor(androidx.core.graphics.ColorUtils.blendARGB(color(R.color.card_bg), strong, 0.2f))
+                // 3.0.1: until (or unless) the site's icon comes, its letter in a circle of its colour, the
+                // icon's size on the same tile: no more tiles of different colours side by side.
+                v.findViewById<ImageView>(R.id.tile_icon).apply {
+                    setImageDrawable(Ui.monogram(context, t.label, t.key, 26))
+                    visibility = View.VISIBLE
                 }
+                v.findViewById<View>(R.id.tile_letter).visibility = View.GONE
                 v.setOnClickListener { listener?.onTileClicked(t.url) }
                 // Held: it can be dragged to another place; let go without moving and its menu opens.
                 v.setOnLongClickListener {
@@ -618,11 +617,6 @@ class HomeView @JvmOverloads constructor(
             icon.visibility = View.VISIBLE
             v.findViewById<View>(R.id.tile_letter).visibility = View.GONE
         }
-    }
-
-    private fun letterColor(key: String): Int {
-        val palette = Profiles.COLORS
-        return palette[(key.hashCode() and 0x7fffffff) % palette.size]
     }
 
     private fun color(res: Int) = Palette.color(context, res)

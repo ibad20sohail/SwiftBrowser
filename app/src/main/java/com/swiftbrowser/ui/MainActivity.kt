@@ -518,7 +518,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             setImageResource(b.icon)
             contentDescription = b.label
             imageTintList = ColorStateList.valueOf(iconColor())
-            layoutParams = LinearLayout.LayoutParams(dp(48f).toInt(), dp(48f).toInt())
+            layoutParams = LinearLayout.LayoutParams(resources.getDimensionPixelSize(R.dimen.toolbar_button_width), dp(48f).toInt())
             Ui.pressable(this, 0.88f)
             setOnClickListener { toolbarAction(key) }
         }
@@ -1664,8 +1664,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         if (photo != null) {
             profileChip.text = ""
             profileChip.backgroundTintList = null
-            // Drawn at 30 dp in the middle of the button's 48 dp place, like its circle (bg_profile_chip).
-            profileChip.background = android.graphics.drawable.InsetDrawable(photo, dp(9f).toInt())
+            // Drawn at 30 dp in the middle of the button's place (44 x 48 dp), like its circle (bg_profile_chip).
+            profileChip.background = android.graphics.drawable.InsetDrawable(photo, dp(7f).toInt(), dp(9f).toInt(), dp(7f).toInt(), dp(9f).toInt())
         } else {
             profileChip.text = Profiles.initial(p)
             if (profileChip.background !== circle) profileChip.background = circle

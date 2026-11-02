@@ -104,7 +104,8 @@ class SwitchRowAccessibility(private val switch: SlimSwitch) : View.Accessibilit
 object SystemBars {
     /**
      * The keyboard (and on Android 7 some dialogs) brings the bars back for good; they go again a
-     * moment after it has gone, as long as [wanted] says so.
+     * moment after it has gone, as long as [wanted] says so. 3.0.1: about a second after (it was 2.5,
+     * long enough to look like full screen had been lost); never while the keyboard is up.
      */
     fun keepHidden(a: Activity, wanted: () -> Boolean = { true }) {
         val decor = a.window.decorView
@@ -112,7 +113,7 @@ object SystemBars {
             override fun run() {
                 if (!SwiftApp.prefs.fullScreen || a.isFinishing || !a.hasWindowFocus() || !wanted()) return
                 if (ViewCompat.getRootWindowInsets(decor)?.isVisible(WindowInsetsCompat.Type.ime()) == true) {
-                    decor.postDelayed(this, 2500)
+                    decor.postDelayed(this, RECHECK_MS)
                     return
                 }
                 apply(a)
@@ -122,10 +123,13 @@ object SystemBars {
         decor.setOnSystemUiVisibilityChangeListener { visibility ->
             if (SwiftApp.prefs.fullScreen && visibility and View.SYSTEM_UI_FLAG_FULLSCREEN == 0) {
                 decor.removeCallbacks(check)
-                decor.postDelayed(check, 2500)
+                decor.postDelayed(check, RECHECK_MS)
             }
         }
     }
+
+    /** How soon the bars go again once nothing needs them (and how often that is checked while typing). */
+    private const val RECHECK_MS = 900L
 
     fun apply(a: Activity) {
         val c = WindowCompat.getInsetsController(a.window, a.window.decorView)

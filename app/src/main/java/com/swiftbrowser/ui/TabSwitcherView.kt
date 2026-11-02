@@ -1078,8 +1078,10 @@ class TabSwitcherView @JvmOverloads constructor(
         private fun bindPicture(h: CardHolder, card: Item.TabCard) {
             val tab = card.tab
             if (tab.isHome) {
-                if (tab.incognito) h.placeholder.setImageResource(R.drawable.ic_incognito) else h.placeholder.setImageDrawable(Ui.logo(context))
-                h.placeholder.imageTintList = if (tab.incognito) ColorStateList.valueOf(color(R.color.incognito_hint)) else null
+                // 3.0.1: Swift's mark plain and quiet, like the globe of other cards: a few new tabs no longer
+                // fill the grid with coloured logos.
+                h.placeholder.setImageResource(if (tab.incognito) R.drawable.ic_incognito else R.drawable.ic_logo_mark)
+                h.placeholder.imageTintList = ColorStateList.valueOf(color(if (tab.incognito) R.color.incognito_hint else R.color.text_secondary))
                 return
             }
             val viewer = com.swiftbrowser.docs.Docs.isViewerUrl(tab.url)
@@ -1138,6 +1140,8 @@ class TabSwitcherView @JvmOverloads constructor(
                     cornerRadius = radius
                     setColor(color(if (dark) R.color.incognito_bg else R.color.tab_thumb_bg))
                 }
+                // A new tab's mark is tinted (3.0.1); a page's picture in this place again must not be.
+                view.imageTintList = null
                 if (tab == null) {
                     view.setImageDrawable(null)
                 } else if (!tab.isHome) {
@@ -1150,7 +1154,9 @@ class TabSwitcherView @JvmOverloads constructor(
                     }
                 } else {
                     view.scaleType = ImageView.ScaleType.CENTER_INSIDE
-                    if (tab.incognito) view.setImageResource(R.drawable.ic_incognito) else view.setImageDrawable(Ui.logo(context))
+                    // 3.0.1: the same quiet mark as a new tab's card.
+                    view.setImageResource(if (tab.incognito) R.drawable.ic_incognito else R.drawable.ic_logo_mark)
+                    view.imageTintList = ColorStateList.valueOf(color(if (tab.incognito) R.color.incognito_hint else R.color.text_secondary))
                 }
             }
         }

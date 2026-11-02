@@ -148,10 +148,12 @@ class NewsSection(context: Context, private val listener: Listener) : LinearLayo
         chipsFor = signature
         chips.removeAllViews()
         // 3.0: the chosen topic filled with the accent and ticked; its soft accent of before was hardly
-        // told from the others in the light look.
+        // told from the others in the light look. 3.0.1: in the dark look the soft accent again (as the
+        // ≡ menu's switches and the Downloads filters), plainly apart from the grey there.
+        val night = Palette.isNight(context)
         val states = arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf())
-        val bg = ColorStateList(states, intArrayOf(Ui.accent(context), Ui.color(context, R.color.surface_alt)))
-        val fg = ColorStateList(states, intArrayOf(Ui.onAccent(context), Ui.text(context)))
+        val bg = ColorStateList(states, intArrayOf(if (night) Ui.accentContainer(context) else Ui.accent(context), Ui.color(context, R.color.surface_alt)))
+        val fg = ColorStateList(states, intArrayOf(if (night) Ui.onAccentContainer(context) else Ui.onAccent(context), Ui.text(context)))
         for (t in topics) {
             chips.addView(Chip(context).apply {
                 id = View.generateViewId()

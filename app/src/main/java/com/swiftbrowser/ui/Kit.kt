@@ -350,6 +350,56 @@ object Ui {
         setColor(fill)
     }
 
+    /**
+     * 3.0.1: a site's own colour, for where it has no icon of its own (its shortcut, the menu's
+     * header, a Continue card without a picture): always the same one for the same site.
+     */
+    fun siteColor(key: String): Int {
+        val palette = com.swiftbrowser.core.Profiles.COLORS
+        return palette[(key.hashCode() and 0x7fffffff) % palette.size]
+    }
+
+    /**
+     * 3.0.1: a site without an icon: its first letter, white, in a circle of its colour (as Chrome
+     * does), the same size as the site icons beside it, so a row of shortcuts looks even.
+     */
+    fun monogram(ctx: Context, letter: String, key: String, sizeDp: Int): Drawable =
+        Monogram(letter.take(1).uppercase(), siteColor(key), dp(ctx, sizeDp))
+
+    private class Monogram(private val letter: String, fill: Int, private val size: Int) : Drawable() {
+        private val disc = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = fill }
+        private val text = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            textAlign = Paint.Align.CENTER
+            typeface = Typeface.DEFAULT_BOLD
+        }
+
+        override fun draw(c: Canvas) {
+            val b = bounds
+            val r = minOf(b.width(), b.height()) / 2f
+            c.drawCircle(b.exactCenterX(), b.exactCenterY(), r, disc)
+            text.textSize = r * 1.05f
+            c.drawText(letter, b.exactCenterX(), b.exactCenterY() - (text.descent() + text.ascent()) / 2, text)
+        }
+
+        override fun getIntrinsicWidth() = size
+
+        override fun getIntrinsicHeight() = size
+
+        override fun setAlpha(alpha: Int) {
+            disc.alpha = alpha
+            text.alpha = alpha
+        }
+
+        override fun setColorFilter(cf: android.graphics.ColorFilter?) {
+            disc.colorFilter = cf
+            text.colorFilter = cf
+        }
+
+        @Deprecated("Deprecated in Java")
+        override fun getOpacity() = android.graphics.PixelFormat.TRANSLUCENT
+    }
+
     private fun highlight(ctx: Context): Int {
         val tv = TypedValue()
         return if (ctx.theme.resolveAttribute(android.R.attr.colorControlHighlight, tv, true)) {

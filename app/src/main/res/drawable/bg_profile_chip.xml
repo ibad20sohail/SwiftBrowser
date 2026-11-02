@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 3.0: the profile's 30 dp circle in the address bar, in the middle of its 48 dp place (its
-     colour is the view's background tint). -->
+<!-- 3.0: the profile's 30 dp circle in the address bar, in the middle of its place (its colour is
+     the view's background tint). 3.0.1: the place is 44 dp wide and 48 dp tall. -->
 <inset xmlns:android="http://schemas.android.com/apk/res/android"
     android:drawable="@drawable/bg_circle"
-    android:inset="9dp" />
+    android:insetLeft="7dp"
+    android:insetRight="7dp"
+    android:insetTop="9dp"
+    android:insetBottom="9dp" />

@@ -166,14 +166,14 @@
                     android:paddingEnd="2dp">
 
                     <!-- 3.0: the toolbar's buttons are 48 dp to tap (they were 40, the profile 30);
-                         what they draw is the same size. -->
+                         what they draw is the same size. 3.0.1: 44 dp wide (toolbar_button_width). -->
                     <FrameLayout
-                        android:layout_width="48dp"
+                        android:layout_width="@dimen/toolbar_button_width"
                         android:layout_height="48dp">
 
                         <TextView
                             android:id="@+id/profile_chip"
-                            android:layout_width="48dp"
+                            android:layout_width="@dimen/toolbar_button_width"
                             android:layout_height="48dp"
                             android:layout_gravity="center"
                             android:background="@drawable/bg_profile_chip"
@@ -281,7 +281,7 @@
 
                     <FrameLayout
                         android:id="@+id/video_btn"
-                        android:layout_width="48dp"
+                        android:layout_width="@dimen/toolbar_button_width"
                         android:layout_height="48dp"
                         android:background="?attr/selectableItemBackgroundBorderless"
                         android:contentDescription="Videos on this page"
@@ -298,7 +298,7 @@
 
                     <FrameLayout
                         android:id="@+id/tabs_btn"
-                        android:layout_width="48dp"
+                        android:layout_width="@dimen/toolbar_button_width"
                         android:layout_height="48dp"
                         android:background="?attr/selectableItemBackgroundBorderless"
                         android:contentDescription="Tabs">

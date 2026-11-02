@@ -318,7 +318,7 @@ class SettingsActivity : AppCompatActivity() {
         val card = card()
         val topics = Section(card)
         for (t in Topic.entries) {
-            topics.action(t.icon, t.title, { topicSummary(t) }, badge = true) { show(t) }
+            topics.action(t.icon, t.title, { keepParts(topicSummary(t)) }, badge = true) { show(t) }
         }
         normal.addView(card)
         normal.addView(TextView(this).apply {
@@ -409,6 +409,12 @@ class SettingsActivity : AppCompatActivity() {
             def.build(section)
         }
     }
+
+    /**
+     * 3.0.1: each part of a topic's summary stays on one line ("Back up" was split as "Back" and
+     * "up"); lines break only between the parts.
+     */
+    private fun keepParts(summary: String) = summary.split(" · ").joinToString(" · ") { it.replace(' ', '\u00A0') }
 
     /** What is set in a topic, in a few words. */
     private fun topicSummary(t: Topic): String = when (t) {

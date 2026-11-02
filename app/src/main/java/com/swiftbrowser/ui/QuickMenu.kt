@@ -510,6 +510,11 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
         if (tab.isHome && !tab.incognito) {
             headerIcon.setImageDrawable(Ui.logo(a))
             headerIcon.imageTintList = null
+        } else if (http && !tab.incognito) {
+            // 3.0.1: the site's letter in its colour (as on its shortcut) until its icon comes, not a globe.
+            val key = com.swiftbrowser.core.TopSites.key(UrlUtils.host(tab.url).orEmpty())
+            headerIcon.setImageDrawable(Ui.monogram(a, com.swiftbrowser.core.TopSites.label(key), key, 26))
+            headerIcon.imageTintList = null
         } else {
             headerIcon.setImageResource(if (tab.incognito) R.drawable.ic_incognito else R.drawable.ic_globe)
             headerIcon.imageTintList = ColorStateList.valueOf(color(R.color.text_secondary))
@@ -1259,10 +1264,10 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
                 val circle = layers?.getDrawable(0) as? GradientDrawable
                 val glyph = layers?.getDrawable(1)
                 if (circle != null && glyph != null) {
-                    val fromFill = color(if (active) R.color.surface_alt else Looks.accent.primary)
-                    val toFill = color(if (active) Looks.accent.primary else R.color.surface_alt)
-                    val fromInk = color(if (active) R.color.text_primary else Looks.accent.onPrimary)
-                    val toInk = color(if (active) Looks.accent.onPrimary else R.color.text_primary)
+                    val fromFill = if (active) color(R.color.surface_alt) else onFill()
+                    val toFill = if (active) onFill() else color(R.color.surface_alt)
+                    val fromInk = if (active) color(R.color.text_primary) else onInk()
+                    val toInk = if (active) onInk() else color(R.color.text_primary)
                     val tick = (2 until layers.numberOfLayers).map { layers.getDrawable(it) }
                     val argb = android.animation.ArgbEvaluator()
                     colors?.cancel()
@@ -1359,10 +1364,10 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
     private fun roundIcon(icon: Int, active: Boolean, size: Int = 48, fill: Int? = null, tick: Boolean = false): Drawable {
         val circle = GradientDrawable().apply {
             shape = GradientDrawable.OVAL
-            setColor(fill ?: color(if (active) Looks.accent.primary else R.color.surface_alt))
+            setColor(fill ?: if (active) onFill() else color(R.color.surface_alt))
         }
         val glyph = ContextCompat.getDrawable(a, icon)!!.mutate()
-        glyph.setTint(color(if (active) Looks.accent.onPrimary else R.color.text_primary))
+        glyph.setTint(if (active) onInk() else color(R.color.text_primary))
         val layers = if (!tick) arrayOf(circle, glyph) else {
             // The tick's badge has a ring in the menu's colour, so it stands apart from the filled circle.
             val badge = GradientDrawable().apply {
@@ -1391,6 +1396,15 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
             }
         }
     }
+
+    /**
+     * 3.0.1: an "on" button's circle. In the dark look the soft accent (your accent's own deep tone, as
+     * before 3.0: warm, and plainly apart from the grey of "off"); in the light look the full accent,
+     * as the soft one there was hardly told from off. The tick says "on" in both.
+     */
+    private fun onFill() = color(if (Palette.isNight(a)) Looks.accent.container else Looks.accent.primary)
+
+    private fun onInk() = color(if (Palette.isNight(a)) Looks.accent.onContainer else Looks.accent.onPrimary)
 
     private fun borderless(): Int {
         val arr = a.obtainStyledAttributes(intArrayOf(android.R.attr.selectableItemBackgroundBorderless))

@@ -627,12 +627,13 @@ object Sheets {
             bind = { h, m ->
                 val name = m.url.substringBefore('?').substringAfterLast('/').ifBlank { UrlUtils.host(m.url) ?: "video" }
                 val host = UrlUtils.host(m.frameUrl.ifBlank { m.url }) ?: ""
-                val info = if (m.kind == MediaItem.Kind.HLS) {
-                    "Stream · " + (streamInfo[m.url]?.summary ?: "checking…")
+                val stream = m.kind != MediaItem.Kind.FILE
+                val info = if (stream) {
+                    (if (m.kind == MediaItem.Kind.DASH) "DASH stream · " else "Stream · ") + (streamInfo[m.url]?.summary ?: "checking…")
                 } else {
                     "File" + if (m.size > 0) " · ${UrlUtils.formatBytes(m.size)}" else ""
                 }
-                h.set(R.drawable.ic_movie, if (m.kind == MediaItem.Kind.HLS) "Video stream ($name)" else name, "$info · $host")
+                h.set(R.drawable.ic_movie, if (stream) "Video stream ($name)" else name, "$info · $host")
                 // 3.0.1: the button plays it in Swift's player (a tap on the row still downloads it).
                 h.setAction(R.drawable.ic_play, "Play in Swift's player") {
                     dialog.dismiss()
@@ -652,7 +653,7 @@ object Sheets {
         }
         adapter.items = visibleItems()
         list.adapter = adapter
-        val unchecked = tab.media.filter { it.kind == MediaItem.Kind.HLS && !streamInfo.containsKey(it.url) }
+        val unchecked = tab.media.filter { it.kind != MediaItem.Kind.FILE && !streamInfo.containsKey(it.url) }
         if (unchecked.isNotEmpty()) {
             a.lifecycleScope.launch {
                 for (m in unchecked) {
@@ -681,6 +682,19 @@ object Sheets {
     private fun inspectStream(m: MediaItem, private: Boolean): StreamInfo = try {
         val text = Downloads.fetchText(m.url, m.headers, private)
         when {
+            // 3.0.2: a DASH stream: what would be saved (or why it can't be).
+            m.kind == MediaItem.Kind.DASH || com.swiftbrowser.download.Dash.isManifest(text) -> try {
+                StreamInfo(com.swiftbrowser.download.Dash.forDownload(text, m.url).summary, emptyList())
+            } catch (e: com.swiftbrowser.download.DownloadRules.Failure) {
+                StreamInfo(
+                    when (e.message) {
+                        com.swiftbrowser.download.DownloadRules.LIVE -> "live (can't be saved)"
+                        com.swiftbrowser.download.DownloadRules.PROTECTED -> "DRM-protected"
+                        else -> "plays, can't be saved"
+                    },
+                    emptyList(),
+                )
+            }
             !Hls.isPlaylist(text) -> StreamInfo("unknown format", emptyList())
             Hls.isMaster(text) -> {
                 val variants = Hls.parseMaster(text, m.url)
@@ -712,6 +726,13 @@ object Sheets {
         fun start() {
             if (m.kind == MediaItem.Kind.HLS) {
                 downloadHls(a, tab, m.url, headers)
+            } else if (m.kind == MediaItem.Kind.DASH) {
+                // 3.0.2: the best video up to 1080p with its sound, as one MP4.
+                a.withStorage {
+                    val base = tab.title.ifBlank { UrlUtils.host(tab.url) ?: "video" }
+                    Downloads.startHls(tab.profileId, m.url, base, headers, tab.url, tab.incognito, dash = true)
+                    a.snack("Downloading $base", "View") { a.openDownloads() }
+                }
             } else {
                 a.withStorage {
                     val base = tab.title.ifBlank { UrlUtils.host(tab.url) ?: "video" }

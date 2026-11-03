@@ -129,6 +129,26 @@ object TabRules {
         return out
     }
 
+    // ------------------------------------------------------------------ Android's memory warnings (3.0.2)
+
+    /** What a memory warning does to tabs: nothing, the usual limits for low memory, or all background tabs go. */
+    enum class Warning { NONE, TRIM, BACKGROUND_TABS }
+
+    /**
+     * What Android's memory warning [level] (ComponentCallbacks2) does to tabs. While Swift is on
+     * screen, Android sends 5, 10 and 15 by how few other apps it keeps in the background, not by
+     * free memory: on a phone where Swift is the main app they come with most of the memory free (5
+     * with 1574 of 2002 MB free on the test phone), and every background tab used to reload. So they
+     * count only when the memory really is low ([memoryLow]), and then through the usual limits
+     * (TRIM: one tab, plus kept and playing ones). In the background (40 and up) background tabs go.
+     */
+    fun onWarning(level: Int, memoryLow: Boolean): Warning = when {
+        level >= android.content.ComponentCallbacks2.TRIM_MEMORY_BACKGROUND -> Warning.BACKGROUND_TABS
+        level in android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_MODERATE..android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL ->
+            if (memoryLow) Warning.TRIM else Warning.NONE
+        else -> Warning.NONE
+    }
+
     // ------------------------------------------------------------------ links from other apps
 
     /** A tab showing [tabUrl] shows exactly [url] (a link another app sent): the same, or with the slash a site's address gets. */

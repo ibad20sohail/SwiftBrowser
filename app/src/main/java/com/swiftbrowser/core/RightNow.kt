@@ -27,7 +27,20 @@ object RightNow {
         val crashesThisWeek: Int,
         /** How the previous run ended, if badly. */
         val lastRun: String?,
+        /** When tabs were last unloaded and why (3.0.2), see [unloadedText]. */
+        val lastUnloaded: String? = null,
     )
+
+    /** When tabs last let go of their pages and why (3.0.2), [agoMs] ago. */
+    fun unloadedText(count: Int, agoMs: Long, why: String): String {
+        val min = agoMs / 60_000
+        val ago = when {
+            min < 1 -> "just now"
+            min < 60 -> "$min min ago"
+            else -> "${min / 60} h ${min % 60} min ago"
+        }
+        return "Last unloaded: ${if (count == 1) "1 tab" else "$count tabs"}, $ago, because $why."
+    }
 
     /** Blocking (off the main thread): Swift's processes by part, with their memory (PSS) in MB. */
     fun parts(ctx: Context): List<Pair<String, Long>> = try {
@@ -80,6 +93,7 @@ object RightNow {
         val kept = if (s.kept > 0) ", ${s.kept} kept loaded" else ""
         lines += "Tabs: ${s.loaded} of ${s.tabs} loaded$kept."
         s.limitedBy?.let { lines += "$it: only the open tab and tabs kept loaded stay loaded." }
+        s.lastUnloaded?.let { lines += it }
         lines += when (s.crashesThisWeek) {
             0 -> "No page engine crashes in the last 7 days."
             1 -> "1 page engine crash in the last 7 days."

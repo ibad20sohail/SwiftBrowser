@@ -191,6 +191,24 @@ object DownloadRules {
     fun lengthOk(expectedUs: Long, actualUs: Long): Boolean =
         actualUs > 0 && (expectedUs <= 0 || actualUs >= expectedUs - maxOf(2_000_000L, expectedUs / 33))
 
+    /** 3.0.2: what a stream's separate sound is of all its bytes when the stream doesn't say (HLS). */
+    const val SOUND_SHARE = 0.08
+
+    /**
+     * 3.0.2: a stream's progress, 0..100 (-1 unknown). [done] of [total] parts are saved, the first
+     * [soundParts] of them its separate sound (saved first), which is only [soundShare] of the bytes:
+     * counted by parts alone, a film showed 50% once its sound was in.
+     */
+    fun streamPercent(done: Int, total: Int, soundParts: Int, soundShare: Double): Int {
+        if (total <= 0) return -1
+        if (done >= total) return 100
+        if (soundParts <= 0 || soundParts >= total) return (done * 100 / total).coerceIn(0, 100)
+        val share = soundShare.coerceIn(0.01, 0.99)
+        val sound = done.coerceIn(0, soundParts).toDouble() / soundParts
+        val video = (done - soundParts).coerceIn(0, total - soundParts).toDouble() / (total - soundParts)
+        return ((sound * share + video * (1 - share)) * 100).toInt().coerceIn(0, 100)
+    }
+
     /** Every part of a stream is on disk ([saved] bytes of the [fileBytes] the file has): nothing to fetch any more. */
     fun streamSaved(seg: Int, segTotal: Int, audioSeg: Int, audioTotal: Int, fileBytes: Long, saved: Long): Boolean =
         segTotal > 0 && seg >= segTotal && audioSeg >= audioTotal && saved > 0 && fileBytes >= saved

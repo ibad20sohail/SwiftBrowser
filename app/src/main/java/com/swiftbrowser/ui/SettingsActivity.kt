@@ -704,7 +704,7 @@ class SettingsActivity : AppCompatActivity() {
 
         // Home & news
         def(Topic.NEWS, null, "Show news", "news headlines stories home page feed") {
-            switch(R.drawable.ic_news, "Show news", { "Headlines under the shortcuts on the home page" }, checked = { prefs.newsEnabled }) {
+            switch(R.drawable.ic_news, "Show news", { "Headlines on the home page" }, checked = { prefs.newsEnabled }) {
                 prefs.newsEnabled = it
             }
         }
@@ -716,6 +716,12 @@ class SettingsActivity : AppCompatActivity() {
             ) {
                 prefs.homeContinue = it
             }
+        }
+        // 3.0.2: the parts of the home page in another order (nothing is left out).
+        def(Topic.NEWS, null, "Order of the home page", "order arrange move reorder home sections shortcuts continue news first") {
+            action(R.drawable.ic_swap, "Order of the home page", {
+                com.swiftbrowser.core.HomeOrder.parse(prefs.homeOrder).joinToString(" · ") { com.swiftbrowser.core.HomeOrder.label(it) }
+            }) { chooseHomeOrder() }
         }
         def(Topic.NEWS, "News", "Stories with big pictures", "news pictures images cards big chrome compact layout") {
             switch(
@@ -2443,6 +2449,53 @@ class SettingsActivity : AppCompatActivity() {
         }
     }
 
+    /** 3.0.2: the order of the home page's parts under the search box, moved up or down; nothing is left out. */
+    private fun chooseHomeOrder() {
+        var order = com.swiftbrowser.core.HomeOrder.parse(prefs.homeOrder)
+        val list = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(8), dp(4), dp(8), 0)
+        }
+        fun rebuild() {
+            list.removeAllViews()
+            order.forEachIndexed { i, part ->
+                val name = com.swiftbrowser.core.HomeOrder.label(part)
+                val row = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = android.view.Gravity.CENTER_VERTICAL
+                    setPadding(dp(16), dp(2), dp(4), dp(2))
+                }
+                row.addView(Ui.text(this, Ui.Type.BODY, "${i + 1}.  $name"), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                fun arrow(icon: Int, what: String, by: Int, can: Boolean) = android.widget.ImageButton(this).apply {
+                    setImageResource(icon)
+                    imageTintList = android.content.res.ColorStateList.valueOf(Palette.color(this@SettingsActivity, R.color.text_primary))
+                    setBackgroundResource(borderless())
+                    contentDescription = "Move $name $what"
+                    isEnabled = can
+                    alpha = if (can) 1f else 0.3f
+                    setOnClickListener {
+                        order = com.swiftbrowser.core.HomeOrder.move(order, part, by)
+                        prefs.homeOrder = com.swiftbrowser.core.HomeOrder.encode(order)
+                        rebuild()
+                    }
+                }
+                row.addView(arrow(R.drawable.ic_up, "up", -1, i > 0), LinearLayout.LayoutParams(dp(48), dp(48)))
+                row.addView(arrow(R.drawable.ic_down, "down", 1, i < order.size - 1), LinearLayout.LayoutParams(dp(48), dp(48)))
+                list.addView(row)
+            }
+            list.addView(Ui.text(this, Ui.Type.CAPTION, "Under the search box. Continue shows only when there is something to go on with.").apply {
+                setPadding(dp(16), dp(8), dp(16), dp(4))
+            })
+        }
+        rebuild()
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Order of the home page")
+            .setView(list)
+            .setPositiveButton("Done") { _, _ -> refreshAll() }
+            .setOnDismissListener { refreshAll() }
+            .showImmersive()
+    }
+
     /** Settings → Privacy & security → Security status (3.0.1). The keystore is read off the main thread. */
     private fun showSecurityStatus() {
         lifecycleScope.launch {
@@ -2511,6 +2564,9 @@ class SettingsActivity : AppCompatActivity() {
                     else -> null
                 },
                 crashesThisWeek = com.swiftbrowser.core.RightNow.crashesSince(crashes, System.currentTimeMillis()),
+                lastUnloaded = TabManager.lastUnloaded?.let {
+                    com.swiftbrowser.core.RightNow.unloadedText(it.count, System.currentTimeMillis() - it.time, it.why)
+                },
                 lastRun = when (Diagnostics.problem) {
                     Diagnostics.Problem.CLOSED_BY_ANDROID -> "Last time, Android closed Swift while it was on screen, most likely to free memory."
                     Diagnostics.Problem.ENGINE_CRASH -> "Last time, the page engine stopped while Swift was on screen."

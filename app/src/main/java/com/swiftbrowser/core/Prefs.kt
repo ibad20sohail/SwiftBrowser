@@ -48,6 +48,11 @@ class Prefs(ctx: Context) {
         get() = sp.getInt(NIGHT_LIGHT_STRENGTH, 2)
         set(v) = sp.edit { putInt(NIGHT_LIGHT_STRENGTH, v) }
 
+    /** 3.0.2: the order of the home page's parts (HomeOrder); empty for the default one. */
+    var homeOrder: String
+        get() = sp.getString(HOME_ORDER, "") ?: ""
+        set(v) = sp.edit { putString(HOME_ORDER, v) }
+
     /** The home page's "Continue" row: videos and articles left half-way (2.3). */
     var homeContinue: Boolean
         get() = sp.getBoolean(HOME_CONTINUE, true)
@@ -445,6 +450,7 @@ class Prefs(ctx: Context) {
         const val NEWS_CARDS = "news_cards"
         const val NEWS_ENABLED = "news_enabled"
         const val HOME_CONTINUE = "home_continue"
+        const val HOME_ORDER = "home_order"
         const val NIGHT_LIGHT = "night_light"
         const val NIGHT_LIGHT_STRENGTH = "night_light_strength"
         const val WELCOME_DONE = "welcome_done"

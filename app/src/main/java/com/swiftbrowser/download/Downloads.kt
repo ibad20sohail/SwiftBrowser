@@ -95,12 +95,15 @@ object Downloads {
         /** A stream's parts saved, of all of them (3.0: its separate sound track's included). */
         @Volatile var segDone: Int = extra.optInt("seg", 0) + extra.optInt("aseg", 0)
         @Volatile var segTotal: Int = extra.optInt("segTotal", 0)
+        /** 3.0.2: of those, the separate sound's (saved first), and its share of the bytes. */
+        @Volatile var soundParts: Int = extra.optInt("asegTotal", 0)
+        @Volatile var soundShare: Double = extra.optDouble("ashare", DownloadRules.SOUND_SHARE)
 
         /** 0..100, or -1 when unknown. */
         val percent: Int
             get() {
                 if (status == DONE) return 100
-                if (kind == KIND_HLS) return if (segTotal > 0) segDone * 100 / segTotal else -1
+                if (kind == KIND_HLS) return DownloadRules.streamPercent(segDone, segTotal, soundParts, soundShare)
                 return if (total > 0) (done * 100 / total).toInt() else -1
             }
 
@@ -487,11 +490,14 @@ object Downloads {
     fun startHls(
         profileId: Long, playlistUrl: String, title: String, headers: Map<String, String>, pageUrl: String?, incognito: Boolean = false,
         audio: String? = null,
+        dash: Boolean = false,
     ): Item {
-        val name = UrlUtils.sanitizeFileName(title).removeSuffix(".mp4").removeSuffix(".ts") + ".ts"
+        // 3.0.2: a DASH stream (its manifest at [playlistUrl]) is saved by the same downloader, as MP4.
+        val name = UrlUtils.sanitizeFileName(title).removeSuffix(".mp4").removeSuffix(".ts") + if (dash) ".mp4" else ".ts"
         val extra = JSONObject()
         audio?.let { extra.put("audio", it) }
-        val item = create(profileId, KIND_HLS, playlistUrl, name, "video/mp2t", -1, headers, pageUrl, extra, incognito)
+        if (dash) extra.put("dash", true)
+        val item = create(profileId, KIND_HLS, playlistUrl, name, if (dash) "video/mp4" else "video/mp2t", -1, headers, pageUrl, extra, incognito)
         schedule()
         return item
     }
@@ -785,6 +791,9 @@ object Downloads {
         val sound = soundFile(item)?.takeIf { it.isFile && it.length() > 0 }
         val partial = item.extra.optBoolean("keep")
         if (partial) item.extra.put("note", partNote(item))
+        // 3.0.2: MP4 parts that name only newer brands, which this Android doesn't read (DASH's sound).
+        if (item.extra.optBoolean("fmp4")) Mp4Brands.fixFile(video)
+        if (item.extra.optBoolean("afmp4")) sound?.let { Mp4Brands.fixFile(it) }
         // A fragmented MP4 stream is an MP4 already; with its sound apart, the two are joined.
         if (!prefs.hlsToMp4 || (item.extra.optBoolean("fmp4") && sound == null)) {
             sound?.let { keepApart(item, it) }
@@ -799,12 +808,12 @@ object Downloads {
         }
         when (DownloadRules.convert(bytes, free)) {
             DownloadRules.Convert.TOO_BIG -> {
-                addNote(item, "Saved as .ts: it's too big to become an MP4 on this phone")
+                addNote(item, "${keptAs(item)}: it's too big to become one MP4 on this phone")
                 sound?.let { keepApart(item, it) }
                 return
             }
             DownloadRules.Convert.NO_ROOM -> {
-                addNote(item, "Saved as .ts: there wasn't room to make an MP4 of it")
+                addNote(item, "${keptAs(item)}: there wasn't room to make one MP4 of it")
                 sound?.let { keepApart(item, it) }
                 return
             }
@@ -826,7 +835,7 @@ object Downloads {
             mp4.delete()
             if (!job.isActive) return
             L.d("Kept the stream of download ${item.id}: the MP4 wasn't whole")
-            addNote(item, "Saved as .ts: Swift couldn't make a whole MP4 of it")
+            addNote(item, "${keptAs(item)}: Swift couldn't make a whole MP4 of it")
             sound?.let { keepApart(item, it) }
             return
         }
@@ -840,6 +849,9 @@ object Downloads {
         item.filePath = out.path
         item.fileName = out.name
     }
+
+    /** How a stream that didn't become one MP4 was kept (3.0.2: MP4 parts are an MP4 already, not .ts). */
+    private fun keptAs(item: Item) = if (item.extra.optBoolean("fmp4")) "Kept as downloaded" else "Saved as .ts"
 
     /** "The first 12 of 45 minutes": how much of the stream a kept part has. */
     private fun partNote(item: Item): String {
@@ -1126,20 +1138,33 @@ object Downloads {
             soundFile(item)?.let { s -> if (extra.has("abytes")) truncate(s, extra.optLong("abytes", 0)) }
             return@coroutineScope
         }
-        var text = fetchText(item, run, item.url)
-        var playlistUrl = item.url
-        if (!Hls.isPlaylist(text)) throw DownloadRules.Failure(Why.PERMANENT, DownloadRules.NOT_A_VIDEO)
-        if (Hls.isMaster(text)) {
-            val best = Hls.parseMaster(text, item.url).firstOrNull() ?: throw DownloadRules.Failure(Why.PERMANENT, DownloadRules.NOTHING)
-            playlistUrl = best.url
-            // 3.0: a quality whose sound comes separately: that is saved too.
-            if (!extra.has("audio")) best.audio?.let { extra.put("audio", it) }
-            text = fetchText(item, run, playlistUrl)
+        val media: Hls.Media
+        val audio: Hls.Media?
+        var soundShare = DownloadRules.SOUND_SHARE
+        if (extra.optBoolean("dash")) {
+            // 3.0.2: a DASH stream: its best video and its sound, as the same parts an HLS one has.
+            val tracks = Dash.forDownload(fetchText(item, run, item.url), item.url)
+            media = tracks.video
+            audio = tracks.audio
+            soundShare = tracks.soundShare
+            // The sound's own file is kept apart until both are joined (see soundFile).
+            if (audio != null && !extra.has("audio")) extra.put("audio", audio.segments.first().url)
+        } else {
+            var text = fetchText(item, run, item.url)
+            var playlistUrl = item.url
+            if (!Hls.isPlaylist(text)) throw DownloadRules.Failure(Why.PERMANENT, DownloadRules.NOT_A_VIDEO)
+            if (Hls.isMaster(text)) {
+                val best = Hls.parseMaster(text, item.url).firstOrNull() ?: throw DownloadRules.Failure(Why.PERMANENT, DownloadRules.NOTHING)
+                playlistUrl = best.url
+                // 3.0: a quality whose sound comes separately: that is saved too.
+                if (!extra.has("audio")) best.audio?.let { extra.put("audio", it) }
+                text = fetchText(item, run, playlistUrl)
+            }
+            media = Hls.parseMedia(text, playlistUrl)
+            val audioUrl = extra.optString("audio").takeIf { it.isNotEmpty() }
+            audio = audioUrl?.let { url -> Hls.parseMedia(fetchText(item, run, url), url).also { check(it) } }
         }
-        val media = Hls.parseMedia(text, playlistUrl)
         check(media)
-        val audioUrl = extra.optString("audio").takeIf { it.isNotEmpty() }
-        val audio = audioUrl?.let { url -> Hls.parseMedia(fetchText(item, run, url), url).also { check(it) } }
 
         if (media.fragmentedMp4 && !item.fileName.endsWith(".mp4")) {
             // fMP4 segments joined after their init segment already form an MP4 file.
@@ -1155,6 +1180,9 @@ object Downloads {
         extra.put("vsegTotal", videoParts)
         extra.put("asegTotal", soundParts)
         extra.put("segTotal", videoParts + soundParts)
+        extra.put("ashare", soundShare)
+        item.soundParts = soundParts
+        item.soundShare = soundShare
         item.segTotal = videoParts + soundParts
         extra.put("fmp4", media.fragmentedMp4)
         extra.put("duration", media.duration)

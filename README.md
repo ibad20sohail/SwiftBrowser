@@ -5,7 +5,7 @@ ad-heavy sites on an old phone (Moto E4, Android 7.1.2).
 
 ## Download
 
-**[Download Swift 3.0.1 (APK)](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v3.0.1/Swift-3.0.1.apk)**
+**[Download Swift 3.0.2 (APK)](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v3.0.2/Swift-3.0.2.apk)**
 for Android 7 and newer (32-bit ARM, about 172 MB). It installs over an earlier Swift and keeps
 tabs and settings. From 1.4 on, Swift can also update itself: Settings → About Swift → Check for
 updates.
@@ -31,6 +31,24 @@ ones, and a short welcome on the first start.
 - **Night light** (2.3, Settings → Look & screen): a warm layer over Swift, pages and videos too,
   from 7 pm to 7 am or always, in three strengths. Taps go through it.
 
+- **New in 3.0.2**:
+  - **A new player**, after VLC's: the times over a seek bar as wide as the screen; back and on
+    10 seconds beside play (with a playlist on a narrow screen, previous and next instead); over a
+    video a light ring for play, and shades top and bottom so the controls read over any picture.
+    A tap in the middle shows or hides the controls at once; a double tap on a side jumps, and says
+    so on that side. A speed, sleep timer or subtitle timing that is on shows as a chip under the
+    title (tap to change it, hold to turn it off). Sound and subtitles are one sheet and one button.
+  - **Tabs stay loaded while you use Swift**: opening Settings, Files or the player no longer
+    unloads the other tabs. They are unloaded a minute after you leave Swift, and Android's memory
+    warnings count while Swift is on screen only when memory is really low. Right now says when
+    tabs were last unloaded, and why.
+  - **DASH videos** (.mpd, used by many video sites): found on pages, played in Swift's player, and
+    downloaded as one MP4 (the best H.264 up to 1080p with its AAC sound, in the phone's language
+    when there is a choice). Live, copy-protected and multi-part streams say why they can't be
+    saved. A stream's progress weighs its sound by its size, so it no longer jumps to half way.
+  - **Home page order** (Settings → Home & news): Continue now comes first, then the shortcuts and
+    the news; any order can be chosen, and nothing is left out.
+  - **Licence**: Swift's own code is under the GNU GPL, version 3 or later (see [LICENSE](LICENSE)).
 - **New in 3.0.1**:
   - **Incognito leaves nothing behind**: site settings changed in an incognito tab last until the
     incognito tabs close; they are no longer saved or put in backups.
@@ -482,7 +500,7 @@ signed with the same key.
 | `.../tabs` | Tabs, sessions and the GeckoView delegates (navigation, pop-up policy, crashes, permissions) |
 | `.../adblock` | Ad-block levels, the uBlock Origin bridge and the pop-up/redirect policy |
 | `.../media` | Bridge to the helper extension: video detection, playback speed, tap tracking |
-| `.../download` | Download manager, HLS downloader, TS→MP4 remuxer, notification service |
+| `.../download` | Download manager, HLS and DASH downloader, TS→MP4 remuxer, notification service |
 | `.../vpn` | The VPN: WireGuard tunnel for Swift only, locations, encrypted setup files |
 | `.../ui` | Activities, home page, tab grid, settings, bottom sheets and dialogs |
 | `app/src/main/assets/extensions/ublock` | uBlock Origin 1.75.0, patched by `tools/update_ublock.py` |
@@ -497,6 +515,10 @@ unless the download matches the hash addons.mozilla.org publishes (`--skip-amo-c
 If `tools/ublock-patch/swift-bridge.js` changes, also bump `UBO_BRIDGE_REV` in `Engine.kt`.
 
 ## Licenses
+
+Swift's own code is free software: you can share and change it under the **GNU General Public
+License, version 3 or (at your option) any later version** (the `LICENSE` file). It has to be: it
+includes GPLv3 parts (uBlock Origin and Jellyfin's FFmpeg decoder).
 
 The app lists every part with its licence and home page under About Swift → Open-source licences
 (`ui/LicencesData.kt`). In short:

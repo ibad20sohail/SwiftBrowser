@@ -462,11 +462,52 @@ object TabManager {
         // 3.0.1: tabs kept loaded stay whatever happens, and leave room for others (TabRules.toUnload).
         val loaded = others.map { TabRules.Loaded(it.id, it.lastUsed, it.playing || it.sessionOpening || opensPopup(it), it.kept) }
         val openCounts = current?.session != null && current?.kept != true
+        var count = 0
+        var idleOnly = true
         for (id in TabRules.toUnload(loaded, openCounts, max, idleSince)) {
             val t = others.firstOrNull { it.id == id } ?: continue
-            L.d("Unloading tab ${t.id} (${if (t.lastUsed < idleSince) "not opened for 30 minutes" else "the limit is $max loaded"})")
+            val idle = t.lastUsed < idleSince
+            if (!idle) idleOnly = false
+            L.d("Unloading tab ${t.id} (${if (idle) "not opened for 30 minutes" else "the limit is $max loaded"})")
             suspend(t)
+            if (t.session == null) count++
         }
+        noteUnloaded(
+            count,
+            when {
+                low -> "the phone's memory was low"
+                com.swiftbrowser.engine.Power.saving -> "battery saver keeps one tab loaded"
+                idleOnly -> "they weren't opened for 30 minutes"
+                else -> "more than $max tabs were loaded"
+            },
+        )
+    }
+
+    /** The last time pages were let go, and why (3.0.2: for Settings → Speed & memory → Right now). */
+    class Unloaded(val time: Long, val count: Int, val why: String)
+
+    var lastUnloaded: Unloaded? = null
+        private set
+
+    private fun noteUnloaded(count: Int, why: String) {
+        if (count > 0) lastUnloaded = Unloaded(System.currentTimeMillis(), count, why)
+    }
+
+    /**
+     * Whether any of Swift's screens shows (3.0.2, from SwiftApp: the browser, Settings, Files, the
+     * player...). Before, Settings or the player in front of the browser counted as Swift being away,
+     * and a minute later every background tab let go of its page. A minute really out of sight,
+     * other tabs let go of their pages so Android is less likely to close Swift on a 2 GB phone; a
+     * short trip to another app keeps everything.
+     */
+    fun inSight(visible: Boolean) {
+        main.removeCallbacks(freeAfterLeaving)
+        if (!visible) main.postDelayed(freeAfterLeaving, 60_000)
+    }
+
+    private val freeAfterLeaving = Runnable {
+        L.d("Out of sight for a minute: keeping only the open (or playing, or kept) tab loaded")
+        suspendBackgroundTabs("Swift was out of sight for a minute")
     }
 
     /** "Keep loaded" (3.0.1) on or off for [tab]; off lets the usual limits apply to it again. */
@@ -519,9 +560,11 @@ object TabManager {
         Helper.sendLook()
     }
 
-    /** Android is short of memory, or Swift is out of sight: background pages go, but playing and kept tabs (3.0.1). */
-    fun suspendBackgroundTabs() {
-        tabs.filter { it.session != null && it !== current && !it.playing && !it.kept }.forEach { suspend(it) }
+    /** Android is short of memory, or Swift is out of sight: background pages go, but playing and kept tabs (3.0.1). [why]: for Right now. */
+    fun suspendBackgroundTabs(why: String) {
+        val gone = tabs.filter { it.session != null && it !== current && !it.playing && !it.kept }
+        gone.forEach { suspend(it) }
+        noteUnloaded(gone.count { it.session == null }, why)
     }
 
     /** Tabs closed together from the tab grid, until the next close; see [undoClose]. */

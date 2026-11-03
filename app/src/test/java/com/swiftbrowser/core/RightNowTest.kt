@@ -29,6 +29,16 @@ class RightNowTest {
     }
 
     @Test
+    fun theDetailsSayWhenAndWhyTabsWereUnloaded() {
+        assertEquals(
+            "Last unloaded: 2 tabs, 5 min ago, because Swift was out of sight for a minute.",
+            RightNow.unloadedText(2, 5 * 60_000L + 10_000, "Swift was out of sight for a minute"),
+        )
+        assertEquals("Last unloaded: 1 tab, just now, because the phone's memory was low.", RightNow.unloadedText(1, 20_000, "the phone's memory was low"))
+        assertEquals("Last unloaded: 3 tabs, 2 h 5 min ago, because more than 2 tabs were loaded.", RightNow.unloadedText(3, 125 * 60_000L, "more than 2 tabs were loaded"))
+    }
+
+    @Test
     fun theRowSaysMemoryAndTabs() {
         assertEquals("412 MB free of 1862 MB · 3 of 9 tabs loaded", RightNow.summary(412, 1862, 3, 9))
         assertEquals("412 MB free of 1862 MB · 1 of 1 tab loaded", RightNow.summary(412, 1862, 1, 1))

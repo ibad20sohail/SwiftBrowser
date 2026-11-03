@@ -8,6 +8,7 @@ import android.app.PendingIntent
 import android.content.ComponentCallbacks2
 import android.content.Context
 import android.content.Intent
+import android.os.Bundle
 import android.os.Process
 import android.os.SystemClock
 import androidx.appcompat.app.AppCompatDelegate
@@ -62,6 +63,25 @@ class SwiftApp : Application() {
         // 2.9.2: torrents, run with the rules above (the VPN, mobile data, the battery).
         com.swiftbrowser.torrent.Torrents.init(this)
         com.swiftbrowser.core.Health.init(this)
+        // 3.0.2: whether any of Swift's screens shows (the browser, Settings, Files, the player...).
+        registerActivityLifecycleCallbacks(object : Application.ActivityLifecycleCallbacks {
+            private var started = 0
+
+            override fun onActivityStarted(activity: Activity) {
+                if (started++ == 0) TabManager.inSight(true)
+            }
+
+            override fun onActivityStopped(activity: Activity) {
+                started = (started - 1).coerceAtLeast(0)
+                if (started == 0) TabManager.inSight(false)
+            }
+
+            override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) {}
+            override fun onActivityResumed(activity: Activity) {}
+            override fun onActivityPaused(activity: Activity) {}
+            override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) {}
+            override fun onActivityDestroyed(activity: Activity) {}
+        })
         L.d(
             "Swift ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) started on ${android.os.Build.MANUFACTURER} " +
                 "${android.os.Build.MODEL}, Android ${android.os.Build.VERSION.RELEASE}, ${android.os.Build.SUPPORTED_ABIS.joinToString()}; " +
@@ -109,14 +129,22 @@ class SwiftApp : Application() {
             com.swiftbrowser.files.FileThumbs.trim()
             Favicons.trim()
         }
-        // Android is about to start closing apps (while Swift runs, or while it is in the
-        // background): Swift could be next, so it frees the pages of background tabs (they reload
-        // when opened) and saves its log. Merely leaving the app (UI_HIDDEN) isn't a reason.
-        val running = level in ComponentCallbacks2.TRIM_MEMORY_RUNNING_MODERATE..ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL
-        if (running || level >= ComponentCallbacks2.TRIM_MEMORY_BACKGROUND) {
-            L.d("Memory getting low: unloading background tabs")
-            TabManager.suspendBackgroundTabs()
-            L.flushNow()
+        // Android is about to start closing apps: Swift could be next, so pages of other tabs go
+        // (they reload when opened) and the log is saved. Merely leaving the app (UI_HIDDEN) isn't a
+        // reason. 3.0.2: while Swift is on screen, only when the memory really is low, through the
+        // usual limits (TabRules.onWarning): these warnings come with most of the memory free, and
+        // every background tab used to reload after a visit to Settings.
+        when (com.swiftbrowser.tabs.TabRules.onWarning(level, Diagnostics.memoryLow())) {
+            com.swiftbrowser.tabs.TabRules.Warning.TRIM -> {
+                TabManager.trimLiveSessions()
+                L.flushNow()
+            }
+            com.swiftbrowser.tabs.TabRules.Warning.BACKGROUND_TABS -> {
+                L.d("Memory getting low with Swift in the background: unloading background tabs")
+                TabManager.suspendBackgroundTabs("Android needed memory while Swift was in the background")
+                L.flushNow()
+            }
+            com.swiftbrowser.tabs.TabRules.Warning.NONE -> Unit
         }
     }
 

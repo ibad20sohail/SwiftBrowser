@@ -12,6 +12,8 @@ const NATIVE_APP = 'swift';
 const FILE_EXT = /\.(mp4|m4v|webm|mkv|mov|avi|flv|3gp)(?:[?#]|$)/i;
 const SEGMENT_EXT = /\.(ts|m4s|m4a|aac|mp3|vtt|webvtt|srt|key|jpg|jpeg|png|gif|webp)(?:[?#]|$)/i;
 const HLS_EXT = /\.m3u8(?:[?#]|$)/i;
+// 3.0.2: DASH manifests (played and saved by Swift too).
+const DASH_EXT = /\.mpd(?:[?#]|$)/i;
 const MIN_FILE_SIZE = 1024 * 1024;
 
 // Script requests (XHR / fetch) are most of what pages load, and each one woke this script with
@@ -21,7 +23,7 @@ const MIN_FILE_SIZE = 1024 * 1024;
 // is listed too. Movie sites often hand out playlists from addresses like /playlist.php or
 // /hls/master: those words count as well.
 const XHR_URLS = [];
-for (const s of ['m3u8', 'M3U8', 'mpegurl', 'mpegURL', 'playlist', 'Playlist', 'manifest', 'master', 'hls', 'HLS']) {
+for (const s of ['m3u8', 'M3U8', 'mpegurl', 'mpegURL', 'playlist', 'Playlist', 'manifest', 'master', 'hls', 'HLS', '.mpd', '.MPD', 'dash', 'DASH']) {
   XHR_URLS.push('*://*/*' + s + '*');
 }
 for (const ext of ['mp4', 'm4v', 'webm', 'mkv', 'mov', 'avi', 'flv', '3gp']) {
@@ -277,6 +279,8 @@ function onMediaHeaders(details) {
   let kind = null;
   if (ct.includes('mpegurl') || HLS_EXT.test(url)) {
     kind = 'hls';
+  } else if (ct.includes('dash+xml') || DASH_EXT.test(url)) {
+    kind = 'dash';
   } else if (details.type === 'media' || ct.startsWith('video/') || FILE_EXT.test(url)) {
     // Pieces of adaptive streams (YouTube etc.) are fetched by script and can't be saved as files;
     // reporting each of them only costs work while the video plays.

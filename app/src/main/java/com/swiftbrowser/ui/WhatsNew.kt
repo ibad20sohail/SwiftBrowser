@@ -24,6 +24,11 @@ object WhatsNew {
     private class Item(val icon: Int, val title: String, val text: String, val version: Int = 19)
 
     private val NEW = listOf(
+        Item(R.drawable.ic_play, "A new player", "The times sit over a bar as wide as the screen, with back and on 10 seconds beside play. A tap in the middle shows or hides the controls at once, a double tap on a side jumps there, and a speed or sleep timer that is on shows under the title (hold it to turn it off). Sound and subtitles share one button.", version = 24),
+        Item(R.drawable.ic_tab, "Tabs stay loaded in Settings", "Opening Settings, Files or the player no longer unloads your other tabs: Swift waits until you have left Swift for a minute. Right now (Settings → Speed & memory) says when tabs were last unloaded, and why.", version = 24),
+        Item(R.drawable.ic_movie, "More website videos", "Videos sent as DASH, which many video sites use, are found on pages, play in Swift's player and download as one MP4 with sound, in your phone's language when there is a choice. A stream's download no longer jumps to half way once its sound is in.", version = 24),
+        Item(R.drawable.ic_swap, "Home page order", "Continue now comes first, under the search box. Settings → Home & news → Order of the home page puts the parts in the order you like; nothing is left out.", version = 24),
+        Item(R.drawable.ic_info, "Swift's licence", "Swift's own code is under the GNU GPL, version 3 or later, as About → Open-source licences now says.", version = 24),
         Item(R.drawable.ic_incognito, "Incognito leaves nothing behind", "Site settings changed in an incognito tab (desktop site, text size, ad blocking and more) now last only until you close your incognito tabs. Before, they were saved and went into backups.", version = 23),
         Item(R.drawable.ic_tab, "Keep a tab loaded", "Hold a tab in the tab grid and choose Keep loaded: Swift won't unload it to save memory. A lower number of tabs kept loaded now applies at once.", version = 23),
         Item(R.drawable.ic_shield, "Memory and security at a glance", "Settings → Speed & memory → Right now shows free memory, Swift's own and its loaded tabs. Privacy & security → Security status shows what is on, and what Swift has checked.", version = 23),

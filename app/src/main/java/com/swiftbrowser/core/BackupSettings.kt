@@ -33,7 +33,7 @@ object BackupSettings {
         // Before 2.2, read once to carry them over.
         "menu_buttons" to STRING, "show_home_button" to BOOLEAN,
         // Home & news
-        "news_enabled" to BOOLEAN, "news_cards" to BOOLEAN, "news_country" to STRING, "news_topics" to SET,
+        "news_enabled" to BOOLEAN, "home_order" to STRING, "news_cards" to BOOLEAN, "news_country" to STRING, "news_topics" to SET,
         "news_feeds" to STRING, "news_hidden" to SET, "home_continue" to BOOLEAN, "hidden_tiles" to SET,
         "news_topic" to STRING,
         // Browsing & tabs

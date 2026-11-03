@@ -58,6 +58,8 @@ object LocalPlayback {
         /** A website video, played from the network with the page's [headers]. */
         val stream: Boolean = false,
         val hls: Boolean = false,
+        /** 3.0.2: a DASH stream (.mpd). */
+        val dash: Boolean = false,
         val headers: Map<String, String> = emptyMap(),
         /** From an incognito tab: nothing about it is remembered, logged or shown on the lock screen. */
         val incognito: Boolean = false,
@@ -219,7 +221,10 @@ object LocalPlayback {
     // No title of Swift's own in the item: it would win over the song's tags.
     private fun mediaItem(e: Entry): MediaItem = MediaItem.Builder()
         .setUri(e.uri)
-        .apply { if (e.hls) setMimeType(MimeTypes.APPLICATION_M3U8) }
+        .apply {
+            if (e.hls) setMimeType(MimeTypes.APPLICATION_M3U8)
+            if (e.dash) setMimeType(MimeTypes.APPLICATION_MPD)
+        }
         .build()
 
     /**

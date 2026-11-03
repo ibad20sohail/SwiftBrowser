@@ -16,6 +16,17 @@ internal object LicencesData {
     )
 
     val components: List<Component> = listOf(
+        // 3.0.2: Swift itself, under the GPL as the GPLv3 parts it includes require (LICENSE in its repository).
+        Component(
+            name = "Swift",
+            version = com.swiftbrowser.BuildConfig.VERSION_NAME,
+            licence = "GNU General Public License v3.0 or later",
+            licenceUrl = "https://www.gnu.org/licenses/gpl-3.0.html",
+            home = "https://github.com/ibad20sohail/SwiftBrowser",
+            note = "This browser's own code, whose source is on GitHub: you may share and change it under " +
+                "the GPL. It has to be under the GPL, as it includes uBlock Origin and Jellyfin's FFmpeg " +
+                "decoder, which are GPLv3.",
+        ),
         Component(
             name = "GeckoView",
             version = "143.0",
@@ -136,7 +147,7 @@ internal object LicencesData {
             licenceUrl = "https://www.apache.org/licenses/LICENSE-2.0.txt",
             home = "https://github.com/androidx/media",
             note = "Swift's own video and music player (ExoPlayer). Parts used: common, container, database, " +
-                "datasource, decoder, exoplayer, exoplayer-hls, extractor.",
+                "datasource, decoder, exoplayer, exoplayer-dash, exoplayer-hls, extractor.",
         ),
         Component(
             name = "Apache Commons Codec",

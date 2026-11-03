@@ -122,6 +122,15 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
     private lateinit var playlistButton: ImageButton
     private lateinit var unlockButton: ImageButton
     private lateinit var boostBadge: TextView
+
+    // 3.0.2: the redone controls (after VLC's player).
+    private lateinit var chips: LinearLayout
+    private lateinit var previousButton: ImageButton
+    private lateinit var nextButton: ImageButton
+    private lateinit var back10: ImageButton
+    private lateinit var forward10: ImageButton
+    private lateinit var speedButton: ImageButton
+    private var chipsShown = ""
     private var problem: View? = null
 
     /** Icon buttons: white over a video, in the text colour on the music screen. */
@@ -232,7 +241,7 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
                 // Android closed Swift isn't played again), and only from the web, never a file:// path.
                 if (!ViewerAccess.isOwn(i) || !UrlUtils.isHttp(url)) return false
                 val headers = i.getBundleExtra(EXTRA_HEADERS)?.let { b -> b.keySet().associateWith { b.getString(it).orEmpty() } } ?: emptyMap()
-                playStream(url, i.getStringExtra(EXTRA_TITLE), headers, i.getBooleanExtra(EXTRA_INCOGNITO, false))
+                playStream(url, i.getStringExtra(EXTRA_TITLE), headers, i.getBooleanExtra(EXTRA_INCOGNITO, false), i.getBooleanExtra(EXTRA_DASH, false))
                 true
             }
             Intent.ACTION_VIEW -> {
@@ -294,11 +303,13 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
     }
 
     /** A website video: HLS (.m3u8) or a plain file, fetched with the page's headers. */
-    private fun playStream(url: String, title: String?, headers: Map<String, String>, incognito: Boolean) {
+    private fun playStream(url: String, title: String?, headers: Map<String, String>, incognito: Boolean, dashHint: Boolean = false) {
         val path = url.substringBefore('?').substringBefore('#')
         val hls = path.lowercase(Locale.ROOT).endsWith(".m3u8") || url.contains(".m3u8", ignoreCase = true)
+        // 3.0.2: a DASH stream, by its address or as the page's own request said (a manifest without .mpd).
+        val dash = !hls && (dashHint || path.lowercase(Locale.ROOT).endsWith(".mpd"))
         val name = title?.takeIf { it.isNotBlank() } ?: UrlUtils.host(url)?.removePrefix("www.") ?: "Video"
-        val entry = LocalPlayback.Entry(Uri.parse(url), name, kindOf(path) != Kind.AUDIO, stream = true, hls = hls, headers = headers, incognito = incognito)
+        val entry = LocalPlayback.Entry(Uri.parse(url), name, kindOf(path) != Kind.AUDIO, stream = true, hls = hls, dash = dash, headers = headers, incognito = incognito)
         LocalPlayback.load(this, listOf(entry), 0, C.TIME_UNSET)
         attach()
     }
@@ -588,9 +599,13 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         root.addView(hud, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
     }
 
+    /**
+     * 3.0.2, after VLC's player: Back, the title (and "2 of 7"), then the sound and subtitles, turning,
+     * the playlist and More. Under the title, chips for only what isn't as usual (see [updateChips]).
+     */
     private fun buildTopBar() {
         titleView = TextView(this).apply {
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16.5f)
             typeface = Ui.MEDIUM
             isSingleLine = true
             ellipsize = TextUtils.TruncateAt.END
@@ -600,23 +615,29 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
             isSingleLine = true
             ellipsize = TextUtils.TruncateAt.END
         }
+        chips = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            visibility = View.GONE
+        }
         rotateButton = button(R.drawable.ic_rotate, "Turn the screen") { rotationSheet() }
-        subtitlesButton = button(R.drawable.ic_subtitles, "Subtitles") { subtitlesSheet() }
+        subtitlesButton = button(R.drawable.ic_subtitles, "Sound and subtitles") { tracksSheet() }
         playlistButton = button(R.drawable.ic_view_list, "Playlist") { playlistSheet() }
         val size = dp(48)
         topBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(4), dp(4), dp(4), dp(20))
+            gravity = Gravity.TOP
+            // Room below for the shade to fade out, so the title reads over any picture.
+            setPadding(dp(4), dp(4), dp(4), dp(36))
             addView(button(R.drawable.ic_back, "Back") { close() }, LinearLayout.LayoutParams(size, size))
             addView(LinearLayout(this@PlayerActivity).apply {
                 orientation = LinearLayout.VERTICAL
-                setPadding(dp(8), 0, dp(4), 0)
+                setPadding(dp(8), dp(12), dp(4), 0)
                 addView(titleView)
                 addView(countView)
+                addView(chips, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) })
             }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-            addView(rotateButton, LinearLayout.LayoutParams(size, size))
             addView(subtitlesButton, LinearLayout.LayoutParams(size, size))
+            addView(rotateButton, LinearLayout.LayoutParams(size, size))
             addView(playlistButton, LinearLayout.LayoutParams(size, size))
             addView(button(R.drawable.ic_more, "More") { moreSheet() }, LinearLayout.LayoutParams(size, size))
         }
@@ -625,13 +646,13 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
 
     private fun buildControls() {
         elapsed = TextView(this).apply {
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
-            gravity = Gravity.CENTER
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            gravity = Gravity.CENTER_VERTICAL or Gravity.START
             minWidth = dp(48)
         }
         length = TextView(this).apply {
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
-            gravity = Gravity.CENTER
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            gravity = Gravity.CENTER_VERTICAL or Gravity.END
             minWidth = dp(48)
             minHeight = dp(40)
             contentDescription = "Length (tap for the time left)"
@@ -675,35 +696,137 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         fitButton = button(R.drawable.ic_aspect_ratio, "Picture size") { nextFit() }
         shuffleButton = button(R.drawable.ic_shuffle, "Shuffle") { toggleShuffle() }
         repeatButton = button(R.drawable.ic_repeat, "Repeat") { nextRepeat() }
-        val previous = button(R.drawable.ic_media_previous, "Previous") { LocalPlayback.previous() }
-        val next = button(R.drawable.ic_media_next, "Next") { LocalPlayback.next() }
-        val small = dp(48)
+        previousButton = button(R.drawable.ic_media_previous, "Previous") { LocalPlayback.previous() }
+        nextButton = button(R.drawable.ic_media_next, "Next") { LocalPlayback.next() }
+        // 3.0.2: back and on by the double tap's step, as buttons too (VLC's -10 and +10).
+        back10 = button(R.drawable.ic_fast_rewind, "Back ${PlayerSettings.doubleTapSeconds} seconds") { jump(-1) }
+        forward10 = button(R.drawable.ic_fast_forward, "On ${PlayerSettings.doubleTapSeconds} seconds") { jump(1) }
+        speedButton = button(R.drawable.ic_speed, "Playback speed") { speedSheet() }
+        val small = dp(44)
+        // Lock and picture size at the start, the playing in the middle, speed at the end; which of
+        // them show depends on video or music, a playlist and the width (see arrangeButtons).
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             addView(lockButton, LinearLayout.LayoutParams(small, small))
             addView(shuffleButton, LinearLayout.LayoutParams(small, small))
-            addView(View(this@PlayerActivity), LinearLayout.LayoutParams(0, 1, 1f))
-            addView(previous, LinearLayout.LayoutParams(small, small))
-            addView(playButton, LinearLayout.LayoutParams(dp(60), dp(60)).apply { setMargins(dp(20), 0, dp(20), 0) })
-            addView(next, LinearLayout.LayoutParams(small, small))
-            addView(View(this@PlayerActivity), LinearLayout.LayoutParams(0, 1, 1f))
             addView(fitButton, LinearLayout.LayoutParams(small, small))
+            addView(View(this@PlayerActivity), LinearLayout.LayoutParams(0, 1, 1f))
+            addView(previousButton, LinearLayout.LayoutParams(small, small))
+            addView(back10, LinearLayout.LayoutParams(small, small))
+            addView(playButton, LinearLayout.LayoutParams(dp(60), dp(60)).apply { setMargins(dp(14), 0, dp(14), 0) })
+            addView(forward10, LinearLayout.LayoutParams(small, small))
+            addView(nextButton, LinearLayout.LayoutParams(small, small))
+            addView(View(this@PlayerActivity), LinearLayout.LayoutParams(0, 1, 1f))
+            addView(speedButton, LinearLayout.LayoutParams(small, small))
             addView(repeatButton, LinearLayout.LayoutParams(small, small))
+        }
+        // The times above a bar as wide as the screen (3.0.2: the bar no longer shares its line).
+        val times = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(8), 0, dp(4), 0)
+            addView(elapsed)
+            addView(View(this@PlayerActivity), LinearLayout.LayoutParams(0, 1, 1f))
+            addView(length)
         }
         controls = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(8), dp(28), dp(8), dp(12))
-            addView(LinearLayout(this@PlayerActivity).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                addView(elapsed)
-                addView(seek, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-                addView(length)
-            })
-            addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(4) })
+            setPadding(dp(8), dp(44), dp(8), dp(10))
+            // Pulled down onto the bar, so the times read as the bar's own (the length keeps its tap room).
+            addView(times, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = -dp(10) })
+            addView(seek, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(2) })
         }
         root.addView(controls, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM))
+    }
+
+    /** 3.0.2: the buttons that make sense now: video or music, a playlist or one item, what fits across. */
+    private fun arrangeButtons() {
+        val video = videoMode
+        val queue = LocalPlayback.entries.size > 1
+        val dm = resources.displayMetrics
+        val narrow = dm.widthPixels / dm.density < 420
+        for (v in listOf(lockButton, fitButton, rotateButton, subtitlesButton, speedButton)) v.visibility = if (video) View.VISIBLE else View.GONE
+        for (v in listOf(shuffleButton, repeatButton)) v.visibility = if (video) View.GONE else View.VISIBLE
+        // Previous and next only for a playlist (music keeps them: they also restart the song).
+        val steps = if (queue || !video) View.VISIBLE else View.GONE
+        previousButton.visibility = steps
+        nextButton.visibility = steps
+        // Across a phone held upright, a playlist's buttons take the jumps' place.
+        val jumps = if (video && !(queue && narrow)) View.VISIBLE else View.GONE
+        back10.visibility = jumps
+        forward10.visibility = jumps
+    }
+
+    /** The jump buttons: back or on by the double tap's step. */
+    private fun jump(direction: Int) {
+        if (player == null) return
+        val step = PlayerSettings.doubleTapSeconds * 1000L
+        LocalPlayback.seekBy(direction * step)
+        showHud(if (direction < 0) R.drawable.ic_fast_rewind else R.drawable.ic_fast_forward, (if (direction < 0) "−" else "+") + "${step / 1000} s", null, null)
+        hideHudSoon()
+        scheduleHide()
+    }
+
+    /**
+     * 3.0.2, VLC's chips: under the title, only what isn't as usual (a speed, the sleep timer, the
+     * subtitles' timing). A tap opens its choices, holding puts it back. Looked at with the progress.
+     */
+    private fun updateChips() {
+        val p = player ?: return
+        val speed = p.playbackParameters.speed
+        val sleep = LocalPlayback.sleepLabel()
+        val delay = if (subFile != null && subDelayMs != 0L) "Subtitles ${delayLabel()}" else null
+        val key = "$speed|$sleep|$delay|$videoMode"
+        if (key == chipsShown) return
+        chipsShown = key
+        chips.removeAllViews()
+        if (abs(speed - 1f) > 0.01f) {
+            chips.addView(chip(R.drawable.ic_speed, PlayerSettings.speedLabel(speed), "Speed ${PlayerSettings.speedLabel(speed)}. Hold for normal speed", { speedSheet() }) {
+                player?.setPlaybackSpeed(1f)
+                say("Normal speed")
+                updateChips()
+            })
+        }
+        if (sleep != null) {
+            chips.addView(chip(R.drawable.ic_timer, "Sleep: $sleep", "Sleep timer: $sleep. Hold to turn it off", { sleepSheet() }) {
+                LocalPlayback.cancelSleep()
+                say("Sleep timer off")
+                updateChips()
+            })
+        }
+        if (delay != null) {
+            chips.addView(chip(R.drawable.ic_subtitles, delay, "$delay. Hold to put the subtitles back in time", { tracksSheet() }) {
+                subDelayMs = 0
+                saveSubtitleDelay()
+                refreshSubtitles()
+                updateChips()
+            })
+        }
+        chips.visibility = if (chips.childCount > 0) View.VISIBLE else View.GONE
+    }
+
+    private fun chip(icon: Int, text: String, description: String, onTap: () -> Unit, onReset: () -> Unit): TextView = TextView(this).apply {
+        val fg = if (videoMode) Color.WHITE else Palette.color(this@PlayerActivity, R.color.text_primary)
+        this.text = text
+        setTextColor(fg)
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+        typeface = Ui.MEDIUM
+        isSingleLine = true
+        val mark = Ui.icon(this@PlayerActivity, icon, fg)?.mutate()?.apply { setBounds(0, 0, dp(14), dp(14)) }
+        setCompoundDrawablesRelative(mark, null, null, null)
+        compoundDrawablePadding = dp(5)
+        val fill = if (videoMode) 0x33FFFFFF else Palette.color(this@PlayerActivity, R.color.surface_alt)
+        background = Ui.ripple(this@PlayerActivity, Ui.shape(this@PlayerActivity, fill, 14), 14)
+        setPadding(dp(10), dp(5), dp(11), dp(6))
+        contentDescription = description
+        setOnClickListener { onTap() }
+        setOnLongClickListener {
+            onReset()
+            true
+        }
+        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(6) }
     }
 
     /** Video (black, controls over the picture) or music (Swift's colours, the cover, controls that stay). */
@@ -716,8 +839,22 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         setBarColours(bg)
         frame.visibility = if (video) View.VISIBLE else View.GONE
         music.visibility = if (video) View.GONE else View.VISIBLE
-        topBar.background = if (video) GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(0x99000000.toInt(), 0)) else null
-        controls.background = if (video) GradientDrawable(GradientDrawable.Orientation.BOTTOM_TOP, intArrayOf(0xB3000000.toInt(), 0)) else null
+        // 3.0.2: deeper shades (as VLC's), so the controls read over a bright picture; the rest of
+        // the picture is left alone (no dimming, no blur).
+        topBar.background = if (video) GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(0xCC000000.toInt(), 0)) else null
+        controls.background = if (video) GradientDrawable(GradientDrawable.Orientation.BOTTOM_TOP, intArrayOf(0xE0000000.toInt(), 0x99000000.toInt(), 0)) else null
+        controls.setPadding(dp(8), if (video) dp(44) else dp(8), dp(8), dp(10))
+        // Over a video a light ring; on the music screen the accent's round button.
+        playButton.background = if (video) {
+            GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(0x40000000)
+                setStroke(dp(2), Color.WHITE)
+            }
+        } else {
+            Ui.circle(Ui.accent(this))
+        }
+        playButton.imageTintList = ColorStateList.valueOf(if (video) Color.WHITE else Ui.onAccent(this))
         val tint = ColorStateList.valueOf(fg)
         for (b in icons) b.imageTintList = tint
         titleView.setTextColor(fg)
@@ -725,8 +862,8 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         elapsed.setTextColor(fg)
         length.setTextColor(fg)
         seek.progressBackgroundTintList = ColorStateList.valueOf(if (video) 0x55FFFFFF else Palette.color(this, R.color.outline))
-        for (v in listOf(lockButton, fitButton, rotateButton, subtitlesButton)) v.visibility = if (video) View.VISIBLE else View.GONE
-        for (v in listOf(shuffleButton, repeatButton)) v.visibility = if (video) View.GONE else View.VISIBLE
+        arrangeButtons()
+        chipsShown = ""
         if (!video) {
             if (locked) setLocked(false)
             showControls(true)
@@ -809,6 +946,7 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
         if (!videoMode) layoutMusic()
+        arrangeButtons()
         applySubtitleSize()
         handler.post { moveSubtitles() }
     }
@@ -819,7 +957,6 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         val e = LocalPlayback.current ?: return
         val n = LocalPlayback.entries.size
         val position = if (n > 1) "${LocalPlayback.index + 1} of $n" else null
-        val sleep = LocalPlayback.sleepLabel()?.let { "Sleep: $it" }
         if (videoMode) {
             titleView.text = e.title
         } else {
@@ -833,9 +970,11 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
             songArtist.visibility = if (songArtist.text.isNullOrBlank()) View.GONE else View.VISIBLE
             showCover()
         }
-        countView.text = listOfNotNull(position, sleep).joinToString(" · ")
+        countView.text = position.orEmpty()
         countView.visibility = if (countView.text.isNullOrEmpty()) View.GONE else View.VISIBLE
         playlistButton.visibility = if (n > 1) View.VISIBLE else View.GONE
+        arrangeButtons()
+        updateChips()
     }
 
     private fun showCover() {
@@ -914,7 +1053,10 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
     /** Twice a second while the screen is seen. */
     private val ticker = object : Runnable {
         override fun run() {
-            if (controlsShown || !videoMode) updateProgress()
+            if (controlsShown || !videoMode) {
+                updateProgress()
+                updateChips()
+            }
             handler.postDelayed(this, 500)
         }
     }
@@ -933,10 +1075,10 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         if (videoMode && controlsShown && LocalPlayback.playing && !scrubbing && problem == null) showControls(false)
     }
 
-    /** The controls go 3.5 seconds after the last touch while a video plays. */
+    /** The controls go 4 seconds after the last touch while a video plays (3.0.2: 3.5 before); paused, they stay. */
     private fun scheduleHide() {
         handler.removeCallbacks(autoHide)
-        if (videoMode && controlsShown && LocalPlayback.playing) handler.postDelayed(autoHide, 3500)
+        if (videoMode && controlsShown && LocalPlayback.playing) handler.postDelayed(autoHide, 4000)
     }
 
     override fun onUserInteraction() {
@@ -999,8 +1141,9 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
 
     // ------------------------------------------------------------------ the HUD (gestures' feedback)
 
-    private fun showHud(icon: Int, text: String, sub: String?, level: Float?) {
+    private fun showHud(icon: Int, text: String, sub: String?, level: Float?, side: Int = 0) {
         handler.removeCallbacks(hideHud)
+        placeHud(side)
         hud.animate().cancel()
         hud.alpha = 1f
         hud.visibility = View.VISIBLE
@@ -1014,6 +1157,21 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
             hudLevel.visibility = View.VISIBLE
             hudLevel.progress = (level * 1000).roundToInt()
         }
+    }
+
+    /** 3.0.2: a double tap's HUD on its side of the screen, where the eyes are; the rest in the middle. */
+    private fun placeHud(side: Int) {
+        val lp = hud.layoutParams as? FrameLayout.LayoutParams ?: return
+        val gravity = when {
+            side < 0 -> Gravity.CENTER_VERTICAL or Gravity.START
+            side > 0 -> Gravity.CENTER_VERTICAL or Gravity.END
+            else -> Gravity.CENTER
+        }
+        if (lp.gravity == gravity) return
+        lp.gravity = gravity
+        lp.marginStart = if (side != 0) dp(48) else 0
+        lp.marginEnd = if (side != 0) dp(48) else 0
+        hud.layoutParams = lp
     }
 
     private val hideHud = Runnable {
@@ -1057,7 +1215,7 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         tapSide = side
         tapAt = now
         LocalPlayback.seekBy(side * step)
-        showHud(if (side < 0) R.drawable.ic_fast_rewind else R.drawable.ic_fast_forward, (if (side < 0) "−" else "+") + "${tapTotal / 1000} s", null, null)
+        showHud(if (side < 0) R.drawable.ic_fast_rewind else R.drawable.ic_fast_forward, (if (side < 0) "−" else "+") + "${tapTotal / 1000} s", null, null, side)
         hideHudSoon()
     }
 
@@ -1279,7 +1437,6 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         actions += Sheets.Action(R.drawable.ic_speed, "Speed ${PlayerSettings.speedLabel(p.playbackParameters.speed)}", primary = true) { speedSheet() }
         actions += Sheets.Action(R.drawable.ic_timer, LocalPlayback.sleepLabel()?.let { "Sleep: $it" } ?: "Sleep timer", primary = true) { sleepSheet() }
         if (videoMode) {
-            actions += Sheets.Action(R.drawable.ic_volume, "Sound track", primary = true) { audioSheet() }
             actions += Sheets.Action(R.drawable.ic_headphones, if (LocalPlayback.background) "Stop playing in background" else "Play in background", primary = true) { toggleBackground() }
             actions += Sheets.Action(if (p.repeatMode == Player.REPEAT_MODE_ONE) R.drawable.ic_repeat_one else R.drawable.ic_repeat, "Repeat: ${repeatLabel(p.repeatMode)}") { nextRepeat() }
         }
@@ -1424,34 +1581,6 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
                 PlayerSettings.rotation = key
                 applyRotation()
             })
-        }
-        d = Sheets.sheet(this, col)
-        d.showImmersive()
-    }
-
-    private fun audioSheet() {
-        val p = player ?: return
-        val groups = p.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
-        if (groups.isEmpty()) {
-            say("This video has no sound")
-            return
-        }
-        val col = Sheets.column(this)
-        col.addView(Sheets.header(this, "Sound track", null))
-        lateinit var d: BottomSheetDialog
-        var n = 0
-        for (g in groups) {
-            for (t in 0 until g.length) {
-                n++
-                val name = trackName(g.getTrackFormat(t), n, "Sound") + if (!g.isTrackSupported(t, true)) " (this phone can't play it)" else ""
-                col.addView(choiceRow(name, g.isTrackSelected(t), R.drawable.ic_volume) {
-                    d.dismiss()
-                    p.trackSelectionParameters = p.trackSelectionParameters.buildUpon()
-                        .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, false)
-                        .setOverrideForType(TrackSelectionOverride(g.mediaTrackGroup, t))
-                        .build()
-                })
-            }
         }
         d = Sheets.sheet(this, col)
         d.showImmersive()
@@ -1647,11 +1776,35 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         }
     }
 
-    private fun subtitlesSheet() {
+    /**
+     * 3.0.2: sound and subtitles in one sheet (VLC's Tracks): the sound tracks first when the video
+     * has several, then the subtitles with their size, colour, background, timing and letters.
+     */
+    private fun tracksSheet() {
         val p = player ?: return
         val col = Sheets.column(this)
-        col.addView(Sheets.header(this, "Subtitles", null))
         lateinit var d: BottomSheetDialog
+        val sounds = p.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
+        val severalSounds = sounds.sumOf { it.length } > 1
+        col.addView(Sheets.header(this, if (severalSounds) "Sound and subtitles" else "Subtitles", null))
+        if (severalSounds) {
+            col.addView(Sheets.label(this, "Sound"))
+            var s = 0
+            for (g in sounds) {
+                for (t in 0 until g.length) {
+                    s++
+                    val name = trackName(g.getTrackFormat(t), s, "Sound") + if (!g.isTrackSupported(t, true)) " (this phone can't play it)" else ""
+                    col.addView(choiceRow(name, g.isTrackSelected(t), R.drawable.ic_volume) {
+                        d.dismiss()
+                        p.trackSelectionParameters = p.trackSelectionParameters.buildUpon()
+                            .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, false)
+                            .setOverrideForType(TrackSelectionOverride(g.mediaTrackGroup, t))
+                            .build()
+                    })
+                }
+            }
+            col.addView(Sheets.label(this, "Subtitles", top = 16))
+        }
         val groups = p.currentTracks.groups.filter { it.type == C.TRACK_TYPE_TEXT }
         val ownOn = subFile == null && !subOff && groups.any { it.isSelected }
         col.addView(choiceRow("Off", subFile == null && !ownOn, R.drawable.ic_close) {
@@ -1996,6 +2149,7 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         if (f == null) {
             val type = when {
                 e.hls -> "application/x-mpegURL"
+                e.dash -> "application/dash+xml"
                 e.stream -> if (e.video) "video/*" else "audio/*"
                 else -> try {
                     contentResolver.getType(e.uri)
@@ -2212,6 +2366,7 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         private const val EXTRA_TITLE = "title"
         private const val EXTRA_HEADERS = "headers"
         private const val EXTRA_INCOGNITO = "incognito"
+        private const val EXTRA_DASH = "dash"
 
         /** Posts that must happen even after the screen has gone (the folder's playlist for music). */
         private val mainHandler = Handler(Looper.getMainLooper())
@@ -2255,7 +2410,7 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
          * page's [headers] (Referer, User-Agent; no cookies, see GeckoDataSource). [incognito]: nothing
          * about it is kept, logged or shown on the lock screen.
          */
-        fun openStream(from: Context, url: String, title: String?, headers: Map<String, String> = emptyMap(), incognito: Boolean = false) {
+        fun openStream(from: Context, url: String, title: String?, headers: Map<String, String> = emptyMap(), incognito: Boolean = false, dash: Boolean = false) {
             val h = Bundle().apply { for ((k, v) in headers) putString(k, v) }
             val i = Intent(from, PlayerActivity::class.java)
                 .setAction(ACTION_PLAY_STREAM)
@@ -2263,6 +2418,7 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
                 .putExtra(EXTRA_TITLE, title)
                 .putExtra(EXTRA_HEADERS, h)
                 .putExtra(EXTRA_INCOGNITO, incognito)
+                .putExtra(EXTRA_DASH, dash)
             // 3.0: only Swift's pages hand over a website video.
             ViewerAccess.mark(i)
             if (from !is Activity) i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)

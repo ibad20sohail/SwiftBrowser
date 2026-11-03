@@ -165,27 +165,35 @@ class PlayerGestures(context: Context, private val host: Host) : View(context) {
     private var holding = false
     private var canSwipe = false
 
+    /** The last single tap was in the middle third (shown or hid the controls already). */
+    private var tappedMiddle = false
+
+    private fun inMiddle(x: Float): Boolean = x >= width / 3f && x <= width - width / 3f
+
     private val detector = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
         override fun onDown(e: MotionEvent) = true
 
+        // 3.0.2: a tap in the middle third shows or hides the controls at once, without waiting to
+        // see whether a second tap follows (double taps only skip, at the sides, as VLC advises);
+        // at the sides a single tap still waits, for the double tap's sake.
+        override fun onSingleTapUp(e: MotionEvent): Boolean {
+            tappedMiddle = inMiddle(e.x)
+            if (tappedMiddle) host.onTap()
+            return true
+        }
+
         override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
-            host.onTap()
+            if (!tappedMiddle) host.onTap()
             return true
         }
 
         override fun onDoubleTap(e: MotionEvent): Boolean {
-            if (host.locked() || !host.gesturesOn()) {
+            // A second quick tap in the middle is simply another tap.
+            if (host.locked() || !host.gesturesOn() || inMiddle(e.x)) {
                 host.onTap()
                 return true
             }
-            val third = width / 3f
-            host.onDoubleTap(
-                when {
-                    e.x < third -> -1
-                    e.x > width - third -> 1
-                    else -> 0
-                },
-            )
+            host.onDoubleTap(if (e.x < width / 2f) -1 else 1)
             return true
         }
 

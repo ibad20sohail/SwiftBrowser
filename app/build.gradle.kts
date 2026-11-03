@@ -21,8 +21,8 @@ android {
         applicationId = "com.swiftbrowser.app"
         minSdk = 24
         targetSdk = 35
-        versionCode = 23
-        versionName = "3.0.1"
+        versionCode = 24
+        versionName = "3.0.2"
     }
 
     flavorDimensions += "abi"
@@ -154,6 +154,8 @@ dependencies {
     val media3 = "1.11.1"
     implementation("androidx.media3:media3-exoplayer:$media3")
     implementation("androidx.media3:media3-exoplayer-hls:$media3")
+    // 3.0.2: DASH streams (.mpd) too, played and saved: Media3's own DASH part (Apache-2.0, Android 5+).
+    implementation("androidx.media3:media3-exoplayer-dash:$media3")
     // Dolby (AC-3, E-AC-3, TrueHD) and DTS sound in films (2.9.2), which the phone has no decoders
     // for: Media3's FFmpeg audio decoder as Jellyfin builds it (FFmpeg 6.0, audio decoders only,
     // Android 6+). It's made for Media3 1.9 but only calls what 1.11 still has (checked class by

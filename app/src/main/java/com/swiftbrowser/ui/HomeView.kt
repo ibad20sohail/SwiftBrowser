@@ -210,6 +210,7 @@ class HomeView @JvmOverloads constructor(
             findViewById<LinearLayout>(R.id.home_column).addView(it, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
                 topMargin = dp(28)
             })
+            applyOrder()
         }
         section.visibility = View.VISIBLE
         section.show()
@@ -332,6 +333,7 @@ class HomeView @JvmOverloads constructor(
         if (incognito) tilesTitle.visibility = View.GONE
         if (incognito) continueRow.visibility = View.GONE else continueRow.refresh()
         updateNews()
+        applyOrder()
         if (incognito) {
             search.background = GradientDrawable().apply {
                 cornerRadius = dp(27).toFloat()
@@ -349,6 +351,27 @@ class HomeView @JvmOverloads constructor(
         searchIcon.setImageResource(engine.icon)
         searchIcon.imageTintList = if (com.swiftbrowser.core.SearchEngine.isLogo(engine.icon)) null else hint.textColors
         post { updateTopSpace() }
+    }
+
+    /**
+     * 3.0.2: the parts under the search box in the order chosen (HomeOrder: Continue, the shortcuts and
+     * the news by default). Nothing is left out, only placed; moved only when the order changed.
+     */
+    private fun applyOrder() {
+        val column = findViewById<LinearLayout>(R.id.home_column)
+        val parts = com.swiftbrowser.core.HomeOrder.parse(SwiftApp.prefs.homeOrder).flatMap { part ->
+            when (part) {
+                com.swiftbrowser.core.HomeOrder.CONTINUE -> listOf<View>(continueRow)
+                com.swiftbrowser.core.HomeOrder.SHORTCUTS -> listOf<View>(tilesTitle, tilesBox)
+                else -> listOfNotNull<View>(news)
+            }
+        }
+        val after = column.indexOfChild(search) + 1
+        if (after <= 0) return
+        val shown = (after until column.childCount).map { column.getChildAt(it) }.filter { it in parts }
+        if (shown == parts) return
+        for (v in parts) column.removeView(v)
+        parts.forEachIndexed { i, v -> column.addView(v, after + i) }
     }
 
     fun scrollToTop() {

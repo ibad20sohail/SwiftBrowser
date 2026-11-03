@@ -128,6 +128,18 @@ class TabRulesTest {
     }
 
     @Test
+    fun warningsWhileOnScreenCountOnlyWithMemoryReallyLow() {
+        // 5, 10 and 15 come with Swift on screen, often with most of the memory free.
+        for (level in listOf(5, 10, 15)) {
+            assertEquals(TabRules.Warning.NONE, TabRules.onWarning(level, memoryLow = false))
+            assertEquals(TabRules.Warning.TRIM, TabRules.onWarning(level, memoryLow = true))
+        }
+        // Merely leaving Swift isn't a reason; in the background, background tabs go.
+        assertEquals(TabRules.Warning.NONE, TabRules.onWarning(20, memoryLow = true))
+        for (level in listOf(40, 60, 80)) assertEquals(TabRules.Warning.BACKGROUND_TABS, TabRules.onWarning(level, memoryLow = false))
+    }
+
+    @Test
     fun anOpenTabKeptLoadedDoesNotCount() {
         val others = listOf(tab(1, 2_000))
         assertEquals(listOf(1L), TabRules.toUnload(others, openCounts = true, max = 1, idleSince = idleSince))

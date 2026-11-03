@@ -462,12 +462,6 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         outState.putBoolean(STATE_MENU_OPEN, built && quickMenu.isOpen)
     }
 
-    /** Pages of other tabs are let go a while after Swift leaves the screen (see [onStop]). */
-    private val freeBackgroundTabs = Runnable {
-        L.d("In the background for a while: keeping only the open (or playing) tab loaded")
-        TabManager.suspendBackgroundTabs()
-    }
-
     private fun startupChores() {
         lifecycleScope.launch {
             val freed = withContext(Dispatchers.IO) { com.swiftbrowser.core.Storage.freeSpaceIfLow(this@MainActivity) }
@@ -822,7 +816,6 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         }
         Looks.sync()
         Looks.watchClock(true)
-        handler.removeCallbacks(freeBackgroundTabs)
         // Settings → Look & screen may have moved the address bar.
         if (bottomBar != prefs.toolbarAtBottom) applyToolbarPosition()
         // Settings → Browsing may have changed the search engine, Look & screen the address bar's buttons.
@@ -887,10 +880,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             val keepPlaying = prefs.keepPlaying && current?.playing == true
             current?.session?.let { if (it.isOpen && !keepPlaying) it.setActive(false) }
             AdBlock.updateInBackground()
-            // A short trip to another app keeps everything; after a minute, other tabs let go of
-            // their pages so Android is less likely to close Swift on a 2 GB phone.
-            handler.removeCallbacks(freeBackgroundTabs)
-            handler.postDelayed(freeBackgroundTabs, 60_000)
+            // 3.0.2: other tabs let go of their pages a minute after none of Swift's screens shows
+            // (TabManager.inSight), not a minute after this one is covered by Settings or the player.
         }
         updateKeepScreenOn()
     }
@@ -2393,7 +2384,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
     /** The video a site plays, as Swift's player can take it: its stream (HLS) first, else the biggest video file. */
     private fun siteVideo(tab: Tab): com.swiftbrowser.media.MediaItem? =
-        tab.media.lastOrNull { it.kind == com.swiftbrowser.media.MediaItem.Kind.HLS }
+        tab.media.lastOrNull { it.kind == com.swiftbrowser.media.MediaItem.Kind.HLS || it.kind == com.swiftbrowser.media.MediaItem.Kind.DASH }
             ?: tab.media.filter { it.kind == com.swiftbrowser.media.MediaItem.Kind.FILE && !it.mime.startsWith("audio") }.maxByOrNull { it.size }
 
     /**
@@ -2454,7 +2445,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             if (headers.keys.none { it.equals("user-agent", true) }) headers["User-Agent"] = com.swiftbrowser.engine.UserAgent.forTab(tab.desktop)
             // The page stops, so the two don't play at once.
             tab.mediaSession?.pause()
-            PlayerActivity.openStream(this, video.url, tab.title.ifBlank { null }, headers, tab.incognito)
+            PlayerActivity.openStream(this, video.url, tab.title.ifBlank { null }, headers, tab.incognito, video.kind == com.swiftbrowser.media.MediaItem.Kind.DASH)
         }
     }
 

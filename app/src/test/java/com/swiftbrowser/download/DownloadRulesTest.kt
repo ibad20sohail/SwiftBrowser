@@ -105,6 +105,18 @@ class DownloadRulesTest {
     }
 
     @Test
+    fun aStreamsSoundCountsByItsShareOfTheBytes() {
+        // 159 sound parts, then 159 video parts; the sound is 5% of the bytes.
+        assertEquals(5, DownloadRules.streamPercent(159, 318, 159, 0.05))
+        assertEquals(2, DownloadRules.streamPercent(80, 318, 159, 0.05))
+        assertEquals(52, DownloadRules.streamPercent(159 + 80, 318, 159, 0.05))
+        assertEquals(100, DownloadRules.streamPercent(318, 318, 159, 0.05))
+        // No separate sound: by parts, as before.
+        assertEquals(50, DownloadRules.streamPercent(60, 120, 0, 0.05))
+        assertEquals(-1, DownloadRules.streamPercent(0, 0, 0, 0.05))
+    }
+
+    @Test
     fun theSameAddressAgainShowsWhatIsThereFirst() {
         assertEquals(DownloadRules.Again.NEW, DownloadRules.again(null, fileThere = false))
         for (going in listOf(Downloads.QUEUED, Downloads.RUNNING, Downloads.PAUSED, Downloads.CONVERTING)) {

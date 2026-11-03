@@ -41,10 +41,12 @@ object Hls {
         val endList: Boolean,
         val init: Segment?,
         val duration: Double,
+        /** 3.0.2: MP4 parts (a DASH stream's, also one whole MP4 file without an init part). */
+        private val mp4Parts: Boolean = init != null,
     ) {
         val encrypted: Boolean get() = segments.any { it.key != null }
         val unsupportedKey: Boolean get() = segments.any { it.key != null && it.key.method != "AES-128" }
-        val fragmentedMp4: Boolean get() = init != null
+        val fragmentedMp4: Boolean get() = mp4Parts
     }
 
     fun isPlaylist(text: String): Boolean = text.trimStart('﻿', ' ', '\n', '\r').startsWith("#EXTM3U")

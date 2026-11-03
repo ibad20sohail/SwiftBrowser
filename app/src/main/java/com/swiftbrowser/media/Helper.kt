@@ -25,7 +25,7 @@ data class MediaItem(
     val pageTitle: String,
     val time: Long,
 ) {
-    enum class Kind { HLS, FILE }
+    enum class Kind { HLS, FILE, DASH }
 }
 
 /**
@@ -355,7 +355,11 @@ object Helper {
         if (!MediaRules.acceptable(url) || tab.media.any { it.url == url }) return
         val item = MediaItem(
             url = url,
-            kind = if (msg.optString("kind") == "hls") MediaItem.Kind.HLS else MediaItem.Kind.FILE,
+            kind = when (msg.optString("kind")) {
+                "hls" -> MediaItem.Kind.HLS
+                "dash" -> MediaItem.Kind.DASH
+                else -> MediaItem.Kind.FILE
+            },
             mime = msg.optString("mime"),
             size = msg.optLong("size", -1),
             headers = toMap(msg.optJSONObject("headers")),

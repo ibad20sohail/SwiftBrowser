@@ -197,6 +197,10 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
     // Pull to refresh.
     private var ptrRefreshing = false
+
+    /** 3.0.3: the pull, or the swipe from an edge, has gone far enough to act (a tick once, as it gets there). */
+    private var pullArmed = false
+    private var edgeArmed = false
     private var ptrStartedAt = 0L
     private var ptrSpin: ObjectAnimator? = null
 
@@ -425,6 +429,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         // almost full.
         handler.postDelayed({ if (!isFinishing) startupChores() }, 20_000)
         Downloads.addListener(updateDownloadListener)
+        Downloads.addListener(downloadRingListener)
+        showDownloadRing()
         Downloads.all().filter { VpnUi.isSetupFile(it) }.mapTo(setupFilesSeen) { it.id }
         Downloads.addListener(setupFileListener)
         built = true
@@ -514,6 +520,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             imageTintList = ColorStateList.valueOf(iconColor())
             layoutParams = LinearLayout.LayoutParams(resources.getDimensionPixelSize(R.dimen.toolbar_button_width), dp(48f).toInt())
             Ui.pressable(this, 0.88f)
+            // 3.0.3: holding it shows its name.
+            androidx.appcompat.widget.TooltipCompat.setTooltipText(this, b.label)
             setOnClickListener { toolbarAction(key) }
         }
     }
@@ -906,6 +914,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             for (t in TabManager.tabs) t.session?.let { if (it.selectionActionDelegate === menu) it.selectionActionDelegate = null }
         }
         Downloads.removeListener(updateDownloadListener)
+        Downloads.removeListener(downloadRingListener)
         Downloads.removeListener(setupFileListener)
         if (TabManager.ui === this) TabManager.ui = null
         if (Engine.activityDelegate != null) Engine.activityDelegate = null
@@ -984,6 +993,10 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         updateVpnBadge()
         // The toolbar's buttons give the same small press as every button in the app.
         for (v in listOf<View>(homeBtn, tabsBtn, menuBtn, videoBtn, profileChip.parent as View)) Ui.pressable(v, 0.88f)
+        // 3.0.3: holding an icon-only button shows its name (the tab button keeps its own hold menu).
+        for (v in listOf<View>(homeBtn, menuBtn, videoBtn)) {
+            v.contentDescription?.let { androidx.appcompat.widget.TooltipCompat.setTooltipText(v, it) }
+        }
     }
 
     private fun handleIntent(intent: Intent?) {
@@ -1088,7 +1101,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
     private fun setupToolbar() {
         profileChip.setOnClickListener { Sheets.profiles(this) }
-        tabsBtn.setOnClickListener { openTabSwitcher() }
+        tabsBtn.setOnClickListener { tabsTapped() }
         tabsBtn.setOnLongClickListener {
             tabButtonMenu()
             true
@@ -2000,8 +2013,14 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     private fun setupSwitcher(s: TabSwitcherView) {
         s.listener = object : TabSwitcherView.Listener {
             override fun onTabChosen(tab: Tab) {
-                if (tab !== current) TabManager.select(tab)
+                val switched = tab !== current
+                if (switched) TabManager.select(tab)
                 s.close(pageRect())
+                // 3.0.3: once, the quicker way to do that (it was there all along, hardly found).
+                if (switched && !prefs.hintBarSwipe && TabManager.swipeOrder(tab).size >= 2) {
+                    prefs.hintBarSwipe = true
+                    handler.postDelayed({ if (!isFinishing) snack("Tip: swipe the address bar sideways to go to the next or previous tab", long = true) }, 700)
+                }
             }
 
             override fun onNewTab(incognito: Boolean) {
@@ -2591,6 +2610,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
     override fun onPageScroll(tab: Tab, scrollY: Float, byUser: Boolean) {
         if (tab !== current || fullscreenTab != null) return
+        placeScrollHandle(tab, show = byUser)
         if (byUser) lastUserScrollAt = SystemClock.uptimeMillis()
         val last = lastScrollY
         lastScrollY = scrollY
@@ -2737,9 +2757,12 @@ class MainActivity : AppCompatActivity(), BrowserUi {
                 ptrIndicator.imageTintList = ColorStateList.valueOf(
                     color(if (offset >= trigger) Looks.accent.primary else R.color.text_secondary),
                 )
+                if (offset >= trigger && !pullArmed) Haptics.tick(ptrIndicator)
+                pullArmed = offset >= trigger
             }
 
             override fun onPullEnd(distance: Float) {
+                pullArmed = false
                 if (pullOffset(distance) >= dp(64f)) startPullRefresh() else hidePullIndicator()
             }
         }
@@ -3868,6 +3891,143 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         }
     }
 
+    // ------------------------------------------------------------------ 3.0.3: the tab button and the menu's ring
+
+    private val openGridAfterTap = Runnable { openTabSwitcher() }
+    private var tabsTappedAt = 0L
+
+    /**
+     * A tap on the tab button opens the grid; two in a row go back to the tab you were on before (and
+     * again, back here). With such a tab, a single tap waits a moment to see whether a second follows.
+     */
+    private fun tabsTapped() {
+        val now = SystemClock.uptimeMillis()
+        val back = TabManager.previousTab()
+        if (back != null && now - tabsTappedAt < TAB_DOUBLE_TAP_MS) {
+            handler.removeCallbacks(openGridAfterTap)
+            tabsTappedAt = 0L
+            Haptics.tick(tabsBtn)
+            TabManager.select(back)
+            return
+        }
+        tabsTappedAt = now
+        handler.removeCallbacks(openGridAfterTap)
+        if (back == null) openTabSwitcher() else handler.postDelayed(openGridAfterTap, TAB_DOUBLE_TAP_MS)
+    }
+
+    private val downloadRing by lazy { ProgressRing(this).also { it.setColour(Ui.accent(this)) } }
+    private val downloadRingListener: () -> Unit = { showDownloadRing() }
+
+    /** While downloads run, a ring round the menu button shows how far they have come (torrents too). */
+    private fun showDownloadRing() {
+        val running = Downloads.all().filter { it.status == Downloads.RUNNING || it.status == Downloads.QUEUED || it.status == Downloads.CONVERTING }
+        if (running.isEmpty()) {
+            downloadRing.fraction = null
+            menuBtn.foreground = null
+            return
+        }
+        val known = running.map { it.percent }.filter { it >= 0 }
+        downloadRing.fraction = if (known.size == running.size) known.average().toFloat() / 100f else -1f
+        if (menuBtn.foreground !== downloadRing) {
+            downloadRing.setColour(Ui.accent(this))
+            menuBtn.foreground = downloadRing
+        }
+    }
+
+    // ------------------------------------------------------------------ 3.0.3: the fast scroll handle
+
+    /**
+     * On a long page (over [LONG_PAGE_SCREENS] screens), a small handle at the right edge while you
+     * scroll: dragging it moves through the page as far down as the finger is down the screen. It
+     * fades a moment after scrolling stops. Above the page's gesture layer, so a drag on it is never
+     * an edge swipe or a pull to reload.
+     */
+    private val scrollHandle: FrameLayout by lazy {
+        val pill = View(this).apply {
+            background = Ui.shape(this@MainActivity, Ui.accent(this@MainActivity), 4, android.graphics.Color.WHITE, 1.5f)
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }
+        FrameLayout(this).apply {
+            visibility = View.GONE
+            contentDescription = "Drag to move through the page"
+            addView(pill, FrameLayout.LayoutParams(dp(7), dp(52), android.view.Gravity.END or android.view.Gravity.CENTER_VERTICAL).apply { marginEnd = dp(4) })
+            setOnTouchListener { _, ev -> dragScrollHandle(ev) }
+        }.also {
+            // The screen's page area (not the new view's own children).
+            this@MainActivity.findViewById<FrameLayout>(R.id.content).addView(it, FrameLayout.LayoutParams(dp(36), dp(64), android.view.Gravity.END or android.view.Gravity.TOP))
+        }
+    }
+    private var handleDragging = false
+    private var handleGrabY = 0f
+    private var handleScrolledAt = 0L
+    private val hideScrollHandle = Runnable {
+        if (!handleDragging) scrollHandle.animate().alpha(0f).setDuration(200).withEndAction { if (!handleDragging) scrollHandle.visibility = View.GONE }
+    }
+
+    override fun onPageSize(tab: Tab) {
+        if (tab === current) placeScrollHandle(tab, show = false)
+    }
+
+    /** Where the handle is along the page's right edge (and [show]: brought up while scrolling). */
+    private fun placeScrollHandle(tab: Tab, show: Boolean) {
+        if (!built || handleDragging) return
+        val long = tab.pageViewHeight > 0f && tab.pageScrollMax > LONG_PAGE_SCREENS * tab.pageViewHeight
+        if (!long || tab.showsHome || editing || switcherOpen || findBar.visibility == View.VISIBLE) {
+            if (scrollHandle.visibility == View.VISIBLE) hideScrollHandle.run()
+            return
+        }
+        if (!show && scrollHandle.visibility != View.VISIBLE) return
+        val content = scrollHandle.parent as View
+        val track = (content.height - scrollHandle.height - 2 * dp(8)).coerceAtLeast(1)
+        scrollHandle.translationY = dp(8) + track * (tab.pageY / tab.pageScrollMax).coerceIn(0f, 1f)
+        if (show) {
+            if (scrollHandle.visibility != View.VISIBLE) {
+                scrollHandle.alpha = 0f
+                scrollHandle.visibility = View.VISIBLE
+            }
+            scrollHandle.animate().cancel()
+            scrollHandle.animate().alpha(1f).setDuration(120).start()
+            handler.removeCallbacks(hideScrollHandle)
+            handler.postDelayed(hideScrollHandle, 1500)
+        }
+    }
+
+    private fun dragScrollHandle(ev: MotionEvent): Boolean {
+        val tab = current ?: return false
+        val content = scrollHandle.parent as View
+        val track = (content.height - scrollHandle.height - 2 * dp(8)).coerceAtLeast(1)
+        when (ev.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                handleDragging = true
+                handleGrabY = ev.rawY - scrollHandle.translationY
+                handler.removeCallbacks(hideScrollHandle)
+                scrollHandle.animate().cancel()
+                scrollHandle.alpha = 1f
+                Haptics.tick(scrollHandle)
+            }
+            MotionEvent.ACTION_MOVE -> {
+                val y = (ev.rawY - handleGrabY).coerceIn(dp(8).toFloat(), (dp(8) + track).toFloat())
+                scrollHandle.translationY = y
+                val now = SystemClock.uptimeMillis()
+                // About 30 moves a second is plenty for the page to follow.
+                if (now - handleScrolledAt >= 32 && tab.pageViewHeight > 0f) {
+                    handleScrolledAt = now
+                    val f = (y - dp(8)) / track
+                    tab.session?.panZoomController?.scrollTo(
+                        org.mozilla.geckoview.ScreenLength.zero(),
+                        org.mozilla.geckoview.ScreenLength.fromVisualViewportHeight((f * tab.pageScrollMax / tab.pageViewHeight).toDouble()),
+                        org.mozilla.geckoview.PanZoomController.SCROLL_BEHAVIOR_AUTO,
+                    )
+                }
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                handleDragging = false
+                handler.postDelayed(hideScrollHandle, 1500)
+            }
+        }
+        return true
+    }
+
     private val updateDownloadListener: () -> Unit = {
         if (Updates.downloadId >= 0 && updateBar != null) showUpdateProgress()
         val id = Updates.downloadId
@@ -3923,9 +4083,12 @@ class MainActivity : AppCompatActivity(), BrowserUi {
                 edgeArrow.translationX = if (fromLeft) -size + progress * travel else root.width - progress * travel
                 edgeArrow.alpha = 0.35f + 0.65f * progress
                 edgeArrow.imageTintList = ColorStateList.valueOf(color(if (progress >= 1f) Looks.accent.primary else R.color.text_secondary))
+                if (progress >= 1f && !edgeArmed) Haptics.tick(edgeArrow)
+                edgeArmed = progress >= 1f
             }
 
             override fun onEdgeSwipeEnd(fromLeft: Boolean, distance: Float) {
+                edgeArmed = false
                 val tab = current
                 if (distance >= dp(96f) && tab != null) {
                     if (fromLeft) TabManager.goBack(tab) else TabManager.goForward(tab)
@@ -3963,6 +4126,9 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     private fun color(res: Int) = Palette.color(this, res)
 
     private fun dp(v: Float) = v * resources.displayMetrics.density
+
+    /** 3.0.3: whole pixels, for view sizes. */
+    private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
     private fun showCrashReportIfAny() {
         val report = Crash.pending(this) ?: return
@@ -4023,6 +4189,12 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     }
 
     companion object {
+        /** 3.0.3: a page this many screens longer than the screen gets the fast scroll handle. */
+        private const val LONG_PAGE_SCREENS = 4f
+
+        /** 3.0.3: how long a tap on the tab button waits for a second one (Android's own double-tap time). */
+        private const val TAB_DOUBLE_TAP_MS = 300L
+
         private const val TOOLBAR_SETTLE_MS = 300L
 
         /** 3.0: how long the start-up screen waits for the ad blocker before it offers Load now. */

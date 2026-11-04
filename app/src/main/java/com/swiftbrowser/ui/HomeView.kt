@@ -142,7 +142,7 @@ class HomeView @JvmOverloads constructor(
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }
         addView(pullIndicator, LayoutParams(dp(40), dp(40), android.view.Gravity.TOP or android.view.Gravity.CENTER_HORIZONTAL))
-        continueRow = ContinueRow(context, { listener?.onContinueClicked(it) }, { listener?.onContinueLongClicked(it) })
+        continueRow = ContinueRow(context, ContinueRow.Part.BROWSER, { listener?.onContinueClicked(it) }, { listener?.onContinueLongClicked(it) })
         val column = findViewById<LinearLayout>(R.id.home_column)
         // The row reaches into the column's side padding (it would be cut off there otherwise).
         column.clipToPadding = false

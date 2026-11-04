@@ -118,6 +118,8 @@ class TabSwitcherView @JvmOverloads constructor(
         subMore = findViewById(R.id.sub_more)
         subAction = findViewById(R.id.sub_action)
         newTab = findViewById(R.id.switcher_new)
+        // 3.0.3: a press springs, as the toolbar's buttons do.
+        Ui.pressable(newTab, 0.94f)
         searchButton = findViewById(R.id.switcher_search)
         toggle = findViewById(R.id.switcher_toggle)
         toggleNormal = findViewById(R.id.toggle_normal)
@@ -144,6 +146,11 @@ class TabSwitcherView @JvmOverloads constructor(
         searchButton.setOnClickListener { setMode(Mode.SEARCH) }
         toggleNormal.setOnClickListener { setPage(false) }
         toggleIncognito.setOnClickListener { setPage(true) }
+        // 3.0.3: they spring when pressed, and holding the icon-only ones shows their names.
+        for (v in listOf(toggleNormal, toggleIncognito, searchButton)) {
+            Ui.pressable(v, 0.92f)
+            v.contentDescription?.let { androidx.appcompat.widget.TooltipCompat.setTooltipText(v, it) }
+        }
         findViewById<View>(R.id.switcher_empty_new).setOnClickListener {
             if (mode == Mode.SEARCH) back() else listener?.onNewTab(showingIncognito)
         }
@@ -596,6 +603,9 @@ class TabSwitcherView @JvmOverloads constructor(
 
     /** Pill behind the chosen page of the toggle. */
     private fun toggleBackground(selected: Int) = StateListDrawable().apply {
+        // 3.0.3: Normal and Incognito cross-fade as you switch, instead of jumping.
+        setEnterFadeDuration(150)
+        setExitFadeDuration(150)
         addState(intArrayOf(android.R.attr.state_selected), GradientDrawable().apply {
             cornerRadius = dp(17).toFloat()
             setColor(selected)
@@ -888,7 +898,22 @@ class TabSwitcherView @JvmOverloads constructor(
         val selected: View = view.findViewById(R.id.card_selected)
         var tab: Tab? = null
 
+        /** 3.0.3: the site's name under its icon while the tab has no picture (or only a black one). */
+        val placeholderName: TextView = TextView(view.context).apply {
+            textSize = 12.5f
+            isSingleLine = true
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            gravity = android.view.Gravity.CENTER
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            visibility = View.GONE
+        }
+
         init {
+            (thumbBox as FrameLayout).addView(placeholderName, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, android.view.Gravity.CENTER).apply {
+                val side = Ui.dp(view.context, 12)
+                setMargins(side, 0, side, 0)
+            })
+            placeholderName.translationY = Ui.dp(view.context, 38).toFloat()
             // The page's picture has its own rounded corners inside the card.
             thumbBox.clipToOutline = true
             // The touch ripple stays inside the card's rounded corners.
@@ -1052,7 +1077,9 @@ class TabSwitcherView @JvmOverloads constructor(
             h.itemView.scaleY = 1f
             h.title.setTextColor(color(if (dark) R.color.incognito_text else R.color.text_primary))
             h.close.imageTintList = ColorStateList.valueOf(color(if (dark) R.color.incognito_hint else R.color.text_secondary))
-            h.thumbBox.setBackgroundColor(color(if (dark) R.color.incognito_bg else R.color.tab_thumb_bg))
+            // 3.0.3: a rounded background, not a plain colour: the picture is clipped to it, so its
+            // corners stay inside the card's rounded border and the open tab's ring.
+            h.thumbBox.background = Ui.shape(context, color(if (dark) R.color.incognito_bg else R.color.tab_thumb_bg), 14)
             h.selected.visibility = if (card.current) View.VISIBLE else View.GONE
             if (card.current) h.selected.background = ring()
             bindTitle(h, card, icon = true)
@@ -1107,6 +1134,7 @@ class TabSwitcherView @JvmOverloads constructor(
         /** The page's picture; its kind's mark (or the logo for a new tab) until there is one. */
         private fun bindPicture(h: CardHolder, card: Item.TabCard) {
             val tab = card.tab
+            h.placeholderName.visibility = View.GONE
             if (tab.isHome) {
                 // 3.0.1: Swift's mark plain and quiet, like the globe of other cards: a few new tabs no longer
                 // fill the grid with coloured logos.
@@ -1117,10 +1145,25 @@ class TabSwitcherView @JvmOverloads constructor(
             val viewer = com.swiftbrowser.docs.Docs.isViewerUrl(tab.url)
             h.placeholder.setImageResource(if (viewer) R.drawable.ic_documents else R.drawable.ic_globe)
             h.placeholder.imageTintList = ColorStateList.valueOf(color(R.color.text_secondary))
+            // 3.0.3: no picture yet (or only a black one, as a page playing a video gives): the site's own
+            // icon and its name, instead of an empty box.
+            val site = if (viewer) null else com.swiftbrowser.core.UrlUtils.host(tab.url)?.removePrefix("www.")?.removePrefix("m.")
+            if (site != null) {
+                h.placeholderName.text = site
+                h.placeholderName.setTextColor(color(if (showingIncognito) R.color.incognito_hint else R.color.text_secondary))
+                h.placeholderName.visibility = View.VISIBLE
+                Favicons.load(tab.url) { icon ->
+                    if (icon != null && h.tab === tab && h.placeholder.visibility == View.VISIBLE) {
+                        h.placeholder.imageTintList = null
+                        h.placeholder.setImageBitmap(icon)
+                    }
+                }
+            }
             Thumbnails.load(tab) { bmp ->
                 if (bmp != null && h.tab === tab) {
                     h.thumb.setImageBitmap(bmp)
                     h.placeholder.visibility = View.GONE
+                    h.placeholderName.visibility = View.GONE
                     pictureShown(tab, bmp)
                 }
             }
@@ -1146,7 +1189,8 @@ class TabSwitcherView @JvmOverloads constructor(
                 setColor(color(if (dark) R.color.incognito_bg else R.color.surface_alt))
             }
             h.close.imageTintList = ColorStateList.valueOf(color(if (dark) R.color.incognito_hint else R.color.text_secondary))
-            h.mosaic.setBackgroundColor(color(if (dark) R.color.incognito_url else R.color.tab_card_bg))
+            // 3.0.3: rounded too, so the group's square fill no longer covers the card's border.
+            h.mosaic.background = Ui.shape(context, color(if (dark) R.color.incognito_url else R.color.tab_card_bg), 16)
             h.selected.visibility = if (card.current) View.VISIBLE else View.GONE
             if (card.current) h.selected.background = ring()
             h.thumbs.forEach { it.setImageDrawable(null) }

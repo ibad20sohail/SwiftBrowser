@@ -2,16 +2,18 @@ package com.swiftbrowser.core
 
 /**
  * 3.0.2: the order of the home page's parts under the search box (Settings → Home & news → Order of
- * the home page). Nothing is left out, only placed. By default Continue comes first: what you were
- * watching or reading is one tap away without scrolling, and when there is nothing to go on with the
- * row hides itself, so the shortcuts sit right under the search box as before.
+ * the home page). Nothing is left out, only placed. 3.0.3: the shortcuts come first again, right
+ * under the search box (as asked), then Continue and the news.
  */
 object HomeOrder {
     const val CONTINUE = "continue"
     const val SHORTCUTS = "shortcuts"
     const val NEWS = "news"
 
-    val DEFAULT = listOf(CONTINUE, SHORTCUTS, NEWS)
+    val DEFAULT = listOf(SHORTCUTS, CONTINUE, NEWS)
+
+    /** 3.0.2's own first order: a saved copy of it is cleared once (SwiftApp), so the new one applies. */
+    const val OLD_DEFAULT = "continue,shortcuts,news"
 
     fun label(part: String): String = when (part) {
         CONTINUE -> "Continue watching and reading"

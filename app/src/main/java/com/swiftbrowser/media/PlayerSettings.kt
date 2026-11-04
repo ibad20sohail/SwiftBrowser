@@ -34,6 +34,15 @@ object PlayerSettings {
     const val ROTATION = "player_rotation"
     const val DOUBLE_TAP_SECONDS = "player_double_tap_seconds"
 
+    // 3.0.3: the equalizer (SoundEffects), where the subtitles were dragged to, and hints said once.
+    const val EQUALIZER = "player_eq_on"
+    const val EQUALIZER_PRESET = "player_eq_preset"
+    const val EQUALIZER_LEVELS = "player_eq_levels"
+    const val BASS_BOOST = "player_eq_bass"
+    const val SUBTITLE_LIFT = "player_subtitle_lift"
+    const val HINT_PINCH = "player_hint_pinch"
+    const val HINT_TAPS = "player_hint_taps"
+
     /** As the video is: wide videos in landscape, tall ones upright (either way round). */
     const val ROTATE_AUTO = "auto"
     /** Turns with the phone, even when its auto-rotate is off. */
@@ -97,6 +106,41 @@ object PlayerSettings {
     var doubleTapSeconds: Int
         get() = sp.getInt(DOUBLE_TAP_SECONDS, 10).coerceIn(5, 60)
         set(v) = sp.edit { putInt(DOUBLE_TAP_SECONDS, v.coerceIn(5, 60)) }
+
+    /** 3.0.3: the equalizer on everything the player plays. */
+    var equalizerOn: Boolean
+        get() = sp.getBoolean(EQUALIZER, false)
+        set(v) = sp.edit { putBoolean(EQUALIZER, v) }
+
+    /** 3.0.3: one of the phone's equalizer presets, or -1 for the user's own levels ([equalizerLevels]). */
+    var equalizerPreset: Int
+        get() = sp.getInt(EQUALIZER_PRESET, -1).coerceAtLeast(-1)
+        set(v) = sp.edit { putInt(EQUALIZER_PRESET, v.coerceAtLeast(-1)) }
+
+    /** 3.0.3: the user's own band levels in millibels, "300,0,-200" (see EqualizerRules). */
+    var equalizerLevels: String
+        get() = sp.getString(EQUALIZER_LEVELS, "").orEmpty()
+        set(v) = sp.edit { putString(EQUALIZER_LEVELS, v) }
+
+    /** 3.0.3: the bass boost, 0 (none) to 1000. */
+    var bassBoost: Int
+        get() = sp.getInt(BASS_BOOST, 0).coerceIn(0, 1000)
+        set(v) = sp.edit { putInt(BASS_BOOST, v.coerceIn(0, 1000)) }
+
+    /** 3.0.3: how far up the subtitles were dragged, as a share of the screen's height (0: their usual place). */
+    var subtitleLift: Float
+        get() = sp.getFloat(SUBTITLE_LIFT, 0f).let { if (it.isNaN()) 0f else it.coerceIn(-0.1f, 0.9f) }
+        set(v) = sp.edit { putFloat(SUBTITLE_LIFT, if (v.isNaN()) 0f else v.coerceIn(-0.1f, 0.9f)) }
+
+    /** 3.0.3: "Pinch to fill the screen" was said. */
+    var pinchHintShown: Boolean
+        get() = sp.getBoolean(HINT_PINCH, false)
+        set(v) = sp.edit { putBoolean(HINT_PINCH, v) }
+
+    /** 3.0.3: "Tap again to skip more" was said. */
+    var tapsHintShown: Boolean
+        get() = sp.getBoolean(HINT_TAPS, false)
+        set(v) = sp.edit { putBoolean(HINT_TAPS, v) }
 
     fun rotationLabel(key: String) = when (key) {
         ROTATE_SENSOR -> "Turn with the phone"

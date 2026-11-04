@@ -42,6 +42,9 @@ class SlimSwitch(context: Context) : View(context) {
     }
 
     fun setChecked(on: Boolean, animate: Boolean) {
+        // 3.0.3: already sliding there (a row refreshes itself right after a tap): the slide goes on.
+        // Before, the refresh cancelled it and the thumb jumped, so Settings' switches never slid.
+        if (on == isChecked && animator != null) return
         if (on == isChecked && animator == null) {
             position = if (on) 1f else 0f
             invalidate()
@@ -109,6 +112,10 @@ object SystemBars {
      */
     fun keepHidden(a: Activity, wanted: () -> Boolean = { true }) {
         val decor = a.window.decorView
+        // 3.0.3: hidden at once, as the screen is made (every screen calls this in onCreate). Before,
+        // only once its window had focus, after Android had shown it with the bars, so they showed
+        // for a moment as Settings or Files opened.
+        if (SwiftApp.prefs.fullScreen && wanted()) apply(a)
         val check = object : Runnable {
             override fun run() {
                 if (!SwiftApp.prefs.fullScreen || a.isFinishing || !a.hasWindowFocus() || !wanted()) return
@@ -195,6 +202,12 @@ object Immersive {
     private fun paintColors(d: android.app.Dialog) {
         if (d is com.google.android.material.bottomsheet.BottomSheetDialog) Palette.paintSheet(d)
         Palette.paintDialog(d)
+        // 3.0.3: a dialog's buttons spring when pressed, as Swift's own buttons do.
+        if (d is androidx.appcompat.app.AlertDialog) {
+            for (which in intArrayOf(android.content.DialogInterface.BUTTON_POSITIVE, android.content.DialogInterface.BUTTON_NEGATIVE, android.content.DialogInterface.BUTTON_NEUTRAL)) {
+                d.getButton(which)?.let { Ui.pressable(it, 0.95f) }
+            }
+        }
     }
 
     private fun hasTextField(v: View): Boolean = v is android.widget.EditText ||
@@ -249,6 +262,64 @@ class TopCropImageView @JvmOverloads constructor(
 }
 
 /** The light vibration (Settings → Look & screen → Light vibration), whatever the phone's touch-vibration setting. */
+/**
+ * 3.0.3: a thin ring around a toolbar button (the menu's) while downloads run: filled as far as they
+ * have come, or a short arc that moves on at each update when their size isn't known. Drawn as a
+ * foreground, so the button stays as it is; nothing is drawn once [fraction] is null.
+ */
+class ProgressRing(ctx: Context) : android.graphics.drawable.Drawable() {
+    private val stroke = 2.5f * ctx.resources.displayMetrics.density
+    private val inset = 5f * ctx.resources.displayMetrics.density
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = stroke
+        strokeCap = Paint.Cap.ROUND
+    }
+    private val track = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = stroke
+    }
+    private val box = RectF()
+
+    /** 0..1 as far as known, -1 for "running, size unknown", null for nothing running. */
+    var fraction: Float? = null
+        set(v) {
+            if (v == -1f) spin = (spin + 40f) % 360f
+            if (field == v && v != -1f) return
+            field = v
+            invalidateSelf()
+        }
+    private var spin = 0f
+
+    fun setColour(colour: Int) {
+        paint.color = colour
+        track.color = ColorUtils.setAlphaComponent(colour, 56)
+        invalidateSelf()
+    }
+
+    override fun draw(canvas: Canvas) {
+        val f = fraction ?: return
+        val b = bounds
+        val side = minOf(b.width(), b.height()) - 2 * inset
+        if (side <= 0) return
+        box.set(b.exactCenterX() - side / 2, b.exactCenterY() - side / 2, b.exactCenterX() + side / 2, b.exactCenterY() + side / 2)
+        canvas.drawOval(box, track)
+        if (f < 0f) canvas.drawArc(box, spin - 90f, 70f, false, paint)
+        else canvas.drawArc(box, -90f, 360f * f.coerceIn(0.02f, 1f), false, paint)
+    }
+
+    override fun setAlpha(alpha: Int) {
+        paint.alpha = alpha
+    }
+
+    override fun setColorFilter(colorFilter: android.graphics.ColorFilter?) {
+        paint.colorFilter = colorFilter
+    }
+
+    @Suppress("OVERRIDE_DEPRECATION")
+    override fun getOpacity(): Int = android.graphics.PixelFormat.TRANSLUCENT
+}
+
 object Haptics {
     fun hold(v: View) = buzz(v, android.view.HapticFeedbackConstants.LONG_PRESS)
 

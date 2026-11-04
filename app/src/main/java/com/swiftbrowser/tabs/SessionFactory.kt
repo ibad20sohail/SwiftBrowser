@@ -364,6 +364,8 @@ class TabDelegates(private val tab: Tab) :
     // ------------------------------------------------------------------ scrolling
 
     override fun onScrollChanged(session: GeckoSession, update: GeckoSession.ScrollPositionUpdate) {
+        // 3.0.3: in the page's own pixels, for the fast scroll handle (the toolbar's are the screen's).
+        tab.pageY = update.scrollY.toFloat()
         if (tab !== TabManager.current) return
         ui?.onPageScroll(
             tab, update.scrollY * update.zoom,

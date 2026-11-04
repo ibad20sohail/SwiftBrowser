@@ -2,6 +2,12 @@ package com.swiftbrowser.ui
 
 /** The library's scanner screen, in full screen when Swift is (2.2). */
 class QrScanActivity : com.journeyapps.barcodescanner.CaptureActivity() {
+    override fun onCreate(savedInstanceState: android.os.Bundle?) {
+        super.onCreate(savedInstanceState)
+        // 3.0.3: full screen from the start, as the other screens (no bars showing as it opens).
+        SystemBars.apply(this)
+    }
+
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) SystemBars.apply(this)

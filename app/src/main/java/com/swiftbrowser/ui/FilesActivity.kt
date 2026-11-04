@@ -21,6 +21,7 @@ import android.text.TextWatcher
 import android.text.format.DateUtils
 import android.view.Gravity
 import android.view.MenuItem
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.CheckBox
@@ -53,6 +54,7 @@ import com.swiftbrowser.docs.DocThumbs
 import com.swiftbrowser.docs.Docs
 import com.swiftbrowser.download.Downloads
 import com.swiftbrowser.files.Archives
+import com.swiftbrowser.files.DragSelect
 import com.swiftbrowser.files.Favourites
 import com.swiftbrowser.files.FileIndex
 import com.swiftbrowser.files.FileItem
@@ -69,6 +71,9 @@ import com.swiftbrowser.files.PrivateFolder
 import com.swiftbrowser.files.RecycleBin
 import com.swiftbrowser.files.Transfers
 import com.swiftbrowser.files.Volumes
+import com.swiftbrowser.media.LocalMedia
+import com.swiftbrowser.media.Unfinished
+import com.swiftbrowser.media.Watched
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -103,6 +108,11 @@ import java.util.Locale
  * recycle bin, Private and Wi-Fi transfer (WifiTransferActivity). Options are in FilesSettings
  * (also in Swift's Settings), read again each time Files shows. Places slide in from the side
  * they're reached from, and deleted rows close up.
+ *
+ * 3.0.3: the start page has Continue (videos and songs on the phone left part-way in Swift's
+ * player; the browser's Continue keeps the web's). The title bar and the path scroll away with the
+ * list and the search box stays at the top. After a hold, sliding the finger selects the files it
+ * passes. Videos' pictures show how much of them was watched, and a tick once watched to the end.
  */
 class FilesActivity : ListActivity() {
     /** A row: a file or folder on the phone ([file]) or in the archive being looked at ([entry]). */
@@ -164,14 +174,21 @@ class FilesActivity : ListActivity() {
     /** 2.9: the documents opened in Swift lately, as small cards with their first page. */
     private class RecentDocs(val docs: List<Docs.Doc>)
 
-    /** What the start page shows ([counts] and [recent] come a moment after the rest). */
-    private class HomeData(
+    /** 3.0.3: videos and songs on the phone left part-way in Swift's player, as Continue's cards. */
+    private class ContinueCards(val items: List<Unfinished.Item>)
+
+    /**
+     * What the start page shows ([counts] and [recent] come a moment after the rest). 3.0.3: a data
+     * class, so a change to one part ([copy]) keeps the others; [continued]: Continue's cards.
+     */
+    private data class HomeData(
         val storages: List<StorageCard>,
         val favourites: List<Row>,
         val counts: Map<FileIndex.Category, FileIndex.Summary>?,
         val recent: List<Row>?,
         val bin: RecycleBin.Summary?,
         val docs: List<Docs.Doc>,
+        val continued: List<Unfinished.Item>,
     )
 
     private val sp get() = SwiftApp.prefs.sp
@@ -264,7 +281,10 @@ class FilesActivity : ListActivity() {
     private val swiftDownloads: File by lazy { Downloads.directory() }
 
     private lateinit var pathScroll: HorizontalScrollView
-    /** The search box and the path, at the top of the page: they scroll away with the list (2.9.1). */
+    /**
+     * The search box and the path, at the top of the page: they scroll away with the list (2.9.1).
+     * 3.0.3: the title bar and the path do; the search box stays.
+     */
     private lateinit var appBar: com.google.android.material.appbar.AppBarLayout
     /** How far [appBar] has gone up (0: all on show). */
     private var appBarOffset = 0
@@ -389,6 +409,15 @@ class FilesActivity : ListActivity() {
         list.setHasFixedSize(true)
         // A screen of tiles and a few more, so going back and forth between list and grid makes few new ones.
         list.recycledViewPool.setMaxRecycledViews(TYPE_TILE, gridCols * 6)
+        // 3.0.3: after a hold, sliding the finger selects (or unselects) the files it passes.
+        list.addOnItemTouchListener(slideTouch)
+        // 3.0.3: videos' watched marks come from two small stores: read off the main thread now, so
+        // the rows find them in memory.
+        val app = applicationContext
+        lifecycleScope.launch(Dispatchers.IO) {
+            LocalMedia.progress(app, "", -1)
+            Watched.isFinished(app, "", -1)
+        }
         onBackPressedDispatcher.addCallback(this, back)
         Volumes.refresh(this)
         needAccess = !hasAccess()
@@ -589,6 +618,8 @@ class FilesActivity : ListActivity() {
             RecycleBin.purgeSoon(this)
             applySettings()
             pruneGone()
+            // 3.0.3: back from the player: the videos' pictures show how much is watched now.
+            adapter.notifyItemRangeChanged(0, adapter.itemCount, PAYLOAD_WATCHED)
         }
         started = true
     }
@@ -716,8 +747,13 @@ class FilesActivity : ListActivity() {
         // 2.9.1: the search box and the path belong to the top of the page: scrolling down takes them
         // away with the list (more room for files), and they come back once the list is at its top.
         // The list only moves by an offset as they go, so scrolling costs no new layout.
+        // 3.0.3: the title bar and the path scroll away, and the search box stays at the top once they
+        // have gone (it has no scroll flags, so what is above it goes and it doesn't). Files' title bar
+        // only: the other lists keep theirs where it was.
         val searchBox = search.parent as View
-        val at = column.indexOfChild(searchBox)
+        val at = column.indexOfChild(toolbar)
+        val barHeight = toolbar.layoutParams.height
+        column.removeView(toolbar)
         column.removeView(searchBox)
         column.removeView(box)
         appBar = com.google.android.material.appbar.AppBarLayout(this).apply {
@@ -729,8 +765,11 @@ class FilesActivity : ListActivity() {
         fun scrollsAway(height: Int) = com.google.android.material.appbar.AppBarLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, height).apply {
             scrollFlags = com.google.android.material.appbar.AppBarLayout.LayoutParams.SCROLL_FLAG_SCROLL
         }
-        appBar.addView(searchBox, scrollsAway(ViewGroup.LayoutParams.WRAP_CONTENT))
+        appBar.addView(toolbar, scrollsAway(barHeight))
         appBar.addView(pathScroll, scrollsAway(Ui.dp(this, 40)))
+        // No scroll flags, so it stays once the two above have gone. (Made in code, AppBarLayout's
+        // LayoutParams scroll by default: unlike from XML, the flag has to be cleared.)
+        appBar.addView(searchBox, com.google.android.material.appbar.AppBarLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { scrollFlags = 0 })
         // Only a list longer than the room under them takes them away (an empty or short folder keeps them).
         val topBehavior = object : com.google.android.material.appbar.AppBarLayout.Behavior() {
             override fun onStartNestedScroll(parent: androidx.coordinatorlayout.widget.CoordinatorLayout, child: com.google.android.material.appbar.AppBarLayout, directTargetChild: View, target: View, nestedScrollAxes: Int, type: Int) =
@@ -928,10 +967,45 @@ class FilesActivity : ListActivity() {
 
     /**
      * The search box and the path on show again, as at the top of the page (2.9.1); with [atTop]
-     * false, gone as when scrolled down to where the list now is.
+     * false, gone as when scrolled down to where the list now is. 3.0.3: the title bar and the path
+     * (the search box always shows).
      */
     private fun showPageTop(atTop: Boolean = true) {
+        titleBarAnim?.cancel()
         if ((appBarOffset == 0) != atTop) appBar.setExpanded(atTop, false)
+    }
+
+    /** 3.0.3: the title bar coming back (see [showTitleBar]). */
+    private var titleBarAnim: android.animation.ValueAnimator? = null
+
+    /**
+     * 3.0.3: selecting started: the title bar comes back (it shows the count and Select all), sliding
+     * down. While a finger is on the list (the hold that started it, maybe sliding on), once it is
+     * lifted: the files mustn't move under it.
+     */
+    private fun showTitleBar() {
+        if (appBarOffset == 0) return
+        if (fingerDown) {
+            expandOnLift = true
+            return
+        }
+        val behavior = (appBar.layoutParams as? androidx.coordinatorlayout.widget.CoordinatorLayout.LayoutParams)?.behavior as? com.google.android.material.appbar.AppBarLayout.Behavior
+        if (!animationsOn || behavior == null) {
+            appBar.setExpanded(true, false)
+            return
+        }
+        // Material's own slide takes up to 300 ms: a short one, moving the bar (the list follows it).
+        titleBarAnim?.cancel()
+        titleBarAnim = android.animation.ValueAnimator.ofInt(behavior.getTopAndBottomOffset(), 0).apply {
+            duration = Motion.SHORT
+            interpolator = Motion.standard
+            addUpdateListener { a ->
+                val offset = a.animatedValue as Int
+                behavior.setTopAndBottomOffset(offset)
+                appBarOffset = offset
+            }
+            start()
+        }
     }
 
     /** The list goes on past the bottom of the screen (asked once a swipe starts, not as it moves). */
@@ -1059,7 +1133,9 @@ class FilesActivity : ListActivity() {
         rowsBytes = listed.sumOf { it.size.coerceAtLeast(0) }
         searchRows = searchRows?.filter(keep)
         paths.forEach { selected.remove(it) }
-        homeCache?.let { c -> homeCache = HomeData(c.storages, c.favourites.filter(keep), c.counts, c.recent?.filter(keep), c.bin, c.docs) }
+        homeCache?.let { c ->
+            homeCache = c.copy(favourites = c.favourites.filter(keep), recent = c.recent?.filter(keep), continued = c.continued.filter { it.localPath == null || it.localPath !in paths })
+        }
         render(removals = true)
         if (quietly) L.d("Files: ${paths.size} gone meanwhile, taken off the list")
     }
@@ -1076,20 +1152,31 @@ class FilesActivity : ListActivity() {
         val app = applicationContext
         homeJob = lifecycleScope.launch {
             var docs: List<Docs.Doc> = emptyList()
+            var continued: List<Unfinished.Item> = emptyList()
             val (storages, favourites, bin) = withContext(Dispatchers.IO) {
                 val cards = Volumes.refresh(app).map { v -> v.space().let { (free, total) -> StorageCard(v, free, total) } }
                 val favs = Favourites.paths().map { File(it) }.filter { it.isDirectory && !PrivateFolder.isInside(app, it) }
                     .map { rowOf(FileItem.of(it, count = true, where = FileIndex.placeOf(app, it.parentFile))) }
                 docs = recentDocuments()
+                continued = continueItems(app)
                 Triple(cards, favs, RecycleBin.summaryNow(app))
             }
             val before = homeCache
-            homeCache = HomeData(storages, favourites, before?.counts, before?.recent, bin, docs)
+            homeCache = HomeData(storages, favourites, before?.counts, before?.recent, bin, docs, continued)
             if (onStartPage) render()
             val overview = withContext(Dispatchers.IO) { FileIndex.overview(app) { !isActive } }
-            homeCache = HomeData(storages, favourites, overview.counts, overview.recent.map { rowOf(it) }, bin, docs)
+            // 3.0.3: what changed meanwhile (a card taken off, a folder deleted) stays as it is now.
+            homeCache = homeCache?.copy(counts = overview.counts, recent = overview.recent.map { rowOf(it) })
             if (onStartPage) render()
         }
+    }
+
+    /** 3.0.3: Continue's cards: the phone's videos and songs left part-way in Swift's player. Off the main thread. */
+    private fun continueItems(app: Context): List<Unfinished.Item> = try {
+        Unfinished.forFiles(app)
+    } catch (e: Exception) {
+        L.w("Files: Continue couldn't be read", e)
+        emptyList()
     }
 
     /** The documents opened in Swift lately (2.9), but not files deleted since. Off the main thread. */
@@ -1108,11 +1195,7 @@ class FilesActivity : ListActivity() {
         val out = ArrayList<Any>()
         out += Header("Storage")
         if (data != null) out.addAll(data.storages) else Volumes.all(this).forEach { out += StorageCard(it, -1, -1) }
-        // 2.9: Files is where documents are found: the ones read lately come first, to carry on.
-        if (!data?.docs.isNullOrEmpty()) {
-            out += Header("Recent documents", "Show all") { openCategory(FileIndex.Category.DOCUMENTS) }
-            out += RecentDocs(data!!.docs)
-        }
+        // 3.0.3: Storage, Categories, Tools, Favourites, Continue, Recent documents, Recent files.
         out += Header("Categories")
         out += CategoryGrid(data?.counts)
         out += Header("Tools")
@@ -1121,6 +1204,16 @@ class FilesActivity : ListActivity() {
             out += Header("Favourites")
             if (data.favourites.isEmpty()) out += Hint("Keep the folders you use most here: tap ⋮ next to a folder, then Add to favourites.")
             else out.addAll(data.favourites)
+            // 3.0.3: videos and songs left part-way in Swift's player, to carry on (none: no heading either).
+            if (data.continued.isNotEmpty()) {
+                out += Header("Continue")
+                out += ContinueCards(data.continued)
+            }
+            // 2.9: Files is where documents are found: the ones read lately, to carry on.
+            if (data.docs.isNotEmpty()) {
+                out += Header("Recent documents", "Show all") { openCategory(FileIndex.Category.DOCUMENTS) }
+                out += RecentDocs(data.docs)
+            }
         }
         val recent = data?.recent?.let { stillThere(it) }
         if (recent != null) {
@@ -1144,7 +1237,7 @@ class FilesActivity : ListActivity() {
             if (out.size > HOME_RECENT || f == null || f.exists()) out += r else gone += f.path
         }
         if (gone.isNotEmpty()) {
-            homeCache?.let { c -> homeCache = HomeData(c.storages, c.favourites, c.counts, c.recent?.filter { it.file?.path !in gone }, c.bin, c.docs) }
+            homeCache?.let { c -> homeCache = c.copy(recent = c.recent?.filter { it.file?.path !in gone }) }
             val app = applicationContext
             lifecycleScope.launch(Dispatchers.IO) { FileOps.forgetPaths(app, gone) }
         }
@@ -1431,6 +1524,8 @@ class FilesActivity : ListActivity() {
         if (navClose != selecting) {
             navClose = selecting
             toolbar.setNavigationIcon(if (selecting) R.drawable.ic_close else R.drawable.ic_back)
+            // 3.0.3: the title bar may have scrolled away: selecting brings it back.
+            if (selecting) showTitleBar()
         }
         if (selecting) {
             toolbar.title = if (selected.size == 1) "1 selected" else "${number(selected.size)} selected"
@@ -2571,7 +2666,8 @@ class FilesActivity : ListActivity() {
         when {
             index != null -> {}
             home -> homeCache?.let { c ->
-                homeCache = HomeData(c.storages, c.favourites.map(swap), c.counts, c.recent?.map(swap), c.bin, c.docs)
+                // 3.0.3: where a video was left is kept by its path: a renamed one leaves Continue.
+                homeCache = c.copy(favourites = c.favourites.map(swap), recent = c.recent?.map(swap), continued = c.continued.filter { it.localPath != from.path })
                 if (onStartPage) render()
             }
             category != null -> {
@@ -3064,6 +3160,9 @@ class FilesActivity : ListActivity() {
         var thumb: FileThumbs.Request? = null
         var marked = false
         var boundKey: String? = null
+
+        /** 3.0.3: a video's watched line and tick, over its picture (made the first time one is needed). */
+        var marks: WatchMarks? = null
         lateinit var folderFill: Drawable
         lateinit var fileFill: Drawable
         lateinit var plain: Drawable
@@ -3182,7 +3281,7 @@ class FilesActivity : ListActivity() {
         actions += Sheets.Action(R.drawable.ic_close, "Remove from recent") {
             lifecycleScope.launch {
                 withContext(Dispatchers.IO) { runCatching { SwiftApp.db.forgetDocument(doc.id) } }
-                homeCache?.let { c -> homeCache = HomeData(c.storages, c.favourites, c.counts, c.recent, c.bin, c.docs.filter { it.id != doc.id }) }
+                homeCache?.let { c -> homeCache = c.copy(docs = c.docs.filter { it.id != doc.id }) }
                 if (onStartPage) render()
             }
         }
@@ -3206,6 +3305,218 @@ class FilesActivity : ListActivity() {
         h.box.addView(Palette.paint(chips), FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
     }
 
+    // ------------------------------------------------------------------ 3.0.3: Continue
+
+    private class ContinueHolder(box: FrameLayout, val row: ContinueRow) : RecyclerView.ViewHolder(box)
+
+    /** Continue's row: the browser home's cards, here with the phone's videos and songs (in a box, so the list's movement leaves the row's own alone). */
+    private fun makeContinue(): ContinueHolder {
+        val box = FrameLayout(this).apply {
+            setPadding(0, dp(4), 0, dp(6))
+            layoutParams = RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        }
+        lateinit var row: ContinueRow
+        row = ContinueRow(this, ContinueRow.Part.FILES, { playContinue(it) }, { continueSheet(row, it) })
+        box.addView(row, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        return ContinueHolder(box, row)
+    }
+
+    /** Plays a card's video or song as Files plays one: in Swift's player, where it was left, its folder as the playlist. */
+    private fun playContinue(item: Unfinished.Item) {
+        val f = item.localPath?.let { File(it) } ?: return
+        if (!f.isFile) {
+            say("“${f.name}” isn't there any more")
+            homeCache?.let { c -> homeCache = c.copy(continued = c.continued.filter { it.url != item.url }) }
+            if (onStartPage) render(removals = true)
+            return
+        }
+        if (FileOpener.open(this, f)) finish()
+    }
+
+    /** Holding a card: play it, see it in its folder, or take it off Continue (as on the browser's home page). */
+    private fun continueSheet(row: ContinueRow, item: Unfinished.Item) {
+        val f = item.localPath?.let { File(it) } ?: return
+        Haptics.tick(list)
+        Sheets.actions(this, item.title.ifBlank { f.name }, item.caption, listOf(
+            Sheets.Action(R.drawable.ic_play, "Play", primary = true) { playContinue(item) },
+            Sheets.Action(R.drawable.ic_folder, "Show in folder", primary = true) { showInFolder(f) },
+            Sheets.Action(R.drawable.ic_close, "Remove from Continue", danger = true) { removeContinue(row, item) },
+        ), iconRes = if (item.video) R.drawable.ic_movie else R.drawable.ic_music_note)
+    }
+
+    /**
+     * Takes a card off Continue: it fades and the row closes up, with Undo; once the Undo is gone,
+     * where it was left is forgotten (Unfinished.remove). The last one takes its heading with it.
+     */
+    private fun removeContinue(row: ContinueRow, item: Unfinished.Item) {
+        val c = homeCache ?: return
+        homeCache = c.copy(continued = c.continued.filter { it.url != item.url })
+        row.remove(item) {
+            // Undo: back on the start page, newest first as before.
+            homeCache?.let { now ->
+                if (now.continued.none { it.url == item.url }) homeCache = now.copy(continued = (now.continued + item).sortedByDescending { it.updated })
+            }
+            if (onStartPage) render()
+        }
+        if (homeCache?.continued.isNullOrEmpty() && onStartPage) render(removals = true)
+    }
+
+    // ------------------------------------------------------------------ 3.0.3: watched marks
+
+    /**
+     * A video's picture shows how much of it was watched in Swift's player, and a tick once it was
+     * watched to its end: looked up by the path and size the row has (no disk access while binding).
+     */
+    private fun markWatched(h: FileHolder, r: Row) {
+        val path = r.file?.path?.takeIf { r.kind == FileKind.VIDEO && !inBin }
+        val share = path?.let { LocalMedia.progress(this, it, r.size) }
+        val done = path != null && Watched.isFinished(this, path, r.size)
+        if (share == null && !done) {
+            if (h.icon.foreground != null) h.icon.foreground = null
+            return
+        }
+        val marks = h.marks ?: WatchMarks(this, h.tile).also { h.marks = it }
+        marks.set(share, done)
+        if (h.icon.foreground !== marks) h.icon.foreground = marks
+    }
+
+    // ------------------------------------------------------------------ 3.0.3: sliding to select
+
+    /** A finger is on the list; selecting that starts meanwhile brings the title bar back once it is lifted. */
+    private var fingerDown = false
+    private var expandOnLift = false
+
+    /** Where the hold that began a slide was (a position in the list; -1: no slide), and where the finger is now. */
+    private var slideFrom = -1
+    private var slideTo = -1
+
+    /** The slide selects (the hold selected its file) or unselects; whether it has reached another file yet. */
+    private var slideSelects = true
+    private var slideMoved = false
+
+    /** What was selected as the slide began: files it leaves behind go back to that. */
+    private var slideBefore: Set<String> = emptySet()
+    private var slideX = 0f
+    private var slideY = 0f
+
+    /** A hold selected (or unselected) the file at [position]: sliding on does the same to the files the finger passes. */
+    private fun armSlide(position: Int, selects: Boolean) {
+        if (!fingerDown || position < 0) return
+        slideFrom = position
+        slideTo = position
+        slideSelects = selects
+        slideMoved = false
+        slideBefore = HashSet(selected.keys)
+    }
+
+    private fun endSlide() {
+        slideFrom = -1
+        list.removeCallbacks(slideScroll)
+    }
+
+    /** Watches the list's touches: after a hold, the moves of the same touch select instead of scrolling. */
+    private val slideTouch = object : RecyclerView.OnItemTouchListener {
+        override fun onInterceptTouchEvent(rv: RecyclerView, e: MotionEvent): Boolean {
+            when (e.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    fingerDown = true
+                    titleBarAnim?.cancel()
+                    endSlide()
+                }
+                // The hold selected: from now on the finger selects, and the list doesn't follow it.
+                MotionEvent.ACTION_MOVE -> if (slideFrom >= 0) {
+                    slideAt(e)
+                    return true
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> lifted()
+            }
+            return false
+        }
+
+        override fun onTouchEvent(rv: RecyclerView, e: MotionEvent) {
+            when (e.actionMasked) {
+                MotionEvent.ACTION_MOVE -> slideAt(e)
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> lifted()
+            }
+        }
+
+        override fun onRequestDisallowInterceptTouchEvent(disallowIntercept: Boolean) {}
+    }
+
+    private fun slideAt(e: MotionEvent) {
+        if (slideFrom < 0) return
+        slideX = e.x
+        slideY = e.y
+        slideOver()
+        // Near the top or bottom the list scrolls on by itself, a frame at a time.
+        list.removeCallbacks(slideScroll)
+        list.postOnAnimation(slideScroll)
+    }
+
+    /** The finger was lifted (or the touch was taken away). */
+    private fun lifted() {
+        fingerDown = false
+        endSlide()
+        if (expandOnLift) {
+            expandOnLift = false
+            if (selected.isNotEmpty()) showTitleBar()
+        }
+    }
+
+    /** The part of the list on show, top and bottom in its own coordinates (the bars above can push its end below the screen). */
+    private fun listShown(): Pair<Int, Int> {
+        val box = list.parent as View
+        val page = box.parent as View
+        return list.paddingTop to minOf(list.height, page.height - box.top - list.top)
+    }
+
+    /** The files from the held one to the one under the finger are as the slide makes them; those it left are as they were. */
+    private fun slideOver() {
+        if (slideFrom < 0) return
+        val (top, bottom) = listShown()
+        if (bottom <= top) return
+        val left = list.paddingLeft.toFloat()
+        val x = slideX.coerceIn(left, (list.width - list.paddingRight - 1).toFloat().coerceAtLeast(left))
+        val y = slideY.coerceIn(top.toFloat(), (bottom - 1).toFloat())
+        val under = list.findChildViewUnder(x, y) ?: return
+        val to = list.getChildAdapterPosition(under)
+        if (to == RecyclerView.NO_POSITION || to == slideTo) return
+        val step = DragSelect.step(slideFrom, slideTo, to)
+        slideTo = to
+        val was = selected.isNotEmpty()
+        var changed = false
+        fun mark(p: Int, on: Boolean) {
+            val r = adapter.items.getOrNull(p) as? Row ?: return
+            if ((r.key in selected) == on) return
+            if (on) selected[r.key] = r else selected.remove(r.key)
+            adapter.notifyItemChanged(p, PAYLOAD_TOGGLED)
+            changed = true
+        }
+        for (p in step.left) mark(p, (adapter.items.getOrNull(p) as? Row)?.let { it.key in slideBefore } == true)
+        for (p in step.reached) mark(p, slideSelects)
+        if (!changed) return
+        // A light buzz as a run of files begins.
+        if (!slideMoved) {
+            slideMoved = true
+            Haptics.tick(list)
+        }
+        if (was != selected.isNotEmpty()) refreshSelection()
+        updateChrome()
+    }
+
+    /** Sliding near the top or bottom of the list: it scrolls on by itself, a little each frame, faster nearer the edge. */
+    private val slideScroll = object : Runnable {
+        override fun run() {
+            if (slideFrom < 0) return
+            val (top, bottom) = listShown()
+            val step = DragSelect.edgeStep(slideY, top, bottom, dp(56), dp(12))
+            if (step == 0 || !list.canScrollVertically(step)) return
+            list.scrollBy(0, step)
+            slideOver()
+            list.postOnAnimation(this)
+        }
+    }
+
     private inner class Adapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
         var items: List<Any> = emptyList()
             private set
@@ -3215,6 +3526,8 @@ class FilesActivity : ListActivity() {
          * moved away), those close up one by one; otherwise (and for many at once) all show anew.
          */
         fun set(list: List<Any>, removals: Boolean = false) {
+            // 3.0.3: a slide's positions belong to the list as it was.
+            endSlide()
             val old = items
             items = list
             val gone = old.size - list.size
@@ -3241,6 +3554,7 @@ class FilesActivity : ListActivity() {
             is CategoryGrid -> "categories"
             is ToolGrid -> "tools"
             is RecentDocs -> "docs:" + o.docs.joinToString(",") { it.id }
+            is ContinueCards -> "continue:" + o.items.joinToString(",") { it.url + ":" + it.progress }
             else -> o
         }
 
@@ -3254,6 +3568,7 @@ class FilesActivity : ListActivity() {
             is ToolGrid -> TYPE_TOOLS
             is DocFilter -> TYPE_DOC_FILTER
             is RecentDocs -> TYPE_DOCS
+            is ContinueCards -> TYPE_CONTINUE
             else -> TYPE_HINT
         }
 
@@ -3265,6 +3580,7 @@ class FilesActivity : ListActivity() {
             TYPE_CATEGORIES -> makeCategories()
             TYPE_TOOLS -> makeTools()
             TYPE_DOCS -> makeRecentDocs()
+            TYPE_CONTINUE -> makeContinue()
             TYPE_DOC_FILTER -> FilterHolder(FrameLayout(this@FilesActivity).apply {
                 setPadding(0, dp(4), 0, dp(6))
                 layoutParams = RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
@@ -3278,11 +3594,20 @@ class FilesActivity : ListActivity() {
         override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) = onBindViewHolder(holder, position, mutableListOf())
 
         override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int, payloads: MutableList<Any>) {
-            when (val item = items[position]) {
+            val item = items[position]
+            // 3.0.3: only the videos' watched marks are asked for again: nothing else changes.
+            if (payloads.isNotEmpty() && item !is Row && payloads.all { it == PAYLOAD_WATCHED }) return
+            when (item) {
                 is Row -> {
                     val h = holder as FileHolder
-                    // Only the selection changed: the tick and the marking, not the picture.
-                    if (payloads.isNotEmpty() && h.boundKey == item.key) bindSelection(h, item, PAYLOAD_TOGGLED in payloads, fade = PAYLOAD_SELECTION in payloads) else bind(h, item)
+                    // Only the selection changed: the tick and the marking, not the picture (3.0.3: or
+                    // only how much of a video was watched).
+                    if (payloads.isNotEmpty() && h.boundKey == item.key) {
+                        if (PAYLOAD_WATCHED in payloads) markWatched(h, item)
+                        if (PAYLOAD_TOGGLED in payloads || PAYLOAD_SELECTION in payloads) bindSelection(h, item, PAYLOAD_TOGGLED in payloads, fade = PAYLOAD_SELECTION in payloads)
+                    } else {
+                        bind(h, item)
+                    }
                 }
                 is Header -> bindHeader(holder as HeaderHolder, item)
                 is StorageCard -> bindStorage(holder as StorageHolder, item)
@@ -3290,6 +3615,7 @@ class FilesActivity : ListActivity() {
                 is ToolGrid -> bindTools(holder as ToolsHolder, item)
                 is DocFilter -> bindDocFilter(holder as FilterHolder, item)
                 is RecentDocs -> bindRecentDocs(holder as DocsHolder, item)
+                is ContinueCards -> (holder as ContinueHolder).row.show(item.items)
                 is Hint -> (holder as HintHolder).text.text = item.text
             }
         }
@@ -3430,6 +3756,8 @@ class FilesActivity : ListActivity() {
             if (canSelect) {
                 Haptics.hold(v)
                 toggle(r, h.bindingAdapterPosition)
+                // 3.0.3: sliding on from here does the same to the files the finger passes.
+                armSlide(h.bindingAdapterPosition, r.key in selected)
             } else {
                 itemSheet(r)
             }
@@ -3453,6 +3781,7 @@ class FilesActivity : ListActivity() {
         h.icon.tag = r.key
         setIcon(h, r)
         h.play?.visibility = if (r.kind == FileKind.VIDEO) View.VISIBLE else View.GONE
+        markWatched(h, r)
         val f = r.file
         if (f != null && !r.isDir && thumbsOn && FileThumbs.has(r.kind)) {
             val key = r.key
@@ -3507,7 +3836,12 @@ class FilesActivity : ListActivity() {
         if (selecting) {
             h.check.setImageResource(if (on) R.drawable.ic_check_box else R.drawable.ic_check_box_blank)
             h.check.imageTintList = if (on) accentTint else secondaryTint
-            if (toggled && on) Motion.bump(h.check, 1.2f)
+            if (toggled && on) {
+                // 3.0.3: the bump stops every animation of the box, the fade-in above too, which left the
+                // held file's box invisible: it shows at once, with its pop.
+                h.check.alpha = 1f
+                Motion.bump(h.check, 1.2f)
+            }
         }
         if (on != h.marked) {
             h.marked = on
@@ -3756,6 +4090,7 @@ class FilesActivity : ListActivity() {
         private const val TYPE_TOOLS = 6
         private const val TYPE_DOC_FILTER = 7
         private const val TYPE_DOCS = 8
+        private const val TYPE_CONTINUE = 9
 
         private const val SLIDE_FORWARD = 1
         private const val SLIDE_BACK = -1
@@ -3773,6 +4108,9 @@ class FilesActivity : ListActivity() {
         /** Rows rebound for their selection only; the one tapped also pops its tick. */
         private const val PAYLOAD_SELECTION = "selection"
         private const val PAYLOAD_TOGGLED = "toggled"
+
+        /** 3.0.3: rows rebound for their videos' watched marks only (back from the player). */
+        private const val PAYLOAD_WATCHED = "watched"
 
         /** Files to copy or move (or an archive to extract) once the user is in the right folder; kept while Swift runs. */
         private var clip: Clip? = null

@@ -254,6 +254,11 @@ class Prefs(ctx: Context) {
     val showHomeButton: Boolean
         get() = sp.getBoolean(SHOW_HOME_BUTTON, true)
 
+    /** 3.0.3: the one-time hint that swiping the address bar sideways switches tabs was shown. */
+    var hintBarSwipe: Boolean
+        get() = sp.getBoolean("hint_bar_swipe", false)
+        set(v) = sp.edit { putBoolean("hint_bar_swipe", v) }
+
     /** A light vibration on long presses, dragging tabs and grouping them. */
     var haptics: Boolean
         get() = sp.getBoolean(HAPTICS, true)

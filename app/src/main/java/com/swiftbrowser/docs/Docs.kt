@@ -195,6 +195,16 @@ object Docs {
      */
     fun isGone(uri: String): Boolean = Uri.parse(uri).let { it.scheme == ContentResolver.SCHEME_FILE && !File(it.path.orEmpty()).exists() }
 
+    /**
+     * 3.0.3: [doc] was read straight from a link without saving it: its copy waits in Swift's cache
+     * ([openFromWeb]'s web/ folder). Those stay in the browser's Continue; the rest are Files'.
+     */
+    fun isWebCopy(doc: Doc): Boolean {
+        val ctx = SwiftApp.instance ?: return false
+        val u = Uri.parse(doc.uri)
+        return u.scheme == ContentResolver.SCHEME_FILE && u.path.orEmpty().startsWith(File(tempDir(ctx), "web").path + "/")
+    }
+
     fun isViewerUrl(url: String?): Boolean = url != null && url.startsWith("moz-extension://") && url.contains("/docs/view.html")
 
     /** The document a viewer tab shows. */

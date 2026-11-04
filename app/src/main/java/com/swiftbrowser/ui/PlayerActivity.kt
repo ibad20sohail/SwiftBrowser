@@ -1,5 +1,6 @@
 package com.swiftbrowser.ui
 
+import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.ComponentName
 import android.content.Context
@@ -8,6 +9,7 @@ import android.content.pm.ActivityInfo
 import android.content.res.ColorStateList
 import android.content.res.Configuration
 import android.graphics.Color
+import android.graphics.Rect
 import android.graphics.drawable.GradientDrawable
 import android.media.AudioManager
 import android.net.Uri
@@ -22,6 +24,7 @@ import android.text.TextUtils
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.SurfaceView
 import android.view.View
 import android.view.ViewGroup
@@ -54,18 +57,24 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
-import com.google.android.material.bottomsheet.BottomSheetDialog
+import com.google.android.material.chip.ChipGroup
 import com.swiftbrowser.R
 import com.swiftbrowser.SwiftApp
 import com.swiftbrowser.core.AppFiles
 import com.swiftbrowser.core.L
 import com.swiftbrowser.core.UrlUtils
 import com.swiftbrowser.docs.Docs
+import com.swiftbrowser.files.FileKind
+import com.swiftbrowser.files.FileThumbs
+import com.swiftbrowser.media.Delays
+import com.swiftbrowser.media.EqualizerRules
 import com.swiftbrowser.media.LocalMedia
 import com.swiftbrowser.media.LocalPlayback
 import com.swiftbrowser.media.MusicService
 import com.swiftbrowser.media.PlayerSettings
+import com.swiftbrowser.media.SoundEffects
 import com.swiftbrowser.media.Subtitles
+import com.swiftbrowser.media.TrackChoice
 import com.swiftbrowser.media.WatchPositions
 import java.io.File
 import java.util.Locale
@@ -80,10 +89,14 @@ import kotlin.math.roundToInt
  *
  * Videos fill the black screen, with VLC's gestures (see PlayerGestures) and controls that hide
  * while playing; music shows its cover in Swift's colours and goes on in the background
- * (MusicService), the player being shared with it (LocalPlayback). Menus are bottom sheets.
+ * (MusicService), the player being shared with it (LocalPlayback). 3.0.3: menus are panels on this
+ * screen beside the video (PlayerPanel), no longer sheets over it.
  */
 @OptIn(UnstableApi::class)
-class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.Watcher {
+class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.Watcher, PlayerPanel.Host, Messages.DarkScreen {
+    // 3.0.3: over a video the screen is black: messages take the dark colours there (music: Swift's).
+    override val darkMessages: Boolean get() = videoMode
+
     enum class Kind { VIDEO, AUDIO }
 
     private val handler = Handler(Looper.getMainLooper())
@@ -127,11 +140,28 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
     private lateinit var chips: LinearLayout
     private lateinit var previousButton: ImageButton
     private lateinit var nextButton: ImageButton
-    private lateinit var back10: ImageButton
-    private lateinit var forward10: ImageButton
     private lateinit var speedButton: ImageButton
     private var chipsShown = ""
     private var problem: View? = null
+
+    // 3.0.3: menus in a panel beside the video (PlayerPanel); Back closes it first.
+    private lateinit var panel: PlayerPanel
+    private lateinit var panelBack: OnBackPressedCallback
+
+    /** Where the picture went for an upright panel (its move and scale), so a picture subtitle goes with it. */
+    private var videoShift = 0f
+    private var videoScale = 1f
+
+    // 3.0.3: "Up next" at the end of a video of a playlist, counting down to the next.
+    private var upNext: View? = null
+    private var upNextCount: TextView? = null
+    private var upNextThumb: FileThumbs.Request? = null
+    private var upNextLeft = 0
+
+    /** 3.0.3: where the subtitles were dragged to (a share of the height), and the drag under way (NaN: none). */
+    private var subLift = 0f
+    private var liftDrag = Float.NaN
+    private var liftFrom = 0f
 
     /** Icon buttons: white over a video, in the text colour on the music screen. */
     private val icons = ArrayList<ImageButton>()
@@ -169,15 +199,21 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
     private var tapAt = 0L
     private var tapTotal = 0L
 
-    // Subtitles: a file shown by this screen, or the video's own (shown through the player).
+    // Subtitles: a file shown by this screen, or the video's own (shown through the player). 3.0.3:
+    // their timing is LocalPlayback's (the same for both).
     private var subFile: Subtitles.Track? = null
     private var subFiles: List<File> = emptyList()
     private val subAdded = ArrayList<Subtitles.Track>()
     private var subOff = false
-    private var subDelayMs = 0L
     private var subShown: List<Cue> = emptyList()
     private var subToken = 0
     private var resumeAfterPick = false
+
+    /** 3.0.3: where each subtitle file shown was read from (its path, or a content:// address), to keep it as chosen. */
+    private val subSources = HashMap<Subtitles.Track, String>()
+
+    /** 3.0.3: the video's own subtitles chosen last time for this file, chosen again once its tracks are known. */
+    private var pendingSubtitles: TrackChoice? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         Looks.apply(this)
@@ -197,6 +233,12 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
                 close()
             }
         })
+        // 3.0.3: Back closes a panel first (added last, so asked first).
+        panelBack = object : OnBackPressedCallback(false) {
+            override fun handleOnBackPressed() = panel.close()
+        }
+        onBackPressedDispatcher.addCallback(this, panelBack)
+        subLift = PlayerSettings.subtitleLift
         SystemBars.keepHidden(this) { !videoMode }
         LocalPlayback.watch(this)
         val again = savedInstanceState != null || intent?.action == ACTION_SHOW
@@ -397,6 +439,19 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
             }
             if (events.containsAny(Player.EVENT_REPEAT_MODE_CHANGED, Player.EVENT_SHUFFLE_MODE_ENABLED_CHANGED)) updateModes()
             if (events.containsAny(Player.EVENT_TIMELINE_CHANGED, Player.EVENT_POSITION_DISCONTINUITY)) updateProgress()
+            // 3.0.3: whether there is a next one to go on to.
+            if (events.containsAny(
+                    Player.EVENT_TIMELINE_CHANGED, Player.EVENT_MEDIA_ITEM_TRANSITION, Player.EVENT_REPEAT_MODE_CHANGED,
+                    Player.EVENT_SHUFFLE_MODE_ENABLED_CHANGED,
+                )
+            ) {
+                updateSteps()
+            }
+        }
+
+        // 3.0.3: a seek away from the end puts Up next away (the video goes on there).
+        override fun onPositionDiscontinuity(oldPosition: Player.PositionInfo, newPosition: Player.PositionInfo, reason: Int) {
+            if (reason == Player.DISCONTINUITY_REASON_SEEK && upNext != null) hideUpNext()
         }
 
         override fun onPlaybackStateChanged(playbackState: Int) {
@@ -417,6 +472,7 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         override fun onVideoSizeChanged(videoSize: VideoSize) {
             frame.setVideoSize(videoSize.width, videoSize.height, videoSize.pixelWidthHeightRatio)
             applyRotation()
+            hintPinch()
         }
 
         override fun onCues(cueGroup: CueGroup) {
@@ -433,6 +489,9 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
             shownEntry = e
             warnedTracks = null
             hideProblem()
+            // 3.0.3: what a panel showed was about the one before; Up next has happened.
+            hideUpNext()
+            panel.close()
             applyMode(e.video)
             loadSubtitles(e)
             // 3.0: a file of Private is kept out of screenshots and recent apps; an incognito one too
@@ -552,9 +611,13 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
             background = Ui.circle(0x99000000.toInt())
             contentDescription = "Unlock the screen"
             visibility = View.GONE
-            setOnClickListener { setLocked(false) }
+            setOnClickListener {
+                Haptics.tick(root)
+                setLocked(false)
+            }
         }
         root.addView(unlockButton, FrameLayout.LayoutParams(dp(52), dp(52), Gravity.START or Gravity.CENTER_VERTICAL).apply { marginStart = dp(20) })
+        panel = PlayerPanel(root, this)
         setContentView(root)
     }
 
@@ -564,6 +627,9 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         setImageResource(icon)
         contentDescription = label
         setOnClickListener { click() }
+        // 3.0.3: holding one shows its name, and a press springs.
+        androidx.appcompat.widget.TooltipCompat.setTooltipText(this, label)
+        Ui.pressable(this, 0.88f)
         icons += this
     }
 
@@ -619,9 +685,9 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
             orientation = LinearLayout.HORIZONTAL
             visibility = View.GONE
         }
-        rotateButton = button(R.drawable.ic_rotate, "Turn the screen") { rotationSheet() }
-        subtitlesButton = button(R.drawable.ic_subtitles, "Sound and subtitles") { tracksSheet() }
-        playlistButton = button(R.drawable.ic_view_list, "Playlist") { playlistSheet() }
+        rotateButton = button(R.drawable.ic_rotate, "Turn the screen") { rotationPanel() }
+        subtitlesButton = button(R.drawable.ic_subtitles, "Sound and subtitles") { tracksPanel() }
+        playlistButton = button(R.drawable.ic_view_list, "Playlist") { playlistPanel() }
         val size = dp(48)
         topBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -639,7 +705,7 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
             addView(subtitlesButton, LinearLayout.LayoutParams(size, size))
             addView(rotateButton, LinearLayout.LayoutParams(size, size))
             addView(playlistButton, LinearLayout.LayoutParams(size, size))
-            addView(button(R.drawable.ic_more, "More") { moreSheet() }, LinearLayout.LayoutParams(size, size))
+            addView(button(R.drawable.ic_more, "More") { morePanel() }, LinearLayout.LayoutParams(size, size))
         }
         root.addView(topBar, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP))
     }
@@ -692,34 +758,42 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
                 scheduleHide()
             }
         }
-        lockButton = button(R.drawable.ic_lock, "Lock the screen") { setLocked(true) }
+        lockButton = button(R.drawable.ic_lock, "Lock the screen") {
+            // 3.0.3: felt as well as seen (Settings' light vibration).
+            Haptics.tick(root)
+            setLocked(true)
+        }
         fitButton = button(R.drawable.ic_aspect_ratio, "Picture size") { nextFit() }
         shuffleButton = button(R.drawable.ic_shuffle, "Shuffle") { toggleShuffle() }
         repeatButton = button(R.drawable.ic_repeat, "Repeat") { nextRepeat() }
         previousButton = button(R.drawable.ic_media_previous, "Previous") { LocalPlayback.previous() }
         nextButton = button(R.drawable.ic_media_next, "Next") { LocalPlayback.next() }
-        // 3.0.2: back and on by the double tap's step, as buttons too (VLC's -10 and +10).
-        back10 = button(R.drawable.ic_fast_rewind, "Back ${PlayerSettings.doubleTapSeconds} seconds") { jump(-1) }
-        forward10 = button(R.drawable.ic_fast_forward, "On ${PlayerSettings.doubleTapSeconds} seconds") { jump(1) }
-        speedButton = button(R.drawable.ic_speed, "Playback speed") { speedSheet() }
+        speedButton = button(R.drawable.ic_speed, "Playback speed") { speedPanel() }
         val small = dp(44)
-        // Lock and picture size at the start, the playing in the middle, speed at the end; which of
-        // them show depends on video or music, a playlist and the width (see arrangeButtons).
-        val row = LinearLayout(this).apply {
+        // 3.0.3: previous and next beside play (skipping back and on is the double taps' alone), at
+        // every width. Lock and picture size (music: shuffle) at the start, speed (music: repeat) at
+        // the end, the two sides as wide, so play stays in the middle (see arrangeButtons).
+        val start = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
+            gravity = Gravity.CENTER_VERTICAL or Gravity.START
             addView(lockButton, LinearLayout.LayoutParams(small, small))
             addView(shuffleButton, LinearLayout.LayoutParams(small, small))
             addView(fitButton, LinearLayout.LayoutParams(small, small))
-            addView(View(this@PlayerActivity), LinearLayout.LayoutParams(0, 1, 1f))
-            addView(previousButton, LinearLayout.LayoutParams(small, small))
-            addView(back10, LinearLayout.LayoutParams(small, small))
-            addView(playButton, LinearLayout.LayoutParams(dp(60), dp(60)).apply { setMargins(dp(14), 0, dp(14), 0) })
-            addView(forward10, LinearLayout.LayoutParams(small, small))
-            addView(nextButton, LinearLayout.LayoutParams(small, small))
-            addView(View(this@PlayerActivity), LinearLayout.LayoutParams(0, 1, 1f))
+        }
+        val end = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL or Gravity.END
             addView(speedButton, LinearLayout.LayoutParams(small, small))
             addView(repeatButton, LinearLayout.LayoutParams(small, small))
+        }
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(start, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            addView(previousButton, LinearLayout.LayoutParams(dp(48), dp(48)))
+            addView(playButton, LinearLayout.LayoutParams(dp(60), dp(60)).apply { setMargins(dp(18), 0, dp(18), 0) })
+            addView(nextButton, LinearLayout.LayoutParams(dp(48), dp(48)))
+            addView(end, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         }
         // The times above a bar as wide as the screen (3.0.2: the bar no longer shares its line).
         val times = LinearLayout(this).apply {
@@ -741,66 +815,71 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         root.addView(controls, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM))
     }
 
-    /** 3.0.2: the buttons that make sense now: video or music, a playlist or one item, what fits across. */
+    /**
+     * 3.0.2: the buttons that make sense now. 3.0.3: video: lock · fit | previous · play · next |
+     * speed; music: shuffle | previous · play · next | repeat.
+     */
     private fun arrangeButtons() {
         val video = videoMode
-        val queue = LocalPlayback.entries.size > 1
-        val dm = resources.displayMetrics
-        val narrow = dm.widthPixels / dm.density < 420
         for (v in listOf(lockButton, fitButton, rotateButton, subtitlesButton, speedButton)) v.visibility = if (video) View.VISIBLE else View.GONE
         for (v in listOf(shuffleButton, repeatButton)) v.visibility = if (video) View.GONE else View.VISIBLE
-        // Previous and next only for a playlist (music keeps them: they also restart the song).
-        val steps = if (queue || !video) View.VISIBLE else View.GONE
-        previousButton.visibility = steps
-        nextButton.visibility = steps
-        // Across a phone held upright, a playlist's buttons take the jumps' place.
-        val jumps = if (video && !(queue && narrow)) View.VISIBLE else View.GONE
-        back10.visibility = jumps
-        forward10.visibility = jumps
+        updateSteps()
     }
 
-    /** The jump buttons: back or on by the double tap's step. */
-    private fun jump(direction: Int) {
-        if (player == null) return
-        val step = PlayerSettings.doubleTapSeconds * 1000L
-        LocalPlayback.seekBy(direction * step)
-        showHud(if (direction < 0) R.drawable.ic_fast_rewind else R.drawable.ic_fast_forward, (if (direction < 0) "−" else "+") + "${step / 1000} s", null, null)
-        hideHudSoon()
-        scheduleHide()
+    /**
+     * 3.0.3: next is greyed out with nothing to go on to (repeating all counts as something);
+     * previous always works, starting this one again when there is none before it.
+     */
+    private fun updateSteps() {
+        val has = player?.hasNextMediaItem() == true
+        nextButton.isEnabled = has
+        nextButton.alpha = if (has) 1f else 0.4f
     }
 
     /**
      * 3.0.2, VLC's chips: under the title, only what isn't as usual (a speed, the sleep timer, the
-     * subtitles' timing). A tap opens its choices, holding puts it back. Looked at with the progress.
+     * subtitles' timing; 3.0.3: also for the video's own subtitles, and the sound's timing). A tap
+     * opens its choices, holding puts it back. Looked at with the progress.
      */
     private fun updateChips() {
         val p = player ?: return
         val speed = p.playbackParameters.speed
         val sleep = LocalPlayback.sleepLabel()
-        val delay = if (subFile != null && subDelayMs != 0L) "Subtitles ${delayLabel()}" else null
-        val key = "$speed|$sleep|$delay|$videoMode"
+        val subDelay = LocalPlayback.subtitleDelayMs
+        val soundDelay = LocalPlayback.soundDelayMs
+        val subtitlesOn = subFile != null || p.currentTracks.isTypeSelected(C.TRACK_TYPE_TEXT)
+        val subChip = if (videoMode && subtitlesOn && subDelay != 0L) "Subtitles ${Delays.label(subDelay)}" else null
+        val soundChip = if (videoMode && soundDelay != 0L) "Sound ${Delays.label(soundDelay)}" else null
+        val key = "$speed|$sleep|$subChip|$soundChip|$videoMode"
         if (key == chipsShown) return
         chipsShown = key
         chips.removeAllViews()
         if (abs(speed - 1f) > 0.01f) {
-            chips.addView(chip(R.drawable.ic_speed, PlayerSettings.speedLabel(speed), "Speed ${PlayerSettings.speedLabel(speed)}. Hold for normal speed", { speedSheet() }) {
+            chips.addView(chip(R.drawable.ic_speed, PlayerSettings.speedLabel(speed), "Speed ${PlayerSettings.speedLabel(speed)}. Hold for normal speed", { speedPanel() }) {
                 player?.setPlaybackSpeed(1f)
                 say("Normal speed")
                 updateChips()
             })
         }
         if (sleep != null) {
-            chips.addView(chip(R.drawable.ic_timer, "Sleep: $sleep", "Sleep timer: $sleep. Hold to turn it off", { sleepSheet() }) {
+            chips.addView(chip(R.drawable.ic_timer, "Sleep: $sleep", "Sleep timer: $sleep. Hold to turn it off", { sleepPanel() }) {
                 LocalPlayback.cancelSleep()
                 say("Sleep timer off")
                 updateChips()
             })
         }
-        if (delay != null) {
-            chips.addView(chip(R.drawable.ic_subtitles, delay, "$delay. Hold to put the subtitles back in time", { tracksSheet() }) {
-                subDelayMs = 0
-                saveSubtitleDelay()
+        if (subChip != null) {
+            chips.addView(chip(R.drawable.ic_subtitles, subChip, "$subChip. Hold to put the subtitles back in time", { tracksPanel() }) {
+                LocalPlayback.setSubtitleDelay(0)
                 refreshSubtitles()
+                say("Subtitles in time")
+                updateChips()
+            })
+        }
+        if (soundChip != null) {
+            chips.addView(chip(R.drawable.ic_volume, soundChip, "$soundChip. Hold to put the sound back in time", { tracksPanel() }) {
+                LocalPlayback.setSoundDelay(0)
+                say("Sound in time")
                 updateChips()
             })
         }
@@ -831,6 +910,11 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
 
     /** Video (black, controls over the picture) or music (Swift's colours, the cover, controls that stay). */
     private fun applyMode(video: Boolean) {
+        // 3.0.3: a panel is dark over a video and in Swift's colours on the music screen: made again then.
+        if (video != videoMode) {
+            panel.close(animate = false)
+            if (!video) hideUpNext()
+        }
         videoMode = video
         val fg = if (video) Color.WHITE else Palette.color(this, R.color.text_primary)
         val muted = if (video) 0xCCFFFFFF.toInt() else Palette.color(this, R.color.text_secondary)
@@ -948,7 +1032,12 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         if (!videoMode) layoutMusic()
         arrangeButtons()
         applySubtitleSize()
-        handler.post { moveSubtitles() }
+        // 3.0.3: a panel goes to the side or the bottom as the screen now is.
+        panel.relayout()
+        handler.post {
+            moveSubtitles()
+            placeUpNext()
+        }
     }
 
     // ------------------------------------------------------------------ showing the state
@@ -1004,6 +1093,8 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         if (videoMode && playing) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         if (playing) {
             scheduleHide()
+            // 3.0.3: playing on from the end goes to the next one by itself.
+            if (upNext != null) hideUpNext()
         } else {
             handler.removeCallbacks(autoHide)
             if (videoMode && !locked && player?.playbackState == Player.STATE_ENDED) showControls(true)
@@ -1065,9 +1156,15 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
 
     private fun time(ms: Long) = WatchPositions.format(ms.coerceAtLeast(0) / 1000.0)
 
-    /** A message above the controls when they are shown. */
-    private fun say(text: String, action: String? = null, long: Boolean = false, onAction: (() -> Unit)? = null) =
-        Messages.show(this, text, action = action, long = long, bottomOffset = if (controlsShown) controls.height else 0, onAction = onAction)
+    /** A message above the controls when they are shown (3.0.3: or above an upright panel). */
+    private fun say(text: String, action: String? = null, long: Boolean = false, onAction: (() -> Unit)? = null) {
+        val offset = when {
+            panel.isOpen && !panel.side -> panel.size
+            controlsShown -> controls.height
+            else -> 0
+        }
+        Messages.show(this, text, action = action, long = long, bottomOffset = offset, onAction = onAction)
+    }
 
     // ------------------------------------------------------------------ showing and hiding the controls
 
@@ -1089,6 +1186,8 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
     private fun showControls(show: Boolean) {
         if (show && locked) return
         if (!show && !videoMode) return
+        // 3.0.3: hidden while a panel is open (they come back when it closes).
+        if (show && videoMode && panel.isOpen) return
         controlsShown = show
         for (v in arrayOf<View>(topBar, controls)) {
             v.animate().cancel()
@@ -1103,6 +1202,7 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
             }
         }
         moveSubtitles()
+        placeUpNext()
         if (show) {
             updateProgress()
             scheduleHide()
@@ -1210,13 +1310,42 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         }
         val step = PlayerSettings.doubleTapSeconds * 1000L
         val now = SystemClock.uptimeMillis()
-        // Tapping on at the same side adds up (−10 s, −20 s…), as the HUD shows.
-        tapTotal = if (side == tapSide && now - tapAt < 1200) tapTotal + step else step
+        // Tapping on at the same side adds up (−10 s, −20 s…), as the HUD shows. 3.0.3: each further
+        // tap counts (PlayerGestures), within 1.2 s of the last, as on websites' videos.
+        tapTotal = PlayerRules.runTotal(tapTotal, tapSide, tapAt, side, now, step)
         tapSide = side
         tapAt = now
+        if (tapTotal == step) {
+            // 3.0.3: a run of skips starts: felt, and (once) how to skip further.
+            Haptics.tick(gestures)
+            if (!PlayerSettings.tapsHintShown) {
+                PlayerSettings.tapsHintShown = true
+                say("Tap again to skip more")
+            }
+        }
         LocalPlayback.seekBy(side * step)
-        showHud(if (side < 0) R.drawable.ic_fast_rewind else R.drawable.ic_fast_forward, (if (side < 0) "−" else "+") + "${tapTotal / 1000} s", null, null, side)
+        showHud(if (side < 0) R.drawable.ic_fast_rewind else R.drawable.ic_fast_forward, PlayerRules.runLabel(side, tapTotal), null, null, side)
         hideHudSoon()
+    }
+
+    /** 3.0.3: pinching out fills the screen (the black bars are cut off), pinching in fits the whole picture. */
+    override fun onPinch(fill: Boolean) {
+        if (!videoMode || locked || player == null) return
+        val want = if (fill) VideoFrame.Fit.ZOOM else VideoFrame.Fit.FIT
+        if (frame.fit == want) return
+        frame.fit = want
+        Haptics.tick(gestures)
+        showHud(R.drawable.ic_aspect_ratio, want.label, null, null)
+        hideHudSoon(900)
+    }
+
+    /** 3.0.3: [x], [y] (the screen's) on the subtitles' text, give or take a finger's width. */
+    override fun onSubtitles(x: Float, y: Float): Boolean {
+        if (!videoMode || subtitleText.visibility != View.VISIBLE || subtitleText.text.isNullOrEmpty()) return false
+        val r = Rect()
+        subtitleText.getHitRect(r)
+        r.inset(-dp(16), -dp(16))
+        return r.contains(x.toInt(), y.toInt())
     }
 
     override fun onHold(start: Boolean) {
@@ -1249,6 +1378,10 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
                 seekFrom = p.currentPosition
                 seekTarget = seekFrom
                 scrubStart()
+            }
+            PlayerGestures.SUBTITLES -> {
+                liftFrom = subLift
+                liftDrag = subLift
             }
         }
     }
@@ -1306,16 +1439,29 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
                 }
                 previewAt(seekTarget)
             }
+            // 3.0.3: the subtitles follow the finger up or down (for every video, until reset).
+            PlayerGestures.SUBTITLES -> {
+                liftDrag = PlayerRules.lift(liftFrom + amount)
+                moveSubtitles(animate = false)
+            }
         }
     }
 
     override fun onSwipeEnd(kind: Int) {
-        if (kind == PlayerGestures.SEEK) {
-            val moved = seekTarget != seekFrom
-            scrubEnd(if (moved) seekTarget else null)
-            hideHudSoon(if (moved) 300 else 0)
-        } else {
-            hideHudSoon()
+        when (kind) {
+            PlayerGestures.SEEK -> {
+                val moved = seekTarget != seekFrom
+                scrubEnd(if (moved) seekTarget else null)
+                hideHudSoon(if (moved) 300 else 0)
+            }
+            PlayerGestures.SUBTITLES -> {
+                if (!liftDrag.isNaN()) {
+                    subLift = liftDrag
+                    PlayerSettings.subtitleLift = subLift
+                }
+                liftDrag = Float.NaN
+            }
+            else -> hideHudSoon()
         }
     }
 
@@ -1415,15 +1561,66 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
 
     // ------------------------------------------------------------------ menus
 
-    private fun choiceRow(text: String, chosen: Boolean, icon: Int, onClick: () -> Unit): TextView =
-        Sheets.row(this, if (chosen) R.drawable.ic_check else icon, text) { onClick() }.apply {
+    private fun choiceRow(ctx: Context, text: String, chosen: Boolean, icon: Int, onClick: () -> Unit): TextView =
+        Sheets.row(ctx, if (chosen) R.drawable.ic_check else icon, text) { onClick() }.apply {
             if (chosen) {
-                setTextColor(Ui.accent(this@PlayerActivity))
-                setCompoundDrawablesRelativeWithIntrinsicBounds(Ui.icon(this@PlayerActivity, R.drawable.ic_check, Ui.accent(this@PlayerActivity)), null, null, null)
+                setTextColor(Ui.accent(ctx))
+                setCompoundDrawablesRelativeWithIntrinsicBounds(Ui.icon(ctx, R.drawable.ic_check, Ui.accent(ctx)), null, null, null)
             }
         }
 
-    private fun moreSheet() {
+    /** 3.0.3: a menu in the panel beside the video, its content made by [build] in the panel's colours. */
+    private fun showPanel(scrolls: Boolean = true, build: (Context) -> View) {
+        if (isFinishing) return
+        panel.show(build(panel.context()), scrolls)
+    }
+
+    /** A choice made in the panel: it closes, unless the choice put another menu in its place. */
+    private fun picked(run: () -> Unit) {
+        val before = panel.content
+        run()
+        if (panel.isOpen && panel.content === before) panel.close()
+    }
+
+    override fun panelOverVideo(): Boolean = videoMode
+
+    /**
+     * 3.0.3: a panel opened (or changed, or closed): the controls and Up next make way, Back closes it,
+     * and upright, the picture moves up to be whole above it (made smaller only if it must).
+     */
+    override fun onPanelMoved(side: Boolean, size: Int, animate: Boolean) {
+        val open = size > 0
+        panelBack.isEnabled = open
+        if (open) {
+            hideUpNext()
+            if (videoMode && controlsShown) showControls(false)
+        }
+        var shift = 0f
+        var scale = 1f
+        if (open && !side && videoMode) {
+            val r = frame.picture
+            val (move, s) = PlayerRules.fitAbove(r.top.toFloat(), r.bottom.toFloat(), (root.height - size).toFloat())
+            shift = move
+            scale = s
+            frame.pivotX = frame.width / 2f
+            frame.pivotY = r.exactCenterY()
+        }
+        videoShift = shift
+        videoScale = scale
+        frame.animate().cancel()
+        if (animate) {
+            frame.animate().translationY(shift).scaleX(scale).scaleY(scale).setDuration(180).setInterpolator(Motion.standard).start()
+        } else {
+            frame.translationY = shift
+            frame.scaleX = scale
+            frame.scaleY = scale
+        }
+        followPicture(animate)
+        moveSubtitles(animate)
+        if (!open && videoMode && !locked) showControls(true)
+    }
+
+    private fun morePanel() {
         val e = LocalPlayback.current ?: return
         val p = player ?: return
         val f = e.file
@@ -1434,14 +1631,16 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
             if (e.stream && !e.incognito) UrlUtils.host(e.uri.toString())?.removePrefix("www.") else null,
         ).joinToString(" · ")
         val actions = ArrayList<Sheets.Action>()
-        actions += Sheets.Action(R.drawable.ic_speed, "Speed ${PlayerSettings.speedLabel(p.playbackParameters.speed)}", primary = true) { speedSheet() }
-        actions += Sheets.Action(R.drawable.ic_timer, LocalPlayback.sleepLabel()?.let { "Sleep: $it" } ?: "Sleep timer", primary = true) { sleepSheet() }
+        actions += Sheets.Action(R.drawable.ic_speed, "Speed ${PlayerSettings.speedLabel(p.playbackParameters.speed)}", primary = true) { speedPanel() }
+        actions += Sheets.Action(R.drawable.ic_timer, LocalPlayback.sleepLabel()?.let { "Sleep: $it" } ?: "Sleep timer", primary = true) { sleepPanel() }
         if (videoMode) {
             actions += Sheets.Action(R.drawable.ic_headphones, if (LocalPlayback.background) "Stop playing in background" else "Play in background", primary = true) { toggleBackground() }
             actions += Sheets.Action(if (p.repeatMode == Player.REPEAT_MODE_ONE) R.drawable.ic_repeat_one else R.drawable.ic_repeat, "Repeat: ${repeatLabel(p.repeatMode)}") { nextRepeat() }
         }
+        // 3.0.3: only when this phone's sound can take an equalizer.
+        if (SoundEffects.info() != null) actions += Sheets.Action(R.drawable.ic_tune, "Equalizer", primary = !videoMode) { equalizerPanel() }
         if (videoMode && !e.private) actions += Sheets.Action(R.drawable.ic_image, "Screenshot") { screenshot() }
-        if (n > 1) actions += Sheets.Action(R.drawable.ic_view_list, "Playlist") { playlistSheet() }
+        if (n > 1) actions += Sheets.Action(R.drawable.ic_view_list, "Playlist") { playlistPanel() }
         actions += Sheets.Action(R.drawable.ic_reopen, "Open with another app") { openWith() }
         if (f != null) {
             actions += Sheets.Action(R.drawable.ic_share, "Share") { share(f) }
@@ -1451,7 +1650,147 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
             }
         }
         actions += Sheets.Action(R.drawable.ic_info, "Details") { details() }
-        Sheets.actions(this, e.title, sub, actions, icon = if (videoMode || e.private) null else LocalPlayback.smallArt, iconRes = if (videoMode) R.drawable.ic_movie else R.drawable.ic_music_note)
+        showPanel { ctx ->
+            Sheets.column(ctx).apply {
+                addView(Sheets.header(ctx, e.title, sub))
+                addView(Ui.divider(ctx))
+                addView(Sheets.actionList(ctx, actions) { a -> picked { a.run() } })
+            }
+        }
+    }
+
+    /**
+     * 3.0.3: ⋮ → Equalizer: on or off, the phone's own presets (or your own levels), a slider for
+     * each band (its middle, and its level in dB) and the bass boost when the phone has one. For
+     * everything the player plays; any change turns it on.
+     */
+    private fun equalizerPanel() {
+        val info = SoundEffects.info() ?: return
+        showPanel { ctx ->
+            val col = Sheets.column(ctx)
+            col.addView(Sheets.header(ctx, "Equalizer", "For everything Swift's player plays"))
+            val sw = SlimSwitch(ctx).apply { setChecked(PlayerSettings.equalizerOn, animate = false) }
+            val controls = ArrayList<View>()
+            fun showOn(on: Boolean) {
+                if (sw.isChecked != on) sw.setChecked(on, animate = true)
+                for (v in controls) v.alpha = if (on) 1f else 0.5f
+            }
+            col.addView(LinearLayout(ctx).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                minimumHeight = dp(56)
+                setPadding(dp(24), dp(4), dp(14), dp(4))
+                setBackgroundResource(RowHolder.selectableBackground(ctx))
+                addView(Ui.text(ctx, Ui.Type.BODY, "On"), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                addView(sw, LinearLayout.LayoutParams(dp(46), dp(32)))
+                accessibilityDelegate = SwitchRowAccessibility(sw)
+                contentDescription = "Equalizer"
+                setOnClickListener {
+                    val on = !sw.isChecked
+                    SoundEffects.setOn(on)
+                    showOn(on)
+                }
+            })
+            // The phone's presets, then your own levels.
+            val own = info.presets.size
+            val preset = PlayerSettings.equalizerPreset.takeIf { it in info.presets.indices } ?: own
+            val bars = ArrayList<SeekBar>()
+            val values = ArrayList<TextView>()
+            fun showLevels() {
+                val levels = SoundEffects.levels()
+                for (b in bars.indices) {
+                    val l = levels.getOrElse(b) { 0 }
+                    bars[b].progress = (l - info.minLevel) / 100
+                    values[b].text = EqualizerRules.level(l)
+                }
+            }
+            var presetGroup: ChipGroup? = null
+            if (info.presets.isNotEmpty()) {
+                col.addView(caption(ctx, "Presets"))
+                val row = Sheets.chipRow(ctx, info.presets + "Your own", preset) { i ->
+                    SoundEffects.usePreset(if (i < own) i else -1)
+                    showLevels()
+                    showOn(true)
+                }
+                presetGroup = (row as? ViewGroup)?.getChildAt(0) as? ChipGroup
+                controls += row
+                col.addView(row)
+            }
+            col.addView(caption(ctx, "Bands"))
+            val accent = ColorStateList.valueOf(Ui.accent(ctx))
+            for (b in 0 until info.bands) {
+                val value = Ui.text(ctx, Ui.Type.CAPTION, "").apply { gravity = Gravity.END or Gravity.CENTER_VERTICAL }
+                val bar = SeekBar(ctx).apply {
+                    max = ((info.maxLevel - info.minLevel) / 100).coerceAtLeast(1)
+                    progressTintList = accent
+                    thumbTintList = accent
+                    contentDescription = EqualizerRules.frequency(info.centres[b])
+                    setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                        override fun onProgressChanged(bar: SeekBar, progress: Int, fromUser: Boolean) {
+                            if (!fromUser) return
+                            val level = info.minLevel + progress * 100
+                            value.text = EqualizerRules.level(level)
+                            SoundEffects.setBand(b, level, save = false)
+                            presetGroup?.let { g -> g.getChildAt(own)?.let { g.check(it.id) } }
+                            showOn(true)
+                        }
+
+                        override fun onStartTrackingTouch(bar: SeekBar) {}
+
+                        override fun onStopTrackingTouch(bar: SeekBar) = SoundEffects.setBand(b, info.minLevel + bar.progress * 100, save = true)
+                    })
+                }
+                bars += bar
+                values += value
+                val line = LinearLayout(ctx).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(dp(24), 0, dp(24), 0)
+                    minimumHeight = dp(44)
+                    addView(Ui.text(ctx, Ui.Type.LABEL, EqualizerRules.frequency(info.centres[b])), LinearLayout.LayoutParams(dp(64), ViewGroup.LayoutParams.WRAP_CONTENT))
+                    addView(bar, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                    addView(value, LinearLayout.LayoutParams(dp(60), ViewGroup.LayoutParams.WRAP_CONTENT))
+                }
+                controls += line
+                col.addView(line)
+            }
+            showLevels()
+            if (info.bass) {
+                col.addView(caption(ctx, "Bass boost"))
+                val value = Ui.text(ctx, Ui.Type.CAPTION, EqualizerRules.bassLabel(PlayerSettings.bassBoost)).apply { gravity = Gravity.END or Gravity.CENTER_VERTICAL }
+                val bar = SeekBar(ctx).apply {
+                    max = 20
+                    progress = PlayerSettings.bassBoost / 50
+                    progressTintList = accent
+                    thumbTintList = accent
+                    contentDescription = "Bass boost"
+                    setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                        override fun onProgressChanged(bar: SeekBar, progress: Int, fromUser: Boolean) {
+                            if (!fromUser) return
+                            value.text = EqualizerRules.bassLabel(progress * 50)
+                            SoundEffects.setBass(progress * 50, save = false)
+                            if (progress > 0) showOn(true)
+                        }
+
+                        override fun onStartTrackingTouch(bar: SeekBar) {}
+
+                        override fun onStopTrackingTouch(bar: SeekBar) = SoundEffects.setBass(bar.progress * 50, save = true)
+                    })
+                }
+                val line = LinearLayout(ctx).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(dp(24), 0, dp(24), 0)
+                    minimumHeight = dp(44)
+                    addView(bar, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                    addView(value, LinearLayout.LayoutParams(dp(60), ViewGroup.LayoutParams.WRAP_CONTENT))
+                }
+                controls += line
+                col.addView(line)
+            }
+            showOn(PlayerSettings.equalizerOn)
+            col
+        }
     }
 
     /** 3.0: Android 7 asks for storage access the first time a screenshot is saved in Pictures. */
@@ -1526,117 +1865,132 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         }
     }
 
-    private fun speedSheet() {
+    private fun speedPanel() {
         val p = player ?: return
         val speeds = PlayerSettings.SPEEDS
         val now = p.playbackParameters.speed
         val selected = speeds.indices.minByOrNull { abs(speeds[it] - now) } ?: 3
-        val col = Sheets.column(this)
-        col.addView(Sheets.header(this, "Playback speed", "Voices keep their pitch"))
-        col.addView(Sheets.chips(this, speeds.map { PlayerSettings.speedLabel(it) }, selected) { i -> player?.setPlaybackSpeed(speeds[i]) })
-        if (gesturesEnabled) col.addView(Sheets.note(this, "Holding a finger on the video plays it at 2× until you let go."))
-        Sheets.sheet(this, col).showImmersive()
+        showPanel { ctx ->
+            Sheets.column(ctx).apply {
+                addView(Sheets.header(ctx, "Playback speed", "Voices keep their pitch"))
+                addView(Sheets.chips(ctx, speeds.map { PlayerSettings.speedLabel(it) }, selected) { i -> player?.setPlaybackSpeed(speeds[i]) })
+                if (gesturesEnabled) addView(Sheets.note(ctx, "Holding a finger on the video plays it at 2× until you let go."))
+            }
+        }
     }
 
-    private fun sleepSheet() {
+    private fun sleepPanel() {
         val kind = if (videoMode) "video" else "song"
         val left = when {
             LocalPlayback.sleepAtEnd -> "Playing stops at the end of this $kind"
             LocalPlayback.sleepEndsAt > 0 -> "Playing stops in ${LocalPlayback.sleepLabel()?.removeSuffix(" left")}"
             else -> "Playing stops after a while; the sound fades out"
         }
-        val col = Sheets.column(this)
-        col.addView(Sheets.header(this, "Sleep timer", left))
-        lateinit var d: BottomSheetDialog
-        for (m in LocalPlayback.SLEEP_CHOICES) {
-            col.addView(Sheets.row(this, R.drawable.ic_timer, "In $m minutes") {
-                d.dismiss()
-                LocalPlayback.setSleep(m)
-                say("Playing stops in $m minutes")
-            })
+        showPanel { ctx ->
+            Sheets.column(ctx).apply {
+                addView(Sheets.header(ctx, "Sleep timer", left))
+                for (m in LocalPlayback.SLEEP_CHOICES) {
+                    addView(Sheets.row(ctx, R.drawable.ic_timer, "In $m minutes") {
+                        panel.close()
+                        LocalPlayback.setSleep(m)
+                        say("Playing stops in $m minutes")
+                    })
+                }
+                addView(Sheets.row(ctx, R.drawable.ic_timer, "At the end of this $kind") {
+                    panel.close()
+                    LocalPlayback.setSleep(LocalPlayback.SLEEP_END)
+                    say("Playing stops at the end of this $kind")
+                })
+                if (LocalPlayback.sleepLabel() != null) {
+                    addView(Sheets.row(ctx, R.drawable.ic_close, "Turn the timer off") {
+                        panel.close()
+                        LocalPlayback.cancelSleep()
+                        say("Sleep timer off")
+                    })
+                }
+            }
         }
-        col.addView(Sheets.row(this, R.drawable.ic_timer, "At the end of this $kind") {
-            d.dismiss()
-            LocalPlayback.setSleep(LocalPlayback.SLEEP_END)
-            say("Playing stops at the end of this $kind")
-        })
-        if (LocalPlayback.sleepLabel() != null) {
-            col.addView(Sheets.row(this, R.drawable.ic_close, "Turn the timer off") {
-                d.dismiss()
-                LocalPlayback.cancelSleep()
-                say("Sleep timer off")
-            })
-        }
-        d = Sheets.sheet(this, col)
-        d.showImmersive()
     }
 
-    private fun rotationSheet() {
-        val col = Sheets.column(this)
-        col.addView(Sheets.header(this, "Turn the screen", "For every video, until you change it"))
-        lateinit var d: BottomSheetDialog
-        for (key in PlayerSettings.ROTATIONS) {
-            col.addView(choiceRow(PlayerSettings.rotationLabel(key), key == PlayerSettings.rotation, R.drawable.ic_rotate) {
-                d.dismiss()
-                PlayerSettings.rotation = key
-                applyRotation()
-            })
+    private fun rotationPanel() {
+        showPanel { ctx ->
+            Sheets.column(ctx).apply {
+                addView(Sheets.header(ctx, "Turn the screen", "For every video, until you change it"))
+                for (key in PlayerSettings.ROTATIONS) {
+                    addView(choiceRow(ctx, PlayerSettings.rotationLabel(key), key == PlayerSettings.rotation, R.drawable.ic_rotate) {
+                        panel.close()
+                        PlayerSettings.rotation = key
+                        applyRotation()
+                    })
+                }
+            }
         }
-        d = Sheets.sheet(this, col)
-        d.showImmersive()
     }
 
-    private fun playlistSheet() {
+    private fun playlistPanel() {
         val entries = LocalPlayback.entries
         if (entries.size < 2) return
         val now = LocalPlayback.index
-        val col = Sheets.column(this)
-        col.addView(Sheets.header(this, if (videoMode) "Videos in this folder" else "Songs in this folder", "${entries.size}, by name"))
-        lateinit var d: BottomSheetDialog
-        val accent = Ui.accent(this)
-        val text = Palette.color(this, R.color.text_primary)
-        val adapter = RowAdapter<Int>(
-            bind = { h, i ->
-                val e = entries[i]
-                h.set(if (i == now) R.drawable.ic_play else if (e.video) R.drawable.ic_movie else R.drawable.ic_music_note, e.title, if (i == now) "Playing now" else null)
-                h.title.setTextColor(if (i == now) accent else text)
-            },
-            onClick = { i ->
-                d.dismiss()
-                if (i != LocalPlayback.index) LocalPlayback.jumpTo(i)
-            },
-        )
-        adapter.items = entries.indices.toList()
-        val list = RecyclerView(this).apply {
-            layoutManager = LinearLayoutManager(this@PlayerActivity)
-            this.adapter = adapter
+        // The list scrolls itself (in the panel's room), showing the one playing.
+        showPanel(scrolls = false) { ctx ->
+            val accent = Ui.accent(ctx)
+            val text = Palette.color(ctx, R.color.text_primary)
+            val adapter = RowAdapter<Int>(
+                bind = { h, i ->
+                    val e = entries[i]
+                    h.set(if (i == now) R.drawable.ic_play else if (e.video) R.drawable.ic_movie else R.drawable.ic_music_note, e.title, if (i == now) "Playing now" else null)
+                    h.title.setTextColor(if (i == now) accent else text)
+                },
+                onClick = { i ->
+                    panel.close()
+                    if (i != LocalPlayback.index) LocalPlayback.jumpTo(i)
+                },
+            )
+            adapter.items = entries.indices.toList()
+            val list = RecyclerView(ctx).apply {
+                layoutManager = LinearLayoutManager(ctx)
+                this.adapter = adapter
+                isVerticalScrollBarEnabled = false
+                overScrollMode = View.OVER_SCROLL_NEVER
+            }
+            val height = minOf(entries.size * dp(64), (panel.maxHeight() - dp(96)).coerceAtLeast(dp(128)))
+            (list.layoutManager as LinearLayoutManager).scrollToPositionWithOffset(now, dp(64))
+            Sheets.column(ctx).apply {
+                addView(Sheets.header(ctx, if (videoMode) "Videos in this folder" else "Songs in this folder", "${entries.size}, by name"))
+                addView(list, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, height))
+            }
         }
-        // A long list scrolls in a part of the sheet, showing the one playing.
-        val height = minOf(entries.size * dp(64), (resources.displayMetrics.heightPixels * 0.6f).toInt())
-        col.addView(list, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, height))
-        (list.layoutManager as LinearLayoutManager).scrollToPositionWithOffset(now, dp(64))
-        d = Sheets.sheet(this, col)
-        d.showImmersive()
     }
 
     // ------------------------------------------------------------------ subtitles
 
-    /** A new video: its subtitle file next to it if there is one, otherwise its own default ones. */
+    /**
+     * A new video: its subtitle file next to it if there is one, otherwise its own default ones.
+     * 3.0.3: or the subtitles chosen for it last time (off, a file still there, or one of its own,
+     * chosen again once its tracks are known). Their timing is LocalPlayback's, kept with the file.
+     */
     private fun loadSubtitles(e: LocalPlayback.Entry) {
         subToken++
         subFile = null
         subFiles = emptyList()
         subAdded.clear()
         subReaders.clear()
+        subSources.clear()
         subOff = false
-        subDelayMs = 0
+        pendingSubtitles = null
         handler.removeCallbacks(subTicker)
         showCues(emptyList())
         setPlayerText(true, null)
         val f = e.file ?: return
         if (!e.video) return
-        // 3.0.1: the timing chosen for this file last time.
-        subDelayMs = LocalMedia.subtitleDelay(this, f)
+        val kept = LocalPlayback.trackChoice?.takeIf { it.hasSubtitles }
+        if (kept?.subtitlesOff == true) {
+            subtitlesOff()
+        } else if (kept?.hasOwnSubtitles == true) {
+            pendingSubtitles = kept
+            player?.currentTracks?.takeIf { !it.isEmpty }?.let { chooseKeptSubtitles(it) }
+        }
+        val keptFile = kept?.subtitleFile
         val token = subToken
         val lang = PlayerSettings.subtitleLanguage
         LocalPlayback.io.execute {
@@ -1644,58 +1998,101 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
             // 2.9.2: also a torrent's Subs folder; from there only an English file shows by itself
             // (3.0.1: or one in the language chosen in Settings).
             val found = beside + Subtitles.inSubsFolder(f, lang)
-            val firstFile = beside.firstOrNull() ?: found.firstOrNull { Subtitles.inLanguage(it, lang.ifEmpty { "en" }) }
-            val first = firstFile?.let { Subtitles.read(it) }
+            // 3.0.3: the file chosen last time, if it's still there. With a choice kept nothing else
+            // shows by itself, unless it was a file that has gone.
+            val again = keptFile?.let { src -> readSource(src)?.let { Triple(it.first, it.second, src) } }
+            val usual = kept == null || (keptFile != null && again == null)
+            val firstFile = if (!usual) null else beside.firstOrNull() ?: found.firstOrNull { Subtitles.inLanguage(it, lang.ifEmpty { "en" }) }
+            val first = firstFile?.let { ff -> Subtitles.read(ff)?.let { it to ff } }
             handler.post {
                 if (token != subToken || isDestroyed) return@post
                 subFiles = found
-                // A subtitle file named like the video is what its owner wants: shown rather than the video's own.
-                if (first != null && !subOff && subFile == null) {
-                    firstFile?.let { ff -> subReaders[first] = { enc -> Subtitles.read(ff, enc) } }
-                    useSubtitles(first)
+                if (subOff || subFile != null) return@post
+                if (again != null) {
+                    val (track, reader, src) = again
+                    subReaders[track] = reader
+                    subSources[track] = src
+                    if (subFiles.none { it.name == track.label }) subAdded += track
+                    useSubtitles(track)
+                    L.d("Player: showing the subtitle file chosen last time")
+                } else if (first != null) {
+                    // A subtitle file named like the video is what its owner wants: shown rather than the video's own.
+                    val (track, ff) = first
+                    subReaders[track] = { enc -> Subtitles.read(ff, enc) }
+                    subSources[track] = ff.path
+                    useSubtitles(track)
                     L.d("Player: showing a subtitle file found next to the video")
                 }
             }
         }
     }
 
+    /** 3.0.3: a subtitle file kept as chosen (its path, or a content:// address), read again with how to read it once more; null if it's gone. Off the main thread. */
+    private fun readSource(source: String): Pair<Subtitles.Track, (String) -> Subtitles.Track?>? = try {
+        if (source.startsWith("content:")) {
+            val uri = Uri.parse(source)
+            val name = displayName(uri) ?: uri.lastPathSegment?.substringAfterLast('/') ?: "subtitles"
+            val reader = { enc: String? -> contentResolver.openInputStream(uri)?.use { Subtitles.read(it, name, enc) } }
+            reader(null)?.let { it to { enc: String -> reader(enc) } }
+        } else {
+            val file = File(source)
+            if (!file.isFile) null else Subtitles.read(file)?.let { it to { enc: String -> Subtitles.read(file, enc) } }
+        }
+    } catch (e: Exception) {
+        L.w("Player: the subtitles chosen last time can't be read", e)
+        null
+    }
+
+    /** 3.0.3: the video's own subtitles chosen last time, chosen again now its tracks are known. */
+    private fun chooseKeptSubtitles(tracks: Tracks) {
+        val want = pendingSubtitles ?: return
+        val options = ArrayList<Pair<Tracks.Group, Int>>()
+        for (g in tracks.groups) if (g.type == C.TRACK_TYPE_TEXT) for (t in 0 until g.length) options += g to t
+        pendingSubtitles = null
+        val i = TrackChoice.match(want.subtitleLanguage, want.subtitleLabel, options.map { (g, t) -> g.getTrackFormat(t).let { it.language to it.label } })
+        if (i < 0 || subOff || subFile != null) return
+        val (g, t) = options[i]
+        if (!g.isTrackSelected(t)) useVideoSubtitles(g, t)
+    }
+
     /** 3.0: how each subtitle file shown can be read again in another encoding (the subtitle sheet's choice). */
     private val subReaders = HashMap<Subtitles.Track, (String) -> Subtitles.Track?>()
 
     /** 3.0: the encodings to read the subtitles in, when their letters come out wrong. */
-    private fun encodingSheet() {
+    private fun encodingPanel() {
         val track = subFile ?: return
         val reader = subReaders[track] ?: return
-        val col = Sheets.column(this)
-        col.addView(Sheets.header(this, "Text encoding", "Choose another when letters show as boxes or strange signs"))
-        lateinit var d: BottomSheetDialog
-        for ((name, label) in Subtitles.ENCODINGS) {
-            col.addView(choiceRow(label, name.equals(track.encoding, ignoreCase = true), R.drawable.ic_translate) {
-                d.dismiss()
-                val token = subToken
-                LocalPlayback.io.execute {
-                    val again = try {
-                        reader(name)
-                    } catch (e: Exception) {
-                        L.w("Player: subtitles in another encoding", e)
-                        null
-                    }
-                    handler.post {
-                        if (token != subToken || isDestroyed) return@post
-                        if (again == null) {
-                            say("Swift can't read these subtitles that way")
-                            return@post
+        showPanel { ctx ->
+            Sheets.column(ctx).apply {
+                addView(Sheets.header(ctx, "Text encoding", "Choose another when letters show as boxes or strange signs"))
+                for ((name, label) in Subtitles.ENCODINGS) {
+                    addView(choiceRow(ctx, label, name.equals(track.encoding, ignoreCase = true), R.drawable.ic_translate) {
+                        panel.close()
+                        val token = subToken
+                        LocalPlayback.io.execute {
+                            val again = try {
+                                reader(name)
+                            } catch (e: Exception) {
+                                L.w("Player: subtitles in another encoding", e)
+                                null
+                            }
+                            handler.post {
+                                if (token != subToken || isDestroyed) return@post
+                                if (again == null) {
+                                    say("Swift can't read these subtitles that way")
+                                    return@post
+                                }
+                                subReaders[again] = reader
+                                subSources[track]?.let { subSources[again] = it }
+                                val at = subAdded.indexOf(track)
+                                if (at >= 0) subAdded[at] = again
+                                useSubtitles(again)
+                            }
                         }
-                        subReaders[again] = reader
-                        val at = subAdded.indexOf(track)
-                        if (at >= 0) subAdded[at] = again
-                        useSubtitles(again)
-                    }
+                    })
                 }
-            })
+            }
         }
-        d = Sheets.sheet(this, col)
-        d.showImmersive()
     }
 
     /** The player's own subtitles of the video on or off, [override] choosing which. */
@@ -1741,7 +2138,10 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
                     say("Swift can't read “${f.name}” as subtitles")
                 } else {
                     subReaders[track] = { enc -> Subtitles.read(f, enc) }
+                    subSources[track] = f.path
                     useSubtitles(track)
+                    // 3.0.3: chosen for this file next time too.
+                    LocalPlayback.rememberTracks { it.withSubtitleFile(f.path) }
                 }
             }
         }
@@ -1754,6 +2154,16 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         if (again) LocalPlayback.play()
         if (uri == null) return@registerForActivityResult
         val token = subToken
+        // 3.0.3: kept as chosen for this file (a file on the phone, not incognito's or Private's), so
+        // the picked file stays readable after Swift closes.
+        val entry = LocalPlayback.current
+        val keep = entry != null && entry.file != null && !entry.private
+        if (keep) {
+            try {
+                contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            } catch (_: Exception) {
+            }
+        }
         LocalPlayback.io.execute {
             val name = displayName(uri) ?: uri.lastPathSegment?.substringAfterLast('/') ?: "subtitles"
             val track = try {
@@ -1769,7 +2179,9 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
                 } else {
                     subAdded += track
                     subReaders[track] = { enc -> contentResolver.openInputStream(uri)?.use { Subtitles.read(it, name, enc) } }
+                    subSources[track] = uri.toString()
                     useSubtitles(track)
+                    if (keep) LocalPlayback.rememberTracks { it.withSubtitleFile(uri.toString()) }
                     say("Showing $name")
                 }
             }
@@ -1777,65 +2189,76 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
     }
 
     /**
-     * 3.0.2: sound and subtitles in one sheet (VLC's Tracks): the sound tracks first when the video
-     * has several, then the subtitles with their size, colour, background, timing and letters.
+     * 3.0.2: sound and subtitles in one place (VLC's Tracks). 3.0.3: a panel beside the video, in
+     * this order: the sound tracks (when there are several), the subtitles (and "Add subtitles…"),
+     * the timing of the subtitles and of the sound, then how the subtitles look. What is chosen is
+     * kept for a file on the phone (not incognito's or Private's) and chosen again next time.
      */
-    private fun tracksSheet() {
+    private fun tracksPanel() {
         val p = player ?: return
-        val col = Sheets.column(this)
-        lateinit var d: BottomSheetDialog
+        showPanel { ctx -> tracksContent(ctx, p) }
+    }
+
+    private fun tracksContent(ctx: Context, p: ExoPlayer): View {
+        val col = Sheets.column(ctx)
         val sounds = p.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
         val severalSounds = sounds.sumOf { it.length } > 1
-        col.addView(Sheets.header(this, if (severalSounds) "Sound and subtitles" else "Subtitles", null))
+        col.addView(Sheets.header(ctx, "Sound and subtitles", null))
         if (severalSounds) {
-            col.addView(Sheets.label(this, "Sound"))
+            col.addView(Sheets.label(ctx, "Sound"))
             var s = 0
             for (g in sounds) {
                 for (t in 0 until g.length) {
                     s++
-                    val name = trackName(g.getTrackFormat(t), s, "Sound") + if (!g.isTrackSupported(t, true)) " (this phone can't play it)" else ""
-                    col.addView(choiceRow(name, g.isTrackSelected(t), R.drawable.ic_volume) {
-                        d.dismiss()
+                    val f = g.getTrackFormat(t)
+                    val name = trackName(f, s, "Sound") + if (!g.isTrackSupported(t, true)) " (this phone can't play it)" else ""
+                    col.addView(choiceRow(ctx, name, g.isTrackSelected(t), R.drawable.ic_volume) {
+                        panel.close()
                         p.trackSelectionParameters = p.trackSelectionParameters.buildUpon()
                             .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, false)
                             .setOverrideForType(TrackSelectionOverride(g.mediaTrackGroup, t))
                             .build()
+                        LocalPlayback.rememberTracks { it.withSound(f.language, f.label) }
                     })
                 }
             }
-            col.addView(Sheets.label(this, "Subtitles", top = 16))
         }
+        col.addView(Sheets.label(ctx, "Subtitles", top = if (severalSounds) 16 else 12))
         val groups = p.currentTracks.groups.filter { it.type == C.TRACK_TYPE_TEXT }
         val ownOn = subFile == null && !subOff && groups.any { it.isSelected }
-        col.addView(choiceRow("Off", subFile == null && !ownOn, R.drawable.ic_close) {
-            d.dismiss()
+        col.addView(choiceRow(ctx, "Off", subFile == null && !ownOn, R.drawable.ic_close) {
+            panel.close()
             subtitlesOff()
+            LocalPlayback.rememberTracks { it.withSubtitlesOff() }
         })
         var n = 0
         for (g in groups) {
             for (t in 0 until g.length) {
                 n++
-                col.addView(choiceRow(trackName(g.getTrackFormat(t), n, "Subtitles"), subFile == null && !subOff && g.isTrackSelected(t), R.drawable.ic_subtitles) {
-                    d.dismiss()
+                val f = g.getTrackFormat(t)
+                col.addView(choiceRow(ctx, trackName(f, n, "Subtitles"), subFile == null && !subOff && g.isTrackSelected(t), R.drawable.ic_subtitles) {
+                    panel.close()
                     useVideoSubtitles(g, t)
+                    LocalPlayback.rememberTracks { it.withSubtitles(f.language, f.label) }
                 })
             }
         }
         for (f in subFiles) {
-            col.addView(choiceRow(f.name, subFile?.label == f.name, R.drawable.ic_subtitles) {
-                d.dismiss()
+            col.addView(choiceRow(ctx, f.name, subFile?.label == f.name, R.drawable.ic_subtitles) {
+                panel.close()
                 readSubtitles(f)
             })
         }
         for (track in subAdded) {
             if (subFiles.any { it.name == track.label }) continue
-            col.addView(choiceRow(track.label, subFile === track, R.drawable.ic_subtitles) {
-                d.dismiss()
+            col.addView(choiceRow(ctx, track.label, subFile === track, R.drawable.ic_subtitles) {
+                panel.close()
                 useSubtitles(track)
+                subSources[track]?.let { src -> LocalPlayback.rememberTracks { it.withSubtitleFile(src) } }
             })
         }
-        col.addView(Sheets.row(this, R.drawable.ic_add, "Add subtitles…") {
-            d.dismiss()
+        col.addView(Sheets.row(ctx, R.drawable.ic_add, "Add subtitles…") {
+            panel.close()
             resumeAfterPick = LocalPlayback.playing
             try {
                 pickSubtitles.launch(arrayOf("*/*"))
@@ -1844,85 +2267,136 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
                 say("This phone has no app to pick files with")
             }
         })
-        col.addView(Sheets.label(this, "Text size"))
+        // 3.0.3: one timing for the video's own subtitles and subtitle files, and the sound's.
+        col.addView(Sheets.label(ctx, "Timing", top = 16))
+        col.addView(timingRow(ctx, "Subtitles", { LocalPlayback.subtitleDelayMs }) { ms ->
+            LocalPlayback.setSubtitleDelay(ms)
+            refreshSubtitles()
+        })
+        col.addView(timingRow(ctx, "Sound", { LocalPlayback.soundDelayMs }) { ms -> LocalPlayback.setSoundDelay(ms) })
+        col.addView(Sheets.label(ctx, "Subtitle style", top = 16))
+        col.addView(caption(ctx, "Size"))
         val sizes = PlayerSettings.SUBTITLE_SIZES
         val size = PlayerSettings.subtitleSize
-        col.addView(Sheets.chipRow(this, sizes.map { "$it%" }, sizes.indices.minByOrNull { abs(sizes[it] - size) } ?: 1) { i ->
+        col.addView(Sheets.chipRow(ctx, sizes.map { "$it%" }, sizes.indices.minByOrNull { abs(sizes[it] - size) } ?: 1) { i ->
             PlayerSettings.subtitleSize = sizes[i]
             applySubtitleSize()
         })
-        col.addView(Sheets.label(this, "Colour", top = 16))
-        col.addView(Sheets.chipRow(this, PlayerSettings.SUBTITLE_COLOURS.map { it.first }, PlayerSettings.subtitleColour) { i ->
+        col.addView(caption(ctx, "Colour"))
+        col.addView(Sheets.chipRow(ctx, PlayerSettings.SUBTITLE_COLOURS.map { it.first }, PlayerSettings.subtitleColour) { i ->
             PlayerSettings.subtitleColour = i
             applySubtitleSize()
         })
-        col.addView(Sheets.label(this, "Background", top = 16))
-        col.addView(Sheets.chipRow(this, PlayerSettings.SUBTITLE_BACKGROUNDS, PlayerSettings.subtitleBackground) { i ->
+        col.addView(caption(ctx, "Background"))
+        col.addView(Sheets.chipRow(ctx, PlayerSettings.SUBTITLE_BACKGROUNDS, PlayerSettings.subtitleBackground) { i ->
             PlayerSettings.subtitleBackground = i
             applySubtitleSize()
         })
-        col.addView(Sheets.label(this, "Timing", top = 16))
-        col.addView(delayRow(subFile != null))
-        col.addView(Sheets.note(this, if (subFile != null) "Earlier if the words come after the voices, later if they come before." else "Timing can be changed for subtitle files. The video's own subtitles keep its timing."))
         // 3.0: a subtitle file's letters garbled (an old file in another alphabet's encoding): read it another way.
         val shown = subFile
         if (shown != null && subReaders[shown] != null) {
-            col.addView(Sheets.label(this, "Letters", top = 16))
-            col.addView(Sheets.row(this, R.drawable.ic_translate, "Text encoding: ${Subtitles.encodingLabel(shown.encoding)}") {
-                d.dismiss()
-                encodingSheet()
-            })
+            col.addView(caption(ctx, "Letters"))
+            col.addView(Sheets.row(ctx, R.drawable.ic_translate, "Text encoding: ${Subtitles.encodingLabel(shown.encoding)}") { encodingPanel() })
         }
-        d = Sheets.sheet(this, col)
-        d.showImmersive()
+        // 3.0.3: where they sit, dragged on the video (for every video).
+        if (subLift != 0f) {
+            lateinit var reset: View
+            reset = Sheets.row(ctx, R.drawable.ic_refresh, "Reset position") {
+                subLift = 0f
+                PlayerSettings.subtitleLift = 0f
+                moveSubtitles()
+                reset.visibility = View.GONE
+            }
+            col.addView(reset)
+        }
+        if (gesturesEnabled) col.addView(Sheets.note(ctx, "Drag the subtitles on the video to move them up or down."))
+        return col
     }
 
-    /** Earlier · how far · Later, a quarter of a second a tap; tapping the middle puts it back. */
-    private fun delayRow(enabled: Boolean): View {
-        val value = Ui.text(this, Ui.Type.SUBTITLE, delayLabel()).apply {
+    /** A small line naming the choices under it. */
+    private fun caption(ctx: Context, text: String): TextView = Ui.text(ctx, Ui.Type.CAPTION, text).apply {
+        setPadding(dp(24), dp(10), dp(24), dp(4))
+    }
+
+    /**
+     * 3.0.3: "Subtitles", then − 0.3 s later +: a tenth of a second a tap, on and on while held (after
+     * 0.4 s, every 0.12 s), up to 10 s either way; tapping the value puts it back in time.
+     */
+    private fun timingRow(ctx: Context, name: String, value: () -> Long, set: (Long) -> Unit): View {
+        val shown = Ui.text(ctx, Ui.Type.LABEL, "").apply {
             gravity = Gravity.CENTER
-            setOnClickListener {
-                subDelayMs = 0
-                text = delayLabel()
-                refreshSubtitles()
-                saveSubtitleDelay()
+            minHeight = dp(40)
+            background = Ui.ripple(ctx, null, 20)
+        }
+        fun refresh() {
+            val label = Delays.label(value())
+            shown.text = label
+            shown.contentDescription = "$name: $label. Tap to put it back in time"
+        }
+        refresh()
+        shown.setOnClickListener {
+            set(0)
+            refresh()
+        }
+        fun pill(sign: String, direction: Int, description: String) = Ui.text(ctx, Ui.Type.TITLE, sign).apply {
+            gravity = Gravity.CENTER
+            background = Ui.ripple(ctx, Ui.shape(ctx, Palette.color(ctx, R.color.surface_alt), 20), 20)
+            contentDescription = description
+            holdToRepeat(this) {
+                set(Delays.step(value(), direction))
+                refresh()
             }
         }
-        fun pill(label: String, step: Long) = Ui.text(this, Ui.Type.LABEL, label).apply {
-            gravity = Gravity.CENTER
-            background = Ui.ripple(this@PlayerActivity, Ui.shape(this@PlayerActivity, Palette.color(this@PlayerActivity, R.color.surface_alt), 20), 20)
-            setPadding(dp(18), dp(10), dp(18), dp(10))
-            isEnabled = enabled
-            alpha = if (enabled) 1f else 0.4f
-            setOnClickListener {
-                subDelayMs += step
-                value.text = delayLabel()
-                refreshSubtitles()
-                saveSubtitleDelay()
-            }
-        }
-        return LinearLayout(this).apply {
+        val row = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(20), dp(4), dp(20), dp(4))
-            addView(pill("Earlier", -250))
-            addView(value, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-            addView(pill("Later", 250))
+            setPadding(dp(20), 0, dp(20), dp(4))
+            addView(pill("−", -1, "$name earlier"), LinearLayout.LayoutParams(dp(52), dp(40)))
+            addView(shown, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                marginStart = dp(8)
+                marginEnd = dp(8)
+            })
+            addView(pill("+", 1, "$name later"), LinearLayout.LayoutParams(dp(52), dp(40)))
+        }
+        return LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(caption(ctx, name))
+            addView(row)
         }
     }
 
-    /** 3.0.1: the timing stays with the file (a file on the phone; a website's video isn't kept). */
-    private fun saveSubtitleDelay() {
-        val f = LocalPlayback.current?.file ?: return
-        LocalMedia.saveSubtitleDelay(this, f, subDelayMs)
-    }
-
-    private fun delayLabel(): String {
-        val s = String.format(Locale.US, "%.2f", abs(subDelayMs) / 1000.0)
-        return when {
-            subDelayMs > 0 -> "$s s later"
-            subDelayMs < 0 -> "$s s earlier"
-            else -> "In time"
+    /** 3.0.3: [v] steps once a tap, and on and on while held (after 0.4 s, every 0.12 s). */
+    @SuppressLint("ClickableViewAccessibility")
+    private fun holdToRepeat(v: View, step: () -> Unit) {
+        var held = false
+        val again = object : Runnable {
+            override fun run() {
+                if (!held) v.parent?.requestDisallowInterceptTouchEvent(true)
+                held = true
+                step()
+                v.postDelayed(this, 120)
+            }
+        }
+        // A screen reader's activation (no touch) is one step.
+        v.setOnClickListener { step() }
+        v.setOnTouchListener { view, ev ->
+            when (ev.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    held = false
+                    view.isPressed = true
+                    view.postDelayed(again, 400)
+                }
+                MotionEvent.ACTION_UP -> {
+                    view.isPressed = false
+                    view.removeCallbacks(again)
+                    if (!held) step()
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    view.isPressed = false
+                    view.removeCallbacks(again)
+                }
+            }
+            true
         }
     }
 
@@ -1931,14 +2405,14 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         if (subFile != null) handler.post(subTicker)
     }
 
-    /** A subtitle file's lines, checked ten times a second (with the delay applied). */
+    /** A subtitle file's lines, checked ten times a second (with the timing applied, 3.0.3: LocalPlayback's). */
     private val subTicker = object : Runnable {
         override fun run() {
             val track = subFile ?: return
             val p = player ?: return
             // Out of sight (a video's sound in the background) nothing needs them.
             if (!LocalPlayback.screenVisible) return
-            showCues(track.at((p.currentPosition - subDelayMs) * 1000))
+            showCues(track.at((p.currentPosition - LocalPlayback.subtitleDelayMs) * 1000))
             handler.postDelayed(this, 100)
         }
     }
@@ -1958,10 +2432,43 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         subtitleText.setShadowLayer(Ui.dpf(this, if (box == 0) 3.5f else 2f), 0f, 0f, Color.BLACK)
     }
 
-    /** Subtitles rise above the controls while they are shown. */
-    private fun moveSubtitles() {
-        val up = if (controlsShown && videoMode) (controls.height - dp(20)).coerceAtLeast(0).toFloat() else 0f
-        subtitleText.animate().translationY(-up).setDuration(Motion.SHORT).start()
+    /**
+     * Subtitles rise above the controls while they are shown. 3.0.3: they sit where they were dragged
+     * to (above the controls all the same), above an upright panel, or in the room beside one at the
+     * side (so their timing can be seen while it is changed).
+     */
+    private fun moveSubtitles(animate: Boolean = true) {
+        val lift = (if (liftDrag.isNaN()) subLift else liftDrag) * root.height
+        val open = panel.isOpen
+        val controlsUp = if (controlsShown && videoMode && !open) (controls.height - dp(20)).coerceAtLeast(0).toFloat() else 0f
+        val panelUp = if (open && !panel.side) (panel.size - dp(16)).toFloat() else 0f
+        val up = PlayerRules.subtitleUp(lift, controlsUp, panelUp)
+        val beside = open && panel.side
+        val dx = if (beside) -panel.size / 2f else 0f
+        val widest = if (beside) (root.width - panel.size - dp(48)).coerceAtLeast(dp(120)) else Int.MAX_VALUE
+        if (subtitleText.maxWidth != widest) subtitleText.maxWidth = widest
+        subtitleText.animate().cancel()
+        if (animate) {
+            subtitleText.animate().translationY(-up).translationX(dx).setDuration(Motion.SHORT).start()
+        } else {
+            subtitleText.translationY = -up
+            subtitleText.translationX = dx
+        }
+    }
+
+    /** 3.0.3: a picture subtitle (DVD, Blu-ray) moves and shrinks with the picture for an upright panel. */
+    private fun followPicture(animate: Boolean) {
+        val lp = subtitlePicture.layoutParams as? FrameLayout.LayoutParams ?: return
+        subtitlePicture.pivotX = frame.pivotX - lp.leftMargin
+        subtitlePicture.pivotY = frame.pivotY - lp.topMargin
+        subtitlePicture.animate().cancel()
+        if (animate) {
+            subtitlePicture.animate().translationY(videoShift).scaleX(videoScale).scaleY(videoScale).setDuration(180).setInterpolator(Motion.standard).start()
+        } else {
+            subtitlePicture.translationY = videoShift
+            subtitlePicture.scaleX = videoScale
+            subtitlePicture.scaleY = videoScale
+        }
     }
 
     private fun showCues(cues: List<Cue>) {
@@ -2014,6 +2521,7 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
             leftMargin = x.roundToInt()
             topMargin = y.roundToInt()
         }
+        followPicture(false)
         subtitlePicture.setImageBitmap(bmp)
         subtitlePicture.visibility = View.VISIBLE
     }
@@ -2025,6 +2533,8 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         val e = LocalPlayback.current ?: return
         if (tracks.isEmpty) return
         if (e === shownEntry && e.video != videoMode) applyMode(e.video)
+        // 3.0.3: the video's own subtitles chosen last time, now its tracks are known.
+        if (pendingSubtitles != null && e === shownEntry) chooseKeptSubtitles(tracks)
         if (warnedTracks === e) return
         // 2.9.2: 10-bit HEVC (small "x265 10bit" films). The phone's decoders say it is beyond them
         // rather than unsupported, so ExoPlayer tries anyway and the picture stays still: said plainly.
@@ -2100,6 +2610,9 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
     /** What went wrong, in the middle of the screen, with what can be done about it. */
     private fun showProblem(message: String, openWith: Boolean, retry: Boolean) {
         hideProblem()
+        // 3.0.3: what went wrong is what matters now.
+        panel.close(animate = false)
+        hideUpNext()
         handler.removeCallbacks(showSpinner)
         spinner.visibility = View.GONE
         if (locked) setLocked(false)
@@ -2223,7 +2736,14 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         p.audioFormat?.let { a ->
             lines += "Sound: " + listOfNotNull(codecName(a), channels(a.channelCount), if (a.sampleRate > 0) "${a.sampleRate / 1000.0} kHz".replace(".0 ", " ") else null).joinToString(", ")
         }
-        Dialogs.info(this, e.title, lines.joinToString("\n").ifBlank { "Nothing more is known about it." })
+        // 3.0.3: in the panel beside the video, as the other menus.
+        showPanel { ctx ->
+            Sheets.column(ctx).apply {
+                addView(Sheets.header(ctx, e.title, null))
+                if (lines.isEmpty()) lines += "Nothing more is known about it."
+                for (line in lines) addView(Sheets.note(ctx, line))
+            }
+        }
     }
 
     /** HEVC in 10 bits (Main 10 profile, "hvc1.2…"), which phones of this age can't decode. */
@@ -2277,6 +2797,173 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         else -> f.sampleMimeType?.substringAfter('/')?.uppercase(Locale.ROOT)
     }
 
+    // ------------------------------------------------------------------ up next (3.0.3)
+
+    /**
+     * A video of the playlist paused at its end (LocalPlayback, only while this screen is seen):
+     * the next one's name, and its picture when it comes quickly, for 5 seconds, then it plays.
+     */
+    override fun onUpNext() {
+        if (isFinishing || !videoMode || problem != null) return
+        val p = player ?: return
+        if (!p.hasNextMediaItem()) return
+        val next = LocalPlayback.entries.getOrNull(p.nextMediaItemIndex) ?: return
+        showUpNext(next)
+    }
+
+    private fun showUpNext(next: LocalPlayback.Entry) {
+        hideUpNext()
+        panel.close()
+        val white = Color.WHITE
+        val thumb = ImageView(this).apply {
+            background = Ui.shape(this@PlayerActivity, 0x33FFFFFF, 10)
+            clipToOutline = true
+            scaleType = ImageView.ScaleType.CENTER
+            setImageDrawable(Ui.icon(this@PlayerActivity, R.drawable.ic_movie, 0xCCFFFFFF.toInt()))
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }
+        val count = TextView(this).apply {
+            setTextColor(0xCCFFFFFF.toInt())
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+            text = upNextLabel(UP_NEXT_SECONDS)
+        }
+        val name = TextView(this).apply {
+            text = next.title
+            setTextColor(white)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+            typeface = Ui.MEDIUM
+            maxLines = 2
+            ellipsize = TextUtils.TruncateAt.END
+        }
+        fun pill(text: String, main: Boolean, click: () -> Unit) = TextView(this).apply {
+            this.text = text
+            gravity = Gravity.CENTER
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            typeface = Ui.MEDIUM
+            setTextColor(if (main) Ui.onAccent(this@PlayerActivity) else white)
+            background = Ui.ripple(this@PlayerActivity, Ui.shape(this@PlayerActivity, if (main) Ui.accent(this@PlayerActivity) else 0x26FFFFFF, 18), 18)
+            minHeight = dp(40)
+            setPadding(dp(16), dp(8), dp(16), dp(8))
+            setOnClickListener {
+                if (locked) {
+                    showUnlock()
+                    return@setOnClickListener
+                }
+                click()
+            }
+        }
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = Ui.shape(this@PlayerActivity, 0xEB121418.toInt(), 16)
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+            isClickable = true
+            addView(LinearLayout(this@PlayerActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                addView(thumb, LinearLayout.LayoutParams(dp(64), dp(64)))
+                addView(LinearLayout(this@PlayerActivity).apply {
+                    orientation = LinearLayout.VERTICAL
+                    addView(count)
+                    addView(name, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(2) })
+                }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = dp(12) })
+            })
+            addView(LinearLayout(this@PlayerActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.END
+                addView(pill("Cancel", false) { cancelUpNext() })
+                addView(pill("Play now", true) { playUpNext() }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = dp(8) })
+            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(10) })
+        }
+        val width = minOf(dp(340), (root.width - dp(32)).coerceAtLeast(dp(200)))
+        root.addView(card, FrameLayout.LayoutParams(width, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.END).apply { setMargins(0, 0, dp(16), dp(16)) })
+        upNext = card
+        upNextCount = count
+        upNextLeft = UP_NEXT_SECONDS
+        placeUpNext(animate = false)
+        card.alpha = 0f
+        card.animate().alpha(1f).setDuration(Motion.SHORT).start()
+        handler.postDelayed(upNextTick, 1000)
+        // Its picture when it's quick to have (Files may have made it already); none for a private file.
+        val f = next.file
+        if (f != null && !next.private) {
+            upNextThumb = FileThumbs.load(this, f, f.lastModified(), FileKind.VIDEO, dp(64)) { bmp ->
+                if (upNext !== card) return@load
+                thumb.scaleType = ImageView.ScaleType.CENTER_CROP
+                thumb.setImageBitmap(bmp)
+            }
+        }
+        L.d("Player: up next")
+    }
+
+    private fun upNextLabel(seconds: Int) = "Up next in $seconds s"
+
+    private val upNextTick = object : Runnable {
+        override fun run() {
+            if (upNext == null) return
+            upNextLeft--
+            if (upNextLeft <= 0) {
+                playUpNext()
+                return
+            }
+            upNextCount?.text = upNextLabel(upNextLeft)
+            handler.postDelayed(this, 1000)
+        }
+    }
+
+    private fun playUpNext() {
+        hideUpNext()
+        LocalPlayback.next()
+    }
+
+    /** Stays at the end, paused, with the controls to go on from there. */
+    private fun cancelUpNext() {
+        hideUpNext()
+        showControls(true)
+    }
+
+    private fun hideUpNext() {
+        handler.removeCallbacks(upNextTick)
+        upNextThumb?.cancel()
+        upNextThumb = null
+        val card = upNext ?: return
+        upNext = null
+        upNextCount = null
+        card.animate().cancel()
+        card.animate().alpha(0f).setDuration(Motion.SHORT).withEndAction { root.removeView(card) }.start()
+    }
+
+    /** Up next sits above the controls while they show. */
+    private fun placeUpNext(animate: Boolean = true) {
+        val card = upNext ?: return
+        val up = if (controlsShown && videoMode) (controls.height - dp(8)).coerceAtLeast(0).toFloat() else 0f
+        if (animate) card.animate().translationY(-up).setDuration(Motion.SHORT).start() else card.translationY = -up
+    }
+
+    // ------------------------------------------------------------------ hints (3.0.3)
+
+    /** Said once: the first time a video plays whose shape is more than a tenth off the screen's. */
+    private fun hintPinch() {
+        if (PlayerSettings.pinchHintShown || !videoMode || !gesturesEnabled) return
+        val s = player?.videoSize ?: return
+        if (s.width <= 0 || s.height <= 0) return
+        val video = s.width * s.pixelWidthHeightRatio / s.height
+        val dm = android.util.DisplayMetrics()
+        @Suppress("DEPRECATION")
+        windowManager.defaultDisplay.getRealMetrics(dm)
+        val long = maxOf(dm.widthPixels, dm.heightPixels).toFloat()
+        val short = minOf(dm.widthPixels, dm.heightPixels).toFloat().coerceAtLeast(1f)
+        // The screen as it turns for this video (Auto), or as it is held now.
+        val screen = when {
+            PlayerSettings.rotation != PlayerSettings.ROTATE_AUTO && root.height > 0 -> root.width.toFloat() / root.height
+            video >= 1f -> long / short
+            else -> short / long
+        }
+        if (!PlayerRules.shapeDiffers(video, screen)) return
+        PlayerSettings.pinchHintShown = true
+        // After what is said as a video starts ("Going on from…").
+        handler.postDelayed({ if (!isDestroyed && videoMode) say("Pinch to fill the screen") }, 5000)
+    }
+
     // ------------------------------------------------------------------ keys and the screen's life
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
@@ -2314,6 +3001,8 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         }
         LocalPlayback.screenVisible = true
         attach()
+        // 3.0.3: the subtitles where they were dragged to, from the start.
+        root.post { moveSubtitles(animate = false) }
         LocalPlayback.setPictureOff(false)
         handler.removeCallbacks(ticker)
         handler.post(ticker)
@@ -2325,6 +3014,11 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         LocalPlayback.screenVisible = false
         handler.removeCallbacks(ticker)
         handler.removeCallbacks(subTicker)
+        // 3.0.3: no panel left open behind; with Up next showing, a video playing on in the
+        // background goes straight on to the next, as when the screen isn't seen.
+        panel.close(animate = false)
+        val wasUpNext = upNext != null
+        hideUpNext()
         if (!isFinishing && !isChangingConfigurations) {
             val e = LocalPlayback.current
             if (e != null) {
@@ -2332,6 +3026,7 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
                 // picture, which saves the battery); music goes on unless Settings say otherwise.
                 val goOn = if (e.video) LocalPlayback.background else PlayerSettings.backgroundAudio
                 if (!goOn) LocalPlayback.pause() else if (e.video) LocalPlayback.setPictureOff(true)
+                if (wasUpNext && goOn && e.video) LocalPlayback.next()
             }
         }
         LocalPlayback.saveNow()
@@ -2358,6 +3053,9 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
     companion object {
         const val ACTION_PLAY_FILE = "com.swiftbrowser.player.PLAY_FILE"
         const val ACTION_PLAY_STREAM = "com.swiftbrowser.player.PLAY_STREAM"
+
+        /** 3.0.3: how long Up next waits before the next video plays. */
+        private const val UP_NEXT_SECONDS = 5
 
         /** Back to what plays (the notification). */
         const val ACTION_SHOW = "com.swiftbrowser.player.SHOW"

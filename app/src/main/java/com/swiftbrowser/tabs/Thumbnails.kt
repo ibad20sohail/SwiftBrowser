@@ -117,6 +117,13 @@ object Thumbnails {
                 } finally {
                     full.recycle()
                 }
+                // 3.0.3: a picture of one colour (a page playing a video comes out black) shows nothing of
+                // the page: the tab keeps the picture it had, or its card shows the site's icon instead.
+                if (thumb != null && TabRules.looksBlank(samples(thumb))) {
+                    thumb.recycle()
+                    main.post { done?.invoke() }
+                    return@execute
+                }
                 if (thumb != null && !tab.incognito) {
                     try {
                         FileOutputStream(file(tab.id)).use { thumb.compress(Bitmap.CompressFormat.JPEG, 75, it) }
@@ -136,6 +143,16 @@ object Thumbnails {
             taken?.invoke()
             done?.invoke()
         })
+    }
+
+    /** 3.0.3: a grid of the picture's pixels, enough to tell a page from an empty or black screen. */
+    private fun samples(b: Bitmap): IntArray {
+        val n = 12
+        val out = IntArray(n * n)
+        for (y in 0 until n) for (x in 0 until n) {
+            out[y * n + x] = b.getPixel(((x + 0.5f) * b.width / n).toInt().coerceIn(0, b.width - 1), ((y + 0.5f) * b.height / n).toInt().coerceIn(0, b.height - 1))
+        }
+        return out
     }
 
     private fun shrink(full: Bitmap, visibleHeight: Int): Bitmap {

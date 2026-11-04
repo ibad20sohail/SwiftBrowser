@@ -5,7 +5,7 @@ ad-heavy sites on an old phone (Moto E4, Android 7.1.2).
 
 ## Download
 
-**[Download Swift 3.0.2 (APK)](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v3.0.2/Swift-3.0.2.apk)**
+**[Download Swift 3.0.3 (APK)](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v3.0.3/Swift-3.0.3.apk)**
 for Android 7 and newer (32-bit ARM, about 172 MB). It installs over an earlier Swift and keeps
 tabs and settings. From 1.4 on, Swift can also update itself: Settings → About Swift → Check for
 updates.
@@ -31,6 +31,28 @@ ones, and a short welcome on the first start.
 - **Night light** (2.3, Settings → Look & screen): a warm layer over Swift, pages and videos too,
   from 7 pm to 7 am or always, in three strengths. Taps go through it.
 
+- **New in 3.0.3**:
+  - **Player**: previous and next beside play (the 10-second jumps stay on a double tap, and taps in a
+    row add up: +10, +20, +30 s). Sound and subtitles, the ⋮ menu, speed, sleep, turning and the
+    playlist open in a panel beside the video (under it when upright), without dimming it, so the
+    video stays in view. Subtitle timing for every subtitle, the video's own too, and sound timing,
+    in steps of 0.1 s; each video keeps its timing and the tracks chosen. An equalizer with the
+    phone's presets and bass boost, pinch to fill the screen, an Up next card before the next video,
+    and subtitles you can drag up or down.
+  - **Continue in Files**: videos and music from the phone left half-way show in Files (after
+    Favourites); the home page's Continue keeps web videos, articles and documents read from a link.
+    The home page shows the shortcuts first again.
+  - **Files**: video pictures show how much was watched, with a tick on finished ones; hold a file
+    and slide to select many; the search box stays at the top while the title bar and the path
+    scroll away.
+  - **Tabs**: double-tap the tab button for the tab you were on before; tab pictures stay inside
+    their rounded cards; a tab whose picture would be blank (a playing video) shows its site's icon.
+    Long pages get a fast scroll handle at the right edge.
+  - **Look and feel**: messages in the chosen colours (they were charcoal in both modes), switches
+    that slide, buttons that spring and tick, names on hold for icon buttons, picture editor icons
+    only, and no flash of the phone's bars as Settings or Files open in full screen.
+  - **Downloads**: a progress ring round the menu button, pictures of finished videos, and time left
+    for website videos.
 - **New in 3.0.2**:
   - **A new player**, after VLC's: the times over a seek bar as wide as the screen; back and on
     10 seconds beside play (with a playlist on a narrow screen, previous and next instead); over a

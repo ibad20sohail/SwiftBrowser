@@ -417,6 +417,25 @@
       } else {
         reportIcon();
       }
+      // 3.0.3: how tall the page is, for the app's fast scroll handle on long pages. Sent only when
+      // it changes: once loaded, when turned, and now and then while scrolling (pages grow).
+      let lastSize = '';
+      const reportSize = () => {
+        const de = document.documentElement;
+        if (!de) { return; }
+        const h = Math.max(de.scrollHeight, document.body ? document.body.scrollHeight : 0);
+        const vh = window.innerHeight;
+        const key = h + 'x' + vh;
+        if (key === lastSize || !vh) { return; }
+        lastSize = key;
+        send({ type: 'page-size', h, vh });
+      };
+      let sizeTimer = 0;
+      window.addEventListener('load', reportSize);
+      window.addEventListener('resize', reportSize);
+      window.addEventListener('scroll', () => {
+        if (!sizeTimer) { sizeTimer = setTimeout(() => { sizeTimer = 0; reportSize(); }, 1000); }
+      }, { passive: true });
     }
 
     // Pages of the first account only: "/u/1/" and "authuser=1" are another one signed in beside it.

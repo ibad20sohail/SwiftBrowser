@@ -14,19 +14,30 @@ import android.os.SystemClock
 import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
+import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
+import androidx.media3.common.Timeline
+import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Tracks
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.ForwardingRenderer
+import androidx.media3.exoplayer.Renderer
+import androidx.media3.exoplayer.RendererConfiguration
+import androidx.media3.exoplayer.audio.AudioSink
+import androidx.media3.exoplayer.audio.ForwardingAudioSink
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MediaSource
+import androidx.media3.exoplayer.source.SampleStream
+import androidx.media3.exoplayer.text.TextOutput
+import androidx.media3.exoplayer.text.TextRenderer
 import androidx.media3.extractor.DefaultExtractorsFactory
 import com.swiftbrowser.core.Background
 import com.swiftbrowser.core.L
@@ -88,6 +99,9 @@ object LocalPlayback {
 
         /** The player was closed (the notification's Close): the screen closes too. */
         fun onReleased() {}
+
+        /** 3.0.3: a video of the playlist paused at its end, for the screen's "Up next" (see [upNextWanted]). */
+        fun onUpNext() {}
     }
 
     /** Reading covers, folders and subtitle files. */
@@ -125,6 +139,10 @@ object LocalPlayback {
 
     /** The player screen can be seen (between its onStart and onStop). */
     var screenVisible = false
+        set(v) {
+            field = v
+            syncPauseAtEnd()
+        }
 
     /** The paused notification was swiped away while the screen was open: it comes back with playing. */
     private var dismissed = false
@@ -179,7 +197,8 @@ object LocalPlayback {
         // The phone's hardware decoders first (smooth and light on the battery); another decoder
         // when one can't start, rather than an error. FFmpeg (2.9.2) only for sound none of the phone's
         // decoders can play (Dolby and DTS in films): "on" puts it after them, "prefer" would before.
-        val renderers = DefaultRenderersFactory(ctx)
+        // 3.0.3: with the subtitles' and the sound's timing (SyncedRenderers).
+        val renderers = SyncedRenderers(ctx)
             .setEnableDecoderFallback(true)
             .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
         // Smaller buffers than ExoPlayer's (up to 128 MB for video): the phone has 2 GB of memory
@@ -197,6 +216,8 @@ object LocalPlayback {
             .setSeekForwardIncrementMs(10_000)
             .build()
         p.addListener(listener)
+        // 3.0.3: the equalizer, when it is on, on the player's sound.
+        SoundEffects.attach(p.audioSessionId)
         return p
     }
 
@@ -244,6 +265,8 @@ object LocalPlayback {
         dismissed = false
         inBackground = false
         val first = list[start]
+        // 3.0.3: its timing and tracks as chosen last time.
+        loadTimings(first)
         // 3.0: the volume boost belongs to what it was set for, not to the next file opened.
         if (boost > 0f) setBoost(0f)
         val factory = sourcesFor(a, first.headers, first.incognito).also { sources = it }
@@ -265,6 +288,7 @@ object LocalPlayback {
             .build()
         p.prepare()
         p.playWhenReady = true
+        syncPauseAtEnd()
         pauseWebMedia()
         L.d("Player: playing ${first.logName}" + if (positionMs > 0) ", going on where it was left" else "")
         changed()
@@ -322,7 +346,15 @@ object LocalPlayback {
     /** The next one in the list (in shuffled order when shuffling). */
     fun next() {
         val p = player ?: return
-        if (p.hasNextMediaItem()) jumpTo(p.nextMediaItemIndex)
+        if (!p.hasNextMediaItem()) return
+        val i = p.nextMediaItemIndex
+        // 3.0.3: one video or song repeating all: next is it again, from its start.
+        if (i == p.currentMediaItemIndex) {
+            seekTo(0)
+            if (!p.playWhenReady) play()
+        } else {
+            jumpTo(i)
+        }
     }
 
     /** Back to the start, or the one before when already at its start, as music players do. */
@@ -452,7 +484,9 @@ object LocalPlayback {
         enhancer = null
         boost = 0f
         watchDevices(false)
+        SoundEffects.release()
         saveNow()
+        loadTimings(null)
         cancelSleep(notify = false)
         main.removeCallbacks(saver)
         p.removeListener(listener)
@@ -612,6 +646,162 @@ object LocalPlayback {
         }
     }
 
+    // ------------------------------------------------------------------ up next (3.0.3)
+
+    /**
+     * A video of a playlist pauses at its end while the screen is seen (repeat off, one after it),
+     * so the screen can say what comes next before it starts. Music, and anything playing without
+     * the screen, goes straight on.
+     */
+    var upNextWanted = false
+        private set
+
+    private fun syncPauseAtEnd() {
+        val p = player ?: return
+        val e = current
+        upNextWanted = screenVisible && e != null && e.video && p.repeatMode == Player.REPEAT_MODE_OFF && p.hasNextMediaItem()
+        val pause = sleepAtEnd || upNextWanted
+        if (p.pauseAtEndOfMediaItems != pause) p.pauseAtEndOfMediaItems = pause
+    }
+
+    // ------------------------------------------------------------------ timing and tracks (3.0.3)
+
+    /**
+     * How much later (> 0) or earlier the subtitles show and the sound plays, in µs: read on the
+     * playback thread by the renderers (SyncedRenderers). One subtitle timing for the video's own
+     * subtitles and subtitle files (the screen shows those itself, with [subtitleDelayMs]).
+     */
+    @Volatile
+    private var subtitleDelayUs = 0L
+
+    @Volatile
+    private var soundDelayUs = 0L
+
+    val subtitleDelayMs: Long get() = subtitleDelayUs / 1000
+    val soundDelayMs: Long get() = soundDelayUs / 1000
+
+    /** What the timing (and [trackChoice]) is for: kept with that file. */
+    private var timingFor: Entry? = null
+
+    /** The subtitles' timing when the changes being made began (see [timingSettled]). */
+    private var rereadFrom = 0L
+    private var timingChanging = false
+
+    /** The sound and subtitles chosen last time for what plays (a file on the phone, not incognito's or Private's), or null. */
+    var trackChoice: TrackChoice? = null
+        private set
+
+    /** The entry whose sound track was chosen again already. */
+    private var soundRestoredFor: Entry? = null
+
+    fun setSubtitleDelay(ms: Long) {
+        val v = Delays.clamp(ms)
+        if (v == subtitleDelayMs) return
+        beginTimingChange()
+        subtitleDelayUs = v * 1000
+        timingChanged()
+    }
+
+    fun setSoundDelay(ms: Long) {
+        val v = Delays.clamp(ms)
+        if (v == soundDelayMs) return
+        beginTimingChange()
+        soundDelayUs = v * 1000
+        timingChanged()
+    }
+
+    /** A change is about to be made: the first of a round notes where the subtitles' timing began. */
+    private fun beginTimingChange() {
+        if (!timingChanging) rereadFrom = subtitleDelayMs
+    }
+
+    private fun timingChanged() {
+        timingChanging = true
+        main.removeCallbacks(timingSettled)
+        main.postDelayed(timingSettled, 600)
+        changed()
+    }
+
+    /**
+     * 0.6 s after the last change: kept with the file, and, when earlier subtitles were made later
+     * again, the video's own subtitles read again (those passed were dropped) by a quick seek to
+     * where the picture is.
+     */
+    private val timingSettled = Runnable {
+        timingChanging = false
+        saveTimings()
+        val p = player ?: return@Runnable
+        if (Delays.rereadSubtitles(rereadFrom, subtitleDelayMs) && p.currentTracks.isTypeSelected(C.TRACK_TYPE_TEXT)) {
+            // The position said runs ahead by the sound's timing: back by that, so the picture stays.
+            p.seekTo((p.currentPosition - soundDelayMs).coerceAtLeast(0))
+        }
+    }
+
+    private fun saveTimings() {
+        val a = app ?: return
+        val e = timingFor ?: return
+        val f = e.file ?: return
+        if (e.private) return
+        LocalMedia.saveDelays(a, f, subtitleDelayMs, soundDelayMs)
+    }
+
+    /** [e] plays now: the timing and tracks chosen for it last time (a change not kept yet goes to the one before). */
+    private fun loadTimings(e: Entry?) {
+        if (timingChanging) {
+            main.removeCallbacks(timingSettled)
+            timingChanging = false
+            saveTimings()
+        }
+        timingFor = e
+        soundRestoredFor = null
+        val a = app
+        val f = e?.file
+        if (a == null || f == null || e.private) {
+            subtitleDelayUs = 0
+            soundDelayUs = 0
+            trackChoice = null
+            return
+        }
+        subtitleDelayUs = Delays.clamp(LocalMedia.subtitleDelay(a, f)) * 1000
+        soundDelayUs = Delays.clamp(LocalMedia.soundDelay(a, f)) * 1000
+        trackChoice = LocalMedia.trackChoice(a, f)
+    }
+
+    /** Keeps a choice of sound or subtitles for the file playing (not incognito's or Private's, nor a website's). */
+    fun rememberTracks(change: (TrackChoice) -> TrackChoice) {
+        val a = app ?: return
+        val e = current ?: return
+        val f = e.file ?: return
+        if (e.private) return
+        val next = change(trackChoice ?: TrackChoice())
+        trackChoice = next
+        soundRestoredFor = e
+        LocalMedia.saveTrackChoice(a, f, next)
+    }
+
+    /** The sound track chosen last time for [e], chosen again once its tracks are known. */
+    private fun restoreSound(e: Entry, tracks: Tracks) {
+        if (soundRestoredFor === e) return
+        val want = trackChoice?.takeIf { it.hasSound }
+        if (want == null) {
+            soundRestoredFor = e
+            return
+        }
+        val options = ArrayList<Pair<Tracks.Group, Int>>()
+        for (g in tracks.groups) if (g.type == C.TRACK_TYPE_AUDIO) for (t in 0 until g.length) options += g to t
+        soundRestoredFor = e
+        val i = TrackChoice.match(want.soundLanguage, want.soundLabel, options.map { (g, t) -> g.getTrackFormat(t).let { it.language to it.label } })
+        if (i < 0) return
+        val (g, t) = options[i]
+        if (g.isTrackSelected(t)) return
+        val p = player ?: return
+        p.trackSelectionParameters = p.trackSelectionParameters.buildUpon()
+            .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, false)
+            .setOverrideForType(TrackSelectionOverride(g.mediaTrackGroup, t))
+            .build()
+        L.d("Player: the sound track chosen last time is back")
+    }
+
     // ------------------------------------------------------------------ sleep timer
 
     const val SLEEP_END = -1
@@ -667,7 +857,7 @@ object LocalPlayback {
         val p = player ?: return
         if (minutes == SLEEP_END) {
             sleepAtEnd = true
-            p.pauseAtEndOfMediaItems = true
+            syncPauseAtEnd()
         } else {
             sleepEndsAt = SystemClock.uptimeMillis() + minutes * 60_000L
             main.postDelayed(sleepFire, minutes * 60_000L)
@@ -686,8 +876,8 @@ object LocalPlayback {
             player?.volume = 1f
         }
         sleepEndsAt = 0
-        if (sleepAtEnd) player?.pauseAtEndOfMediaItems = false
         sleepAtEnd = false
+        syncPauseAtEnd()
         if (notify) {
             changed()
             app?.let { MusicService.sync(it) }
@@ -703,18 +893,27 @@ object LocalPlayback {
 
     // ------------------------------------------------------------------ what the player says
 
+    /** Played to its end: nothing to go back to, and (3.0.3) a video gets its tick in Files (not incognito's or Private's). */
+    private fun finished(e: Entry?) {
+        val a = app ?: return
+        val f = e?.file ?: return
+        LocalMedia.forget(a, f.path)
+        if (e.video && !e.private) Watched.markFinished(a, f)
+    }
+
     private val listener = object : Player.Listener {
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
             val p = player ?: return
             val before = entries.getOrNull(playingIndex)
             // Played to its end (and on to the next, or round again): nothing to go back to.
-            if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO || reason == Player.MEDIA_ITEM_TRANSITION_REASON_REPEAT) {
-                before?.file?.let { f -> app?.let { LocalMedia.forget(it, f.path) } }
-            }
+            if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO || reason == Player.MEDIA_ITEM_TRANSITION_REASON_REPEAT) finished(before)
             playingIndex = p.currentMediaItemIndex
             clearInfo()
+            // 3.0.3: another file, its own timing and tracks (the same one round again keeps them).
+            if (current !== timingFor) loadTimings(current)
             // The next episode of a series goes on where it was left off too.
             if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO) current?.let { e -> resumeAt(e)?.let { p.seekTo(it) } }
+            syncPauseAtEnd()
             changed()
             app?.let { MusicService.sync(it) }
         }
@@ -728,9 +927,11 @@ object LocalPlayback {
             val video = tracks.containsType(C.TRACK_TYPE_VIDEO)
             if (video != e.video) {
                 e.video = video
+                syncPauseAtEnd()
                 changed()
                 app?.let { MusicService.sync(it) }
             }
+            restoreSound(e, tracks)
         }
 
         override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
@@ -740,20 +941,37 @@ object LocalPlayback {
                 main.postDelayed(saver, 30_000)
             } else {
                 saveNow()
-                // "At the end" of the sleep timer: it has paused there, so it's done.
-                if (reason == Player.PLAY_WHEN_READY_CHANGE_REASON_END_OF_MEDIA_ITEM && sleepAtEnd) {
-                    L.d("Player: sleep timer stopped at the end")
-                    cancelSleep()
+                if (reason == Player.PLAY_WHEN_READY_CHANGE_REASON_END_OF_MEDIA_ITEM) {
+                    // 3.0.3: paused at its end (the sleep timer's "at the end", or Up next): played to
+                    // its end, as if it had gone on (going on is a seek then, which isn't counted).
+                    finished(current)
+                    if (sleepAtEnd) {
+                        // "At the end" of the sleep timer: it has paused there, so it's done.
+                        L.d("Player: sleep timer stopped at the end")
+                        cancelSleep()
+                    } else if (upNextWanted) {
+                        for (w in watchers.toList()) w.onUpNext()
+                    }
                 }
             }
             app?.let { MusicService.sync(it) }
         }
 
         override fun onPlaybackStateChanged(playbackState: Int) {
-            if (playbackState == Player.STATE_ENDED) {
-                current?.file?.let { f -> app?.let { LocalMedia.forget(it, f.path) } }
-            }
+            if (playbackState == Player.STATE_ENDED) finished(current)
             app?.let { MusicService.sync(it) }
+        }
+
+        override fun onTimelineChanged(timeline: Timeline, reason: Int) = syncPauseAtEnd()
+
+        override fun onRepeatModeChanged(repeatMode: Int) = syncPauseAtEnd()
+
+        override fun onShuffleModeEnabledChanged(shuffleModeEnabled: Boolean) = syncPauseAtEnd()
+
+        // 3.0.3: the effects go with the sound to its new session.
+        override fun onAudioSessionIdChanged(audioSessionId: Int) {
+            SoundEffects.attach(audioSessionId)
+            if (boost > 0f) setBoost(boost)
         }
 
         // 3.0: a call took the sound away (or gave it back): the buttons and the notification follow.
@@ -774,5 +992,100 @@ object LocalPlayback {
             L.w("Player: ${current?.logName ?: "media"} couldn't play (${error.errorCodeName})")
             app?.let { MusicService.sync(it) }
         }
+    }
+
+    // ------------------------------------------------------------------ the timing in the renderers (3.0.3)
+
+    /**
+     * ExoPlayer's usual renderers, with the subtitles and the sound moved by their timing: the
+     * subtitle renderer is told a position moved by the subtitles' ([DelayedText]), and the sound's
+     * clock, which the picture follows, is moved by the sound's ([DelayedSound]). FFmpeg's sound
+     * renderer gets the same sound output as the phone's own, so the same clock.
+     */
+    @OptIn(UnstableApi::class)
+    private class SyncedRenderers(ctx: Context) : DefaultRenderersFactory(ctx) {
+        override fun buildTextRenderers(context: Context, output: TextOutput, outputLooper: Looper, extensionRendererMode: Int, out: ArrayList<Renderer>) {
+            val made = ArrayList<Renderer>()
+            super.buildTextRenderers(context, output, outputLooper, extensionRendererMode, made)
+            for (r in made) out += if (r is TextRenderer) DelayedText(r) else r
+        }
+
+        override fun buildAudioSink(context: Context, enableFloatOutput: Boolean, enableAudioTrackPlaybackParams: Boolean): AudioSink? =
+            super.buildAudioSink(context, enableFloatOutput, enableAudioTrackPlaybackParams)?.let { DelayedSound(it) }
+    }
+
+    /**
+     * The video's own subtitles, rendered and reset at the position less the subtitles' timing (so
+     * later subtitles show later). It knows where its stream ends (from the timeline), so near the end
+     * it gets the true position (see Delays.subtitlePositionUs), and it tells the renderer where its
+     * last stream ends: ExoPlayer only does that for a TextRenderer it sees, not through a wrapper.
+     */
+    @OptIn(UnstableApi::class)
+    private class DelayedText(private val text: TextRenderer) : ForwardingRenderer(text) {
+        private var timeline: Timeline = Timeline.EMPTY
+        private var periodId: MediaSource.MediaPeriodId? = null
+        private var offsetUs = 0L
+        private val period = Timeline.Period()
+
+        /** Where the stream being read ends, in the renderers' time; C.TIME_UNSET when not known. */
+        private fun streamEndUs(): Long {
+            val id = periodId ?: return C.TIME_UNSET
+            val i = timeline.getIndexOfPeriod(id.periodUid)
+            if (i == C.INDEX_UNSET) return C.TIME_UNSET
+            val d = timeline.getPeriod(i, period).durationUs
+            return if (d == C.TIME_UNSET) C.TIME_UNSET else offsetUs + d
+        }
+
+        private fun at(positionUs: Long) = Delays.subtitlePositionUs(positionUs, subtitleDelayUs, streamEndUs())
+
+        override fun enable(
+            configuration: RendererConfiguration,
+            formats: Array<out Format>,
+            stream: SampleStream,
+            positionUs: Long,
+            joining: Boolean,
+            mayRenderStartOfStream: Boolean,
+            startPositionUs: Long,
+            offsetUs: Long,
+            mediaPeriodId: MediaSource.MediaPeriodId,
+        ) {
+            this.offsetUs = offsetUs
+            periodId = mediaPeriodId
+            super.enable(configuration, formats, stream, at(positionUs), joining, mayRenderStartOfStream, startPositionUs, offsetUs, mediaPeriodId)
+        }
+
+        override fun replaceStream(formats: Array<out Format>, stream: SampleStream, startPositionUs: Long, offsetUs: Long, mediaPeriodId: MediaSource.MediaPeriodId) {
+            this.offsetUs = offsetUs
+            periodId = mediaPeriodId
+            super.replaceStream(formats, stream, startPositionUs, offsetUs, mediaPeriodId)
+        }
+
+        override fun setTimeline(timeline: Timeline) {
+            this.timeline = timeline
+            super.setTimeline(timeline)
+        }
+
+        override fun setCurrentStreamFinal() {
+            super.setCurrentStreamFinal()
+            val end = streamEndUs()
+            if (end != C.TIME_UNSET) runCatching { text.setFinalStreamEndPositionUs(end) }
+        }
+
+        override fun resetPosition(positionUs: Long, sampleStreamIsResetToKeyFrame: Boolean) =
+            super.resetPosition(at(positionUs), sampleStreamIsResetToKeyFrame)
+
+        override fun supportsResetPositionWithoutKeyFrameReset(positionUs: Long): Boolean =
+            super.supportsResetPositionWithoutKeyFrameReset(at(positionUs))
+
+        override fun render(positionUs: Long, elapsedRealtimeUs: Long) = super.render(at(positionUs), elapsedRealtimeUs)
+
+        override fun getDurationToProgressUs(positionUs: Long, elapsedRealtimeUs: Long): Long =
+            super.getDurationToProgressUs(at(positionUs), elapsedRealtimeUs)
+    }
+
+    /** The sound's output, its clock moved by the sound's timing (see Delays.soundClockUs for which way). */
+    @OptIn(UnstableApi::class)
+    private class DelayedSound(sink: AudioSink) : ForwardingAudioSink(sink) {
+        override fun getCurrentPositionUs(sourceEnded: Boolean): Long = Delays.soundClockUs(super.getCurrentPositionUs(sourceEnded), soundDelayUs)
     }
 }

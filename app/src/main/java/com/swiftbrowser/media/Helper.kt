@@ -196,6 +196,14 @@ object Helper {
                 TabManager.ui?.onPlayingChanged(tab)
             }
             "video-pos" -> WatchPositions.onPosition(tab, msg)
+            "page-size" -> {
+                val vh = msg.optDouble("vh", 0.0).toFloat()
+                if (vh > 0f) {
+                    tab.pageViewHeight = vh
+                    tab.pageScrollMax = (msg.optDouble("h", 0.0).toFloat() - vh).coerceAtLeast(0f)
+                    TabManager.ui?.onPageSize(tab)
+                }
+            }
             "reader-place" -> Unfinished.onReaderPlace(tab, msg)
             // Swift's document viewer (2.4); 3.0: with the page's address, for its own document only.
             "doc-hello", "doc-read", "doc-range", "doc-place", "doc-action", "doc-reading", "doc-zip", "doc-save", "doc-convert", "doc-thumb" ->

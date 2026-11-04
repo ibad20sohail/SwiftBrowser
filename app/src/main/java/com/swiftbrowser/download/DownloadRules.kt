@@ -203,10 +203,32 @@ object DownloadRules {
         if (total <= 0) return -1
         if (done >= total) return 100
         if (soundParts <= 0 || soundParts >= total) return (done * 100 / total).coerceIn(0, 100)
+        return (streamFraction(done, total, soundParts, soundShare) * 100).toInt().coerceIn(0, 100)
+    }
+
+    /** 3.0.3: [streamPercent] as a share, 0..1 (-1 unknown), for how long the stream has left. */
+    fun streamFraction(done: Int, total: Int, soundParts: Int, soundShare: Double): Double {
+        if (total <= 0) return -1.0
+        if (done >= total) return 1.0
+        if (soundParts <= 0 || soundParts >= total) return (done.toDouble() / total).coerceIn(0.0, 1.0)
         val share = soundShare.coerceIn(0.01, 0.99)
         val sound = done.coerceIn(0, soundParts).toDouble() / soundParts
         val video = (done - soundParts).coerceIn(0, total - soundParts).toDouble() / (total - soundParts)
-        return ((sound * share + video * (1 - share)) * 100).toInt().coerceIn(0, 100)
+        return (sound * share + video * (1 - share)).coerceIn(0.0, 1.0)
+    }
+
+    /** 3.0.3: how much of a download must be in before how long it has left is said. */
+    const val LEFT_FROM = 0.02
+
+    /**
+     * 3.0.3: about how many seconds a download has left: [done] bytes are [fraction] (0..1) of it (a
+     * file's share of its size; a stream's from its parts, [streamFraction], as it has no size), coming
+     * at [bytesPerSecond]. Null until that can be told: [LEFT_FROM] of it in, and a speed.
+     */
+    fun secondsLeft(done: Long, fraction: Double, bytesPerSecond: Long): Long? {
+        if (done <= 0 || bytesPerSecond <= 0 || fraction.isNaN() || fraction < LEFT_FROM) return null
+        if (fraction >= 1.0) return 0L
+        return Math.round(done * (1 - fraction) / fraction / bytesPerSecond)
     }
 
     /** Every part of a stream is on disk ([saved] bytes of the [fileBytes] the file has): nothing to fetch any more. */

@@ -21,7 +21,7 @@ object DocRules {
      */
     private val FROM_PAGES = setOf(
         "hello", "click", "icon", "playing", "video-pos", "video-start", "media-ended", "media-error", "media-waiting",
-        "google-account",
+        "google-account", "page-size",
     )
 
     /** The document viewer's own messages (docs/view.js). */

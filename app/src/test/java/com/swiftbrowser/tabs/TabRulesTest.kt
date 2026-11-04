@@ -128,6 +128,15 @@ class TabRulesTest {
     }
 
     @Test
+    fun aPictureOfOneColourIsNoPicture() {
+        assertTrue(TabRules.looksBlank(IntArray(144) { 0xFF000000.toInt() }))
+        assertTrue(TabRules.looksBlank(IntArray(144) { if (it % 7 == 0) 0xFF0A0A0A.toInt() else 0xFF050505.toInt() }))
+        // A white page with a few dark letters is a page.
+        assertFalse(TabRules.looksBlank(IntArray(144) { if (it % 13 == 0) 0xFF202020.toInt() else 0xFFFFFFFF.toInt() }))
+        assertTrue(TabRules.looksBlank(IntArray(0)))
+    }
+
+    @Test
     fun warningsWhileOnScreenCountOnlyWithMemoryReallyLow() {
         // 5, 10 and 15 come with Swift on screen, often with most of the memory free.
         for (level in listOf(5, 10, 15)) {

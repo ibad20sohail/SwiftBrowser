@@ -41,6 +41,19 @@ object LocalMedia {
         return pos.takeIf { it >= MIN_POSITION_MS && !nearEnd(it, saved.item.duration) }
     }
 
+    /**
+     * 3.0.3: how much of [file] was watched (0..1), for the line on its picture in Files; null when
+     * nothing is kept for it (never played, finished, or remembering is off). A map lookup.
+     */
+    fun progress(ctx: Context, file: File): Float? = progress(ctx, file.path, file.length())
+
+    /** [progress] for a file whose [size] is known already (a list row): no disk access. */
+    fun progress(ctx: Context, path: String, size: Long): Float? {
+        val saved = read(sp(ctx).getString(key(path, size), null)) ?: return null
+        val d = saved.item.duration
+        return if (d > 0) (saved.item.position.toFloat() / d).coerceIn(0f, 1f) else null
+    }
+
     /** Remembers where [file] is ([position] of [duration], in ms); at its start or end it is forgotten. */
     fun save(ctx: Context, file: File, title: String, video: Boolean, position: Long, duration: Long) {
         if (duration <= 0) return
@@ -100,33 +113,69 @@ object LocalMedia {
     fun clear(ctx: Context) {
         sp(ctx).edit { clear() }
         delays(ctx).edit { clear() }
+        Watched.clear(ctx)
     }
 
-    // ------------------------------------------------------------------ subtitle timing (3.0.1)
+    // ------------------------------------------------------------------ timing (3.0.1) and tracks (3.0.3)
 
-    /** Each file's subtitle timing (Earlier/Later in the player), kept apart from the places. */
+    /**
+     * Each file's subtitle timing (3.0.3: and its sound timing and the tracks chosen), kept apart from
+     * the places: {"ms": subtitles, "snd": sound, "tr": tracks, "u": when}. 3.0.1's entries (only
+     * "ms") read as they are.
+     */
     private const val DELAYS = "local_media_subtitle_delay"
 
     private fun delays(ctx: Context): SharedPreferences = ctx.applicationContext.getSharedPreferences(DELAYS, Context.MODE_PRIVATE)
 
-    /** The subtitle timing chosen for [file], in ms (later > 0, earlier < 0); 0 when none. */
-    fun subtitleDelay(ctx: Context, file: File): Long = try {
-        delays(ctx).getString(key(file.path, file.length()), null)?.let { JSONObject(it).optLong("ms") } ?: 0L
+    private fun timing(ctx: Context, file: File): JSONObject? = try {
+        delays(ctx).getString(key(file.path, file.length()), null)?.let { JSONObject(it) }
     } catch (_: Exception) {
-        0L
+        null
     }
 
+    /** The subtitle timing chosen for [file], in ms (later > 0, earlier < 0); 0 when none. */
+    fun subtitleDelay(ctx: Context, file: File): Long = timing(ctx, file)?.optLong("ms") ?: 0L
+
+    /** 3.0.3: the sound timing chosen for [file], in ms (the sound later > 0, earlier < 0); 0 when none. */
+    fun soundDelay(ctx: Context, file: File): Long = timing(ctx, file)?.optLong("snd") ?: 0L
+
+    /** 3.0.3: the sound and subtitles chosen for [file] last time, or null. */
+    fun trackChoice(ctx: Context, file: File): TrackChoice? =
+        timing(ctx, file)?.optJSONObject("tr")?.let { TrackChoice.fromJson(it) }?.takeIf { !it.isEmpty }
+
     /** Keeps [ms] as [file]'s subtitle timing for the next time it plays (0 forgets it). */
-    fun saveSubtitleDelay(ctx: Context, file: File, ms: Long) {
+    fun saveSubtitleDelay(ctx: Context, file: File, ms: Long) = changeTiming(ctx, file) { if (ms == 0L) remove("ms") else put("ms", ms) }
+
+    /** 3.0.3: both timings at once (0 forgets one). */
+    fun saveDelays(ctx: Context, file: File, subtitleMs: Long, soundMs: Long) = changeTiming(ctx, file) {
+        if (subtitleMs == 0L) remove("ms") else put("ms", subtitleMs)
+        if (soundMs == 0L) remove("snd") else put("snd", soundMs)
+    }
+
+    /** 3.0.3: the tracks chosen for [file] (null or nothing forgets them). */
+    fun saveTrackChoice(ctx: Context, file: File, choice: TrackChoice?) = changeTiming(ctx, file) {
+        if (choice == null || choice.isEmpty) remove("tr") else put("tr", choice.toJson())
+    }
+
+    /** Changes [file]'s entry; one with nothing left in it goes. Beyond the last KEEP files, the oldest go. */
+    private fun changeTiming(ctx: Context, file: File, change: JSONObject.() -> Unit) {
         val sp = delays(ctx)
         val k = key(file.path, file.length())
-        if (ms == 0L) {
+        val o = (try {
+            sp.getString(k, null)?.let { JSONObject(it) }
+        } catch (_: Exception) {
+            null
+        }) ?: JSONObject()
+        o.change()
+        o.remove("u")
+        if (o.length() == 0) {
             if (sp.contains(k)) sp.edit { remove(k) }
             return
         }
+        o.put("u", System.currentTimeMillis())
         val all = sp.all
         sp.edit {
-            putString(k, JSONObject().put("ms", ms).put("u", System.currentTimeMillis()).toString())
+            putString(k, o.toString())
             if (all.size > KEEP + 20) {
                 all.entries.mapNotNull { e -> (e.value as? String)?.let { runCatching { e.key to JSONObject(it).optLong("u") }.getOrNull() } }
                     .sortedByDescending { it.second }.drop(KEEP).forEach { remove(it.first) }
@@ -149,6 +198,8 @@ object LocalMedia {
                 (e.value as? String)?.let { runCatching { JSONObject(it).optLong("u") }.getOrNull() }?.let { it in from..to } == true
             }.map { it.key }
             if (timings.isNotEmpty()) d.edit { timings.forEach { remove(it) } }
+            // 3.0.3: and the ticks of videos watched to their end then.
+            Watched.clearSince(ctx, from, to)
         }
         return gone.size
     }

@@ -195,6 +195,22 @@ object Sheets {
                     chipStrokeWidth = 0f
                     chipMinHeight = ctx.dp(40).toFloat()
                     isChecked = i == selected
+                    // 3.0.3: the chosen chip's colour fades in (and the one left fades out), and a
+                    // press springs, instead of switching at once.
+                    val on = Ui.accentContainer(ctx)
+                    val off = ctx.color(R.color.surface_alt)
+                    setOnCheckedChangeListener { chip, checked ->
+                        android.animation.ValueAnimator.ofArgb(if (checked) off else on, if (checked) on else off).apply {
+                            duration = 150
+                            addUpdateListener { (chip as Chip).chipBackgroundColor = ColorStateList.valueOf(it.animatedValue as Int) }
+                            addListener(object : android.animation.AnimatorListenerAdapter() {
+                                override fun onAnimationEnd(animation: android.animation.Animator) {
+                                    (chip as Chip).chipBackgroundColor = bg
+                                }
+                            })
+                        }.start()
+                    }
+                    Ui.pressable(this, 0.94f)
                     setOnClickListener { if (isChecked) onSelect(i) }
                 })
             }
@@ -249,7 +265,23 @@ object Sheets {
     class Action(val icon: Int, val label: String, val primary: Boolean = false, val danger: Boolean = false, val run: () -> Unit)
 
     /** A row of big round buttons with a short name under each (up to four fit a phone's width). */
-    private fun buttonRow(ctx: Context, actions: List<Action>, onPick: (Action) -> Unit): LinearLayout = LinearLayout(ctx).apply {
+    /**
+     * 3.0.3: fewer than four buttons keep a quarter of the width each, centred, unless a quarter is too
+     * narrow for their names (the player's side panel): then they share the whole width, so a name
+     * such as "Play in background" doesn't break inside a word.
+     */
+    private class ButtonRow(ctx: Context) : LinearLayout(ctx) {
+        val spacers = ArrayList<View>()
+        var spacerWeight = 0f
+
+        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+            val narrow = MeasureSpec.getSize(widthMeasureSpec) / 4 < context.dp(80)
+            for (s in spacers) (s.layoutParams as LayoutParams).weight = if (narrow) 0f else spacerWeight
+            super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+        }
+    }
+
+    private fun buttonRow(ctx: Context, actions: List<Action>, onPick: (Action) -> Unit): LinearLayout = ButtonRow(ctx).apply {
         orientation = LinearLayout.HORIZONTAL
         setPadding(ctx.dp(12), ctx.dp(8), ctx.dp(12), ctx.dp(8))
         for (action in actions) {
@@ -278,11 +310,16 @@ object Sheets {
                 setOnClickListener { onPick(action) }
             }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         }
-        // Fewer than four keep their size, centred.
+        // Fewer than four keep their size, centred (see ButtonRow).
         if (actions.size < 4) {
             val side = (4 - actions.size) * 0.5f
-            addView(View(ctx), 0, LinearLayout.LayoutParams(0, 1, side))
-            addView(View(ctx), LinearLayout.LayoutParams(0, 1, side))
+            spacerWeight = side
+            val before = View(ctx)
+            val after = View(ctx)
+            addView(before, 0, LinearLayout.LayoutParams(0, 1, side))
+            addView(after, LinearLayout.LayoutParams(0, 1, side))
+            spacers += before
+            spacers += after
         }
     }
 
@@ -372,6 +409,25 @@ object Sheets {
         for (action in rest) col.addView(row(a, action.icon, action.label, action.danger) { pick(action) })
         dialog = sheet(a, col)
         dialog.showImmersive()
+    }
+
+    /**
+     * 3.0.3: the big buttons and rows of [actions] as Sheets.actions shows them, without a sheet
+     * around them (the player's own panel); [onPick] runs for the one tapped.
+     */
+    fun actionList(ctx: Context, actions: List<Action>, onPick: (Action) -> Unit): LinearLayout = LinearLayout(ctx).apply {
+        orientation = LinearLayout.VERTICAL
+        val main = actions.filter { it.primary }
+        val rest = actions.filter { !it.primary }
+        main.chunked(4).forEach { addView(buttonRow(ctx, it, onPick)) }
+        if (main.isNotEmpty() && rest.isNotEmpty()) addView(Ui.divider(ctx, 24).apply {
+            (layoutParams as LinearLayout.LayoutParams).apply {
+                marginEnd = ctx.dp(24)
+                topMargin = ctx.dp(4)
+                bottomMargin = ctx.dp(4)
+            }
+        })
+        for (action in rest) addView(row(ctx, action.icon, action.label, action.danger) { onPick(action) })
     }
 
     // ------------------------------------------------------------------ dark mode
@@ -1074,6 +1130,7 @@ object Sheets {
             setOnClickListener {
                 val on = !sw.isChecked
                 sw.setChecked(on, animate = true)
+                Haptics.tick(sw)
                 onChange(on)
             }
         }

@@ -55,6 +55,8 @@ object BackupSettings {
         "player_gestures" to BOOLEAN, "player_resume" to BOOLEAN, "player_background_audio" to BOOLEAN,
         "player_speed" to FLOAT, "player_subtitle_size" to INT, "player_subtitle_colour" to INT,
         "player_subtitle_background" to INT, "player_subtitle_language" to STRING, "player_rotation" to STRING, "player_double_tap_seconds" to INT,
+        // 3.0.3: the equalizer and where the subtitles were dragged to (the one-time hints stay out).
+        "player_eq_on" to BOOLEAN, "player_eq_preset" to INT, "player_eq_levels" to STRING, "player_eq_bass" to INT, "player_subtitle_lift" to FLOAT,
         // Torrents
         "torrent_at_once" to INT, "torrent_down_kbps" to INT, "torrent_up_kbps" to INT, "torrent_wifi_only" to BOOLEAN,
         "torrent_battery_pause" to BOOLEAN, "torrent_extra_trackers" to BOOLEAN, "torrent_charging_only" to BOOLEAN,

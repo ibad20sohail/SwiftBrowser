@@ -97,20 +97,24 @@ class SwiftApp : Application() {
     private fun migratePrefs() {
         val sp = prefs.sp
         val version = sp.getInt("prefs_version", 1)
-        if (version >= 4) return
+        if (version >= 5) return
         sp.edit {
-            // 1.0 kept 3 pages in memory; 2 suits a 2 GB phone better.
-            if (version < 2) remove(Prefs.MAX_LIVE_TABS)
-            if (version < 3) {
-                // From 1.2 full-screen videos neither force landscape nor add swipe gestures by default.
-                remove(Prefs.AUTO_LANDSCAPE)
-                remove(Prefs.VIDEO_GESTURES)
+            if (version < 4) {
+                // 1.0 kept 3 pages in memory; 2 suits a 2 GB phone better.
+                if (version < 2) remove(Prefs.MAX_LIVE_TABS)
+                if (version < 3) {
+                    // From 1.2 full-screen videos neither force landscape nor add swipe gestures by default.
+                    remove(Prefs.AUTO_LANDSCAPE)
+                    remove(Prefs.VIDEO_GESTURES)
+                }
+                // 2.7: no more choice of drawing method (always the graphics chip), no search shortcuts.
+                remove(Prefs.SOFTWARE_RENDERING)
+                remove("search_shortcuts")
+                remove("search_shortcuts_removed")
             }
-            // 2.7: no more choice of drawing method (always the graphics chip), no search shortcuts.
-            remove(Prefs.SOFTWARE_RENDERING)
-            remove("search_shortcuts")
-            remove("search_shortcuts_removed")
-            putInt("prefs_version", 4)
+            // 3.0.3: the shortcuts come first again; 3.0.2's first order goes (any other chosen order stays).
+            if (sp.getString(Prefs.HOME_ORDER, null) == com.swiftbrowser.core.HomeOrder.OLD_DEFAULT) remove(Prefs.HOME_ORDER)
+            putInt("prefs_version", 5)
         }
     }
 

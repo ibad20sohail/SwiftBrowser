@@ -136,6 +136,14 @@ class Tab(
     /** A video (not just sound) has played on the page since it loaded: the screen stays on while it plays. */
     var videoPlaying = false
 
+    /**
+     * 3.0.3: the page's height less one screen, and the screen's height, in CSS pixels (0 until the
+     * helper says), and where it is scrolled to: for the fast scroll handle on long pages.
+     */
+    var pageScrollMax = 0f
+    var pageViewHeight = 0f
+    var pageY = 0f
+
     val isBlank: Boolean get() = UrlUtils.isBlank(url)
 
     /** A blank tab with nothing to restore shows the home page and needs no engine session (not a pop-up, 3.0). */
@@ -209,6 +217,9 @@ interface BrowserUi {
 
     /** The page scrolled; [scrollY] is in screen pixels, [byUser] when the user scrolled it. */
     fun onPageScroll(tab: Tab, scrollY: Float, byUser: Boolean)
+
+    /** 3.0.3: the page said how tall it is ([Tab.pageScrollMax]). */
+    fun onPageSize(tab: Tab) {}
 
     /** The page asks for the toolbar to be shown or hidden (e.g. to reveal a focused field). */
     fun onToolbarRequest(tab: Tab, show: Boolean)

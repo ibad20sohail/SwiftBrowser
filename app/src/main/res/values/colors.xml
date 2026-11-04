@@ -87,8 +87,5 @@
     <color name="danger">#FFC5221F</color>
     <color name="danger_container">#FFFCE8E6</color>
     <color name="on_danger_container">#FF8C1D18</color>
-    <!-- Messages (the pill at the bottom): dark in light mode, light in dark mode. -->
-    <color name="message_bg">#FF2B2E36</color>
-    <color name="message_text">#FFF2F3F5</color>
     <color name="skeleton">#FFE9ECF1</color>
 </resources>

@@ -15,15 +15,30 @@ import com.swiftbrowser.R
 import com.swiftbrowser.core.Favicons
 import com.swiftbrowser.core.Profiles
 import com.swiftbrowser.core.UrlUtils
+import com.swiftbrowser.files.FileKind
+import com.swiftbrowser.files.FileThumbs
+import com.swiftbrowser.files.FilesSettings
 import com.swiftbrowser.media.Unfinished
 import com.swiftbrowser.tabs.TabManager
+import java.io.File
 
 /**
  * "Continue" on the home page (2.3): videos and articles left half-way, as a row of cards that
  * scrolls sideways. Hidden while there is nothing to continue.
+ *
+ * 3.0.3: the same row and cards serve Files ([part]): the browser's home page has what was left on
+ * the web, Files' start page the videos and songs on the phone. Files reads its cards with the rest
+ * of its page and hands them over ([show]), under a heading of its own.
  */
-class ContinueRow(context: Context, private val onOpen: (Unfinished.Item) -> Unit, private val onHold: (Unfinished.Item) -> Unit) :
-    LinearLayout(context) {
+class ContinueRow(
+    context: Context,
+    private val part: Part,
+    private val onOpen: (Unfinished.Item) -> Unit,
+    private val onHold: (Unfinished.Item) -> Unit,
+) : LinearLayout(context) {
+
+    /** 3.0.3: which Continue the row is: the browser home's (from the web) or Files' (on the phone). */
+    enum class Part { BROWSER, FILES }
 
     // Padded like the page; the row itself reaches the screen's edges (HomeView), so cards scroll out of sight there.
     private val cards = LinearLayout(context).apply {
@@ -36,7 +51,8 @@ class ContinueRow(context: Context, private val onOpen: (Unfinished.Item) -> Uni
     init {
         orientation = VERTICAL
         visibility = GONE
-        addView(TextView(context).apply {
+        // 3.0.3: Files' start page names its parts with headings of its own.
+        if (part == Part.BROWSER) addView(TextView(context).apply {
             text = "Continue"
             textSize = 15.5f
             typeface = Ui.MEDIUM
@@ -55,29 +71,41 @@ class ContinueRow(context: Context, private val onOpen: (Unfinished.Item) -> Uni
     fun refresh() {
         val gen = ++generation
         val profileId = Profiles.currentId
+        val app = context.applicationContext
         TabManager.io.execute {
-            val items = Unfinished.load(profileId)
-            post { if (gen == generation) bind(items) }
+            val items = if (part == Part.FILES) Unfinished.forFiles(app) else Unfinished.forBrowser(profileId)
+            post { if (gen == generation) show(items) }
         }
     }
 
-    private fun bind(items: List<Unfinished.Item>) {
-        val keys = items.map { it.url + it.progress }
-        if (keys == shown && cards.childCount == items.size) return
+    /** Shows [items] as the cards (3.0.3: Files hands over its own); one waiting for its Undo stays out. */
+    fun show(items: List<Unfinished.Item>) {
+        val cardsNow = items.filter { !Unfinished.isHidden(it) }
+        val keys = cardsNow.map { it.url + it.progress }
+        if (keys == shown && cards.childCount == cardsNow.size) return
+        // A row still closing up after its last card went (remove) stays open for these.
+        if (cardsNow.isNotEmpty()) {
+            animate().cancel()
+            alpha = 1f
+        }
         val wasShown = visibility == VISIBLE
         shown = keys
         cards.removeAllViews()
-        items.forEachIndexed { i, item -> cards.addView(card(item), LayoutParams(dp(CARD_DP), ViewGroup.LayoutParams.WRAP_CONTENT).apply { if (i > 0) marginStart = dp(10) }) }
-        visibility = if (items.isEmpty()) GONE else VISIBLE
-        if (!wasShown && items.isNotEmpty()) {
+        cardsNow.forEachIndexed { i, item -> cards.addView(card(item), LayoutParams(dp(CARD_DP), ViewGroup.LayoutParams.WRAP_CONTENT).apply { if (i > 0) marginStart = dp(10) }) }
+        visibility = if (cardsNow.isEmpty()) GONE else VISIBLE
+        // Files' list brings its parts in itself.
+        if (part == Part.BROWSER && !wasShown && cardsNow.isNotEmpty()) {
             alpha = 0f
             translationY = dp(8).toFloat()
             animate().alpha(1f).translationY(0f).setDuration(220).start()
         }
     }
 
-    /** Takes [item]'s card away with a short fade, then the row closes up. */
-    fun remove(item: Unfinished.Item) {
+    /**
+     * Takes [item]'s card away with a short fade, then the row closes up. [onUndo] (3.0.3): what Undo
+     * does besides putting it back (Files shows its start page again); otherwise the row loads again.
+     */
+    fun remove(item: Unfinished.Item, onUndo: (() -> Unit)? = null) {
         // Removed for good once the Undo is gone (2.6): 3.0, when its message goes, not after a fixed
         // time (holding the message stops its clock, and an Undo then came too late to work).
         Unfinished.hide(item)
@@ -90,7 +118,7 @@ class ContinueRow(context: Context, private val onOpen: (Unfinished.Item) -> Uni
                 undone = true
                 Unfinished.unhide(item)
                 shown = emptyList()
-                refresh()
+                if (onUndo != null) onUndo() else refresh()
             }
         }
         val card = (0 until cards.childCount).map { cards.getChildAt(it) }.firstOrNull { it.tag === item } ?: return
@@ -114,12 +142,16 @@ class ContinueRow(context: Context, private val onOpen: (Unfinished.Item) -> Uni
         orientation = VERTICAL
         background = Ui.shape(context, Ui.color(context, R.color.tile_bg), 18)
         clipToOutline = true
-        val site = UrlUtils.host(item.url)?.removePrefix("www.")?.removePrefix("m.").orEmpty()
+        // 3.0.3: a video or song on the phone (Files' row) has no site: its folder says where it is.
+        val local = item.localPath?.let { File(it) }
+        val site = if (local != null) "" else UrlUtils.host(item.url)?.removePrefix("www.")?.removePrefix("m.").orEmpty()
+        val name = item.title.ifBlank { local?.name ?: site }
         addView(FrameLayout(context).apply {
             val doc = item.doc
             // 3.0.1: until its picture comes (or when it has none), the site's colour softly across the card
-            // and a round play (or page) mark, rather than a dim little icon on plain grey.
-            val tint = Ui.siteColor(com.swiftbrowser.core.TopSites.key(site))
+            // and a round play (or page) mark, rather than a dim little icon on plain grey. 3.0.3: the
+            // accent's for a file on the phone, and a note for a song.
+            val tint = if (local != null) Ui.accent(context) else Ui.siteColor(com.swiftbrowser.core.TopSites.key(site))
             if (doc == null) {
                 val base = Ui.color(context, R.color.surface_alt)
                 background = android.graphics.drawable.GradientDrawable(
@@ -134,7 +166,7 @@ class ContinueRow(context: Context, private val onOpen: (Unfinished.Item) -> Uni
                 if (doc != null) {
                     setImageDrawable(com.swiftbrowser.docs.DocIcon(doc.kind, dp(56)))
                 } else {
-                    setImageDrawable(badge(item.video, tint))
+                    setImageDrawable(badge(if (item.video) R.drawable.ic_play else if (local != null) R.drawable.ic_music_note else R.drawable.ic_reader, tint))
                 }
             }
             addView(picture, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
@@ -159,6 +191,17 @@ class ContinueRow(context: Context, private val onOpen: (Unfinished.Item) -> Uni
                     picture.animate().alpha(1f).setDuration(Motion.NORMAL).start()
                 }
             }
+            // 3.0.3: a video on the phone shows a frame of it, made as Files' pictures are (when those are on).
+            if (local != null && item.video && FilesSettings.thumbnails) {
+                FileThumbs.load(context, local, item.fileTime, FileKind.VIDEO, dp(CARD_DP), wide = true) { bmp ->
+                    picture.scaleType = ImageView.ScaleType.CENTER_CROP
+                    picture.setImageBitmap(bmp)
+                    if (isAttachedToWindow) {
+                        picture.alpha = 0f
+                        picture.animate().alpha(1f).setDuration(Motion.SHORT).start()
+                    }
+                }
+            }
             addView(Progress(context, item.progress), FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(4), Gravity.BOTTOM))
         }, LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(PICTURE_DP)))
         addView(LinearLayout(context).apply {
@@ -167,22 +210,24 @@ class ContinueRow(context: Context, private val onOpen: (Unfinished.Item) -> Uni
             addView(LinearLayout(context).apply {
                 orientation = HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
+                val kind = if (item.video) R.drawable.ic_movie else if (local != null) R.drawable.ic_music_note else R.drawable.ic_reader
                 val icon = ImageView(context).apply {
-                    setImageDrawable(Ui.icon(context, if (item.video) R.drawable.ic_movie else R.drawable.ic_reader, Ui.accent(context)))
+                    setImageDrawable(Ui.icon(context, kind, Ui.accent(context)))
                 }
                 addView(icon, LayoutParams(dp(16), dp(16)))
                 val doc = item.doc
-                if (doc != null) icon.setImageDrawable(com.swiftbrowser.docs.DocIcon(doc.kind, dp(16))) else Favicons.load(item.url) { bmp -> if (bmp != null) icon.setImageBitmap(bmp) }
-                addView(Ui.text(context, Ui.Type.CAPTION, doc?.kind?.label ?: site, lines = 1).apply { setPadding(dp(6), 0, 0, 0) },
+                if (doc != null) icon.setImageDrawable(com.swiftbrowser.docs.DocIcon(doc.kind, dp(16))) else if (local == null) Favicons.load(item.url) { bmp -> if (bmp != null) icon.setImageBitmap(bmp) }
+                val where = local?.parentFile?.let { com.swiftbrowser.files.FileIndex.placeOf(context, it) }
+                addView(Ui.text(context, Ui.Type.CAPTION, doc?.kind?.label ?: where ?: site, lines = 1).apply { setPadding(dp(6), 0, 0, 0) },
                     LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             })
-            addView(Ui.text(context, Ui.Type.LABEL, item.title.ifBlank { site }, lines = 2).apply {
+            addView(Ui.text(context, Ui.Type.LABEL, name, lines = 2).apply {
                 setPadding(0, dp(6), 0, 0)
                 minLines = 2
             })
             addView(Ui.text(context, Ui.Type.CAPTION, item.caption, lines = 1).apply { setPadding(0, dp(4), 0, 0) })
         })
-        contentDescription = "Continue ${item.title.ifBlank { site }}, ${item.caption}"
+        contentDescription = "Continue $name, ${item.caption}"
         setOnClickListener { onOpen(item) }
         setOnLongClickListener {
             onHold(item)
@@ -191,15 +236,15 @@ class ContinueRow(context: Context, private val onOpen: (Unfinished.Item) -> Uni
         Ui.pressable(this, 0.96f)
     }
 
-    /** 3.0.1: the round mark on a card without its picture: play for a video, a page for an article. */
-    private fun badge(video: Boolean, tint: Int): android.graphics.drawable.Drawable {
+    /** 3.0.1: the round mark on a card without its picture: play for a video, a page for an article (3.0.3: [glyph]). */
+    private fun badge(glyph: Int, tint: Int): android.graphics.drawable.Drawable {
         val disc = android.graphics.drawable.GradientDrawable().apply {
             shape = android.graphics.drawable.GradientDrawable.OVAL
             setColor(0xEBFFFFFF.toInt())
         }
-        val glyph = androidx.core.content.ContextCompat.getDrawable(context, if (video) R.drawable.ic_play else R.drawable.ic_reader)!!.mutate()
-        glyph.setTint(tint)
-        return android.graphics.drawable.LayerDrawable(arrayOf(disc, glyph)).apply {
+        val mark = androidx.core.content.ContextCompat.getDrawable(context, glyph)!!.mutate()
+        mark.setTint(tint)
+        return android.graphics.drawable.LayerDrawable(arrayOf(disc, mark)).apply {
             setLayerSize(0, dp(48), dp(48))
             setLayerSize(1, dp(26), dp(26))
             setLayerGravity(1, Gravity.CENTER)

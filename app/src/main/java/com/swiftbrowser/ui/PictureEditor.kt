@@ -132,21 +132,25 @@ class PictureEditor(
 
     private fun whiteRipple() = RippleDrawable(ColorStateList.valueOf(0x40FFFFFF), null, null)
 
+    /**
+     * 3.0.3: icons only, as the viewer's own bar (2.9.1): holding one shows its name, and screen
+     * readers still say it. The captions under them are gone.
+     */
     private fun tool(icon: Int, label: String, click: () -> Unit) = LinearLayout(a).apply {
         orientation = LinearLayout.VERTICAL
-        gravity = Gravity.CENTER_HORIZONTAL
-        setPadding(0, Ui.dp(a, 8), 0, Ui.dp(a, 6))
+        gravity = Gravity.CENTER
+        minimumHeight = Ui.dp(a, 52)
+        setPadding(0, Ui.dp(a, 12), 0, Ui.dp(a, 12))
         background = whiteRipple()
         contentDescription = label
         isClickable = true
+        isFocusable = true
         addView(ImageView(a).apply {
             setImageDrawable(Ui.icon(a, icon, Color.WHITE))
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }, LinearLayout.LayoutParams(Ui.dp(a, 24), Ui.dp(a, 24)))
-        addView(Ui.text(a, Ui.Type.CAPTION, label, 0xDDFFFFFF.toInt(), lines = 1).apply {
-            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-            setPadding(0, Ui.dp(a, 6), 0, 0)
-        })
+        androidx.appcompat.widget.TooltipCompat.setTooltipText(this, label)
+        Ui.pressable(this, 0.9f)
         setOnClickListener { click() }
     }
 

@@ -1147,6 +1147,16 @@ class DownloadsActivity : ListActivity() {
         val status: TextView = v.findViewById(R.id.dl_status)
         val action: ImageButton = v.findViewById(R.id.dl_action)
         val more: ImageButton = v.findViewById(R.id.dl_more)
+
+        // 3.0.3: a finished video's frame in place of its icon (see showFrame), and the icon as it was.
+        val iconTint = icon.imageTintList
+        val iconBadge: android.graphics.drawable.Drawable? = icon.background
+        val iconPad = icon.paddingLeft
+        val iconScale: ImageView.ScaleType = icon.scaleType
+        val frameFill = Ui.shape(v.context, Palette.color(v.context, R.color.surface_alt), 10)
+        var frameRequest: com.swiftbrowser.files.FileThumbs.Request? = null
+        var frameFor: String? = null
+        var frame: android.graphics.Bitmap? = null
     }
 
     private inner class DownloadAdapter : RecyclerView.Adapter<DownloadHolder>() {
@@ -1182,6 +1192,7 @@ class DownloadsActivity : ListActivity() {
                     else -> R.drawable.ic_download
                 },
             )
+            showFrame(h, d, video)
             h.name.text = d.fileName
             val pct = d.percent
             h.progress.visibility = if (d.status == Downloads.DONE) View.GONE else View.VISIBLE
@@ -1210,10 +1221,45 @@ class DownloadsActivity : ListActivity() {
             }
             h.itemView.setOnClickListener { if (d.status == Downloads.DONE) open(d) }
             h.itemView.setOnLongClickListener {
-                menu(d)
+                menu(d, h.frame)
                 true
             }
-            h.more.setOnClickListener { menu(d) }
+            h.more.setOnClickListener { menu(d, h.frame) }
+        }
+
+        override fun onViewRecycled(holder: DownloadHolder) {
+            holder.frameRequest?.cancel()
+            holder.frameRequest = null
+        }
+    }
+
+    /**
+     * 3.0.3: a finished video download whose file is still there shows a frame of it in a rounded
+     * square, instead of the film icon. Made off the main thread by Files' picture maker and kept in its
+     * memory (a missing file makes none: the icon stays); downloads running or of other kinds keep their icons.
+     */
+    private fun showFrame(h: DownloadHolder, d: Downloads.Item, video: Boolean) {
+        h.frameRequest?.cancel()
+        h.frameRequest = null
+        h.frame = null
+        h.icon.imageTintList = h.iconTint
+        h.icon.background = h.iconBadge
+        h.icon.clipToOutline = false
+        h.icon.setPadding(h.iconPad, h.iconPad, h.iconPad, h.iconPad)
+        h.icon.scaleType = h.iconScale
+        val wanted = video && d.status == Downloads.DONE && d.kind != Downloads.KIND_TORRENT
+        h.frameFor = if (wanted) d.filePath else null
+        if (!wanted) return
+        val key = d.filePath
+        h.frameRequest = com.swiftbrowser.files.FileThumbs.load(this, File(d.filePath), d.created, com.swiftbrowser.files.FileKind.VIDEO, Ui.dp(this, 40)) { bmp ->
+            if (h.frameFor != key) return@load
+            h.frame = bmp
+            h.icon.imageTintList = null
+            h.icon.background = h.frameFill
+            h.icon.clipToOutline = true
+            h.icon.setPadding(0, 0, 0, 0)
+            h.icon.scaleType = ImageView.ScaleType.CENTER_CROP
+            h.icon.setImageBitmap(bmp)
         }
     }
 
@@ -1252,7 +1298,21 @@ class DownloadsActivity : ListActivity() {
             append(UrlUtils.formatBytes(d.done))
             if (d.total > 0 && d.kind != Downloads.KIND_HLS) append(" of ").append(UrlUtils.formatBytes(d.total))
             if (d.bytesPerSecond > 0) append(" · ").append(UrlUtils.formatBytes(d.bytesPerSecond)).append("/s")
+            secondsLeft(d)?.let { append(" · ").append(duration(it)).append(" left") }
         }
+    }
+
+    /**
+     * 3.0.3: about how long a running download has left, as for torrents: a file's from its size, a
+     * stream's (HLS, DASH: no size until the end) from how much of its parts are in. Null until known.
+     */
+    private fun secondsLeft(d: Downloads.Item): Long? {
+        val fraction = when {
+            d.kind == Downloads.KIND_HLS -> com.swiftbrowser.download.DownloadRules.streamFraction(d.segDone, d.segTotal, d.soundParts, d.soundShare)
+            d.total > 0 -> d.done.toDouble() / d.total
+            else -> return null
+        }
+        return com.swiftbrowser.download.DownloadRules.secondsLeft(d.done, fraction, d.bytesPerSecond)
     }
 
     /**
@@ -1347,7 +1407,8 @@ class DownloadsActivity : ListActivity() {
         }
     }
 
-    private fun menu(d: Downloads.Item) {
+    /** [frame] (3.0.3): the video's frame its row shows, for the sheet's picture too. */
+    private fun menu(d: Downloads.Item, frame: android.graphics.Bitmap? = null) {
         if (d.kind == Downloads.KIND_TORRENT) {
             torrentMenu(d)
             return
@@ -1387,7 +1448,7 @@ class DownloadsActivity : ListActivity() {
             PageActions.isSavedPage(d) -> R.drawable.ic_offline
             else -> R.drawable.ic_download
         }
-        Sheets.actions(this, d.fileName, statusText(d), actions, iconRes = kind)
+        Sheets.actions(this, d.fileName, statusText(d), actions, icon = frame, iconRes = kind)
     }
 
     /** Opens the phone's file manager at the download's folder, or says where it is. */

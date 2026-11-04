@@ -71,7 +71,10 @@ import kotlin.math.abs
  * another app's link (content://) shows just that picture, and an edit of it is saved as a copy
  * in Pictures/Swift.
  */
-class MediaViewerActivity : AppCompatActivity() {
+class MediaViewerActivity : AppCompatActivity(), Messages.DarkScreen {
+    // 3.0.3: a black screen in both modes: its messages are dark too.
+    override val darkMessages: Boolean get() = true
+
     enum class Kind { IMAGE, VIDEO, AUDIO }
 
     /** One picture: of the folder, or the one another app sent. */
@@ -579,6 +582,8 @@ class MediaViewerActivity : AppCompatActivity() {
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }, LinearLayout.LayoutParams(Ui.dp(this@MediaViewerActivity, 24), Ui.dp(this@MediaViewerActivity, 24)))
         androidx.appcompat.widget.TooltipCompat.setTooltipText(this, label)
+        // 3.0.3: a press springs.
+        Ui.pressable(this, 0.9f)
         setOnClickListener { click() }
     }
 

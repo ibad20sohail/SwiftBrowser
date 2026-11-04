@@ -5,10 +5,12 @@ import org.junit.Test
 
 class HomeOrderTest {
     @Test
-    fun continueComesFirstUnlessChosenOtherwise() {
-        assertEquals(listOf("continue", "shortcuts", "news"), HomeOrder.parse(null))
-        assertEquals(listOf("continue", "shortcuts", "news"), HomeOrder.parse(""))
+    fun shortcutsComeFirstUnlessChosenOtherwise() {
+        assertEquals(listOf("shortcuts", "continue", "news"), HomeOrder.parse(null))
+        assertEquals(listOf("shortcuts", "continue", "news"), HomeOrder.parse(""))
         assertEquals(listOf("news", "shortcuts", "continue"), HomeOrder.parse("news,shortcuts,continue"))
+        // 3.0.2's own first order is what the start-up step clears (SwiftApp.migratePrefs).
+        assertEquals("continue,shortcuts,news", HomeOrder.OLD_DEFAULT)
     }
 
     @Test
@@ -20,10 +22,10 @@ class HomeOrderTest {
     @Test
     fun partsMoveOnePlaceWithinTheList() {
         val order = HomeOrder.DEFAULT
-        assertEquals(listOf("shortcuts", "continue", "news"), HomeOrder.move(order, "shortcuts", -1))
-        assertEquals(listOf("continue", "news", "shortcuts"), HomeOrder.move(order, "shortcuts", 1))
-        assertEquals(order, HomeOrder.move(order, "continue", -1))
+        assertEquals(order, HomeOrder.move(order, "shortcuts", -1))
+        assertEquals(listOf("continue", "shortcuts", "news"), HomeOrder.move(order, "shortcuts", 1))
+        assertEquals(listOf("continue", "shortcuts", "news"), HomeOrder.move(order, "continue", -1))
         assertEquals(order, HomeOrder.move(order, "news", 1))
-        assertEquals("continue,shortcuts,news", HomeOrder.encode(order))
+        assertEquals("shortcuts,continue,news", HomeOrder.encode(order))
     }
 }

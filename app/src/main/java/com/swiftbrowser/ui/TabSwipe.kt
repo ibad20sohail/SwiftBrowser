@@ -219,6 +219,8 @@ class TabSwipe(
         val flung = vx * towards > flingVelocity
         val switch = !cancelled && (dx * towards > w * 0.3f || (flung && dx * towards > slop))
         if (switch) {
+            // 3.0.3: felt as the other tab is taken.
+            Haptics.tick(peek)
             val remaining = abs(peek.translationX) / w
             peek.animate().translationX(0f)
                 .setDuration((60 + 160 * remaining).toLong())

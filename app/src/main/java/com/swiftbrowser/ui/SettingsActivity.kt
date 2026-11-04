@@ -711,7 +711,7 @@ class SettingsActivity : AppCompatActivity() {
         def(Topic.NEWS, null, "Continue watching and reading", "continue unfinished videos articles reading resume home") {
             switch(
                 R.drawable.ic_reopen, "Continue watching and reading",
-                { "Videos and articles you left half-way, on the home page" },
+                { "What you left half-way: web videos and articles on the home page, your own videos and music in Files" },
                 checked = { prefs.homeContinue },
             ) {
                 prefs.homeContinue = it
@@ -1388,6 +1388,7 @@ class SettingsActivity : AppCompatActivity() {
                 if (!enabled()) return@setOnClickListener
                 val on = !sw.isChecked
                 sw.setChecked(on, animate = true)
+                Haptics.tick(sw)
                 onChange(on)
                 refreshAll()
             }
@@ -1395,7 +1396,9 @@ class SettingsActivity : AppCompatActivity() {
                 sw.setChecked(checked(), animate = false)
                 setSummary(sub, summary())
                 val e = enabled()
-                row.alpha = if (e) 1f else 0.5f
+                // 3.0.3: a row that becomes available (or not) fades rather than jumps.
+                val a = if (e) 1f else 0.5f
+                if (row.isAttachedToWindow && row.alpha != a) row.animate().alpha(a).setDuration(150).start() else row.alpha = a
             }
             update()
             refresh += update

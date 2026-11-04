@@ -117,6 +117,48 @@ class DownloadRulesTest {
     }
 
     @Test
+    fun aStreamsShareIsItsPercentWithoutRounding() {
+        assertEquals(0.05 + 0.95 * 80 / 159, DownloadRules.streamFraction(159 + 80, 318, 159, 0.05), 1e-9)
+        assertEquals(0.5, DownloadRules.streamFraction(60, 120, 0, 0.05), 1e-9)
+        assertEquals(1.0, DownloadRules.streamFraction(318, 318, 159, 0.05), 1e-9)
+        assertEquals(-1.0, DownloadRules.streamFraction(0, 0, 0, 0.05), 1e-9)
+        for (done in 0..318) {
+            val share = DownloadRules.streamFraction(done, 318, 159, 0.05)
+            assertEquals((share * 100).toInt(), DownloadRules.streamPercent(done, 318, 159, 0.05))
+        }
+    }
+
+    @Test
+    fun timeLeftIsSaidOnceThereIsEnoughToGoOn() {
+        val mb = 1_048_576L
+        // A file: 25 MB of 100 MB in, at 1 MB a second.
+        assertEquals(75L, DownloadRules.secondsLeft(25 * mb, 0.25, mb))
+        // Under 2% in, no speed yet, nothing in or nothing known: not said.
+        assertNull(DownloadRules.secondsLeft(mb, 0.01, mb))
+        assertNull(DownloadRules.secondsLeft(25 * mb, 0.25, 0))
+        assertNull(DownloadRules.secondsLeft(0, 0.25, mb))
+        assertNull(DownloadRules.secondsLeft(25 * mb, -1.0, mb))
+        assertNull(DownloadRules.secondsLeft(25 * mb, Double.NaN, mb))
+        // All of it in: nothing left.
+        assertEquals(0L, DownloadRules.secondsLeft(100 * mb, 1.0, mb))
+    }
+
+    @Test
+    fun aStreamsTimeLeftComesFromItsParts() {
+        val mb = 1_048_576L
+        // 10 sound parts (8% of the bytes), then 100 video parts; the sound and half the video are in,
+        // 54 MB so far, at 2 MB a second: about 100 MB in all, 46 MB (23 seconds) to go.
+        val share = DownloadRules.streamFraction(60, 110, 10, 0.08)
+        assertEquals(0.54, share, 1e-9)
+        assertEquals(23L, DownloadRules.secondsLeft(54 * mb, share, 2 * mb))
+        // The sound alone is only 8% of it: still most of the video to come.
+        val sound = DownloadRules.streamFraction(10, 110, 10, 0.08)
+        assertEquals(92L, DownloadRules.secondsLeft(8 * mb, sound, mb))
+        // Its first part (under 2%) says nothing yet.
+        assertNull(DownloadRules.secondsLeft(mb / 10, DownloadRules.streamFraction(1, 110, 10, 0.08), mb))
+    }
+
+    @Test
     fun theSameAddressAgainShowsWhatIsThereFirst() {
         assertEquals(DownloadRules.Again.NEW, DownloadRules.again(null, fileThere = false))
         for (going in listOf(Downloads.QUEUED, Downloads.RUNNING, Downloads.PAUSED, Downloads.CONVERTING)) {

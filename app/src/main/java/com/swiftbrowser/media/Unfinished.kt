@@ -1,15 +1,23 @@
 package com.swiftbrowser.media
 
+import android.content.Context
 import com.swiftbrowser.SwiftApp
 import com.swiftbrowser.core.UrlUtils
+import com.swiftbrowser.docs.Docs
 import com.swiftbrowser.tabs.Tab
 import com.swiftbrowser.tabs.TabManager
 import org.json.JSONObject
+import java.io.File
 
 /**
  * The home page's "Continue" row (2.3): long videos (WatchPositions) and reader view articles left
  * half-way, newest first. Only pages in the profile's history show, so profiles keep apart and
  * clearing history clears the row too. Nothing from incognito tabs is kept.
+ *
+ * 3.0.3: web things in the browser, phone things in Files. The browser's row ([forBrowser]) has
+ * website videos, articles and documents read straight from a link; Files' start page ([forFiles])
+ * has the videos and songs on the phone left part-way in Swift's player. Documents kept on the phone
+ * are in Files' "Recent documents".
  */
 object Unfinished {
     /** [image]: a picture for the card (the video's poster, the article's first picture), if any. */
@@ -19,10 +27,15 @@ object Unfinished {
         val doc: com.swiftbrowser.docs.Docs.Doc? = null,
         /** A video or song on the phone left part-way in Swift's player (2.9). */
         val localPath: String? = null,
+        /** 3.0.3: when that file last changed (its picture on the card is kept by it). */
+        val fileTime: Long = 0,
     )
 
     private const val MAX = 8
     private const val MAX_AGE_MS = 30L * 24 * 60 * 60 * 1000
+
+    /** 3.0.3: documents looked through for the browser's row (many may be kept on the phone, so Files'). */
+    private const val DOCS_LOOKED_AT = 40
 
     /** The reader view page says how far the article was read ([done]: to its end). */
     fun onReaderPlace(tab: Tab, msg: JSONObject) {
@@ -38,8 +51,11 @@ object Unfinished {
         }
     }
 
-    /** What the row shows (on [TabManager.io]). */
-    fun load(profileId: Long): List<Item> {
+    /**
+     * 3.0.3: the browser home's row (on [TabManager.io]): website videos, articles, and documents
+     * read straight from a link without saving them (their copies in Swift's cache, Docs.isWebCopy).
+     */
+    fun forBrowser(profileId: Long): List<Item> {
         if (!SwiftApp.prefs.homeContinue) return emptyList()
         val since = System.currentTimeMillis() - MAX_AGE_MS
         val db = SwiftApp.db
@@ -55,21 +71,35 @@ object Unfinished {
             Item(r[0] as String, (r[1] as String?).orEmpty(), share, "${(share * 100).toInt()}% read", false, r[3] as Long, r[4] as String?)
         }
         // 2.9: a document whose file was deleted leaves the row (and is forgotten).
-        val docs = db.unfinishedDocuments(profileId, since, MAX).filter { d ->
-            !com.swiftbrowser.docs.Docs.isGone(d.uri).also { gone -> if (gone) db.forgetDocumentUri(d.uri) }
-        }.map { d ->
-            val caption = if (d.kind == com.swiftbrowser.docs.Docs.Kind.PDF && d.total > 0) "Page ${d.place} of ${d.total}" else "${(d.progress * 100).toInt()}% read"
+        val docs = db.unfinishedDocuments(profileId, since, DOCS_LOOKED_AT).filter { d ->
+            !Docs.isGone(d.uri).also { gone -> if (gone) db.forgetDocumentUri(d.uri) }
+        }.filter { Docs.isWebCopy(it) }.map { d ->
+            val caption = if (d.kind == Docs.Kind.PDF && d.total > 0) "Page ${d.place} of ${d.total}" else "${(d.progress * 100).toInt()}% read"
             Item(d.uri, d.name, d.progress, caption, false, d.updated, null, d)
         }
-        // 2.9: videos and songs from the phone, left part-way in Swift's player (files that still exist).
-        val local = SwiftApp.instance?.let { ctx ->
-            LocalMedia.recent(ctx, MAX).filter { it.updated >= since && it.duration > 0 && !com.swiftbrowser.files.PrivateFolder.isInside(ctx, java.io.File(it.path)) }.map { m ->
-                val left = ((m.duration - m.position) / 60_000).toInt().coerceAtLeast(1)
-                Item("file://" + m.path, m.title, (m.position.toFloat() / m.duration).coerceIn(0f, 1f), "$left min left", m.video, m.updated, null, localPath = m.path)
-            }
-        }.orEmpty()
-        return (videos + articles + docs + local).filter { it.url !in hidden }.sortedByDescending { it.updated }.take(MAX)
+        return newest(videos + articles + docs)
     }
+
+    /**
+     * 3.0.3: Files' start page's row (off the main thread): the videos and songs on the phone left
+     * part-way in Swift's player (2.9), files that still exist and aren't in Private.
+     */
+    fun forFiles(ctx: Context): List<Item> {
+        if (!SwiftApp.prefs.homeContinue) return emptyList()
+        val since = System.currentTimeMillis() - MAX_AGE_MS
+        val local = LocalMedia.recent(ctx, MAX).filter { it.updated >= since && it.duration > 0 && !com.swiftbrowser.files.PrivateFolder.isInside(ctx, File(it.path)) }.map { m ->
+            val left = ((m.duration - m.position) / 60_000).toInt().coerceAtLeast(1)
+            Item(
+                "file://" + m.path, m.title, (m.position.toFloat() / m.duration).coerceIn(0f, 1f), "$left min left", m.video, m.updated, null,
+                localPath = m.path, fileTime = File(m.path).lastModified(),
+            )
+        }
+        return newest(local)
+    }
+
+    /** 3.0.3: what a row shows of [items]: the newest first, not those waiting for their Undo ([hidden]), [MAX] at most. */
+    internal fun newest(items: List<Item>, hidden: Set<String> = this.hidden): List<Item> =
+        items.filter { it.url !in hidden }.sortedByDescending { it.updated }.take(MAX)
 
     private val YOUTUBE_ID = Regex("^https?://(?:www\\.|m\\.|music\\.)?(?:youtube\\.com/(?:watch\\?(?:.*&)?v=|shorts/|live/)|youtu\\.be/)([A-Za-z0-9_-]{11})")
 
@@ -87,6 +117,9 @@ object Unfinished {
     fun unhide(item: Item) {
         hidden -= item.url
     }
+
+    /** 3.0.3: [item] was taken off its row and waits for its Undo to run out. */
+    fun isHidden(item: Item): Boolean = item.url in hidden
 
     /** Takes [item] off the row. */
     fun remove(item: Item) {

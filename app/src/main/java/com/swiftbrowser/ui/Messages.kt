@@ -3,7 +3,6 @@ package com.swiftbrowser.ui
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Context
-import android.content.res.Configuration
 import android.os.Handler
 import android.os.Looper
 import android.view.Gravity
@@ -105,11 +104,28 @@ object Messages {
         return pill
     }
 
-    /** The accent as it looks at night: readable on the pill, which is dark in both modes (2.2). */
-    private fun pillAccent(ctx: Context): Int {
-        val config = Configuration(ctx.resources.configuration)
-        config.uiMode = (config.uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or Configuration.UI_MODE_NIGHT_YES
-        return Palette.color(ctx.createConfigurationContext(config), Looks.accent.primary)
+    /**
+     * 3.0.3: a screen that is black whatever the mode (the picture viewer, the player over a video)
+     * says so, and its messages take the dark colours there.
+     */
+    interface DarkScreen {
+        val darkMessages: Boolean
+    }
+
+    /**
+     * 3.0.3: the message's colours from Swift's own (the mode's, your chosen ones included): in light
+     * mode the sheets' surface with a thin outline, in dark mode the raised surface; the text and the
+     * action as everywhere else. It was a fixed charcoal in both modes.
+     */
+    private class Colours(val bg: Int, val fg: Int, val accent: Int, val stroke: Int?)
+
+    private fun colours(ctx: Context): Colours {
+        val night = Palette.isNight(ctx) || (ctx as? DarkScreen)?.darkMessages == true
+        return if (night) {
+            Colours(Palette.colorFor(ctx, true, R.color.surface_alt), Palette.colorFor(ctx, true, R.color.text_primary), Palette.colorFor(ctx, true, Looks.accent.primary), null)
+        } else {
+            Colours(Palette.colorFor(ctx, false, R.color.sheet_bg), Palette.colorFor(ctx, false, R.color.text_primary), Palette.colorFor(ctx, false, Looks.accent.primary), Palette.colorFor(ctx, false, R.color.outline))
+        }
     }
 
     @SuppressLint("ViewConstructor")
@@ -133,9 +149,10 @@ object Messages {
         private var startedAt = 0L
 
         init {
-            val fg = Ui.color(ctx, R.color.message_text)
-            val accent = pillAccent(ctx)
-            background = Ui.shape(ctx, Ui.color(ctx, R.color.message_bg), 18)
+            val c = colours(ctx)
+            val fg = c.fg
+            val accent = c.accent
+            background = Ui.shape(ctx, c.bg, 18, c.stroke)
             elevation = Ui.dpf(ctx, 6f)
             clipToOutline = true
             accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
@@ -169,6 +186,8 @@ object Messages {
                         onAction?.invoke()
                         dismiss()
                     }
+                    // 3.0.3: springs when pressed.
+                    Ui.pressable(this, 0.92f)
                 }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
                     marginStart = Ui.dp(ctx, 4)
                     topMargin = -reach

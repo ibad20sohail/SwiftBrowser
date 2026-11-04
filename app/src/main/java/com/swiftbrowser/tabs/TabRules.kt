@@ -153,4 +153,30 @@ object TabRules {
 
     /** A tab showing [tabUrl] shows exactly [url] (a link another app sent): the same, or with the slash a site's address gets. */
     fun sameAddress(tabUrl: String, url: String): Boolean = tabUrl == url || tabUrl == "$url/" || "$tabUrl/" == url
+
+    /**
+     * 3.0.3: whether [pixels] (ARGB) are all about one colour: every channel within a small range.
+     * A plain page with some text still differs where the text is; black video frames don't.
+     */
+    fun looksBlank(pixels: IntArray, spread: Int = 14): Boolean {
+        if (pixels.isEmpty()) return true
+        var minR = 255
+        var maxR = 0
+        var minG = 255
+        var maxG = 0
+        var minB = 255
+        var maxB = 0
+        for (p in pixels) {
+            val r = (p shr 16) and 0xFF
+            val g = (p shr 8) and 0xFF
+            val b = p and 0xFF
+            if (r < minR) minR = r
+            if (r > maxR) maxR = r
+            if (g < minG) minG = g
+            if (g > maxG) maxG = g
+            if (b < minB) minB = b
+            if (b > maxB) maxB = b
+        }
+        return maxR - minR <= spread && maxG - minG <= spread && maxB - minB <= spread
+    }
 }

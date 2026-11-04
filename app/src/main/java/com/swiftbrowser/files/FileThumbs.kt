@@ -49,10 +49,12 @@ object FileThumbs {
     /**
      * [onLoaded] runs on the main thread with [file]'s picture ([size] px square), straight away
      * when it is in memory. Returns the request to cancel, or null when there is nothing to wait for.
+     * 3.0.3: [wide], a video's whole frame [size] px wide at most (Continue's cards in Files).
      */
-    fun load(ctx: Context, file: File, time: Long, kind: FileKind, size: Int, onLoaded: (Bitmap) -> Unit): Request? {
+    fun load(ctx: Context, file: File, time: Long, kind: FileKind, size: Int, wide: Boolean = false, onLoaded: (Bitmap) -> Unit): Request? {
         if (!has(kind)) return null
-        val key = "$size:${file.path}:$time"
+        val frame = wide && kind == FileKind.VIDEO
+        val key = (if (frame) "w" else "") + "$size:${file.path}:$time"
         memory.get(key)?.let {
             onLoaded(it)
             return null
@@ -63,7 +65,7 @@ object FileThumbs {
         pool.execute {
             if (r.cancelled) return@execute
             val bmp = try {
-                make(app, file, kind, size)
+                if (frame) video(file)?.let { wideOf(it, size) } else make(app, file, kind, size)
             } catch (_: Exception) {
                 null
             } catch (_: OutOfMemoryError) {
@@ -120,6 +122,17 @@ object FileThumbs {
             0
         }
         return square(bmp, size, degrees)
+    }
+
+    /** 3.0.3: [src] as it is, [width] px wide at most, in the lighter 16-bit format (a frame has no see-through parts). */
+    private fun wideOf(src: Bitmap, width: Int): Bitmap {
+        val s = min(1f, width.toFloat() / src.width.coerceAtLeast(1))
+        val w = (src.width * s).toInt().coerceAtLeast(1)
+        val h = (src.height * s).toInt().coerceAtLeast(1)
+        val out = Bitmap.createBitmap(w, h, Bitmap.Config.RGB_565)
+        Canvas(out).drawBitmap(src, null, android.graphics.Rect(0, 0, w, h), android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG))
+        src.recycle()
+        return out
     }
 
     /** The middle square of [src], [size] px, turned upright. */

@@ -7,6 +7,7 @@ import android.graphics.Rect
 import android.net.Uri
 import android.view.GestureDetector
 import android.view.MotionEvent
+import android.view.ScaleGestureDetector
 import android.view.View
 import android.view.ViewConfiguration
 import android.view.ViewGroup
@@ -65,7 +66,8 @@ class VideoFrame(context: Context) : ViewGroup(context) {
     enum class Fit(val label: String) {
         FIT("Fit to screen"),
         FILL("Stretch to fill"),
-        ZOOM("Zoom to fill"),
+        // 3.0.3: named as pinching out calls it (it was "Zoom to fill").
+        ZOOM("Fill screen"),
         WIDE("16:9"),
         STANDARD("4:3"),
     }
@@ -132,6 +134,10 @@ class VideoFrame(context: Context) : ViewGroup(context) {
  * holding plays faster until let go, swiping up and down changes the brightness (left half) or the
  * volume (right half), and swiping sideways seeks. Swipes starting at the screen's top or bottom
  * edge are left to Android (they bring its bars).
+ *
+ * 3.0.3: pinching fills the screen or fits the picture; after a double tap, further taps on that
+ * side skip again; an up or down drag starting on the subtitles moves them. With two fingers down
+ * no swipe starts.
  */
 @SuppressLint("ViewConstructor")
 class PlayerGestures(context: Context, private val host: Host) : View(context) {
@@ -155,6 +161,12 @@ class PlayerGestures(context: Context, private val host: Host) : View(context) {
         fun onSwipe(kind: Int, amount: Float)
 
         fun onSwipeEnd(kind: Int)
+
+        /** 3.0.3: a pinch out far enough ([fill]: fill the screen) or in (fit the picture). */
+        fun onPinch(fill: Boolean)
+
+        /** 3.0.3: [x], [y] are on the subtitles (a drag up or down from there moves them). */
+        fun onSubtitles(x: Float, y: Float): Boolean
     }
 
     private val slop = ViewConfiguration.get(context).scaledTouchSlop * 1.5f
@@ -167,6 +179,39 @@ class PlayerGestures(context: Context, private val host: Host) : View(context) {
 
     /** The last single tap was in the middle third (shown or hid the controls already). */
     private var tappedMiddle = false
+
+    /** 3.0.3: a second finger came down in this touch: no taps or swipes from it, only the pinch. */
+    private var twoFingers = false
+
+    /** 3.0.3: this touch started on the subtitles. */
+    private var onSubtitles = false
+
+    /** 3.0.3: this touch is a further tap of a double tap's series (see [TapSeries]). */
+    private var seriesTap = false
+    private val series = TapSeries()
+
+    /** 3.0.3: a double tap on a side was made in this touch: the series starts when it lets go. */
+    private var skippedSide = 0
+    private val pinch = PinchSteps()
+
+    private val scale = ScaleGestureDetector(context, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+        override fun onScaleBegin(detector: ScaleGestureDetector): Boolean {
+            if (host.locked() || !host.gesturesOn() || holding) return false
+            pinch.begin()
+            return true
+        }
+
+        override fun onScale(detector: ScaleGestureDetector): Boolean {
+            when (pinch.add(detector.scaleFactor)) {
+                1 -> host.onPinch(true)
+                -1 -> host.onPinch(false)
+            }
+            return true
+        }
+    }).apply {
+        // Not a double tap and a drag (that is the seek's and the skips' own).
+        isQuickScaleEnabled = false
+    }
 
     private fun inMiddle(x: Float): Boolean = x >= width / 3f && x <= width - width / 3f
 
@@ -193,7 +238,9 @@ class PlayerGestures(context: Context, private val host: Host) : View(context) {
                 host.onTap()
                 return true
             }
-            host.onDoubleTap(if (e.x < width / 2f) -1 else 1)
+            val side = if (e.x < width / 2f) -1 else 1
+            skippedSide = side
+            host.onDoubleTap(side)
             return true
         }
 
@@ -204,17 +251,55 @@ class PlayerGestures(context: Context, private val host: Host) : View(context) {
         }
     })
 
+    /** No tap, double tap or hold out of this touch any more. */
+    private fun cancelTaps(ev: MotionEvent) {
+        val cancel = MotionEvent.obtain(ev).apply { action = MotionEvent.ACTION_CANCEL }
+        detector.onTouchEvent(cancel)
+        cancel.recycle()
+    }
+
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(ev: MotionEvent): Boolean {
+        scale.onTouchEvent(ev)
         when (ev.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 downX = ev.x
                 downY = ev.y
                 swipe = 0
                 holding = false
+                twoFingers = false
+                skippedSide = 0
                 canSwipe = !host.locked() && host.gesturesOn() && ev.y > edge && ev.y < height - edge
+                onSubtitles = canSwipe && host.onSubtitles(ev.x, ev.y)
+                // 3.0.3: another tap on the side that was just skipped skips again, at once.
+                seriesTap = !host.locked() && host.gesturesOn() && series.claims(PlayerRules.third(ev.x, width), ev.eventTime)
+                if (seriesTap) return true
+                series.clear()
+            }
+            MotionEvent.ACTION_POINTER_DOWN -> {
+                // 3.0.3: a second finger (a pinch): a swipe under way ends where it is, and nothing else comes of this touch.
+                if (!twoFingers) {
+                    twoFingers = true
+                    seriesTap = false
+                    if (swipe != 0) {
+                        val kind = swipe
+                        swipe = 0
+                        host.onSwipeEnd(kind)
+                    }
+                    cancelTaps(ev)
+                }
+                return true
             }
             MotionEvent.ACTION_MOVE -> {
+                if (seriesTap) {
+                    // Moved: not a tap after all.
+                    if (abs(ev.x - downX) > slop || abs(ev.y - downY) > slop) {
+                        seriesTap = false
+                        series.clear()
+                    }
+                    return true
+                }
+                if (twoFingers) return true
                 if (swipe != 0) {
                     if (swipe == SEEK) host.onSwipe(swipe, (ev.x - downX) / width.coerceAtLeast(1)) else host.onSwipe(swipe, (downY - ev.y) / height.coerceAtLeast(1))
                     return true
@@ -223,11 +308,13 @@ class PlayerGestures(context: Context, private val host: Host) : View(context) {
                     val dx = ev.x - downX
                     val dy = ev.y - downY
                     if (abs(dx) > slop || abs(dy) > slop) {
-                        swipe = if (abs(dx) > abs(dy)) SEEK else if (downX < width / 2f) BRIGHTNESS else VOLUME
-                        // No tap, double tap or hold out of this touch any more.
-                        val cancel = MotionEvent.obtain(ev).apply { action = MotionEvent.ACTION_CANCEL }
-                        detector.onTouchEvent(cancel)
-                        cancel.recycle()
+                        swipe = when {
+                            onSubtitles && abs(dy) > abs(dx) -> SUBTITLES
+                            abs(dx) > abs(dy) -> SEEK
+                            downX < width / 2f -> BRIGHTNESS
+                            else -> VOLUME
+                        }
+                        cancelTaps(ev)
                         // Measured from here, so the change doesn't jump by the first few pixels.
                         downX = ev.x
                         downY = ev.y
@@ -237,6 +324,17 @@ class PlayerGestures(context: Context, private val host: Host) : View(context) {
                 }
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                if (seriesTap) {
+                    seriesTap = false
+                    val side = series.side
+                    if (ev.actionMasked == MotionEvent.ACTION_UP && side != 0) {
+                        host.onDoubleTap(side)
+                        series.start(side, ev.eventTime)
+                    } else {
+                        series.clear()
+                    }
+                    return true
+                }
                 if (swipe != 0) {
                     val kind = swipe
                     swipe = 0
@@ -247,6 +345,12 @@ class PlayerGestures(context: Context, private val host: Host) : View(context) {
                     holding = false
                     host.onHold(false)
                 }
+                if (twoFingers) {
+                    twoFingers = false
+                    return true
+                }
+                // 3.0.3: a double tap on a side: further taps there skip again (the series).
+                if (ev.actionMasked == MotionEvent.ACTION_UP && skippedSide != 0) series.start(skippedSide, ev.eventTime)
             }
         }
         detector.onTouchEvent(ev)
@@ -257,5 +361,8 @@ class PlayerGestures(context: Context, private val host: Host) : View(context) {
         const val BRIGHTNESS = 1
         const val VOLUME = 2
         const val SEEK = 3
+
+        /** 3.0.3: the subtitles, dragged up or down. */
+        const val SUBTITLES = 4
     }
 }

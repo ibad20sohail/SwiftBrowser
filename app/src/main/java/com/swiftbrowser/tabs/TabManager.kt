@@ -279,8 +279,14 @@ object TabManager {
         return tab
     }
 
+    /** 3.0.3: the tab chosen before the one showing now (a double tap on the tab button goes back to it). */
+    private var previousTabId = -1L
+
+    fun previousTab(): Tab? = tabs.firstOrNull { it.id == previousTabId && it !== current }
+
     fun select(tab: Tab) {
         val previous = current
+        if (previous != null && previous !== tab) previousTabId = previous.id
         if (previous != null && previous !== tab) {
             // 3.0: it was in use until now, not only when it was opened (an idle tab lets go of its
             // page after 30 minutes, see trimLiveSessions).

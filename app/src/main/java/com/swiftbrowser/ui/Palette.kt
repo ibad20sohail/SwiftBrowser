@@ -22,6 +22,7 @@ import com.swiftbrowser.R
 import com.swiftbrowser.SwiftApp
 import kotlin.math.abs
 import kotlin.math.cbrt
+import kotlin.math.hypot
 import kotlin.math.min
 import kotlin.math.pow
 
@@ -369,7 +370,7 @@ object Palette {
 
     /** A Material dialog's background in the chosen sheet colour (call on the builder, before create). */
     fun dialogBackground(ctx: Context): Drawable = GradientDrawable().apply {
-        cornerRadius = 26 * ctx.resources.displayMetrics.density
+        cornerRadius = Ui.R_LARGE * ctx.resources.displayMetrics.density
         setColor(color(ctx, R.color.sheet_bg))
     }
 
@@ -460,9 +461,18 @@ object Tones {
 
     fun withAlpha(c: Int, alpha: Int) = (c and 0x00FFFFFF) or (alpha shl 24)
 
-    /** [seed] at lightness [tone] (0 black … 100 white), as colourful as the screen can show. */
-    fun tone(seed: Int, tone: Double): Int {
-        val (_, a, b) = lab(seed)
+    /**
+     * [seed] at lightness [tone] (0 black … 100 white), as colourful as the screen can show. 3.0.4:
+     * [chroma] asks for that much colour instead of the seed's own, its hue kept (a cover's soft
+     * background, a clear accent from a dull cover).
+     */
+    fun tone(seed: Int, tone: Double, chroma: Double = Double.NaN): Int {
+        var (_, a, b) = lab(seed)
+        val own = hypot(a, b)
+        if (!chroma.isNaN() && own > 0) {
+            a *= chroma / own
+            b *= chroma / own
+        }
         // Less colour until it fits on screen (very light and very dark tones hold little colour).
         var lo = 0.0
         var hi = 1.0
@@ -508,10 +518,12 @@ object Tones {
         return if (t3 > 0.008856) t3 else (t - 16.0 / 116) / 7.787
     }
 
+    // 3.0.4: the channels read from the colour's number (not with Color.red…), so tones are worked
+    // out the same on the PC, where the music screen's colours are tested (CoverColoursTest).
     fun lab(c: Int): Triple<Double, Double, Double> {
-        val r = lin(Color.red(c))
-        val g = lin(Color.green(c))
-        val b = lin(Color.blue(c))
+        val r = lin((c shr 16) and 0xFF)
+        val g = lin((c shr 8) and 0xFF)
+        val b = lin(c and 0xFF)
         val x = (0.4124 * r + 0.3576 * g + 0.1805 * b) / XN
         val y = 0.2126 * r + 0.7152 * g + 0.0722 * b
         val z = (0.0193 * r + 0.1192 * g + 0.9505 * b) / ZN
@@ -530,6 +542,6 @@ object Tones {
         val eps = 0.0005
         if (r < -eps || r > 1 + eps || g < -eps || g > 1 + eps || bl < -eps || bl > 1 + eps) return null
         fun ch(v: Double) = (gamma(v.coerceIn(0.0, 1.0)) * 255 + 0.5).toInt().coerceIn(0, 255)
-        return Color.rgb(ch(r), ch(g), ch(bl))
+        return (0xFF shl 24) or (ch(r) shl 16) or (ch(g) shl 8) or ch(bl)
     }
 }

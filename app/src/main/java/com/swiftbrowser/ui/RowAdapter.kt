@@ -112,6 +112,14 @@ class RowHolder(view: View) : RecyclerView.ViewHolder(view) {
         action.setOnClickListener { onClick() }
     }
 
+    /**
+     * 3.0.4: the row's background as it is now (a grouped list's rounded piece, GroupedRows) stays
+     * through [set], as the ripple does for other lists' rows.
+     */
+    fun keepBackground() {
+        ripple = itemView.background
+    }
+
     companion object {
         private var selectable = 0
 
@@ -127,11 +135,16 @@ class RowHolder(view: View) : RecyclerView.ViewHolder(view) {
     }
 }
 
-/** A RecyclerView adapter over a plain list, binding each item to an item_row. */
+/**
+ * A RecyclerView adapter over a plain list, binding each item to an item_row. 3.0.4: with
+ * [groupOf], a grouped list: rows of the same group (what it says for them) that are next to each
+ * other sit together as rounded pieces (GroupedRows).
+ */
 class RowAdapter<T>(
     private val bind: (RowHolder, T) -> Unit,
     private val onClick: (T) -> Unit,
     private val onLongClick: ((T) -> Unit)? = null,
+    private val groupOf: ((T) -> Any)? = null,
 ) : RecyclerView.Adapter<RowHolder>() {
     var items: List<T> = emptyList()
         set(value) {
@@ -139,13 +152,22 @@ class RowAdapter<T>(
             notifyDataSetChanged()
         }
 
+    /** The group of the item at a position (made once, not on every bind). */
+    private val groupAt: (Int) -> Any? = { i -> groupOf?.invoke(items[i]) }
+
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RowHolder =
-        RowHolder(Palette.paint(LayoutInflater.from(parent.context).inflate(R.layout.item_row, parent, false)))
+        RowHolder(Palette.paint(LayoutInflater.from(parent.context).inflate(R.layout.item_row, parent, false))).also {
+            if (groupOf != null) {
+                GroupedRows.prepare(it.itemView)
+                it.keepBackground()
+            }
+        }
 
     override fun getItemCount() = items.size
 
     override fun onBindViewHolder(holder: RowHolder, position: Int) {
         val item = items[position]
+        if (groupOf != null) GroupedRows.place(holder.itemView, position, items.size, groupAt)
         bind(holder, item)
         holder.itemView.setOnClickListener { onClick(item) }
         if (onLongClick != null) {

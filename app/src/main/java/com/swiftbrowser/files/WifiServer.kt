@@ -656,6 +656,8 @@ class WifiServer(private val ctx: Context, val address: InetAddress, private val
         } finally {
             receiving.decrementAndGet()
             lastBusyAt = SystemClock.elapsedRealtime()
+            // 3.0.4: Files measures the folder again (FolderSizes).
+            if (saved.isNotEmpty()) FolderSizes.changed(listOf(dir.path))
         }
         send(out, Reply(200, JSON, JSONObject().put("ok", true).put("saved", JSONArray(saved)).toString().toByteArray()))
     }

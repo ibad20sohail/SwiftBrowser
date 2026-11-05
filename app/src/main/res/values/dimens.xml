@@ -4,4 +4,16 @@
     <!-- 3.0.1: the address bar's buttons, 48 dp tall to tap; 44 wide (48 in 3.0), which leaves the
          site's name 16 dp more with four buttons. -->
     <dimen name="toolbar_button_width">44dp</dimen>
+
+    <!-- 3.0.4: the text sizes of Ui.Type (Kit.kt), so the layout files use the same scale. -->
+    <dimen name="text_display">30sp</dimen>
+    <dimen name="text_headline">23sp</dimen>
+    <dimen name="text_title">19sp</dimen>
+    <dimen name="text_heading">17sp</dimen>
+    <dimen name="text_subtitle">15.5sp</dimen>
+    <dimen name="text_body">15sp</dimen>
+    <dimen name="text_body_secondary">14sp</dimen>
+    <dimen name="text_label">13.5sp</dimen>
+    <dimen name="text_caption">12.5sp</dimen>
+    <dimen name="text_small">11sp</dimen>
 </resources>

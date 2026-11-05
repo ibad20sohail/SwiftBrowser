@@ -60,7 +60,8 @@ class VpnTileService : TileService() {
             Vpn.State.ON -> Vpn.current()?.countryName ?: getString(R.string.tile_vpn)
             else -> getString(R.string.tile_vpn)
         }
-        tile.icon = Icon.createWithResource(this, R.drawable.ic_tile_vpn)
+        // 3.0.4: the key filled while on, as Swift's icons are.
+        tile.icon = Icon.createWithResource(this, if (tile.state == Tile.STATE_ACTIVE) R.drawable.ic_tile_vpn_on else R.drawable.ic_tile_vpn)
         tile.updateTile()
     }
 

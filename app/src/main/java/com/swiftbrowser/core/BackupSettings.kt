@@ -27,19 +27,27 @@ object BackupSettings {
         "light_bg" to STRING, "light_bg_custom" to INT, "dark_bg" to STRING, "dark_bg_custom" to INT,
         "night_light" to INT, "night_light_strength" to INT, "text_scale" to FLOAT, "force_zoom" to BOOLEAN,
         "full_screen" to BOOLEAN, "haptics" to BOOLEAN,
+        // 3.0.4: Swift's own font or the phone's.
+        "swift_font" to BOOLEAN,
         // The address bar and the menu
         "toolbar_at_bottom" to BOOLEAN, "hide_toolbar_on_scroll" to BOOLEAN, "toolbar_follows_scroll" to BOOLEAN,
         "bar_swipes" to INT, "toolbar_layout" to STRING, "menu_layout" to STRING, "menu_hidden" to STRING,
+        // 3.0.4: the floating bar, and websites' colours in it.
+        "bar_style" to STRING, "site_colours" to BOOLEAN,
         // Before 2.2, read once to carry them over.
         "menu_buttons" to STRING, "show_home_button" to BOOLEAN,
         // Home & news
-        "news_enabled" to BOOLEAN, "home_order" to STRING, "news_cards" to BOOLEAN, "news_country" to STRING, "news_topics" to SET,
+        "news_enabled" to BOOLEAN, "home_order" to STRING, "home_background" to STRING, "news_cards" to BOOLEAN, "news_country" to STRING, "news_topics" to SET,
         "news_feeds" to STRING, "news_hidden" to SET, "home_continue" to BOOLEAN, "hidden_tiles" to SET,
         "news_topic" to STRING,
         // Browsing & tabs
         "search_engine" to STRING, "search_custom_url" to STRING, "search_custom_name" to STRING,
         "search_suggestions" to BOOLEAN, "pull_to_refresh" to BOOLEAN, "edge_swipe" to BOOLEAN,
         "inactive_days" to INT, "reader_font" to STRING, "reader_spacing" to INT,
+        // 3.0.4: reader view's page colour (sepia).
+        "reader_theme" to STRING,
+        // 3.0.4: the tab grid as a list, and the group's strip by the bar (pinned tabs are tabs, not settings).
+        "tabs_as_list" to BOOLEAN, "group_strip" to BOOLEAN,
         "translate_offer" to BOOLEAN, "translate_to" to STRING,
         // Ad blocking
         "ad_level" to STRING, "hide_cookie_notices" to BOOLEAN,
@@ -57,6 +65,8 @@ object BackupSettings {
         "player_subtitle_background" to INT, "player_subtitle_language" to STRING, "player_rotation" to STRING, "player_double_tap_seconds" to INT,
         // 3.0.3: the equalizer and where the subtitles were dragged to (the one-time hints stay out).
         "player_eq_on" to BOOLEAN, "player_eq_preset" to INT, "player_eq_levels" to STRING, "player_eq_bass" to INT, "player_subtitle_lift" to FLOAT,
+        // 3.0.4: night sound (loud parts quieter, quiet voices louder).
+        "player_night_sound" to BOOLEAN,
         // Torrents
         "torrent_at_once" to INT, "torrent_down_kbps" to INT, "torrent_up_kbps" to INT, "torrent_wifi_only" to BOOLEAN,
         "torrent_battery_pause" to BOOLEAN, "torrent_extra_trackers" to BOOLEAN, "torrent_charging_only" to BOOLEAN,
@@ -65,6 +75,8 @@ object BackupSettings {
         "files_hidden" to BOOLEAN, "files_start_at" to STRING, "files_grid" to BOOLEAN, "files_sort" to INT,
         "files_category_sort" to INT, "files_thumbnails" to BOOLEAN, "files_recycle_bin" to BOOLEAN,
         "files_bin_days" to INT, "files_wifi_port" to INT,
+        // 3.0.4: two folders side by side (where each side was is not a setting).
+        "files_two_panes" to BOOLEAN,
         // Privacy & security
         "https_only" to BOOLEAN, "reject_cookie_banners" to BOOLEAN, "secure_dns" to STRING,
         "incognito_screenshots" to BOOLEAN, "safer_browsing" to BOOLEAN, "newer_firefox_version" to BOOLEAN,

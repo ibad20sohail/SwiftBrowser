@@ -2,9 +2,12 @@
     android:width="24dp"
     android:height="24dp"
     android:tint="?attr/colorControlNormal"
-    android:viewportWidth="24"
-    android:viewportHeight="24">
-    <path
-        android:fillColor="@android:color/white"
-        android:pathData="M20,6h-8l-2,-2H4c-1.11,0 -1.99,0.89 -1.99,2L2,18c0,1.11 0.89,2 2,2h16c1.11,0 2,-0.89 2,-2V8c0,-1.11 -0.89,-2 -2,-2zM19,14h-3v3h-2v-3h-3v-2h3V9h2v3h3v2z" />
+    android:viewportWidth="960"
+    android:viewportHeight="960">
+    <!-- 3.0.4: Material Symbols Rounded "create_new_folder". -->
+    <group android:translateY="960">
+        <path
+            android:fillColor="@android:color/white"
+            android:pathData="M160,-160q-33,0 -56.5,-23.5T80,-240v-480q0,-33 23.5,-56.5T160,-800h207q16,0 30.5,6t25.5,17l57,57h320q33,0 56.5,23.5T880,-640v400q0,33 -23.5,56.5T800,-160H160Zm0,-80h640v-400H447l-80,-80H160v480Zm0,0v-480 480Zm400,-160v40q0,17 11.5,28.5T600,-320q17,0 28.5,-11.5T640,-360v-40h40q17,0 28.5,-11.5T720,-440q0,-17 -11.5,-28.5T680,-480h-40v-40q0,-17 -11.5,-28.5T600,-560q-17,0 -28.5,11.5T560,-520v40h-40q-17,0 -28.5,11.5T480,-440q0,17 11.5,28.5T520,-400h40Z" />
+    </group>
 </vector>

@@ -24,7 +24,7 @@ object AdStatsCard {
         return LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(Ui.dp(ctx, 18), Ui.dp(ctx, 16), Ui.dp(ctx, 18), Ui.dp(ctx, 12))
-            addView(Ui.text(ctx, Ui.Type.HEADLINE, NumberFormat.getIntegerInstance().format(total)).apply { textSize = 30f })
+            addView(Ui.text(ctx, Ui.Type.DISPLAY, NumberFormat.getIntegerInstance().format(total)))
             // 3.0: "1 ad or tracker", not "1 ads and trackers".
             val what = if (total == 1) "ad or tracker blocked in the last 7 days" else "ads and trackers blocked in the last 7 days"
             addView(Ui.text(ctx, Ui.Type.BODY_SECONDARY, if (total == 0) "Nothing blocked yet this week" else what))

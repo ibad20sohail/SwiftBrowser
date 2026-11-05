@@ -120,6 +120,8 @@ object RecycleBin {
                 L.w("Recycle bin: moving failed (${e.javaClass.simpleName})")
                 Batch(emptyList(), list)
             }
+            // 3.0.4: the folders they left, and the bin, are measured again (FolderSizes).
+            FolderSizes.changed(list.mapNotNull { it.parentFile?.path } + b.items.map { binOf(it.volume).path })
             main.post { done(b) }
         }
     }
@@ -194,6 +196,7 @@ object RecycleBin {
                 val ok = access != null && runCatching { access.delete(f) }.getOrDefault(false)
                 if (ok) FileOps.forget(app, f) else failed++
             }
+            FolderSizes.changed(files.mapNotNull { it.parentFile?.path })
             main.post { done(failed) }
         }
     }
@@ -210,6 +213,7 @@ object RecycleBin {
                 L.w("Recycle bin: restoring failed (${e.javaClass.simpleName})")
                 emptyList<File>() to items.size
             }
+            FolderSizes.changed(items.map { it.home.path } + items.map { binOf(it.volume).path })
             main.post { done(r.first, r.second) }
         }
     }
@@ -219,6 +223,7 @@ object RecycleBin {
         val app = ctx.applicationContext
         worker.execute {
             val n = runCatching { eraseNow(app, items) }.getOrDefault(0)
+            FolderSizes.changed(items.map { binOf(it.volume).path })
             main.post { done(n) }
         }
     }
@@ -228,6 +233,7 @@ object RecycleBin {
         val app = ctx.applicationContext
         worker.execute {
             val n = runCatching { synchronized(lock) { Volumes.refresh(app).sumOf { v -> emptyVolume(app, v) } } }.getOrDefault(0)
+            FolderSizes.changed(Volumes.all(app).map { binOf(it).path })
             main.post { done(n) }
         }
     }
@@ -284,6 +290,7 @@ object RecycleBin {
             } catch (e: Exception) {
                 L.w("Recycle bin: clean-up failed (${e.javaClass.simpleName})")
             }
+            FolderSizes.changed(Volumes.all(app).map { binOf(it).path })
         }
     }
 

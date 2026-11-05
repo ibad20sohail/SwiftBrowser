@@ -74,6 +74,17 @@ object Passwords {
         }
     }
 
+    /** 3.0.4: another secret (a network folder's password) locked with the same keystore key. Blocking. */
+    fun lock(text: String): String = encrypt(text)
+
+    /** 3.0.4: what [lock] gave back, unlocked; null when the keystore lost its key or doesn't answer. Blocking. */
+    fun unlock(stored: String): String? = try {
+        decrypt(stored, existingKey())
+    } catch (e: Exception) {
+        L.w("The keystore can't be read (${e.javaClass.simpleName})")
+        null
+    }
+
     /** 3.0: how many of a profile's sign-ins can be read, and how many can't any more. */
     class Count(val readable: Int, val unreadable: Int)
 

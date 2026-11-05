@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 3.0.4: Swift's own font (Google Sans Flex, SIL Open Font License 1.1) as one family, regular
+     and bold, so text asked for in bold gets the real bold weight. Android 7 reads the app:
+     attributes through AndroidX; newer Androids the android: ones. -->
+<font-family xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+    <font
+        android:font="@font/swift_sans_regular"
+        android:fontStyle="normal"
+        android:fontWeight="400"
+        app:font="@font/swift_sans_regular"
+        app:fontStyle="normal"
+        app:fontWeight="400" />
+    <font
+        android:font="@font/swift_sans_bold"
+        android:fontStyle="normal"
+        android:fontWeight="700"
+        app:font="@font/swift_sans_bold"
+        app:fontStyle="normal"
+        app:fontWeight="700" />
+</font-family>

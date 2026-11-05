@@ -496,14 +496,13 @@ class MediaViewerActivity : AppCompatActivity(), Messages.DarkScreen {
         val white = Color.WHITE
         title = TextView(this).apply {
             setTextColor(white)
-            textSize = 16f
-            typeface = Ui.MEDIUM
+            Ui.size(this, Ui.Type.SUBTITLE)
             isSingleLine = true
             ellipsize = android.text.TextUtils.TruncateAt.END
         }
         count = TextView(this).apply {
             setTextColor(0xCCFFFFFF.toInt())
-            textSize = 12.5f
+            Ui.size(this, Ui.Type.CAPTION, keepFont = true)
             isSingleLine = true
         }
         val size = Ui.dp(this, 48)

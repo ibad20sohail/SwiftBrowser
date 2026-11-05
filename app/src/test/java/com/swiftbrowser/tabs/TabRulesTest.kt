@@ -148,6 +148,76 @@ class TabRulesTest {
         for (level in listOf(40, 60, 80)) assertEquals(TabRules.Warning.BACKGROUND_TABS, TabRules.onWarning(level, memoryLow = false))
     }
 
+    // ------------------------------------------------------------------ pinned tabs (3.0.4)
+
+    private val pins = hashSetOf<String>()
+    private val isPinned: (String) -> Boolean = { it in pins }
+
+    @Test
+    fun pinnedTabsComeFirstAndEveryoneKeepsTheirOrder() {
+        pins += listOf("p2", "p1")
+        assertEquals(listOf("p2", "p1", "a", "b", "c"), TabRules.pinnedFirst(listOf("a", "p2", "b", "p1", "c"), isPinned))
+        // Nothing pinned: nothing moves.
+        pins.clear()
+        assertEquals(listOf("a", "b"), TabRules.pinnedFirst(listOf("a", "b"), isPinned))
+    }
+
+    @Test
+    fun aTabPinnedGoesAfterThoseAlreadyPinned() {
+        pins += listOf("p1", "p2")
+        val before = listOf("p1", "p2", "a", "b", "c")
+        pins += "b"
+        assertEquals(listOf("p1", "p2", "b", "a", "c"), TabRules.withPinChanged(before, "b", isPinned))
+        // In the order they were pinned: one pinned later goes after it.
+        pins += "c"
+        assertEquals(listOf("p1", "p2", "b", "c", "a"), TabRules.withPinChanged(listOf("p1", "p2", "b", "a", "c"), "c", isPinned))
+    }
+
+    @Test
+    fun aTabUnpinnedGoesFirstOfTheOthers() {
+        pins += listOf("p1", "p2", "p3")
+        pins -= "p1"
+        assertEquals(listOf("p2", "p3", "p1", "a", "b"), TabRules.withPinChanged(listOf("p1", "p2", "p3", "a", "b"), "p1", isPinned))
+        // The last pinned tab unpinned: the front of the list.
+        pins.clear()
+        assertEquals(listOf("p3", "a", "b"), TabRules.withPinChanged(listOf("p3", "a", "b"), "p3", isPinned))
+    }
+
+    @Test
+    fun aTabOpenedFromAPinnedOneGoesAfterThePinnedTabs() {
+        // A link opened in a new tab goes next to its tab, which is pinned here: it moves after them.
+        pins += listOf("p1", "p2")
+        assertEquals(listOf("p1", "p2", "new", "a"), TabRules.pinnedFirst(listOf("p1", "new", "p2", "a"), isPinned))
+    }
+
+    // ------------------------------------------------------------------ sound and the group strip (3.0.4)
+
+    @Test
+    fun aMutedTabSaysSoUntilUnmuted() {
+        assertEquals(TabRules.Sound.NONE, TabRules.sound(playing = false, muted = false))
+        assertEquals(TabRules.Sound.PLAYING, TabRules.sound(playing = true, muted = false))
+        assertEquals(TabRules.Sound.MUTED, TabRules.sound(playing = true, muted = true))
+        // Paused, or its page went: still muted.
+        assertEquals(TabRules.Sound.MUTED, TabRules.sound(playing = false, muted = true))
+    }
+
+    @Test
+    fun theGroupStripShowsWithAGroupedTabsPage() {
+        assertEquals(TabRules.Strip.SHOWN, TabRules.strip(enabled = true, grouped = true, hasPage = true, fullScreen = false, pageShown = true, typing = false))
+        assertEquals(TabRules.Strip.NONE, TabRules.strip(enabled = true, grouped = false, hasPage = true, fullScreen = false, pageShown = true, typing = false))
+        assertEquals(TabRules.Strip.NONE, TabRules.strip(enabled = false, grouped = true, hasPage = true, fullScreen = false, pageShown = true, typing = false))
+        // A new tab's home page has no page to make room in; a full-screen video has the whole screen.
+        assertEquals(TabRules.Strip.NONE, TabRules.strip(enabled = true, grouped = true, hasPage = false, fullScreen = false, pageShown = false, typing = false))
+        assertEquals(TabRules.Strip.NONE, TabRules.strip(enabled = true, grouped = true, hasPage = true, fullScreen = true, pageShown = true, typing = false))
+    }
+
+    @Test
+    fun theGroupStripKeepsItsRoomWhileItMakesWay() {
+        // Typing an address, or the home page over the tab's page: hidden, but the page keeps its size.
+        assertEquals(TabRules.Strip.ROOM, TabRules.strip(enabled = true, grouped = true, hasPage = true, fullScreen = false, pageShown = true, typing = true))
+        assertEquals(TabRules.Strip.ROOM, TabRules.strip(enabled = true, grouped = true, hasPage = true, fullScreen = false, pageShown = false, typing = false))
+    }
+
     @Test
     fun anOpenTabKeptLoadedDoesNotCount() {
         val others = listOf(tab(1, 2_000))

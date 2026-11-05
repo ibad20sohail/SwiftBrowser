@@ -162,6 +162,8 @@ object Looks {
         }
         SwiftApp.reloadAfterThemeChange = true
         SwiftApp.applyNightMode(dark)
+        // 3.0.4: the home screen widget turns light or dark with Swift.
+        SwiftApp.instance?.let { SearchWidget.refresh(it) }
     }
 
     fun setMode(mode: Int) {
@@ -200,10 +202,27 @@ object Looks {
         colorsChanged(activity)
     }
 
+    /**
+     * 3.0.4: colours from a picture (PictureColours.mix): its accent as the user's own accent, and
+     * its light and dark backgrounds as the user's own backgrounds, in one go.
+     */
+    fun setPictureColours(activity: Activity, accent: Int, lightBg: Int, darkBg: Int) {
+        val prefs = SwiftApp.prefs
+        prefs.accent = Accent.CUSTOM.key
+        prefs.accentCustom = accent
+        prefs.lightBg = Palette.CUSTOM
+        prefs.lightBgCustom = lightBg
+        prefs.darkBg = Palette.CUSTOM
+        prefs.darkBgCustom = darkBg
+        colorsChanged(activity)
+    }
+
     private fun colorsChanged(activity: Activity) {
         Palette.invalidate()
         // Reader view's links follow too.
         com.swiftbrowser.media.Helper.sendReaderStyle()
+        // 3.0.4: and the home screen widget.
+        SearchWidget.refresh(activity)
         activity.recreate()
     }
 
@@ -262,7 +281,12 @@ object Ui {
     const val XL = 20
     const val XXL = 24
 
-    // Corner radii (dp).
+    // Corner radii (dp). 3.0.4: every rounded corner in the app is one of these four (around 20
+    // different sizes had crept in): XSMALL for small marks, labels and the inner corners of grouped
+    // rows; SMALL for pictures, tiles and icon boxes; MEDIUM for cards; LARGE for sheets, dialogs and
+    // the outer corners of grouped rows. Thin bars and pills stay fully round (half their height),
+    // and a shape inside another is a step smaller than the one around it.
+    const val R_XSMALL = 8
     const val R_SMALL = 12
     const val R_MEDIUM = 16
     const val R_LARGE = 24
@@ -283,25 +307,67 @@ object Ui {
     fun textSecondary(ctx: Context) = color(ctx, R.color.text_secondary)
     fun danger(ctx: Context) = color(ctx, R.color.danger)
 
-    val MEDIUM: Typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+    /** 3.0.4: Swift's own font (AppFont) when it's on, the phone's otherwise. */
+    val MEDIUM: Typeface get() = AppFont.medium ?: Typeface.create("sans-serif-medium", Typeface.NORMAL)
 
-    /** Text styles: size (sp), medium weight or not, and secondary (grey) colour or not. */
-    enum class Type(val sp: Float, val medium: Boolean, val secondary: Boolean) {
-        HEADLINE(22f, true, false),
-        TITLE(18f, true, false),
-        SUBTITLE(15.5f, true, false),
-        BODY(15f, false, false),
-        BODY_SECONDARY(14f, false, true),
-        LABEL(13.5f, true, false),
-        CAPTION(12.5f, false, true),
-        SECTION(13f, true, false),
+    /** 3.0.4: headings in bold, as Android 16's own apps have them (bolder headlines). */
+    val BOLD: Typeface get() = AppFont.bold ?: Typeface.create("sans-serif", Typeface.BOLD)
+
+    /** How heavy a text style is. */
+    enum class Weight { REGULAR, MEDIUM, BOLD }
+
+    /**
+     * Text styles: size (sp), weight, and secondary (grey) colour or not. 3.0.4: headlines, titles
+     * and section headings bolder and a little bigger, for a clearer order on every screen; and every
+     * text in the app on this one scale (about 100 sizes had been set by hand, 10 to 34 sp): DISPLAY
+     * for big numbers and big titles, HEADING for the parts of a page, SMALL for badges and the
+     * smallest labels. The layout files use the same sizes (res/values/dimens.xml, text_*).
+     */
+    enum class Type(val sp: Float, val weight: Weight, val secondary: Boolean) {
+        /**
+         * 3.0.4: a screen's large title (Settings, History, Bookmarks, Downloads), as Android's own
+         * apps open with (it moves up under the title bar as the page scrolls), and big numbers.
+         */
+        DISPLAY(30f, Weight.BOLD, false),
+        HEADLINE(23f, Weight.BOLD, false),
+        TITLE(19f, Weight.BOLD, false),
+        HEADING(17f, Weight.BOLD, false),
+        SUBTITLE(15.5f, Weight.MEDIUM, false),
+        BODY(15f, Weight.REGULAR, false),
+        BODY_SECONDARY(14f, Weight.REGULAR, true),
+        LABEL(13.5f, Weight.MEDIUM, false),
+        CAPTION(12.5f, Weight.REGULAR, true),
+        SMALL(11f, Weight.MEDIUM, false),
+        SECTION(14f, Weight.BOLD, false),
+    }
+
+    fun typeface(weight: Weight): Typeface = when (weight) {
+        Weight.REGULAR -> AppFont.regular ?: Typeface.DEFAULT
+        Weight.MEDIUM -> MEDIUM
+        Weight.BOLD -> BOLD
+    }
+
+    /** 3.0.4: only the size and weight of [type], for text that keeps a colour (or a font) of its own. */
+    fun size(tv: TextView, type: Type, keepFont: Boolean = false): TextView = tv.apply {
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, type.sp)
+        if (!keepFont) typeface = typeface(type.weight)
+        noHyphens(this)
+    }
+
+    /**
+     * 3.0.4: no words split at the end of a line ("Proton VP-N"): Android 7 hyphenates labels by
+     * default (Android 10 stopped), and a label reads better with the whole word on the next line.
+     */
+    fun noHyphens(tv: TextView) {
+        if (android.os.Build.VERSION.SDK_INT >= 23) tv.hyphenationFrequency = android.text.Layout.HYPHENATION_FREQUENCY_NONE
     }
 
     fun style(tv: TextView, type: Type, color: Int? = null): TextView = tv.apply {
         setTextSize(TypedValue.COMPLEX_UNIT_SP, type.sp)
-        typeface = if (type.medium) MEDIUM else Typeface.DEFAULT
+        typeface = typeface(type.weight)
         setTextColor(color ?: if (type == Type.SECTION) accent(context) else if (type.secondary) textSecondary(context) else text(context))
         if (type == Type.BODY || type == Type.BODY_SECONDARY) setLineSpacing(0f, 1.15f)
+        noHyphens(this)
     }
 
     fun text(ctx: Context, type: Type, value: CharSequence?, color: Int? = null, lines: Int = 0): TextView =
@@ -438,6 +504,18 @@ object Ui {
             layoutParams = LinearLayout.LayoutParams(size, size)
         }
 
+    /**
+     * 3.0.4: a row that scrolls sideways fades out softly at an end where more of it is hidden, so it's
+     * clear there's more (Android's own fading edge, which only shows where there's something to
+     * scroll to). The row is drawn into a layer of its own, so the fading is worked out only when the
+     * row itself changes, not on every frame of the page scrolling past it (a slow graphics chip).
+     */
+    fun fadeEdges(row: android.widget.HorizontalScrollView, lengthDp: Int = 28) {
+        row.isHorizontalFadingEdgeEnabled = true
+        row.setFadingEdgeLength(dp(row.context, lengthDp))
+        row.setLayerType(View.LAYER_TYPE_HARDWARE, null)
+    }
+
     fun divider(ctx: Context, insetStartDp: Int = 0): View = View(ctx).apply {
         setBackgroundColor(color(ctx, R.color.divider))
         layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(ctx, 1).coerceAtMost(2)).apply {
@@ -449,14 +527,21 @@ object Ui {
      * Pressing [v] shrinks it a little and lets go with a small spring: every button, tile and card
      * reacts to the finger the same way. Done by state, so it never interferes with touch handling.
      */
-    fun pressable(v: View, scale: Float = 0.96f) {
+    fun pressable(v: View, scale: Float = 0.96f, morph: Boolean = true) {
+        // 3.0.4: and its shape changes a little as it is pressed (rounded corners squarer, a circle a
+        // rounded square), springing back as it is let go: Android 16's buttons do that. Only its
+        // background is redrawn, so it costs next to nothing.
         val down = AnimatorSet().apply {
-            playTogether(ObjectAnimator.ofFloat(v, View.SCALE_X, scale), ObjectAnimator.ofFloat(v, View.SCALE_Y, scale))
+            val parts = arrayListOf<Animator>(ObjectAnimator.ofFloat(v, View.SCALE_X, scale), ObjectAnimator.ofFloat(v, View.SCALE_Y, scale))
+            if (morph) parts += ObjectAnimator.ofFloat(v, PRESS_SHAPE, 1f)
+            playTogether(parts)
             duration = 90
             interpolator = Motion.standard
         }
         val up = AnimatorSet().apply {
-            playTogether(ObjectAnimator.ofFloat(v, View.SCALE_X, 1f), ObjectAnimator.ofFloat(v, View.SCALE_Y, 1f))
+            val parts = arrayListOf<Animator>(ObjectAnimator.ofFloat(v, View.SCALE_X, 1f), ObjectAnimator.ofFloat(v, View.SCALE_Y, 1f))
+            if (morph) parts += ObjectAnimator.ofFloat(v, PRESS_SHAPE, 0f)
+            playTogether(parts)
             duration = 180
             interpolator = Motion.overshoot
         }
@@ -464,6 +549,84 @@ object Ui {
             addState(intArrayOf(android.R.attr.state_pressed), down)
             addState(intArrayOf(), up)
         }
+    }
+
+    /** How much rounder a pressed shape's corners get squarer (0.45: to about half). */
+    private const val PRESS_SQUARER = 0.45f
+
+    /** 0 as drawn, 1 pressed: the shape of [View]'s background follows it (see [morph]). */
+    private val PRESS_SHAPE = object : android.util.Property<View, Float>(Float::class.java, "pressShape") {
+        override fun get(v: View): Float = (v.getTag(R.id.press_shape) as? Float) ?: 0f
+        override fun set(v: View, value: Float) {
+            // Not pressed yet (the "let go" state also runs as the view is first shown): nothing to put back.
+            if (value == 0f && v.getTag(R.id.press_radius) == null) return
+            v.setTag(R.id.press_shape, value)
+            morph(v, value)
+        }
+    }
+
+    /** What [morph] keeps: the shape changed and its corners as drawn. */
+    private class PressRadius(val target: Any, val radius: Float, val radii: FloatArray?)
+
+    /**
+     * 3.0.4: the corners of [v]'s background [f] of the way to pressed (squarer); 0 puts them back.
+     * A chip or a Material button by its own corner radius; anything else by the first rounded shape
+     * (GradientDrawable) in its background, a ripple's or an inset's included. A circle becomes a
+     * rounded square of the same size, which looks the same until pressed.
+     */
+    private fun morph(v: View, f: Float) {
+        when (v) {
+            is com.google.android.material.chip.Chip -> {
+                val base = baseRadius(v, v) { PressRadius(v, v.chipCornerRadius, null) } ?: return
+                v.chipCornerRadius = base.radius * (1f - PRESS_SQUARER * f)
+                return
+            }
+            is com.google.android.material.button.MaterialButton -> {
+                val base = baseRadius(v, v) { PressRadius(v, v.cornerRadius.toFloat(), null) } ?: return
+                v.cornerRadius = (base.radius * (1f - PRESS_SQUARER * f)).toInt()
+                return
+            }
+        }
+        val shape = roundedShape(v.background) ?: return
+        val base = baseRadius(v, shape) {
+            // Its own copy first: a shape from the app's drawables is shared by every view showing it.
+            v.background?.mutate()
+            val own = roundedShape(v.background) ?: return@baseRadius null
+            if (own.shape == GradientDrawable.OVAL) {
+                val b = own.bounds
+                if (b.width() <= 0 || kotlin.math.abs(b.width() - b.height()) > 2) return@baseRadius null
+                own.shape = GradientDrawable.RECTANGLE
+                own.cornerRadius = b.height() / 2f
+            }
+            // Android 7 throws reading corners that were never set one by one.
+            PressRadius(own, own.cornerRadius, runCatching { own.cornerRadii?.copyOf() }.getOrNull())
+        } ?: return
+        val g = base.target as GradientDrawable
+        val k = 1f - PRESS_SQUARER * f
+        val radii = base.radii
+        if (radii != null) g.cornerRadii = FloatArray(radii.size) { radii[it] * k } else g.cornerRadius = base.radius * k
+    }
+
+    /** The corners as drawn, worked out on the first press ([make]) and again when the background changed. */
+    private inline fun baseRadius(v: View, current: Any, make: () -> PressRadius?): PressRadius? {
+        val kept = v.getTag(R.id.press_radius) as? PressRadius
+        if (kept != null && (kept.target === current || (current is GradientDrawable && roundedShape(v.background) === kept.target))) return kept
+        val made = make() ?: return null
+        if (made.radius <= 0f && made.radii == null) return null
+        v.setTag(R.id.press_radius, made)
+        return made
+    }
+
+    /** The first rounded shape in [d]: itself, a ripple's or a layer's content, an inset's or a state's. */
+    private fun roundedShape(d: Drawable?): GradientDrawable? = when (d) {
+        null -> null
+        is GradientDrawable -> d
+        is android.graphics.drawable.LayerDrawable -> (0 until d.numberOfLayers).asSequence()
+            .filter { d.getId(it) != android.R.id.mask }
+            .mapNotNull { roundedShape(d.getDrawable(it)) }.firstOrNull()
+        is android.graphics.drawable.InsetDrawable -> roundedShape(d.drawable)
+        is android.graphics.drawable.StateListDrawable -> roundedShape(d.current)
+        else -> null
     }
 
     /**
@@ -532,6 +695,68 @@ object Motion {
     val exit = PathInterpolator(0.3f, 0f, 1f, 1f)
     /** A small spring past the end and back (letting go of a pressed button, a count changing). */
     val overshoot = android.view.animation.OvershootInterpolator(2f)
+
+    /** 3.0.4: whether Android's animations are on (Developer options can turn them off). */
+    fun enabled(ctx: Context): Boolean =
+        android.provider.Settings.Global.getFloat(ctx.contentResolver, android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, 1f) > 0f
+
+    /** 3.0.4: a panel's spring: quick, settling without bouncing. */
+    const val SPRING_PANEL = 700f
+
+    /**
+     * 3.0.4 (spring motion): moves [property] of [v] to [to] with a spring, as Android 16 moves
+     * things: it settles naturally, and asked again on the way it carries on from where it is, at
+     * the speed it has (a panel closed while it opens turns back smoothly). [bounce]: a touch past
+     * the end and back. [end] runs once it has settled at [to], not when a new target took over.
+     * With Android's animations off it is there at once.
+     */
+    fun spring(
+        v: View,
+        property: androidx.dynamicanimation.animation.DynamicAnimation.ViewProperty,
+        to: Float,
+        stiffness: Float = SPRING_PANEL,
+        bounce: Boolean = false,
+        velocity: Float? = null,
+        end: (() -> Unit)? = null,
+    ) {
+        @Suppress("UNCHECKED_CAST")
+        val springs = v.getTag(R.id.motion_springs) as? HashMap<Any, Spring>
+            ?: HashMap<Any, Spring>().also { v.setTag(R.id.motion_springs, it) }
+        val s = springs.getOrPut(property) { Spring(v, property) }
+        s.end = end
+        if (!enabled(v.context)) {
+            s.animation.cancel()
+            property.setValue(v, to)
+            s.end = null
+            end?.invoke()
+            return
+        }
+        s.animation.spring.setStiffness(stiffness).dampingRatio = if (bounce) 0.72f else 1f
+        if (velocity != null) s.animation.setStartVelocity(velocity)
+        s.animation.animateToFinalPosition(to)
+    }
+
+    /** Stops [v]'s springs where they are (their ends don't run). */
+    fun stopSprings(v: View) {
+        @Suppress("UNCHECKED_CAST")
+        (v.getTag(R.id.motion_springs) as? HashMap<Any, Spring>)?.values?.forEach {
+            it.end = null
+            it.animation.cancel()
+        }
+    }
+
+    /** One property's spring on a view, and what runs when it settles. */
+    class Spring(v: View, property: androidx.dynamicanimation.animation.DynamicAnimation.ViewProperty) {
+        var end: (() -> Unit)? = null
+        val animation = androidx.dynamicanimation.animation.SpringAnimation(v, property).apply {
+            spring = androidx.dynamicanimation.animation.SpringForce()
+            addEndListener { _, canceled, _, _ ->
+                val f = end
+                end = null
+                if (!canceled) f?.invoke()
+            }
+        }
+    }
 
     /** Fades [v] in, rising from [fromDy] dp below where it sits. */
     fun fadeIn(v: View, fromDy: Int = 8, delay: Long = 0, duration: Long = NORMAL) {

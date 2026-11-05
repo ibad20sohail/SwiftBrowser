@@ -21,8 +21,8 @@ android {
         applicationId = "com.swiftbrowser.app"
         minSdk = 24
         targetSdk = 35
-        versionCode = 25
-        versionName = "3.0.3"
+        versionCode = 26
+        versionName = "3.0.4"
     }
 
     flavorDimensions += "abi"
@@ -93,6 +93,9 @@ android {
             // (spreadsheet formulas and column widths, shape geometry, Visio, phonetic matching,
             // maths), about 1 MB.
             excludes += listOf("font_metrics.properties", "org/apache/poi/**", "org/apache/commons/codec/**", "assets/org/apache/commons/math3/**")
+            // 3.0.4: Bouncy Castle's tables for post-quantum signatures and its certificate-path
+            // messages, which network folders' crypto (smbj) never uses: about 1.3 MB.
+            excludes += listOf("org/bouncycastle/pqc/**", "org/bouncycastle/x509/*.properties")
         }
     }
 
@@ -172,6 +175,15 @@ dependencies {
     // 3.0: pictures' EXIF (orientation, details) read the same way on every Android version, with
     // the fixes Android 7's own reader lacks.
     implementation("androidx.exifinterface:exifinterface:1.4.2")
+    // 3.0.4: network folders (Files → Tools): a computer's or a home storage's shared folders over
+    // Wi-Fi with SMB 2 and 3, through smbj (Apache-2.0; its crypto is Bouncy Castle's, MIT). 0.14.0,
+    // not 0.15.0: 0.15 is new (August 2026) and turns on a large new directory-lease layer by default.
+    // smbj-rpc (BSD-3-Clause) asks a server for its list of shares. It wants Guava for Java servers:
+    // left out, so Media3's Guava for Android (the same classes it uses) stays the app's.
+    implementation("com.hierynomus:smbj:0.14.0")
+    implementation("com.rapid7.client:dcerpc:0.12.13") {
+        exclude(group = "com.google.guava", module = "guava")
+    }
 
     // 3.0: tests of the plain logic (addresses, file names, playlists, backups) that run on the PC.
     testImplementation("junit:junit:4.13.2")

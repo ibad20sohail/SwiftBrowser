@@ -90,13 +90,20 @@ body.reading #sheets { transform: translateY(110%); }
 #statusactions button {
   margin: 4px; padding: 10px 18px; border-radius: 20px; background: var(--accent); color: var(--on-accent); font-weight: 600;
 }
+/* 3.0.4: the loading shape of Swift's own screens (Google's 2025 style): a soft shape in the accent
+   that changes form while it slowly turns, instead of the old ring. */
 .spinner {
-  width: 36px; height: 36px; border-radius: 50%;
-  border: 3px solid var(--line); border-top-color: var(--accent);
-  animation: spin 0.9s linear infinite;
+  width: 34px; height: 34px; border-radius: 50%; background: var(--accent);
+  animation: morph 2.4s ease-in-out infinite, spin 3.6s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 3s; } }
+@keyframes morph {
+  0%, 100% { border-radius: 50%; }
+  25% { border-radius: 38% 62% 55% 45% / 45% 38% 62% 55%; }
+  50% { border-radius: 32%; }
+  75% { border-radius: 62% 38% 45% 55% / 55% 62% 38% 45%; }
+}
+@media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 4.8s, 7.2s; } }
 
 /* ------------------------------------------------------------------ the more menu and panels */
 

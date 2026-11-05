@@ -2,9 +2,12 @@
     android:width="24dp"
     android:height="24dp"
     android:tint="?attr/colorControlNormal"
-    android:viewportWidth="24"
-    android:viewportHeight="24">
-    <path
-        android:fillColor="@android:color/white"
-        android:pathData="M9.93,13.5h4.14L12,7.98zM20,2H4c-1.1,0 -2,0.9 -2,2v16c0,1.1 0.9,2 2,2h16c1.1,0 2,-0.9 2,-2V4c0,-1.1 -0.9,-2 -2,-2zM15.95,18.5l-1.14,-3H9.17l-1.12,3H5.96l5.11,-13h1.86l5.11,13h-2.09z" />
+    android:viewportWidth="960"
+    android:viewportHeight="960">
+    <!-- 3.0.4: Material Symbols Rounded "font_download". -->
+    <group android:translateY="960">
+        <path
+            android:fillColor="@android:color/white"
+            android:pathData="M384,-362h192l35,97q4,11 14,18t22,7q20,0 32.5,-16.5T684,-293L532,-695q-5,-11 -15,-18t-22,-7h-30q-12,0 -22,7t-15,18L276,-293q-8,19 4,36t32,17q13,0 22.5,-7t14.5,-19l35,-96Zm24,-70l70,-198h4l70,198H408ZM160,-80q-33,0 -56.5,-23.5T80,-160v-640q0,-33 23.5,-56.5T160,-880h640q33,0 56.5,23.5T880,-800v640q0,33 -23.5,56.5T800,-80H160Zm0,-80h640v-640H160v640Zm0,-640v640 -640Z" />
+    </group>
 </vector>

@@ -53,7 +53,7 @@ class DocRulesTest {
             assertFalse(type, DocRules.allowed(type, Sender.READER))
             assertFalse(type, DocRules.allowed(type, Sender.OTHER))
         }
-        for (type in listOf("hello", "click", "icon", "playing", "video-pos", "video-start", "media-ended", "media-error", "media-waiting", "google-account")) {
+        for (type in listOf("hello", "click", "icon", "playing", "video-pos", "video-start", "media-ended", "media-error", "media-waiting", "google-account", "theme-color")) {
             assertTrue(type, DocRules.allowed(type, Sender.CONTENT_SCRIPT))
             assertFalse(type, DocRules.allowed(type, Sender.VIEWER))
         }
@@ -62,6 +62,10 @@ class DocRulesTest {
         assertFalse(DocRules.allowed("tts-start", Sender.CONTENT_SCRIPT))
         assertTrue(DocRules.allowed("reader-place", Sender.READER))
         assertFalse(DocRules.allowed("reader-place", Sender.CONTENT_SCRIPT))
+        // 3.0.4: reader view's Aa button opens Swift's panel for its look; a website's page can't.
+        assertTrue(DocRules.allowed("reader-style", Sender.READER))
+        assertFalse(DocRules.allowed("reader-style", Sender.CONTENT_SCRIPT))
+        assertFalse(DocRules.allowed("reader-style", Sender.VIEWER))
         assertFalse(DocRules.allowed("something-new", Sender.VIEWER))
     }
 

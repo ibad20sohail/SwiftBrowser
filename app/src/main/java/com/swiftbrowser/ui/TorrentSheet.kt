@@ -9,7 +9,6 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.CheckBox
 import android.widget.LinearLayout
-import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.core.view.AccessibilityDelegateCompat
 import androidx.core.view.ViewCompat
@@ -328,10 +327,8 @@ object TorrentSheet {
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
         setPadding(Ui.dp(a, 24), Ui.dp(a, 16), Ui.dp(a, 24), Ui.dp(a, 16))
-        addView(ProgressBar(a).apply {
-            isIndeterminate = true
-            indeterminateTintList = ColorStateList.valueOf(Ui.accent(a))
-        }, LinearLayout.LayoutParams(Ui.dp(a, 24), Ui.dp(a, 24)))
+        // 3.0.4: Swift's loading indicator, in the accent.
+        addView(LoadingIndicator(a), LinearLayout.LayoutParams(Ui.dp(a, 24), Ui.dp(a, 24)))
         addView(Ui.text(a, Ui.Type.BODY, text).apply { setPadding(Ui.dp(a, 16), 0, 0, 0) })
     }
 

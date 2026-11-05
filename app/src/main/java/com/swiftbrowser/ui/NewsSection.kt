@@ -95,7 +95,8 @@ class NewsSection(context: Context, private val listener: Listener) : LinearLayo
             gravity = Gravity.CENTER_VERTICAL
             setPadding(Ui.dp(context, 8), 0, 0, Ui.dp(context, 4))
         }
-        head.addView(Ui.text(context, Ui.Type.SUBTITLE, "News"), LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        // 3.0.4: as bold as the home page's other headings (the scale's HEADING).
+        head.addView(Ui.text(context, Ui.Type.HEADING, "News"), LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         refreshButton = iconButton(R.drawable.ic_refresh, "Refresh news") { refresh(force = true) }
         head.addView(refreshButton)
         head.addView(iconButton(R.drawable.ic_tune, "News settings") { listener.onNewsSettings() })
@@ -111,6 +112,8 @@ class NewsSection(context: Context, private val listener: Listener) : LinearLayo
             clipToPadding = false
             setPadding(Ui.dp(context, 4), 0, Ui.dp(context, 4), 0)
             addView(chips)
+            // 3.0.4: topics fade out at the edge where more of them wait (they used to be cut off hard).
+            Ui.fadeEdges(this)
         }, LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
             bottomMargin = Ui.dp(context, 8)
         })

@@ -250,6 +250,36 @@ internal object LicencesData {
                 "\n" +
                 "Julian Seward, jseward@acm.org",
         ),
+        // 3.0.4: what SMBJ-RPC uses (network folders).
+        Component(
+            name = "Apache Commons IO",
+            version = "2.7",
+            licence = "Apache License 2.0",
+            licenceUrl = "https://www.apache.org/licenses/LICENSE-2.0.txt",
+            home = "https://commons.apache.org/proper/commons-io/",
+            note = "Used by SMBJ-RPC (commons-io).",
+            notice = "Apache Commons IO\n" +
+                "Copyright 2002-2020 The Apache Software Foundation\n" +
+                "\n" +
+                "This product includes software developed at\n" +
+                "The Apache Software Foundation (https://www.apache.org/).",
+        ),
+        Component(
+            name = "Apache Commons Lang",
+            version = "3.4",
+            licence = "Apache License 2.0",
+            licenceUrl = "https://www.apache.org/licenses/LICENSE-2.0.txt",
+            home = "https://commons.apache.org/proper/commons-lang/",
+            note = "Used by SMBJ-RPC (commons-lang3).",
+            notice = "Apache Commons Lang\n" +
+                "Copyright 2001-2015 The Apache Software Foundation\n" +
+                "\n" +
+                "This product includes software developed at\n" +
+                "The Apache Software Foundation (http://www.apache.org/).\n" +
+                "\n" +
+                "This product includes software from the Spring Framework,\n" +
+                "under the Apache License 2.0 (see: StringUtils.containsWhitespace())",
+        ),
         Component(
             name = "Apache Commons Math",
             version = "3.6.1",
@@ -299,6 +329,24 @@ internal object LicencesData {
                 "FedICT (federal ICT department of Belgium), e-Contract.be BVBA (https://www.e-contract.be),\n" +
                 "Bart Hanssens from FedICT",
         ),
+        // 3.0.4: network folders.
+        Component(
+            name = "ASN-One",
+            version = "0.6.0",
+            licence = "Apache License 2.0",
+            licenceUrl = "https://www.apache.org/licenses/LICENSE-2.0.txt",
+            home = "https://github.com/hierynomus/asn-one",
+            note = "Reads and writes the small ASN.1 messages of signing in to a network folder; used by SMBJ.",
+        ),
+        Component(
+            name = "Bouncy Castle",
+            version = "1.79",
+            licence = "Bouncy Castle Licence (MIT)",
+            licenceUrl = "https://www.bouncycastle.org/about/license/",
+            home = "https://www.bouncycastle.org/",
+            note = "Cryptography for network folders (signing in, signed and encrypted SMB 3), used by SMBJ. " +
+                "Part used: bcprov-jdk18on.",
+        ),
         Component(
             name = "desugar_jdk_libs",
             version = "2.1.5",
@@ -315,6 +363,17 @@ internal object LicencesData {
             licenceUrl = "https://www.apache.org/licenses/LICENSE-2.0.txt",
             home = "https://errorprone.info",
             note = "Markers in the code of other libraries, such as Material Components.",
+        ),
+        Component(
+            name = "Google Sans Flex",
+            version = "2025",
+            licence = "SIL Open Font License 1.1",
+            licenceUrl = "https://openfontlicense.org/open-font-license-official-text/",
+            home = "https://github.com/googlefonts/googlesans-flex",
+            note = "Swift's own font (3.0.4): three fixed weights of it (regular, medium and bold) with the " +
+                "Latin and Vietnamese letters, punctuation and common symbols. Copyright 2025 The Google Sans " +
+                "Flex Project Authors. “Google”, “Google Sans” and “Google Sans Flex” are " +
+                "trademarks of Google LLC; Swift isn't affiliated with or endorsed by Google.",
         ),
         Component(
             name = "Google Play services",
@@ -334,8 +393,8 @@ internal object LicencesData {
             licence = "Apache License 2.0",
             licenceUrl = "https://www.apache.org/licenses/LICENSE-2.0.txt",
             home = "https://github.com/google/guava",
-            note = "Google's core libraries for Java, used by Media3. Parts used: guava 33.3.1-android and " +
-                "failureaccess 1.0.2 (and listenablefuture, an empty placeholder).",
+            note = "Google's core libraries for Java, used by Media3 (and SMBJ-RPC). Parts used: guava 33.3.1-android " +
+                "and failureaccess 1.0.2 (and listenablefuture, an empty placeholder).",
         ),
         Component(
             name = "Jellyfin Media3 FFmpeg decoder",
@@ -423,12 +482,62 @@ internal object LicencesData {
             note = "Buttons, menus, sheets and other parts of Swift's screens.",
         ),
         Component(
+            name = "Material Symbols",
+            version = "2025",
+            licence = "Apache License 2.0",
+            licenceUrl = "https://www.apache.org/licenses/LICENSE-2.0.txt",
+            home = "https://github.com/google/material-design-icons",
+            note = "Swift's icons (3.0.4), in the Rounded style: outlined, and filled when something is on.",
+        ),
+        Component(
+            name = "MBassador",
+            version = "1.3.0",
+            licence = "MIT License",
+            licenceUrl = "https://github.com/bennidi/mbassador/blob/master/LICENSE",
+            home = "https://github.com/bennidi/mbassador",
+            note = "Passes messages inside SMBJ (a connection or share that closed).",
+        ),
+        Component(
             name = "SLF4J API",
-            version = "1.7.30",
+            version = "2.0.9",
             licence = "MIT License",
             licenceUrl = "https://www.opensource.org/licenses/mit-license.php",
             home = "https://www.slf4j.org",
-            note = "A logging interface used by Apache POI and Junrar.",
+            note = "A logging interface used by Apache POI, Junrar and SMBJ (Swift gives it nothing to write to).",
+        ),
+        // 3.0.4: network folders.
+        Component(
+            name = "SMBJ",
+            version = "0.14.0",
+            licence = "Apache License 2.0",
+            licenceUrl = "https://www.apache.org/licenses/LICENSE-2.0.txt",
+            home = "https://github.com/hierynomus/smbj",
+            note = "Network folders in Files: the shared folders of a computer or a home storage, over SMB 2 and 3.",
+        ),
+        Component(
+            name = "SMBJ-RPC",
+            version = "0.12.13",
+            licence = "BSD 3-Clause License",
+            licenceUrl = "https://github.com/rapid7/smbj-rpc/blob/master/LICENSE.txt",
+            home = "https://github.com/rapid7/smbj-rpc",
+            note = "Asks a computer for the list of folders it shares (network folders); by Rapid7 (dcerpc).",
+            notice = "Copyright 2017-2021, Rapid7, Inc.\n" +
+                "\n" +
+                "License: BSD-3-clause\n" +
+                "\n" +
+                "Redistribution and use in source and binary forms, with or without\n" +
+                "modification, are permitted provided that the following conditions are met:\n" +
+                "\n" +
+                "  * Redistributions of source code must retain the above copyright notice,\n" +
+                "  this list of conditions and the following disclaimer.\n" +
+                "\n" +
+                "  * Redistributions in binary form must reproduce the above copyright\n" +
+                "  notice, this list of conditions and the following disclaimer in the\n" +
+                "  documentation and/or other materials provided with the distribution.\n" +
+                "\n" +
+                "  * Neither the name of the copyright holder nor the names of its contributors\n" +
+                "  may be used to endorse or promote products derived from this software\n" +
+                "  without specific prior written permission.",
         ),
         Component(
             name = "SnakeYAML",

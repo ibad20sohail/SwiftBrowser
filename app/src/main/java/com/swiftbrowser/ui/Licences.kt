@@ -49,7 +49,7 @@ object Licences {
         c.notice?.let { notice ->
             val text = Ui.text(a, Ui.Type.CAPTION, notice).apply {
                 typeface = Typeface.MONOSPACE
-                textSize = 10.5f
+                Ui.size(this, Ui.Type.SMALL, keepFont = true)
                 visibility = View.GONE
                 background = Ui.shape(a, Palette.color(a, R.color.surface_alt), 12)
                 val p = Ui.dp(a, 10)

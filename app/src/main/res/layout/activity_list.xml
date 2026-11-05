@@ -39,7 +39,7 @@
             android:singleLine="true"
             android:textColor="@color/text_primary"
             android:textColorHint="@color/text_secondary"
-            android:textSize="15sp"
+            android:textSize="@dimen/text_body"
             android:visibility="gone" />
     </com.swiftbrowser.ui.MaxWidthLayout>
 

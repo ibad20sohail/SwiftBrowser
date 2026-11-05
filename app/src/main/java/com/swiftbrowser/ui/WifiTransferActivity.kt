@@ -253,8 +253,7 @@ class WifiTransferActivity : ListActivity() {
             ellipsize = TextUtils.TruncateAt.MIDDLE
         }, 4))
         card.addView(centered(Ui.text(this, Ui.Type.BODY_SECONDARY, "and enter this code"), 16))
-        val code = Ui.text(this, Ui.Type.HEADLINE, spaced(s.code)).apply {
-            textSize = 34f
+        val code = Ui.text(this, Ui.Type.DISPLAY, spaced(s.code)).apply {
             letterSpacing = 0.12f
             contentDescription = s.code.toCharArray().joinToString(" ")
         }

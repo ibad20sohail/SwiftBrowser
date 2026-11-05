@@ -14,28 +14,63 @@ function applySize() {
 const FONTS = { serif: 'Georgia, "Noto Serif", serif', sans: 'Roboto, "Noto Sans", sans-serif' };
 const LINES = ['1.45', '1.65', '1.9'];
 
+// 3.0.4: the page's colours, chosen in the app with the font (Auto, Light, Sepia, Dark). Auto is as
+// before: light or dark as Swift is. Light and dark take Swift's own colours (your background and
+// accent) once the app has sent them; sepia is warm paper with brown text and links, every one of
+// them readable on it at 4.5:1 or better.
+const THEMES = {
+  light: { bg: '#ffffff', text: '#1b1c20', muted: '#646a76', line: '#e4e7ec', surface: '#eef1f6', link: '#1b66e4', reading: '#fff1c2' },
+  dark: { bg: '#15171c', text: '#e6e8ec', muted: '#a3a9b4', line: '#2a2e36', surface: '#262a31', link: '#8ab4ff', reading: '#3a3420' },
+  sepia: { bg: '#f4ecd8', text: '#5b4636', muted: '#76604c', line: '#e1d4b8', surface: '#eadfc6', link: '#8b4513', reading: '#f0dca4' },
+};
+
 const darkQuery = matchMedia('(prefers-color-scheme: dark)');
 let lastLook = null;
+
+// The last page colour chosen, kept by the page itself so the page is in it from the first paint
+// (the app's look is read a moment later).
+function keptTheme() {
+  try { return localStorage.getItem('theme') || 'auto'; } catch (e) { return 'auto'; }
+}
+
+function applyColours(theme, look) {
+  const sepia = theme === 'sepia';
+  const dark = theme === 'dark' || (theme !== 'light' && !sepia && darkQuery.matches);
+  const c = Object.assign({}, sepia ? THEMES.sepia : (dark ? THEMES.dark : THEMES.light));
+  // The page and its text in the app's own colours (2.6), light or dark; links in its accent.
+  const own = !sepia && look ? (dark ? look.pageDark : look.pageLight) : null;
+  if (own) {
+    for (const k of ['bg', 'text', 'muted', 'line', 'surface']) {
+      if (own[k]) { c[k] = own[k]; }
+    }
+  }
+  const accent = !sepia && look ? (dark ? look.accentDark : look.accentLight) : null;
+  if (accent) { c.link = accent; }
+  const root = document.documentElement.style;
+  root.setProperty('--bg', c.bg);
+  root.setProperty('--text', c.text);
+  root.setProperty('--muted', c.muted);
+  root.setProperty('--rule', c.line);
+  root.setProperty('--button', c.surface);
+  root.setProperty('--link', c.link);
+  root.setProperty('--reading', c.reading);
+  root.setProperty('color-scheme', dark ? 'dark' : 'light');
+}
 
 function applyStyle(look) {
   lastLook = look;
   const root = document.documentElement.style;
-  // The page and its text in the app's own colours (2.6), light or dark as Swift is.
-  const c = look && (darkQuery.matches ? look.pageDark : look.pageLight);
-  if (c) {
-    if (c.bg) { root.setProperty('--bg', c.bg); }
-    if (c.text) { root.setProperty('--text', c.text); }
-    if (c.muted) { root.setProperty('--muted', c.muted); }
-    if (c.line) { root.setProperty('--rule', c.line); }
-    if (c.surface) { root.setProperty('--button', c.surface); }
+  let theme = keptTheme();
+  if (look) {
+    theme = THEMES[look.readerTheme] ? look.readerTheme : 'auto';
+    try { localStorage.setItem('theme', theme); } catch (e) { }
   }
+  applyColours(theme, look);
   root.setProperty('--font', FONTS[look && look.readerFont] || FONTS.serif);
   root.setProperty('--line', LINES[look && Number.isInteger(look.readerSpacing) ? look.readerSpacing : 1] || LINES[1]);
-  // Links and buttons in the app's accent colour (light and dark).
-  if (look && look.accentLight) { root.setProperty('--accent-light', look.accentLight); }
-  if (look && look.accentDark) { root.setProperty('--accent-dark', look.accentDark); }
 }
 
+applyColours(keptTheme(), null);
 browser.storage.local.get('look').then(r => applyStyle(r && r.look), () => { });
 darkQuery.addEventListener('change', () => applyStyle(lastLook));
 browser.storage.onChanged.addListener((changes, area) => {
@@ -94,6 +129,8 @@ document.getElementById('bigger').addEventListener('click', () => {
   localStorage.setItem('size', String(size));
   applySize();
 });
+// 3.0.4: the font, line spacing and page colour (sepia...) in Swift's own panel; the page follows.
+document.getElementById('style').addEventListener('click', () => send({ type: 'reader-style' }));
 
 // ---------------------------------------------------------------- read aloud
 

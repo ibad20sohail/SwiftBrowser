@@ -2,9 +2,12 @@
     android:width="24dp"
     android:height="24dp"
     android:tint="?attr/colorControlNormal"
-    android:viewportWidth="24"
-    android:viewportHeight="24">
-    <path
-        android:fillColor="@android:color/white"
-        android:pathData="M19,3H5c-1.11,0 -2,0.9 -2,2v14c0,1.1 0.89,2 2,2h14c1.11,0 2,-0.9 2,-2V5c0,-1.1 -0.89,-2 -2,-2zM10,17l-5,-5 1.41,-1.41L10,14.17l7.59,-7.59L19,8l-9,9z" />
+    android:viewportWidth="960"
+    android:viewportHeight="960">
+    <!-- 3.0.4: Material Symbols Rounded "check_box", filled. -->
+    <group android:translateY="960">
+        <path
+            android:fillColor="@android:color/white"
+            android:pathData="m424,-424l-86,-86q-11,-11 -28,-11t-28,11q-11,11 -11,28t11,28l114,114q12,12 28,12t28,-12l226,-226q11,-11 11,-28t-11,-28q-11,-11 -28,-11t-28,11L424,-424ZM200,-120q-33,0 -56.5,-23.5T120,-200v-560q0,-33 23.5,-56.5T200,-840h560q33,0 56.5,23.5T840,-760v560q0,33 -23.5,56.5T760,-120H200Z" />
+    </group>
 </vector>

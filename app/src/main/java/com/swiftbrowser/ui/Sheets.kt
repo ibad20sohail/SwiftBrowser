@@ -223,6 +223,8 @@ object Sheets {
             overScrollMode = View.OVER_SCROLL_NEVER
             val group = chips(ctx, labels, selected, onSelect).apply { isSingleLine = true }
             addView(group)
+            // 3.0.4: chips fade out at the edge where more of them wait.
+            Ui.fadeEdges(this)
             // The chosen one in sight from the start.
             post { group.getChildAt(selected)?.let { scrollTo((it.left - ctx.dp(20)).coerceAtLeast(0), 0) } }
         }
@@ -561,7 +563,7 @@ object Sheets {
                     GoogleAccounts.picture(a, p.id)?.let { h.setPicture(it) }
                 }
                 // In the accent chosen (2.6), your own included.
-                if (current) h.itemView.background = Ui.shape(a, Ui.accentContainer(a), 14)
+                if (current) h.itemView.background = Ui.shape(a, Ui.accentContainer(a), Ui.R_SMALL)
                 h.setAction(R.drawable.ic_edit, "Manage") {
                     dialog.dismiss()
                     manageProfile(a, p)
@@ -892,7 +894,7 @@ object Sheets {
 
     // ------------------------------------------------------------------ reader view
 
-    /** Reader view's font and line spacing; open reader pages follow at once. */
+    /** Reader view's font, line spacing and (3.0.4) page colour; open reader pages follow at once. */
     fun readerStyle(ctx: Context, onChanged: (() -> Unit)? = null) {
         val prefs = SwiftApp.prefs
         val col = column(ctx)
@@ -906,6 +908,14 @@ object Sheets {
         col.addView(label(ctx, "Line spacing", top = 16))
         col.addView(chips(ctx, listOf("Tight", "Normal", "Loose"), prefs.readerSpacing.coerceIn(0, 2)) { i ->
             prefs.readerSpacing = i
+            Helper.sendReaderStyle()
+            onChanged?.invoke()
+        })
+        // 3.0.4: the page's colour: as Swift is (Auto), or always light, sepia (warm paper) or dark.
+        col.addView(label(ctx, "Page colour", top = 16))
+        val themes = com.swiftbrowser.core.Prefs.READER_THEMES
+        col.addView(chips(ctx, listOf("Auto", "Light", "Sepia", "Dark"), themes.indexOf(prefs.readerTheme).coerceAtLeast(0)) { i ->
+            prefs.readerTheme = themes[i]
             Helper.sendReaderStyle()
             onChanged?.invoke()
         })
@@ -1115,12 +1125,12 @@ object Sheets {
                 setPadding(ctx.dp(20), 0, ctx.dp(8), 0)
                 addView(TextView(ctx).apply {
                     text = title
-                    textSize = 15f
+                    Ui.size(this, Ui.Type.BODY)
                     setTextColor(ctx.color(R.color.text_primary))
                 })
                 addView(TextView(ctx).apply {
                     text = sub
-                    textSize = 13f
+                    Ui.size(this, Ui.Type.CAPTION)
                     setTextColor(ctx.color(R.color.text_secondary))
                 })
             }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))

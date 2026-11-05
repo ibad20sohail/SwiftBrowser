@@ -6,7 +6,6 @@ import android.app.TimePickerDialog
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
-import android.content.res.ColorStateList
 import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
@@ -24,7 +23,6 @@ import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.LinearLayout
-import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AlertDialog
@@ -75,7 +73,7 @@ import java.util.Locale
 open class DocumentActivity : AppCompatActivity() {
     private lateinit var root: FrameLayout
     private lateinit var gecko: GeckoView
-    private lateinit var spinner: ProgressBar
+    private lateinit var spinner: LoadingIndicator
     private lateinit var findBar: LinearLayout
     private lateinit var findText: EditText
     private lateinit var findCount: TextView
@@ -110,7 +108,8 @@ open class DocumentActivity : AppCompatActivity() {
         gecko = GeckoView(this)
         root.addView(gecko, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         // Until the viewer page is there (the engine may still be starting).
-        spinner = ProgressBar(this).apply { indeterminateTintList = ColorStateList.valueOf(Ui.accent(this@DocumentActivity)) }
+        // 3.0.4: Swift's loading indicator, in the accent.
+        spinner = LoadingIndicator(this)
         root.addView(spinner, FrameLayout.LayoutParams(Ui.dp(this, 40), Ui.dp(this, 40), Gravity.CENTER))
         buildFindBar()
         setContentView(root)
@@ -538,7 +537,7 @@ open class DocumentActivity : AppCompatActivity() {
             hint = "Find in document"
             setTextColor(text)
             setHintTextColor(muted)
-            textSize = 15f
+            Ui.size(this, Ui.Type.BODY, keepFont = true)
             isSingleLine = true
             imeOptions = EditorInfo.IME_ACTION_SEARCH or EditorInfo.IME_FLAG_NO_EXTRACT_UI
             background = null
@@ -559,7 +558,7 @@ open class DocumentActivity : AppCompatActivity() {
         }
         findCount = TextView(this).apply {
             setTextColor(muted)
-            textSize = 13f
+            Ui.size(this, Ui.Type.CAPTION, keepFont = true)
             setPadding(Ui.dp(this@DocumentActivity, 4), 0, Ui.dp(this@DocumentActivity, 4), 0)
         }
         fun button(icon: Int, label: String, click: () -> Unit) = ImageButton(this, null, 0, R.style.Swift_ToolbarButton).apply {

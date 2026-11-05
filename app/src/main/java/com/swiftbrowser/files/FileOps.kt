@@ -103,17 +103,34 @@ object FileOps {
         return sorted(shown.map { FileItem.of(it, count) }, sort)
     }
 
-    fun sorted(items: List<FileItem>, sort: Int): List<FileItem> {
+    /**
+     * [items] in [sort]'s order, folders first. 3.0.4: by size, folders go by what they hold when
+     * [folderBytes] knows it (FolderSizes): the measured ones first, the biggest at the top, then
+     * the rest by name.
+     */
+    fun sorted(items: List<FileItem>, sort: Int, folderBytes: ((String) -> Long?)? = null): List<FileItem> {
         val byName = Comparator<FileItem> { a, b -> naturalCompare(a.name, b.name) }
         val inside: Comparator<FileItem> = when (sort) {
             SORT_DATE -> compareByDescending<FileItem> { it.time }.then(byName)
             SORT_SIZE -> Comparator<FileItem> { a, b ->
-                if (a.isDir && b.isDir) naturalCompare(a.name, b.name) else b.size.compareTo(a.size).takeIf { it != 0 } ?: naturalCompare(a.name, b.name)
+                if (a.isDir && b.isDir) foldersBySize(a, b, folderBytes) else b.size.compareTo(a.size).takeIf { it != 0 } ?: naturalCompare(a.name, b.name)
             }
             SORT_TYPE -> compareBy<FileItem> { FileKind.extension(it.name) }.then(byName)
             else -> byName
         }
         return items.sortedWith(compareBy<FileItem> { !it.isDir }.then(inside))
+    }
+
+    /** 3.0.4: two folders by size: measured before not yet measured, bigger first, otherwise by name. */
+    private fun foldersBySize(a: FileItem, b: FileItem, folderBytes: ((String) -> Long?)?): Int {
+        val sa = folderBytes?.invoke(a.file.path)
+        val sb = folderBytes?.invoke(b.file.path)
+        return when {
+            sa != null && sb != null -> sb.compareTo(sa).takeIf { it != 0 } ?: naturalCompare(a.name, b.name)
+            sa != null -> -1
+            sb != null -> 1
+            else -> naturalCompare(a.name, b.name)
+        }
     }
 
     /** Names in the order people expect: "photo 2" before "photo 10", capitals or not. */

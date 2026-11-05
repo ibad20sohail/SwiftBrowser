@@ -5,7 +5,7 @@ ad-heavy sites on an old phone (Moto E4, Android 7.1.2).
 
 ## Download
 
-**[Download Swift 3.0.3 (APK)](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v3.0.3/Swift-3.0.3.apk)**
+**[Download Swift 3.0.4 (APK)](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v3.0.4/Swift-3.0.4.apk)**
 for Android 7 and newer (32-bit ARM, about 172 MB). It installs over an earlier Swift and keeps
 tabs and settings. From 1.4 on, Swift can also update itself: Settings → About Swift → Check for
 updates.
@@ -31,6 +31,38 @@ ones, and a short welcome on the first start.
 - **Night light** (2.3, Settings → Look & screen): a warm layer over Swift, pages and videos too,
   from 7 pm to 7 am or always, in three strengths. Taps go through it.
 
+- **New in 3.0.4**:
+  - **Tabs**: pin a tab (it comes first, can't be swiped away, and stays open when you close all
+    tabs); mute a tab playing sound from its card, its row or the ≡ menu (the whole tab, frames and
+    Web Audio too); show the tabs as a compact list instead of picture cards; and, on a tab in a
+    group, a strip of the group's tabs by the address bar to switch between them.
+  - **Player**: repeat a part between two points (A-B, with marks on the seek bar); frame by frame
+    for a paused video; Night sound, a compressor for watching at low volume (loud parts quieter,
+    quiet voices louder), also in Settings → Video & downloads.
+  - **Files**: folder sizes in the lists (and sorting by size sorts folders too); two folders side
+    by side with the phone sideways, with Copy and Move going straight into the other side's folder
+    ("Copy to the right"); and **network folders** (Tools): a computer's or a home storage's shared
+    folders over Wi-Fi with SMB 2 and 3, read-only, with videos and music played straight from the
+    share and files copied to the phone (smbj and smbj-rpc; a remembered password is
+    keystore-encrypted). The storage bar shows how much pictures, videos, music and documents
+    take; Camera, Download, Pictures, Movies, Music and Documents have folder icons of their own.
+    In a folder the title bar stays put and the search box scrolls away, with the path pinned
+    under the title bar.
+  - **Look**: Swift's own font, Google Sans Flex (three fixed weights; a switch in Look & screen
+    goes back to the phone's font), every text on one type scale, and one icon style: Google's
+    Material Symbols Rounded, outlined, filled when something is on. Colours can come from your
+    home page's picture or the phone's wallpaper (Colours → From your picture), as Material You
+    does on newer Androids. Bolder headings, buttons that change shape a little when pressed,
+    spring motion, a background for the home page (a gradient, your accent colour or your own
+    picture), grouped rounded rows and big titles that shrink as you scroll in Settings, History,
+    Downloads and Bookmarks, one set of four corner sizes, a tick in switches, a new loading
+    spinner, and rows that fade at their ends when there's more.
+  - **Address bar**: a website's own colour (its theme-color) colours the bar (Look & screen →
+    Website colours in the address bar), and a floating style (Address bar style → Floating):
+    a rounded bar with the page showing around it at the bottom.
+  - **Player and reader**: thicker seek bars with a slim handle (wavy while music plays), music in
+    the colours of its album cover, a play button that turns into pause, and a sepia page in reader
+    view (Aa → Page colour). The home-screen widget follows Swift's light or dark look and accent.
 - **New in 3.0.3**:
   - **Player**: previous and next beside play (the 10-second jumps stay on a double tap, and taps in a
     row add up: +10, +20, +30 s). Sound and subtitles, the ⋮ menu, speed, sleep, turning and the

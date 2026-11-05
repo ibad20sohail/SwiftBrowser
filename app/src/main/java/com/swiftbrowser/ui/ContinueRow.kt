@@ -54,8 +54,8 @@ class ContinueRow(
         // 3.0.3: Files' start page names its parts with headings of its own.
         if (part == Part.BROWSER) addView(TextView(context).apply {
             text = "Continue"
-            textSize = 15.5f
-            typeface = Ui.MEDIUM
+            // 3.0.4: as bold as the home page's other headings (the scale's HEADING).
+            Ui.size(this, Ui.Type.HEADING)
             setTextColor(Ui.text(context))
             setPadding(dp(24), 0, 0, dp(10))
         })
@@ -64,6 +64,8 @@ class ContinueRow(
             overScrollMode = OVER_SCROLL_NEVER
             clipToPadding = false
             addView(cards)
+            // 3.0.4: the cards fade out at the edge where more of them wait.
+            Ui.fadeEdges(this)
         }, LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
     }
 
@@ -140,7 +142,7 @@ class ContinueRow(
     private fun card(item: Unfinished.Item): View = LinearLayout(context).apply {
         tag = item
         orientation = VERTICAL
-        background = Ui.shape(context, Ui.color(context, R.color.tile_bg), 18)
+        background = Ui.shape(context, Ui.color(context, R.color.tile_bg), Ui.R_MEDIUM)
         clipToOutline = true
         // 3.0.3: a video or song on the phone (Files' row) has no site: its folder says where it is.
         val local = item.localPath?.let { File(it) }

@@ -3,7 +3,13 @@ package com.swiftbrowser.ui
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
+import android.graphics.Canvas
+import android.graphics.ColorFilter
+import android.graphics.Paint
+import android.graphics.PixelFormat
 import android.graphics.Rect
+import android.graphics.RectF
+import android.graphics.drawable.Drawable
 import android.net.Uri
 import android.view.GestureDetector
 import android.view.MotionEvent
@@ -126,6 +132,69 @@ class VideoFrame(context: Context) : ViewGroup(context) {
             picture.set(maxOf(left, 0), maxOf(top, 0), minOf(left + c.measuredWidth, w), minOf(top + c.measuredHeight, h))
         }
     }
+}
+
+/**
+ * 3.0.4: where the part repeated (A-B) starts and ends, as two small ticks on the seek bar: drawn on
+ * top of its track by the track (SwiftSlider.marks, so under its handle), at shares of its length.
+ */
+class LoopMarks(ctx: Context, colour: Int) : Drawable() {
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = colour }
+    private val halfWidth = Ui.dpf(ctx, 1.5f)
+    private val halfHeight = Ui.dpf(ctx, 7f)
+    private val box = RectF()
+    private var start = Float.NaN
+    private var end = Float.NaN
+
+    /**
+     * 3.0.4: the ticks' colour: one that reads on the track's both parts now the part played is the
+     * accent and thick (white over a video, the text's colour on the music screen).
+     */
+    var colour: Int
+        get() = paint.color
+        set(v) {
+            if (paint.color == v) return
+            paint.color = v
+            invalidateSelf()
+        }
+
+    /** The start and the end as shares of the length (NaN: not set). */
+    fun set(start: Float, end: Float) {
+        if (same(start, this.start) && same(end, this.end)) return
+        this.start = start
+        this.end = end
+        invalidateSelf()
+    }
+
+    private fun same(a: Float, b: Float) = if (a.isNaN()) b.isNaN() else a == b
+
+    override fun draw(canvas: Canvas) {
+        val b = bounds
+        if (b.width() <= 0) return
+        tick(canvas, start, b)
+        tick(canvas, end, b)
+    }
+
+    private fun tick(canvas: Canvas, at: Float, b: Rect) {
+        if (at.isNaN()) return
+        val x = b.left + at.coerceIn(0f, 1f) * b.width()
+        val y = b.exactCenterY()
+        box.set(x - halfWidth, y - halfHeight, x + halfWidth, y + halfHeight)
+        canvas.drawRoundRect(box, halfWidth, halfWidth, paint)
+    }
+
+    override fun setAlpha(alpha: Int) {
+        paint.alpha = alpha
+        invalidateSelf()
+    }
+
+    override fun setColorFilter(colorFilter: ColorFilter?) {
+        paint.colorFilter = colorFilter
+        invalidateSelf()
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
 }
 
 /**

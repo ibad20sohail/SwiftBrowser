@@ -286,6 +286,9 @@ class TabDelegates(private val tab: Tab) :
         tab.progress = 5
         tab.media.clear()
         tab.videoPlaying = false
+        // 3.0.4: the last page's colour stays in the address bar until this one says its own.
+        handler.removeCallbacks(dropStaleColour)
+        tab.siteColourStale = true
         // A reloaded page may offer to continue its video again (see WatchPositions).
         tab.resumeOffered = null
         tab.resumePosition = 0.0
@@ -303,6 +306,19 @@ class TabDelegates(private val tab: Tab) :
         tab.loading = false
         tab.progress = 100
         changed()
+        // 3.0.4: a page that loaded without saying its colour (an error page, a page the helper doesn't
+        // run in) doesn't keep the last page's in the address bar. Its word comes before it finishes
+        // loading (at DOMContentLoaded), so a moment's wait is plenty.
+        if (tab.siteColourStale) handler.postDelayed(dropStaleColour, 800)
+    }
+
+    /** 3.0.4: see onPageStop. */
+    private val dropStaleColour = Runnable {
+        if (!tab.siteColourStale || tab.loading) return@Runnable
+        tab.siteColourStale = false
+        if (tab.siteColour == null) return@Runnable
+        tab.siteColour = null
+        ui?.onSiteColour(tab)
     }
 
     override fun onProgressChange(session: GeckoSession, progress: Int) {

@@ -229,6 +229,8 @@ object FileJobs {
             } finally {
                 w.finish()
                 runCatching { Parts.compactIfBig(ctx) }
+                // 3.0.4: the folders it changed (also when it stopped half-way) are measured again.
+                FolderSizes.changed(synchronized(job.touched) { job.touched.toList() } + listOfNotNull(job.result?.path))
             }
             L.d("File job ${job.kind.name.lowercase()} over in ${SystemClock.uptimeMillis() - started} ms: ${job.filesDone} files, ${job.skipped} skipped, ${if (job.failed) "failed" else "ok"}")
         } else {

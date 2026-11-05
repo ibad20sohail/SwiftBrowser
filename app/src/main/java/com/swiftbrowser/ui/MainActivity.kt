@@ -172,6 +172,21 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     private var bottomBar = false
     private var settleAnim: ValueAnimator? = null
 
+    /**
+     * 3.0.4: the strip of the open tab's group by the address bar (GroupStrip), made the first time
+     * it's needed. While the tab is in a group and has a page, the strip's height is part of the bar
+     * ([barPx]): the engine keeps room for both, and both hide on scroll.
+     */
+    private var groupStrip: GroupStrip? = null
+    private var stripPx = 0
+
+    /** The strip's height the open tab wants; it becomes [stripPx] as that tab's page goes on screen. */
+    private var stripWanted = 0
+
+    /** The address bar and, while there is one, the group strip: the engine's dynamic toolbar. */
+    private val barPx: Int get() = toolbarPx + stripPx
+    private val toolbarDivider: View by lazy { findViewById(R.id.toolbar_divider) }
+
     /** Which way the finger last moved the toolbar: -1 away, +1 back. */
     private var fingerDirection = 0
     private var toolbarShown = 0f
@@ -329,8 +344,9 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         if (built) return
         setContentView(R.layout.activity_main)
         Palette.paint(findViewById<View>(android.R.id.content))
-        toolbarPx = resources.getDimensionPixelSize(R.dimen.toolbar_height)
         bindViews()
+        // 3.0.4: the bar's style first: a floating bar's room is a little taller (toolbarPx).
+        applyBarStyle()
         applyToolbarPosition()
         setupToolbar()
         setupFindBar()
@@ -341,8 +357,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
         gecko.setActivityContextDelegate { this }
         // The toolbar floats over the page and slides away; the page is told how much of it is hidden.
-        gecko.setDynamicToolbarMaxHeight(toolbarPx)
-        applyToolbarShown(toolbarPx.toFloat())
+        gecko.setDynamicToolbarMaxHeight(barPx)
+        applyToolbarShown(barPx.toFloat())
 
         TabManager.ui = this
         Engine.activityDelegate = GeckoRuntime.ActivityDelegate { pending ->
@@ -579,10 +595,15 @@ class MainActivity : AppCompatActivity(), BrowserUi {
                     }
                     val on = b.tag == true
                     b.setImageResource(if (on) R.drawable.ic_star else R.drawable.ic_star_border)
-                    if (on) tint = color(Looks.accent.primary)
+                    if (on) tint = barAccent()
                     b.alpha = if (UrlUtils.isHttp(tab.url)) 1f else 0.4f
                 }
-                "vpn" -> if (com.swiftbrowser.vpn.Vpn.state == com.swiftbrowser.vpn.Vpn.State.ON) tint = color(Looks.accent.primary)
+                "vpn" -> {
+                    val on = com.swiftbrowser.vpn.Vpn.state == com.swiftbrowser.vpn.Vpn.State.ON
+                    // 3.0.4: and its key filled, as Swift's icons are when on.
+                    OnIcons.show(b, R.drawable.ic_vpn, on)
+                    if (on) tint = barAccent()
+                }
             }
             // Only when it changed (2.6): this runs on every page update.
             if (b.imageTintList?.defaultColor != tint) b.imageTintList = ColorStateList.valueOf(tint)
@@ -824,8 +845,21 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         }
         Looks.sync()
         Looks.watchClock(true)
-        // Settings → Look & screen may have moved the address bar.
-        if (bottomBar != prefs.toolbarAtBottom) applyToolbarPosition()
+        // 3.0.4: the home screen widget catches up with the look ("Dark at night" may have turned meanwhile).
+        SearchWidget.refresh(this)
+        // Settings → Look & screen may have moved the address bar, or (3.0.4) changed its style.
+        if ((prefs.barStyle == Prefs.BAR_FLOATING) != floatingBar) {
+            applyBarStyle()
+            applyToolbarPosition()
+            barHeightChanged()
+        } else if (bottomBar != prefs.toolbarAtBottom) {
+            applyToolbarPosition()
+        }
+        // 3.0.4: ... or turned websites' colours in it on or off.
+        barKey = null
+        updateBarColours(animate = false)
+        // 3.0.4: Settings → Browsing & tabs may have turned the group strip on or off.
+        updateGroupStrip()
         // Settings → Browsing may have changed the search engine, Look & screen the address bar's buttons.
         urlEdit.hint = com.swiftbrowser.core.SearchEngine.current.hint
         applyToolbarButtons()
@@ -923,6 +957,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         gestureLayer.pullListener = null
         gestureLayer.fingerListener = null
         settleAnim?.cancel()
+        barAnim?.cancel()
         com.swiftbrowser.engine.DataSaver.listener = null
         com.swiftbrowser.engine.Power.listener = null
         gestureLayer.edgeListener = null
@@ -997,6 +1032,9 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         for (v in listOf<View>(homeBtn, menuBtn, videoBtn)) {
             v.contentDescription?.let { androidx.appcompat.widget.TooltipCompat.setTooltipText(v, it) }
         }
+        // 3.0.4: the address box and the find box keep one shape each, tinted in the bar's colours (paintBar).
+        urlBox.background = urlShape
+        findEdit.background = findShape
     }
 
     private fun handleIntent(intent: Intent?) {
@@ -1255,7 +1293,11 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         if (fullscreenTab != null) return
         val wasEditing = editing
         editing = true
+        // 3.0.4: typing goes with Swift's own colours (the suggestions below are in them), not a website's.
+        updateBarColours(animate = true)
         showToolbar()
+        // 3.0.4: the group strip makes way for the suggestions (its room stays: the page doesn't move).
+        showGroupStrip()
         if (!wasEditing) setToolbarEditing(true)
         val tab = current
         val text = when {
@@ -1300,7 +1342,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         urlBox.translationY = dy
         urlBox.animate().translationY(0f).setDuration(240).setInterpolator(DecelerateInterpolator(1.8f)).withEndAction {
             toolbar.clipChildren = true
-            (appBar as android.view.ViewGroup).clipChildren = true
+            // 3.0.4: a floating bar's shadow reaches past its room (applyBarStyle).
+            (appBar as android.view.ViewGroup).clipChildren = !floatingBar
         }.start()
         box.animate().cancel()
         box.animate().alpha(0f).translationY(-dy / 3f).setDuration(160).start()
@@ -1335,6 +1378,9 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     fun stopEditing() {
         if (!editing) return
         editing = false
+        // 3.0.4: back to the website's colour, if it has one.
+        updateBarColours(animate = true)
+        showGroupStrip()
         setToolbarEditing(false)
         urlBox.animate().cancel()
         urlBox.translationY = 0f
@@ -1592,11 +1638,14 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         shownUrlIcon = res
         shownFavicon = null
         urlIcon.setImageResource(res)
-        urlIcon.imageTintList = when {
-            com.swiftbrowser.core.SearchEngine.isLogo(res) -> null
-            res == R.drawable.ic_not_secure -> ColorStateList.valueOf(Ui.danger(this))
-            else -> ColorStateList.valueOf(iconColor())
-        }
+        urlIcon.imageTintList = urlIconTint(res)
+    }
+
+    /** The address's icon [res] in the bar's colours (3.0.4: a website's too); a search engine's logo as it is. */
+    private fun urlIconTint(res: Int): ColorStateList? = when {
+        com.swiftbrowser.core.SearchEngine.isLogo(res) -> null
+        res == R.drawable.ic_not_secure -> ColorStateList.valueOf(barShown?.danger ?: Ui.danger(this))
+        else -> ColorStateList.valueOf(iconColor())
     }
 
     /** The tab whose loading the bar shows, and whether it is gliding to the end before fading. */
@@ -1695,46 +1744,26 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             val type = field.inputType and android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS.inv()
             field.inputType = if (incognito) type or android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS else type
         }
-        val bg = color(if (incognito) R.color.incognito_toolbar else R.color.toolbar_bg)
-        toolbar.setBackgroundColor(bg)
-        findViewById<View>(R.id.toolbar_divider).setBackgroundColor(color(if (incognito) R.color.incognito_url else R.color.divider))
-        window.statusBarColor = bg
-        val night = resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES
-        WindowCompat.getInsetsController(window, window.decorView).isAppearanceLightStatusBars = !incognito && !night
-        urlBox.background = ContextCompat.getDrawable(this, R.drawable.bg_url)?.mutate()?.also {
-            it.setTint(color(if (incognito) R.color.incognito_url else R.color.surface_alt))
-        }
-        val text = color(if (incognito) R.color.incognito_text else R.color.text_primary)
-        urlEdit.setTextColor(text)
-        urlEdit.setHintTextColor(iconColor())
-        val icons = ColorStateList.valueOf(iconColor())
-        menuBtn.imageTintList = icons
-        homeBtn.imageTintList = icons
-        urlClear.imageTintList = icons
-        urlScan.imageTintList = icons
-        // The find bar and the suggestions in the same colours (2.6).
-        findBar.setBackgroundColor(bg)
-        findEdit.background = ContextCompat.getDrawable(this, R.drawable.bg_url)?.mutate()?.also {
-            it.setTint(color(if (incognito) R.color.incognito_url else R.color.surface_alt))
-        }
-        findEdit.setTextColor(text)
-        findEdit.setHintTextColor(iconColor())
-        androidx.core.widget.TextViewCompat.setCompoundDrawableTintList(findEdit, icons)
-        findCount.setTextColor(iconColor())
-        for (id in intArrayOf(R.id.find_prev, R.id.find_next, R.id.find_close)) findViewById<ImageView>(id).imageTintList = icons
+        // The suggestions in the same colours (2.6). 3.0.4: the bar's, the find bar's and the status
+        // bar's go with the bar's colours (updateBarColours): incognito's, Swift's or a website's.
         suggestionsList.setBackgroundColor(color(if (incognito) R.color.incognito_bg else R.color.toolbar_bg))
         suggestionAdapter.incognito = incognito
         styledTabCount = null
-        styleTabCount()
         profileChip.visibility = if (incognito) View.GONE else View.VISIBLE
         incognitoIcon.visibility = if (incognito) View.VISIBLE else View.GONE
         shownUrlIcon = 0
         bookmarkShownFor = null
+        updateBarColours(animate = true)
+        styleTabCount()
         updateToolbarExtras()
     }
 
+    /** The bar's icons and hints, in its colours as they are now (3.0.4: a website's too). */
     private fun iconColor(): Int =
-        color(if (current?.incognito == true) R.color.incognito_hint else R.color.text_secondary)
+        barShown?.icon ?: color(if (current?.incognito == true) R.color.incognito_hint else R.color.text_secondary)
+
+    /** 3.0.4: the accent's bits on the bar (a filled star, the VPN on, the loading line), readable on its colour. */
+    private fun barAccent(): Int = barShown?.accent ?: Ui.accent(this)
 
     /** Whether this screen is kept out of screenshots now (null: not set yet). */
     private var secureShown: Boolean? = null
@@ -1752,6 +1781,253 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         if (on == secureShown) return
         secureShown = on
         SecureScreen.forIncognito(this, incognito)
+    }
+
+    // ------------------------------------------------------------------ 3.0.4: the bar's colours and style
+
+    /** The bar is a floating pill (Settings → Look & screen → Address bar style). */
+    private var floatingBar = false
+
+    /** The colours the bar shows now (on their way to new ones while they change). */
+    private var barShown: BarColours? = null
+
+    /** What the bar's colours were last worked out from: the same again changes nothing. */
+    private var barKey: Any? = null
+    private var barAnim: ValueAnimator? = null
+
+    /** Whether the status bar's icons are dark (on a light colour), as last set. */
+    private var statusIconsDark: Boolean? = null
+
+    /** The floating bar's pill: its colour and, where a shadow wouldn't show, its outline (fully round: see BarShape). */
+    private val pillShape = android.graphics.drawable.GradientDrawable().apply { cornerRadius = 1000f }
+
+    /** Around the floating pill, where the page doesn't show: at the top, and over Swift's own pages. */
+    private val barSurround = android.graphics.drawable.ColorDrawable()
+
+    /** The address box's and the find box's shapes, tinted in the bar's colours. */
+    private val urlShape by lazy { ContextCompat.getDrawable(this, R.drawable.bg_url)!!.mutate() }
+    private val findShape by lazy { ContextCompat.getDrawable(this, R.drawable.bg_url)!!.mutate() }
+
+    /** The find bar as a floating pill: the pill, what is around it, and the bar's own padding. */
+    private val findPill = android.graphics.drawable.GradientDrawable().apply { cornerRadius = 1000f }
+    private val findSurround = android.graphics.drawable.ColorDrawable()
+    private var findPadding: IntArray? = null
+    private val findButtons by lazy { listOf<ImageView>(findViewById(R.id.find_prev), findViewById(R.id.find_next), findViewById(R.id.find_close)) }
+
+    /**
+     * The address bar's style: across the screen as before, or a fully rounded pill with a little room
+     * around it (BarShape: 8 dp at the sides, 6 dp from the screen's edge). Its room is 6 dp taller when
+     * it floats, so the pill keeps the buttons' size; the engine keeps room for that height (barPx).
+     * At the bottom of the screen the page shows around the pill: the engine draws the page under the
+     * bar there. At the top it can't: the page view is moved down by the bar's height (GeckoView has no
+     * way to keep a top bar's room while drawing under it), so Swift's page colour is around it there.
+     * No blur (too slow on this phone): the pill is opaque, with a soft shadow, or an outline in the
+     * dark look and incognito.
+     */
+    private fun applyBarStyle() {
+        floatingBar = prefs.barStyle == Prefs.BAR_FLOATING
+        toolbarPx = resources.getDimensionPixelSize(R.dimen.toolbar_height) + if (floatingBar) dp(BarShape.EXTRA_DP) else 0
+        val lp = appBar.layoutParams
+        lp.height = toolbarPx
+        appBar.layoutParams = lp
+        // The pill's shadow reaches a little past the bar's room.
+        (appBar as android.view.ViewGroup).clipChildren = !floatingBar
+        if (floatingBar) {
+            toolbar.background = pillShape
+        } else {
+            toolbar.background = android.graphics.drawable.ColorDrawable(barShown?.bar ?: color(R.color.toolbar_bg))
+            toolbar.elevation = 0f
+            appBar.background = null
+        }
+        toolbarDivider.visibility = if (floatingBar) View.INVISIBLE else View.VISIBLE
+        // The loading line is drawn over the pill (it would be under its shadow), without a shadow of its own.
+        progress.outlineProvider = null
+        progress.elevation = if (floatingBar) dp(4f) else 0f
+        styleFindBar()
+        barKey = null
+    }
+
+    /** The floating pill and its loading line where the bar is now (at the top or the bottom of the screen). */
+    private fun placeBarParts() {
+        val m = if (floatingBar) BarShape.pillMargins(bottomBar, dp(BarShape.SIDE_DP), dp(BarShape.EDGE_DP), dp(BarShape.GAP_DP)) else IntArray(4)
+        (toolbar.layoutParams as FrameLayout.LayoutParams).let {
+            it.setMargins(m[0], m[1], m[2], m[3])
+            toolbar.layoutParams = it
+        }
+        // Along the pill's edge on the page's side, clear of its round ends; across the bar otherwise.
+        val p = if (floatingBar) BarShape.progressMargins(bottomBar, toolbarPx, m) else IntArray(4)
+        (progress.layoutParams as FrameLayout.LayoutParams).let {
+            it.setMargins(p[0], p[1], p[2], p[3])
+            progress.layoutParams = it
+        }
+    }
+
+    /** The bar's room changed height (its style): the engine keeps room for the new height, and the bar shows as it did. */
+    private fun barHeightChanged() {
+        if (fullscreenTab != null) return
+        settleAnim?.cancel()
+        settleAnim = null
+        gecko.setDynamicToolbarMaxHeight(barPx)
+        applyToolbarShown(if (toolbarWanted) barPx.toFloat() else 0f)
+    }
+
+    /**
+     * The find bar as the address bar is: across the screen, or a floating pill above the screen's
+     * bottom edge (its own room stays as it was; around the pill is the page's colour).
+     */
+    private fun styleFindBar() {
+        val pad = findPadding ?: intArrayOf(findBar.paddingStart, findBar.paddingTop, findBar.paddingEnd, findBar.paddingBottom).also { findPadding = it }
+        if (!floatingBar) {
+            findBar.background = android.graphics.drawable.ColorDrawable(barShown?.bar ?: color(R.color.toolbar_bg))
+            findBar.setPaddingRelative(pad[0], pad[1], pad[2], pad[3])
+            findBar.outlineProvider = android.view.ViewOutlineProvider.BACKGROUND
+            findBar.elevation = dp(4f)
+            return
+        }
+        val side = dp(BarShape.SIDE_DP)
+        val top = dp(BarShape.GAP_DP)
+        val bottom = dp(BarShape.EDGE_DP)
+        findBar.background = android.graphics.drawable.LayerDrawable(arrayOf(findSurround, android.graphics.drawable.InsetDrawable(findPill, side, top, side, bottom)))
+        findBar.setPaddingRelative(pad[0] + side, top, pad[2] + side, bottom)
+        // Its shadow follows the pill, not the whole bar.
+        findBar.outlineProvider = object : android.view.ViewOutlineProvider() {
+            override fun getOutline(view: View, outline: android.graphics.Outline) {
+                val h = view.height - top - bottom
+                outline.setRoundRect(side, top, view.width - side, view.height - bottom, h / 2f)
+            }
+        }
+    }
+
+    /** Where a shadow wouldn't show (the dark look, incognito), the floating pill has an outline instead. */
+    private fun barOutlined(): Boolean = Palette.isNight(this) || current?.incognito == true
+
+    /** The page shows around a floating bar at the bottom: while a web page is on screen (not Swift's own, nor typing). */
+    private fun barOverPage(): Boolean {
+        val tab = current ?: return false
+        return !tab.showsHome && !tab.crashed && !editing && fullscreenTab == null
+    }
+
+    /**
+     * The website's colour for the bar now (its theme-color, fit for the bar: BarTones.forBar), or null
+     * for Swift's own: not with website colours off, in incognito, while typing an address or in full
+     * screen, nor on Swift's own pages (the home page, reader view, documents, saved pages, the crash
+     * view; an error page says no colour, see TabDelegates.onPageStop).
+     */
+    private fun siteColourFor(tab: Tab?): Int? {
+        if (tab == null || !prefs.siteColours || tab.incognito || editing || fullscreenTab != null) return null
+        if (tab.showsHome || tab.crashed || !UrlUtils.isHttp(tab.url)) return null
+        val c = tab.siteColour ?: return null
+        return BarTones.forBar(c, color(R.color.toolbar_bg), Palette.isNight(this))
+    }
+
+    /** The bar's colours for [tab], with the website's colour [site] (null: Swift's own, or incognito's). */
+    private fun barColoursFor(tab: Tab?, site: Int?): BarColours {
+        val incognito = tab?.incognito == true
+        val surround = color(
+            when {
+                incognito -> R.color.incognito_bg
+                editing -> R.color.toolbar_bg
+                tab?.showsHome == true -> R.color.home_bg
+                else -> R.color.page_bg
+            },
+        )
+        val accent = Ui.accent(this)
+        val danger = Ui.danger(this)
+        if (site != null) return BarColours.forSite(site, accent, danger, surround)
+        return if (incognito) {
+            BarColours(
+                color(R.color.incognito_toolbar), color(R.color.incognito_url), color(R.color.incognito_text),
+                color(R.color.incognito_hint), color(R.color.incognito_url), accent, danger, surround,
+            )
+        } else {
+            BarColours(
+                color(R.color.toolbar_bg), color(R.color.surface_alt), color(R.color.text_primary),
+                color(R.color.text_secondary), color(R.color.divider), accent, danger, surround,
+            )
+        }
+    }
+
+    /**
+     * The bar takes the colours it should have now: a website's, Swift's or incognito's. A change
+     * fades in [BAR_COLOUR_MS] ([animate]: a tab switch, another page, typing an address), only the
+     * bar's own views redrawn; at once with Android's animations off. Cheap when nothing changed: it
+     * comes with every update of the open tab.
+     */
+    private fun updateBarColours(animate: Boolean) {
+        if (!::gecko.isInitialized) return
+        val tab = current
+        val site = siteColourFor(tab)
+        val key = listOf(site, tab?.incognito == true, editing, tab?.showsHome == true, tab?.crashed == true, fullscreenTab != null, floatingBar, bottomBar)
+        if (key == barKey) return
+        barKey = key
+        val target = barColoursFor(tab, site)
+        // The status bar's icons dark or light at once (changing them redraws the system's bars).
+        val status = if (floatingBar) target.surround else target.bar
+        val dark = Contrast.ratio(BarTones.BLACK, status) > Contrast.ratio(BarTones.WHITE, status)
+        if (dark != statusIconsDark) {
+            statusIconsDark = dark
+            WindowCompat.getInsetsController(window, window.decorView).isAppearanceLightStatusBars = dark
+        }
+        val from = barShown
+        barAnim?.cancel()
+        barAnim = null
+        if (from == null || from == target || !animate || !Motion.enabled(this) || !appBar.isShown) {
+            paintBar(target)
+            return
+        }
+        barAnim = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = BAR_COLOUR_MS
+            interpolator = Motion.standard
+            addUpdateListener { paintBar(BarColours.between(from, target, it.animatedFraction)) }
+            start()
+        }
+    }
+
+    /** Paints the bar and what belongs to it in [c]: also each step while its colours change. */
+    private fun paintBar(c: BarColours) {
+        barShown = c
+        val outlined = barOutlined()
+        if (floatingBar) {
+            pillShape.setColor(c.bar)
+            pillShape.setStroke(dp(1), if (outlined) c.outline else android.graphics.Color.TRANSPARENT)
+            toolbar.elevation = if (outlined) 0f else dp(3f)
+            barSurround.color = c.surround
+            val around = if (bottomBar && barOverPage()) null else barSurround
+            if (appBar.background !== around) appBar.background = around
+        } else {
+            toolbar.setBackgroundColor(c.bar)
+        }
+        toolbarDivider.setBackgroundColor(c.line)
+        window.statusBarColor = if (floatingBar) c.surround else c.bar
+        urlShape.setTint(c.pill)
+        urlEdit.setTextColor(c.text)
+        urlEdit.setHintTextColor(c.icon)
+        val icons = ColorStateList.valueOf(c.icon)
+        for (b in listOf(menuBtn, homeBtn, urlClear, urlScan)) b.imageTintList = icons
+        if (shownFavicon == null && shownUrlIcon > 0) urlIcon.imageTintList = urlIconTint(shownUrlIcon)
+        // The accent's bits: itself, or the bar's text colour on a website's colour close to it.
+        val accent = ColorStateList.valueOf(c.accent)
+        progress.progressTintList = accent
+        ((videoBtn as android.view.ViewGroup).getChildAt(0) as? ImageView)?.imageTintList = accent
+        (menuBtn.foreground as? ProgressRing)?.setColour(c.accent)
+        updateToolbarExtras()
+        styleTabCount()
+        // The find bar in the same colours (2.6).
+        if (floatingBar) {
+            findPill.setColor(c.bar)
+            findPill.setStroke(dp(1), if (outlined) c.outline else android.graphics.Color.TRANSPARENT)
+            findSurround.color = c.surround
+            findBar.elevation = if (outlined) 0f else dp(3f)
+        } else {
+            findBar.setBackgroundColor(c.bar)
+        }
+        findShape.setTint(c.pill)
+        findEdit.setTextColor(c.text)
+        findEdit.setHintTextColor(c.icon)
+        androidx.core.widget.TextViewCompat.setCompoundDrawableTintList(findEdit, icons)
+        findCount.setTextColor(c.icon)
+        for (b in findButtons) b.imageTintList = icons
+        groupStrip?.paint(c, floatingBar, bottomBar, outlined)
     }
 
     // ------------------------------------------------------------------ home page
@@ -1972,6 +2248,10 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         }
         val urlVisibility = if (show && !editing) View.INVISIBLE else View.VISIBLE
         if (urlBox.visibility != urlVisibility) urlBox.visibility = urlVisibility
+        // 3.0.4: the group strip goes with the page (not over the home page).
+        showGroupStrip()
+        // 3.0.4: and so does a website's colour (the home page has Swift's).
+        updateBarColours(animate = true)
     }
 
     /** The home button: the home page over the tab's page; Back returns to the page. */
@@ -2076,7 +2356,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
     /** Where the page (or home page) is on the screen, in the tab grid's coordinates. */
     private fun pageRect(): android.graphics.Rect {
-        val bar = toolbarShown.roundToInt()
+        val bar = visibleBarPx()
         val at = IntArray(2)
         val grid = IntArray(2)
         root.getLocationInWindow(at)
@@ -2173,7 +2453,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             elevation = dp(6f)
             addView(TextView(this@MainActivity).apply {
                 text = "▶  Continue from $position"
-                textSize = 15f
+                Ui.size(this, Ui.Type.BODY, keepFont = true)
                 setTextColor(color(Looks.accent.onPrimary))
                 setTypeface(typeface, android.graphics.Typeface.BOLD)
                 setPadding(0, 0, dp(6f).toInt(), 0)
@@ -2191,7 +2471,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             }
         }
         val lp = FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, dp(48f).toInt(), android.view.Gravity.BOTTOM or android.view.Gravity.CENTER_HORIZONTAL)
-        lp.bottomMargin = dp(24f).toInt() + if (bottomBar) toolbarPx else 0
+        lp.bottomMargin = dp(24f).toInt() + if (bottomBar) barPx else 0
         root.addView(chip, lp)
         chip.alpha = 0f
         chip.translationY = dp(16f)
@@ -2221,6 +2501,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         tab.session?.let { s -> root.post { if (current === tab) com.swiftbrowser.tabs.SessionFactory.prompts.showWaiting(s) } }
         Engine.showTextScaleFor(UrlUtils.site(tab.url), tab.incognito)
         val isNew = seenTabs.add(tab.id)
+        // 3.0.4: its group strip, or none: the bar's height for its page is known before the page is shown.
+        updateGroupStrip()
         syncSession(tab)
         crashView.visibility = if (tab.crashed) View.VISIBLE else View.GONE
         val wasFullscreen = fullscreenTab
@@ -2251,6 +2533,11 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         // 3.0: not while the tab being left has its picture taken: this follows then (onLeavingTab).
         if (leavingTab != null) return
         val session = tab.session
+        // 3.0.4: with room for its group strip (or without) before its page is in the view, so the
+        // page is laid out once (the view hands the height to the page it gets). The page leaving goes
+        // first (as setSession would let go of it), so it isn't laid out again for a bar it won't have.
+        if (stripPx != stripWanted && gecko.session != null && gecko.session !== session) gecko.releaseSession()
+        applyStripHeight()
         // 3.0: only an open one: a pop-up's is opened by the engine just after its tab is shown.
         if (session != null && session.isOpen) {
             if (session.selectionActionDelegate !== selectionMenu) session.selectionActionDelegate = selectionMenu
@@ -2270,31 +2557,51 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         val group = current?.let { TabManager.groupOf(it) }
         tabsBtn.contentDescription = "$n ${if (n == 1) "tab" else "tabs"}" + if (group != null) " (group ${TabManager.groupTitle(group)})" else ""
         updateProfileChip()
+        // 3.0.4: the group's tabs came, went, moved, or it was renamed or recoloured.
+        updateGroupStrip()
         if (switcherOpen) switcher.refresh()
     }
 
-    private var styledTabCount: Int? = null
+    private var styledTabCount: Long? = null
 
-    /** The tab button takes the colour of the open tab's group, so you can tell you're in one. */
+    /** 3.0.4: the tab count's own outline, recoloured in place (also while the bar's colours change). */
+    private var tabCountShape: android.graphics.drawable.GradientDrawable? = null
+
+    /**
+     * The tab button takes the colour of the open tab's group, so you can tell you're in one. 3.0.4:
+     * otherwise the bar's colours (a website's too), and on a website's colour the group's only where
+     * it stands out.
+     */
     private fun styleTabCount() {
         val tab = current
         val group = tab?.let { TabManager.groupOf(it) }
         val incognito = tab?.incognito == true
-        val key = (group?.color ?: -1) * 2 + if (incognito) 1 else 0
+        val bar = barShown
+        val plain = bar?.text ?: color(if (incognito) R.color.incognito_text else R.color.text_primary)
+        val text = group?.let { g ->
+            val c = color(TabGroup.colorRes(g.color))
+            if (bar != null && bar.site) BarTones.onBar(c, bar.bar, bar.text) else c
+        } ?: plain
+        val outline = if (group != null || incognito) text else bar?.icon ?: color(R.color.text_secondary)
+        val key = (text.toLong() shl 32) or (outline.toLong() and 0xFFFFFFFFL)
         if (key == styledTabCount) return
         styledTabCount = key
-        val text = when {
-            group != null -> color(TabGroup.colorRes(group.color))
-            incognito -> color(R.color.incognito_text)
-            else -> color(R.color.text_primary)
-        }
         tabsCount.setTextColor(text)
-        tabsCount.background = tabCountBackground(this, if (group != null || incognito) text else color(R.color.text_secondary))
+        val shape = tabCountShape ?: tabCountBackground(this, outline).also { tabCountShape = it }
+        shape.setStroke((2 * resources.displayMetrics.density).roundToInt(), outline)
+        if (tabsCount.background !== shape) tabsCount.background = shape
         // Its spoken label (how many tabs) is set in onTabsChanged.
     }
 
     override fun onTabUpdated(tab: Tab) {
-        if (tab !== current) return
+        if (tab !== current) {
+            // 3.0.4: another tab of the open tab's group has a new title or page: its chip follows.
+            if (tab.groupId != null && tab.groupId == current?.groupId) showGroupStrip()
+            return
+        }
+        // 3.0.4: a new tab of a group that leaves its home page for a page makes room for the strip
+        // first (syncSession), and the strip follows the page's title.
+        updateGroupStrip()
         syncSession(tab)
         updateSitePlayerChip()
         val pageStarted = tab.loading && !shownLoading
@@ -2388,10 +2695,20 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         if (tab === current) {
             Motion.fadeIn(crashView, fromDy = 0)
             showToolbar()
+            updateGroupStrip()
+            // 3.0.4: the crash view is Swift's: Swift's colours.
+            updateBarColours(animate = true)
         }
     }
 
+    /** 3.0.4: the open tab's page said its colour (or that it has none): the bar takes it. */
+    override fun onSiteColour(tab: Tab) {
+        if (tab === current) updateBarColours(animate = true)
+    }
+
     override fun onPlayingChanged(tab: Tab) {
+        // 3.0.4: the tab grid's speakers follow any tab's sound (and its mute).
+        if (switcherOpen) switcher.refreshSound(tab)
         if (tab !== current) return
         updateKeepScreenOn()
         updateSitePlayerChip()
@@ -2425,7 +2742,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         val pad = dp(12f).toInt()
         val chip = TextView(this).apply {
             text = "▶  Swift player"
-            textSize = 14f
+            Ui.size(this, Ui.Type.BODY_SECONDARY, keepFont = true)
             setTextColor(color(Looks.accent.onPrimary))
             setTypeface(typeface, android.graphics.Typeface.BOLD)
             gravity = android.view.Gravity.CENTER
@@ -2439,7 +2756,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             setOnClickListener { playInSwiftPlayer() }
         }
         val lp = FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, dp(40f).toInt(), android.view.Gravity.TOP or android.view.Gravity.END)
-        lp.topMargin = pad + if (bottomBar || fullscreenTab != null) 0 else toolbarPx
+        lp.topMargin = pad + if (bottomBar || fullscreenTab != null) 0 else barPx
         lp.marginEnd = pad
         root.addView(chip, lp)
         chip.alpha = 0f
@@ -2542,31 +2859,57 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             (v.layoutParams as FrameLayout.LayoutParams).gravity = edge
             v.layoutParams = v.layoutParams
         }
-        // Views that fill the page area leave the toolbar's room at its end of the screen.
-        for (v in listOf<View>(home, crashView, pageCover, findViewById(R.id.swipe_peek), suggestionsList)) {
+        // 3.0.4: a floating bar's pill and its loading line, on this side.
+        placeBarParts()
+        // Views that fill the page area leave the toolbar's room at its end of the screen. 3.0.4: the
+        // home page, the crash view and the suggestions show without the group strip; the covers
+        // over the page leave its room too (placePageCovers).
+        for (v in listOf<View>(home, crashView, suggestionsList)) {
             val lp = v.layoutParams as FrameLayout.LayoutParams
             lp.topMargin = if (bottomBar) 0 else toolbarPx
             lp.bottomMargin = if (bottomBar) toolbarPx else 0
             v.layoutParams = lp
         }
+        placePageCovers()
+        placeGroupStrip()
         // With the bar below, the best suggestion is the one next to it.
         (suggestionsList.layoutManager as? LinearLayoutManager)?.reverseLayout = bottomBar
         applyToolbarShown(toolbarShown)
     }
 
+    /** The new tab's cover and the next tab's picture (swiping the bar) cover the page: below the bar and the strip. */
+    private fun placePageCovers() {
+        for (v in listOf<View>(pageCover, findViewById(R.id.swipe_peek))) {
+            val lp = v.layoutParams as FrameLayout.LayoutParams
+            val top = if (bottomBar) 0 else barPx
+            val bottom = if (bottomBar) barPx else 0
+            if (lp.topMargin == top && lp.bottomMargin == bottom) continue
+            lp.topMargin = top
+            lp.bottomMargin = bottom
+            v.layoutParams = lp
+        }
+    }
+
+    /**
+     * [shown]: how much of the bar shows, 0 to [barPx]. 3.0.4: the address bar and the group strip
+     * move as one: at the top the bar goes first and the strip after it, at the bottom the same way
+     * down; the page (at the top) or the engine's clipping (both) follow the whole height.
+     */
     private fun applyToolbarShown(shown: Float) {
         toolbarShown = shown
-        if (shown >= toolbarPx) hiddenBySwipe = false
+        val bar = barPx
+        if (shown >= bar) hiddenBySwipe = false
         if (bottomBar) {
-            appBar.translationY = toolbarPx - shown
+            appBar.translationY = bar - shown
             gestureLayer.translationY = 0f
         } else {
-            appBar.translationY = shown - toolbarPx
+            appBar.translationY = shown - bar
             gestureLayer.translationY = shown
         }
+        groupStrip?.translationY = appBar.translationY
         // The engine lays pages out for a fully shown toolbar (see setDynamicToolbarMaxHeight); a
         // negative clipping moves elements fixed to the bottom of the screen down by the hidden part.
-        gecko.setVerticalClipping((shown - toolbarPx).roundToInt())
+        gecko.setVerticalClipping((shown - bar).roundToInt())
     }
 
     private fun showToolbar() = setToolbarWanted(true)
@@ -2588,14 +2931,15 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     private fun setToolbarWanted(show: Boolean) {
         // In full screen the toolbar stays away; leaving full screen brings it back.
         if (fullscreenTab != null) return
-        val target = if (show) toolbarPx.toFloat() else 0f
+        val target = if (show) barPx.toFloat() else 0f
         if (toolbarWanted == show && toolbarShown == target) return
         settleAnim?.cancel()
         toolbarWanted = show
         applyToolbarShown(target)
         val now = SystemClock.uptimeMillis()
-        // Only a toolbar at the top moves the page, which the engine then makes up for.
-        expectedShift = if (bottomBar) 0f else if (show) toolbarPx.toFloat() else -toolbarPx.toFloat()
+        // Only a toolbar at the top moves the page, which the engine then makes up for (3.0.4: by the
+        // group strip's height too).
+        expectedShift = if (bottomBar) 0f else if (show) barPx.toFloat() else -barPx.toFloat()
         shiftExpectedUntil = now + 1000
         toolbarToggledAt = now
         scrollRun = 0f
@@ -2625,14 +2969,14 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         }
         if (followsFinger()) {
             // Back at the top after a fling upwards (not the engine making up for the toolbar's own move).
-            if (!toolbarWanted && scrollY <= toolbarPx / 2f && last >= 0f && scrollY < last && !gestureLayer.fingerDown &&
+            if (!toolbarWanted && scrollY <= barPx / 2f && last >= 0f && scrollY < last && !gestureLayer.fingerDown &&
                 settleAnim == null && SystemClock.uptimeMillis() - lastToolbarMoveAt > 400
             ) {
                 settleToolbar(true)
             }
             return
         }
-        if (!toolbarWanted && (scrollY <= toolbarPx / 2f || !canAutoHideToolbar())) {
+        if (!toolbarWanted && (scrollY <= barPx / 2f || !canAutoHideToolbar())) {
             // Back at the top of the page (or hiding isn't wanted now): show the toolbar.
             scrollRun = 0f
             showToolbar()
@@ -2657,7 +3001,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         // A deliberate scroll is needed, not a nudge: about a finger's width down to hide, a bit
         // less up to bring it back. Hiding only well below the top, so the page's move can't take
         // it back to where the toolbar would show again.
-        if (toolbarWanted && scrollRun > dp(64f) && scrollY > toolbarPx * 2) {
+        if (toolbarWanted && scrollRun > dp(64f) && scrollY > barPx * 2) {
             hideToolbar()
         } else if (!toolbarWanted && scrollRun < -dp(48f)) {
             showToolbar()
@@ -2674,7 +3018,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         if (!followsFinger() || !canAutoHideToolbar() || !gecko.touchScrollsPage()) return
         // Only once the page is really scrolling, not while the finger is still deciding.
         if (SystemClock.uptimeMillis() - lastUserScrollAt > 300) return
-        val target = (toolbarShown + dy).coerceIn(0f, toolbarPx.toFloat())
+        val target = (toolbarShown + dy).coerceIn(0f, barPx.toFloat())
         if (target == toolbarShown) return
         settleAnim?.cancel()
         settleAnim = null
@@ -2684,7 +3028,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
     /** The finger let go half-way: the toolbar finishes the way it was going. */
     private fun onFingerUp() {
-        if (!followsFinger() || toolbarShown <= 0f || toolbarShown >= toolbarPx) return
+        if (!followsFinger() || toolbarShown <= 0f || toolbarShown >= barPx) return
         settleToolbar(fingerDirection > 0)
     }
 
@@ -2700,13 +3044,13 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
     /** A short, straight slide to fully shown or fully hidden. */
     private fun settleToolbar(show: Boolean) {
-        val target = if (show) toolbarPx.toFloat() else 0f
+        val target = if (show) barPx.toFloat() else 0f
         settleAnim?.cancel()
         if (toolbarShown == target) {
             settleAnim = null
             return
         }
-        val distance = abs(target - toolbarShown) / toolbarPx
+        val distance = abs(target - toolbarShown) / barPx
         settleAnim = ValueAnimator.ofFloat(toolbarShown, target).apply {
             duration = (140 * distance).toLong().coerceAtLeast(50)
             interpolator = LinearInterpolator()
@@ -2725,6 +3069,119 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         if (show) showToolbar() else if (canAutoHideToolbar()) hideToolbar()
     }
 
+    // ------------------------------------------------------------------ 3.0.4: the group strip
+
+    /** What the group strip does for the open tab now (TabRules.strip). */
+    private fun stripState(): TabRules.Strip {
+        val tab = current ?: return TabRules.Strip.NONE
+        return TabRules.strip(
+            enabled = prefs.groupStrip,
+            grouped = TabManager.groupOf(tab) != null,
+            hasPage = !tab.isHome,
+            fullScreen = fullscreenTab != null,
+            pageShown = !tab.showsHome && !tab.crashed,
+            typing = editing,
+        )
+    }
+
+    /**
+     * The open tab's group as a strip of its tabs by the address bar (Settings → Browsing & tabs).
+     * Its room is part of the bar while the tab is in a group and has a page, also while the strip
+     * makes way for the home page, the crash view or typing an address: the page isn't laid out
+     * again for those. Cheap when nothing changed (it comes with every update of the open tab).
+     */
+    private fun updateGroupStrip() {
+        // The bar's views are there from the start of build (what TabManager says comes after).
+        if (!::gecko.isInitialized) return
+        stripWanted = if (stripState() == TabRules.Strip.NONE) 0 else dp(STRIP_DP)
+        // Not while the view still shows another tab's page (the tab being left, for its picture):
+        // the new page's room comes with it (syncSession).
+        if (leavingTab == null && (gecko.session == null || gecko.session === current?.session)) applyStripHeight()
+        showGroupStrip()
+    }
+
+    /** The bar's room for the engine with the strip's ([stripWanted]); the bar stays shown or hidden as it was. */
+    private fun applyStripHeight() {
+        if (stripPx == stripWanted) return
+        stripPx = stripWanted
+        placePageCovers()
+        if (fullscreenTab == null) {
+            settleAnim?.cancel()
+            settleAnim = null
+            gecko.setDynamicToolbarMaxHeight(barPx)
+            applyToolbarShown(if (toolbarWanted) barPx.toFloat() else 0f)
+        }
+        showGroupStrip()
+    }
+
+    /** Shows the strip with the open tab's group as it is now, or hides it. */
+    private fun showGroupStrip() {
+        if (!::gecko.isInitialized) return
+        // Its room is still to be made (or taken away) with the next page: it stays as it is until then.
+        if (stripPx != stripWanted) return
+        val tab = current
+        val group = tab?.let { TabManager.groupOf(it) }
+        if (tab == null || group == null || stripPx == 0 || stripState() != TabRules.Strip.SHOWN) {
+            // 3.0.4: a floating bar has no hairline (the page shows around it).
+            toolbarDivider.visibility = if (floatingBar) View.INVISIBLE else View.VISIBLE
+            groupStrip?.let { if (it.visibility != View.GONE) it.visibility = View.GONE }
+            return
+        }
+        // The strip's own hairline is at the page's edge; the bar's would be between the two.
+        toolbarDivider.visibility = View.INVISIBLE
+        val strip = groupStrip ?: makeGroupStrip()
+        strip.show(group, TabManager.tabsIn(group), tab)
+        if (strip.visibility != View.VISIBLE) {
+            strip.translationY = appBar.translationY
+            strip.visibility = View.VISIBLE
+        }
+    }
+
+    private fun makeGroupStrip(): GroupStrip {
+        val strip = GroupStrip(this)
+        strip.listener = object : GroupStrip.Listener {
+            override fun onTabChosen(tab: Tab) {
+                if (tab !== current && tab in TabManager.tabs) TabManager.select(tab)
+            }
+
+            // Its usual menu, as when its card is held in the tab grid.
+            override fun onTabHeld(tab: Tab) = TabMenu.show(this@MainActivity, tab)
+
+            override fun onNewTab(group: TabGroup) {
+                TabManager.newTabInGroup(group)
+            }
+        }
+        // Above the page's covers, as the bar is, and without a shadow.
+        strip.elevation = appBar.elevation
+        strip.outlineProvider = null
+        strip.visibility = View.GONE
+        val content = appBar.parent as android.view.ViewGroup
+        content.addView(strip, content.indexOfChild(appBar) + 1, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, dp(STRIP_DP)))
+        groupStrip = strip
+        placeGroupStrip()
+        return strip
+    }
+
+    /** The strip on the page's side of the bar: below it at the top of the screen, above it at the bottom. */
+    private fun placeGroupStrip() {
+        val strip = groupStrip ?: return
+        val lp = strip.layoutParams as FrameLayout.LayoutParams
+        lp.gravity = if (bottomBar) android.view.Gravity.BOTTOM else android.view.Gravity.TOP
+        lp.topMargin = if (bottomBar) 0 else toolbarPx
+        lp.bottomMargin = if (bottomBar) toolbarPx else 0
+        strip.layoutParams = lp
+        strip.setLineAtTop(bottomBar)
+        strip.translationY = appBar.translationY
+        // 3.0.4: in the bar's colours and style (a pill of its own when the bar floats).
+        barShown?.let { strip.paint(it, floatingBar, bottomBar, barOutlined()) }
+    }
+
+    /** How much of the bar shows (px): the group strip's room counts only while the strip itself shows. */
+    private fun visibleBarPx(): Int {
+        val hiddenStrip = if (stripPx > 0 && groupStrip?.visibility != View.VISIBLE) stripPx else 0
+        return (toolbarShown.roundToInt() - hiddenStrip).coerceAtLeast(0)
+    }
+
     // ------------------------------------------------------------------ pull to refresh
 
     private val ptrTimeout = Runnable { finishPullRefresh() }
@@ -2740,7 +3197,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
                 val tab = current ?: return false
                 return prefs.pullToRefresh && !ptrRefreshing && fullscreenTab == null && !editing && !switcherOpen &&
                     findBar.visibility != View.VISIBLE && tab.session != null && !tab.showsHome &&
-                    toolbarWanted && toolbarShown >= toolbarPx
+                    toolbarWanted && toolbarShown >= barPx
             }
 
             override fun onPull(distance: Float) {
@@ -2771,8 +3228,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     /** The finger moves twice as far as the circle, up to a limit. */
     private fun pullOffset(distance: Float) = (distance * 0.5f).coerceAtMost(dp(110f))
 
-    /** Circle tucked under the bottom edge of the toolbar. */
-    private fun ptrHiddenY() = (if (bottomBar) 0 else toolbarPx) - dp(16f) - dp(40f)
+    /** Circle tucked under the bottom edge of the toolbar (3.0.4: of the group strip below it). */
+    private fun ptrHiddenY() = (if (bottomBar) 0 else barPx) - dp(16f) - dp(40f)
 
     private fun startPullRefresh() {
         val tab = current ?: return hidePullIndicator()
@@ -3220,6 +3677,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         applyToolbarShown(0f)
         fullscreenTab = tab
         appBar.visibility = View.GONE
+        // 3.0.4: the group strip goes too (its room with the bar's, below).
+        updateGroupStrip()
         // The video gets the whole screen: no room is kept for the toolbar, as in Firefox. Without
         // this the page stays laid out below a toolbar-high empty strip.
         gecko.setDynamicToolbarMaxHeight(0)
@@ -3237,7 +3696,11 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         if (fullscreenTab == null) return
         fullscreenTab = null
         appBar.visibility = View.VISIBLE
-        gecko.setDynamicToolbarMaxHeight(toolbarPx)
+        // 3.0.4: with the group strip's room again when the tab is in a group (it shows with updateAll, below).
+        stripWanted = if (stripState() == TabRules.Strip.NONE) 0 else dp(STRIP_DP)
+        stripPx = stripWanted
+        placePageCovers()
+        gecko.setDynamicToolbarMaxHeight(barPx)
         toolbarWanted = false
         showToolbar()
         applySystemBars()
@@ -3438,7 +3901,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             TabManager.isRestoring(tab) -> Unit
             tab.canGoBack && tab.session != null -> TabManager.goBack(tab)
             tab.leftHome && !tab.isHome -> TabManager.returnHome(tab)
-            tab.parentId != null && TabManager.tabs.any { it.id == tab.parentId } -> TabManager.close(tab)
+            // 3.0.4: not a pinned one (it leaves Swift instead, below).
+            tab.parentId != null && !tab.pinned && TabManager.tabs.any { it.id == tab.parentId } -> TabManager.close(tab)
             // A document opened from Documents or Downloads returns there; one another app sent
             // closes and Android goes back to that app (2.6).
             tab.backTo != null -> {
@@ -3563,7 +4027,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         startup.visibility = View.VISIBLE
         findViewById<android.widget.ImageView>(R.id.startup_logo)?.setImageDrawable(Ui.logo(this))
         // In the accent chosen (2.6), your own included.
-        findViewById<android.widget.ProgressBar>(R.id.startup_spinner)?.indeterminateTintList = ColorStateList.valueOf(Ui.accent(this))
+        findViewById<LoadingIndicator>(R.id.startup_spinner)?.colour = Ui.accent(this)
         // 3.0: a tab chosen later is covered below the toolbar, which is in use (at start the screen
         // carries on from Swift's start screen).
         if (!first) coverBelowToolbar()
@@ -3590,7 +4054,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         startupExtras += picture
         startupBottom().addView(TextView(this).apply {
             text = "Loading… the ad blocker is starting"
-            textSize = 13f
+            Ui.size(this, Ui.Type.CAPTION, keepFont = true)
             setTextColor(color(Looks.accent.onPrimary))
             val pad = dp(14f).toInt()
             setPadding(pad, dp(8f).toInt(), pad, dp(8f).toInt())
@@ -3631,7 +4095,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         val pad = dp(20f).toInt()
         val b = TextView(this).apply {
             text = "Load now, without blocking ads"
-            textSize = 15f
+            Ui.size(this, Ui.Type.BODY, keepFont = true)
             setTypeface(typeface, android.graphics.Typeface.BOLD)
             setTextColor(color(Looks.accent.onContainer))
             gravity = android.view.Gravity.CENTER
@@ -3690,10 +4154,11 @@ class MainActivity : AppCompatActivity(), BrowserUi {
                 val tab = current ?: return false
                 if (editing || fullscreenTab != null || switcherOpen || quickMenu.isOpen) return false
                 if (startup.visibility == View.VISIBLE || findBar.visibility == View.VISIBLE) return false
-                if (!toolbarWanted || toolbarShown < toolbarPx || TabManager.swipeOrder(tab).size < 2) return false
+                if (!toolbarWanted || toolbarShown < barPx || TabManager.swipeOrder(tab).size < 2) return false
+                // 3.0.4: on the bar itself (a floating bar's pill: around it is the page).
                 val at = IntArray(2)
-                appBar.getLocationOnScreen(at)
-                return rawX >= at[0] && rawX < at[0] + appBar.width && rawY >= at[1] && rawY < at[1] + appBar.height
+                toolbar.getLocationOnScreen(at)
+                return rawX >= at[0] && rawX < at[0] + toolbar.width && rawY >= at[1] && rawY < at[1] + toolbar.height
             }
 
             override fun neighbourTab(next: Boolean): Tab? {
@@ -3778,7 +4243,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
                 barSwipeX = ev.rawX
                 barSwipeY = ev.rawY
                 barSwipeMode = when {
-                    mode and Prefs.SWIPE_HIDE != 0 && toolbarWanted && toolbarShown >= toolbarPx && within(appBar, ev) -> 1
+                    mode and Prefs.SWIPE_HIDE != 0 && toolbarWanted && toolbarShown >= barPx && within(toolbar, ev) -> 1
                     mode and Prefs.SWIPE_SHOW != 0 && toolbarShown <= 0f && atScreenEdge(ev) -> 2
                     else -> 0
                 }
@@ -3915,7 +4380,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         if (back == null) openTabSwitcher() else handler.postDelayed(openGridAfterTap, TAB_DOUBLE_TAP_MS)
     }
 
-    private val downloadRing by lazy { ProgressRing(this).also { it.setColour(Ui.accent(this)) } }
+    private val downloadRing by lazy { ProgressRing(this).also { it.setColour(barAccent()) } }
     private val downloadRingListener: () -> Unit = { showDownloadRing() }
 
     /** While downloads run, a ring round the menu button shows how far they have come (torrents too). */
@@ -3929,7 +4394,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         val known = running.map { it.percent }.filter { it >= 0 }
         downloadRing.fraction = if (known.size == running.size) known.average().toFloat() / 100f else -1f
         if (menuBtn.foreground !== downloadRing) {
-            downloadRing.setColour(Ui.accent(this))
+            // 3.0.4: the accent, or the bar's text colour on a website's colour close to it.
+            downloadRing.setColour(barAccent())
             menuBtn.foreground = downloadRing
         }
     }
@@ -4107,9 +4573,9 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         Messages.show(this, text, action.takeIf { onAction != null }, long = long, bottomOffset = messageOffset(), onAction = onAction)
     }
 
-    /** Messages sit above the address bar when it is at the bottom and showing. */
+    /** Messages sit above the address bar when it is at the bottom and showing (3.0.4: and the group strip above it). */
     private fun messageOffset(): Int =
-        if (bottomBar && appBar.visibility == View.VISIBLE) toolbarShown.roundToInt() else 0
+        if (bottomBar && appBar.visibility == View.VISIBLE) visibleBarPx() else 0
 
     private fun showKeyboard(view: View) {
         view.post {
@@ -4136,7 +4602,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         val view = TextView(this).apply {
             setText(text)
             setTextIsSelectable(true)
-            textSize = 11f
+            Ui.size(this, Ui.Type.SMALL, keepFont = true)
             val pad = (16 * resources.displayMetrics.density).toInt()
             setPadding(pad, pad, pad, pad)
         }
@@ -4196,6 +4662,12 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         private const val TAB_DOUBLE_TAP_MS = 300L
 
         private const val TOOLBAR_SETTLE_MS = 300L
+
+        /** 3.0.4: the group strip's height (dp). */
+        private const val STRIP_DP = 40
+
+        /** 3.0.4: how long the bar's colours take to change (a website's colour coming or going). */
+        private const val BAR_COLOUR_MS = 200L
 
         /** 3.0: how long the start-up screen waits for the ad blocker before it offers Load now. */
         private const val LOAD_NOW_AFTER_MS = 8000L

@@ -2,9 +2,12 @@
     android:width="24dp"
     android:height="24dp"
     android:tint="?attr/colorControlNormal"
-    android:viewportWidth="24"
-    android:viewportHeight="24">
-    <path
-        android:fillColor="@android:color/white"
-        android:pathData="M5,15h2V8.41L18.59,20 20,18.59 8.41,7H15V5H5z" />
+    android:viewportWidth="960"
+    android:viewportHeight="960">
+    <!-- 3.0.4: Material Symbols Rounded "north_west". -->
+    <group android:translateY="960">
+        <path
+            android:fillColor="@android:color/white"
+            android:pathData="M280,-624v224q0,17 -11.5,28.5T240,-360q-17,0 -28.5,-11.5T200,-400v-320q0,-17 11.5,-28.5T240,-760h320q17,0 28.5,11.5T600,-720q0,17 -11.5,28.5T560,-680H336l436,436q11,11 11,28t-11,28q-11,11 -28,11t-28,-11L280,-624Z" />
+    </group>
 </vector>

@@ -17,12 +17,16 @@ object DocRules {
 
     /**
      * What the content scripts in websites' frames send (content.js). "google-account" (3.0) is
-     * checked again in Kotlin: only from Google's own https pages, never from incognito.
+     * checked again in Kotlin: only from Google's own https pages, never from incognito. 3.0.4:
+     * "theme-color", the colour a page asks for its bar (only ever a colour for the address bar).
      */
     private val FROM_PAGES = setOf(
         "hello", "click", "icon", "playing", "video-pos", "video-start", "media-ended", "media-error", "media-waiting",
-        "google-account", "page-size",
+        "google-account", "page-size", "theme-color",
     )
+
+    /** 3.0.4: reader view's own: where it was read to, and its Aa button (Swift's panel for its look). */
+    private val FROM_READER = setOf("reader-place", "reader-style")
 
     /** The document viewer's own messages (docs/view.js). */
     private val FROM_VIEWER = setOf(
@@ -55,7 +59,7 @@ object DocRules {
     fun allowed(type: String, sender: Sender): Boolean = when (sender) {
         Sender.CONTENT_SCRIPT -> type in FROM_PAGES
         Sender.VIEWER -> type in FROM_VIEWER || type in READ_ALOUD
-        Sender.READER -> type in READ_ALOUD || type == "reader-place"
+        Sender.READER -> type in READ_ALOUD || type in FROM_READER
         Sender.OTHER -> false
     }
 

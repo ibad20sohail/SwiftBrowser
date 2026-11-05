@@ -47,7 +47,7 @@ object ReportUi {
         var withSites = false
         val text = Ui.text(a, Ui.Type.CAPTION, "").apply {
             typeface = Typeface.MONOSPACE
-            textSize = 10.5f
+            Ui.size(this, Ui.Type.SMALL, keepFont = true)
             setTextIsSelectable(false)
             background = Ui.shape(a, Palette.color(a, R.color.surface_alt), 12)
             val p8 = Ui.dp(a, 10)

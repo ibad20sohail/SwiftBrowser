@@ -63,6 +63,9 @@ object TabManager {
     /** Tabs kept loaded (3.0.1), by id; incognito ones are never written down. */
     private const val KEPT = "tabs_kept_loaded"
 
+    /** 3.0.4: pinned tabs, by id, the same way (their order is the tabs' own, saved with them). */
+    private const val PINNED = "tabs_pinned"
+
     /**
      * 3.0: [task] on [io], for the database: an error there (the phone full: SQLiteFullException) is
      * logged and Swift carries on. Before 3.0 such an error closed Swift, on a full phone at every start.
@@ -117,6 +120,8 @@ object TabManager {
         }
         val leftHome = prefs.sp.getStringSet(LEFT_HOME, null).orEmpty()
         val kept = prefs.sp.getStringSet(KEPT, null).orEmpty()
+        val pinned = prefs.sp.getStringSet(PINNED, null).orEmpty()
+        var ungrouped = false
         val repaired = ArrayList<Tab>()
         // Without their histories (2.6): each is read when its tab opens.
         val read = readTabs()
@@ -131,6 +136,12 @@ object TabManager {
             tab.groupId = r.groupId?.takeIf { id -> groups.any { it.id == id && it.profileId == r.profileId } }
             tab.leftHome = r.id.toString() in leftHome
             tab.kept = r.id.toString() in kept
+            tab.pinned = r.id.toString() in pinned
+            // 3.0.4: a pinned tab is in no group.
+            if (tab.pinned && tab.groupId != null) {
+                tab.groupId = null
+                ungrouped = true
+            }
             // 3.0: saved (before 3.0) with more than Android 7 can read back, a picture's data: address
             // or a very long history: it comes back without it, and is saved so.
             val tooLong = !TabRules.storable(r.url)
@@ -150,12 +161,14 @@ object TabManager {
             deleteGroupRow(g.id)
         }
         keepGroupsTogether()
+        if (keepPinnedFirst() || ungrouped) saveOrder()
         nextTabId = maxOf(db.lastTabId(), tabs.maxOfOrNull { it.id } ?: 0L) + 1
         nextGroupId = maxOf(lastGroupId(), groupRows.maxOfOrNull { it.id } ?: 0L) + 1
         repaired.forEach { scheduleSave(it) }
         if (repaired.isNotEmpty()) L.w("${repaired.size} saved tabs held more than Swift can read back; they keep only what fits")
         // Ids of tabs closed since are let go.
         if (kept.size != tabs.count { it.kept }) saveKept()
+        if (pinned.size != tabs.count { it.pinned }) savePinned()
         main.postDelayed(idleCheck, 5 * 60_000L)
         L.d("Restored ${tabs.size} tabs, ${groups.size} groups")
     }
@@ -254,6 +267,8 @@ object TabManager {
             // A link opened in a new tab from a grouped tab joins its group, as in Chrome.
             if (parent.incognito == incognito) tab.groupId = parent.groupId
             tabs.add(parentIndex + 1, tab)
+            // 3.0.4: next to a pinned tab it goes after the pinned ones.
+            keepPinnedFirst()
         } else {
             tabs.add(tab)
         }
@@ -371,6 +386,8 @@ object TabManager {
         val session = SessionFactory.create(tab)
         session.open(Engine.runtime)
         tab.crashed = false
+        // 3.0.4: a muted tab's page loads muted (its first frame's hello says it again, see Helper).
+        if (tab.muted) Helper.muteEngine(tab, true)
         if (tab === current) activate(tab, session)
         val parsed = tab.sessionState
         val text = if (parsed == null) tab.state else null
@@ -531,6 +548,50 @@ object TabManager {
     }
 
     /**
+     * 3.0.4: pins or unpins [tab]. Pinned, it goes after the tabs pinned before it and leaves its group
+     * (a pinned tab is in none); unpinned, it goes first of the others (TabRules.withPinChanged).
+     */
+    fun setPinned(tab: Tab, on: Boolean) {
+        if (tab.pinned == on || tab !in tabs) return
+        val oldGroup = tab.groupId
+        if (on) tab.groupId = null
+        tab.pinned = on
+        val order = TabRules.withPinChanged(tabs, tab) { it.pinned }
+        tabs.clear()
+        tabs.addAll(order)
+        removeIfEmpty(oldGroup)
+        if (!tab.incognito) savePinned()
+        saveOrder()
+        L.d("Tab ${tab.id} ${if (on) "pinned" else "unpinned"}")
+        ui?.onTabsChanged()
+    }
+
+    /** 3.0.4: put in a group on purpose (the menu's "Add to group"), a pinned tab is unpinned first, as in Chrome. */
+    private fun unpinForGroup(tab: Tab) {
+        if (!tab.pinned) return
+        tab.pinned = false
+        val order = TabRules.withPinChanged(tabs, tab) { it.pinned }
+        tabs.clear()
+        tabs.addAll(order)
+        if (!tab.incognito) savePinned()
+    }
+
+    private fun savePinned() {
+        val ids = tabs.filter { it.pinned && !it.incognito }.mapTo(HashSet()) { it.id.toString() }
+        prefs.sp.edit().putStringSet(PINNED, ids).apply()
+    }
+
+    /** 3.0.4: pinned tabs first, in their order (TabRules.pinnedFirst); true when something moved. */
+    private fun keepPinnedFirst(): Boolean {
+        val firstOther = tabs.indexOfFirst { !it.pinned }
+        if (firstOther < 0 || (firstOther until tabs.size).none { tabs[it].pinned }) return false
+        val order = TabRules.pinnedFirst(tabs) { it.pinned }
+        tabs.clear()
+        tabs.addAll(order)
+        return true
+    }
+
+    /**
      * Swift came on screen or went out of sight (3.0.1): the idle check only runs while it's on
      * screen. Out of sight, background tabs are let go a minute after anyway (suspendBackgroundTabs).
      */
@@ -619,6 +680,8 @@ object TabManager {
         }
         val goneGroups = closing.mapNotNull { group(it.groupId) }.distinct().filter { g -> tabs.none { it.groupId == g.id } }
         goneGroups.forEach { deleteGroup(it) }
+        // 3.0.4: a closed pinned tab leaves the list of pinned ones (Undo pins it again).
+        if (closing.any { it.pinned && !it.incognito }) savePinned()
         saveOrder()
         var replacement: Tab? = null
         if (wasCurrent) {
@@ -662,6 +725,7 @@ object TabManager {
         var first: Tab? = null
         val now = System.currentTimeMillis()
         var leftHome = false
+        var pinnedBack = false
         for (e in c.entries) {
             val old = e.tab
             if (!old.incognito && old.profileId !in profiles) continue
@@ -690,6 +754,10 @@ object TabManager {
             tab.speed = old.speed
             tab.leftHome = old.leftHome
             if (tab.leftHome) leftHome = true
+            // 3.0.4: pinned (and muted) as it was.
+            tab.pinned = old.pinned
+            tab.muted = old.muted
+            if (tab.pinned && !tab.incognito) pinnedBack = true
             tab.groupId = old.groupId?.let { gid -> newGroupIds[gid] ?: gid.takeIf { group(it) != null } }
             tabs.add(e.index.coerceIn(0, tabs.size), tab)
             Thumbnails.move(old, tab)
@@ -698,9 +766,11 @@ object TabManager {
             if (first == null) first = tab
         }
         if (leftHome) saveLeftHome()
+        if (pinnedBack) savePinned()
         // They are open again, so they leave the recently closed list.
         io.safe("update the recently closed tabs") { for (e in c.entries) if (e.rowId >= 0) db.deleteClosedTab(e.rowId) }
         keepGroupsTogether()
+        keepPinnedFirst()
         saveOrder()
         if (restoredCurrent != null) select(restoredCurrent) else ui?.onTabsChanged()
         // The blank tab opened because the last tab had closed goes again if it wasn't used.
@@ -787,9 +857,18 @@ object TabManager {
         return profileTabs(pid).maxByOrNull { it.lastUsed } ?: createTab("about:blank", pid, null, false, false)
     }
 
-    /** Normal tabs can come back with Undo (2.3); incognito ones are gone for good, with their data. */
+    /**
+     * Normal tabs can come back with Undo (2.3); incognito ones are gone for good, with their data.
+     * 3.0.4: pinned tabs stay open, but incognito ones: closing them all is what deletes their data,
+     * as the question before it says.
+     */
     fun closeAll(incognito: Boolean) {
-        closeTabs(if (incognito) incognitoTabs() else profileTabs(), undoable = !incognito)
+        val closing = if (incognito) incognitoTabs() else profileTabs().filter { !it.pinned }
+        if (closing.isEmpty() && !incognito && profileTabs().any { it.pinned }) {
+            ui?.showMessage("Pinned tabs stay open. Unpin one to close it with the others.")
+            return
+        }
+        closeTabs(closing, undoable = !incognito)
     }
 
     // ------------------------------------------------------------------ order and groups
@@ -827,6 +906,7 @@ object TabManager {
         if (slots.size != order.size || set.size != order.size) return
         slots.forEachIndexed { i, index -> tabs[index] = order[i] }
         keepGroupsTogether()
+        keepPinnedFirst()
         saveOrder()
         ui?.onTabsChanged()
     }
@@ -850,6 +930,8 @@ object TabManager {
     /** Puts [tab] in a group with [target]: [target]'s group, or a new one for the two of them. */
     fun groupWith(tab: Tab, target: Tab): TabGroup? {
         if (tab === target || tab.incognito != target.incognito || tab.profileId != target.profileId) return null
+        // 3.0.4: a pinned tab is in no group: dropped on another tab (or another on it), nothing is grouped.
+        if (tab.pinned || target.pinned) return null
         val group = groupOf(target) ?: newGroup(target)
         addToGroup(tab, group)
         return group
@@ -857,6 +939,7 @@ object TabManager {
 
     /** A new group with just [tab] in it, for the menu's "Add to group". */
     fun newGroupWith(tab: Tab): TabGroup {
+        unpinForGroup(tab)
         val old = tab.groupId
         val group = newGroup(tab)
         val index = tabs.indexOf(tab)
@@ -914,6 +997,7 @@ object TabManager {
     /** Moves [tab] into [group], after the group's last tab. */
     fun addToGroup(tab: Tab, group: TabGroup) {
         if (tab.groupId == group.id || tab.incognito != group.incognito || (!tab.incognito && tab.profileId != group.profileId)) return
+        unpinForGroup(tab)
         val old = tab.groupId
         tabs.remove(tab)
         tab.groupId = group.id
@@ -999,15 +1083,15 @@ object TabManager {
 
     /**
      * Tabs not opened for a while (Settings → Browsing) move to the "Inactive tabs" part of the tab
-     * grid, as in Chrome. Grouped, incognito and playing tabs never do.
+     * grid, as in Chrome. Grouped, incognito and playing tabs never do, nor (3.0.4) pinned ones.
      */
     fun isInactive(tab: Tab, now: Long = System.currentTimeMillis()): Boolean {
         val days = prefs.inactiveDays
-        return days > 0 && !tab.incognito && tab.groupId == null && tab !== current && !tab.playing &&
+        return days > 0 && !tab.incognito && tab.groupId == null && tab !== current && !tab.playing && !tab.pinned &&
             now - tab.lastUsed > days * DAY_MS
     }
 
-    /** The tabs swiping on the address bar goes through: as in the tab grid, without inactive ones. */
+    /** The tabs swiping on the address bar goes through: as in the tab grid (3.0.4: pinned ones first), without inactive ones. */
     fun swipeOrder(tab: Tab): List<Tab> {
         val now = System.currentTimeMillis()
         return listedWith(tab).filter { it === tab || !isInactive(it, now) }
@@ -1228,6 +1312,7 @@ object TabManager {
 
     fun deleteProfile(id: Long) {
         if (Profiles.all().size <= 1) return
+        val hadPinned = profileTabs(id).any { it.pinned }
         for (t in profileTabs(id)) {
             detachSession(t)
             tabs.remove(t)
@@ -1235,6 +1320,7 @@ object TabManager {
             Thumbnails.remove(t)
         }
         groups.removeAll { !it.incognito && it.profileId == id }
+        if (hadPinned) savePinned()
         Engine.runtime.storageController.clearDataForSessionContext(Profiles.contextId(id))
         // 3.0: its rows (a long history, its bookmarks) are deleted off the main thread; Swift moves
         // to another profile first, as Profiles.delete would.

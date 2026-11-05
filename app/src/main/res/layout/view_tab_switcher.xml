@@ -29,12 +29,22 @@
                 android:paddingEnd="16dp"
                 android:text="New tab"
                 android:textColor="?attr/colorOnPrimaryContainer"
-                android:textSize="15sp" />
+                android:textSize="@dimen/text_body" />
 
             <View
                 android:layout_width="0dp"
                 android:layout_height="1dp"
                 android:layout_weight="1" />
+
+            <!-- 3.0.4: the tabs as picture cards or as a compact list. -->
+            <ImageButton
+                android:id="@+id/switcher_layout"
+                android:layout_width="44dp"
+                android:layout_height="44dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="List of tabs"
+                android:src="@drawable/ic_view_list"
+                app:tint="@color/text_secondary" />
 
             <ImageButton
                 android:id="@+id/switcher_search"
@@ -69,7 +79,7 @@
                         android:background="@drawable/bg_tab_count"
                         android:gravity="center"
                         android:textColor="@color/text_primary"
-                        android:textSize="10sp"
+                        android:textSize="@dimen/text_small"
                         android:textStyle="bold" />
                 </FrameLayout>
 
@@ -134,7 +144,7 @@
                 android:paddingEnd="4dp"
                 android:singleLine="true"
                 android:textColor="@color/text_primary"
-                android:textSize="18sp" />
+                android:textSize="@dimen/text_title" />
 
             <EditText
                 android:id="@+id/sub_search"
@@ -152,7 +162,7 @@
                 android:singleLine="true"
                 android:textColor="@color/text_primary"
                 android:textColorHint="@color/text_secondary"
-                android:textSize="16sp"
+                android:textSize="@dimen/text_subtitle"
                 android:visibility="gone" />
 
             <ImageButton
@@ -185,7 +195,7 @@
                 android:paddingStart="12dp"
                 android:paddingEnd="12dp"
                 android:textColor="?attr/colorPrimary"
-                android:textSize="15sp"
+                android:textSize="@dimen/text_body"
                 android:visibility="gone" />
         </LinearLayout>
 
@@ -228,7 +238,7 @@
                     android:layout_marginTop="12dp"
                     android:text="No incognito tabs"
                     android:textColor="@color/incognito_text"
-                    android:textSize="18sp" />
+                    android:textSize="@dimen/text_title" />
 
                 <TextView
                     android:id="@+id/switcher_empty_text"
@@ -238,7 +248,7 @@
                     android:gravity="center"
                     android:text="Incognito tabs keep no history, and their cookies are deleted when you close them."
                     android:textColor="@color/incognito_hint"
-                    android:textSize="14sp" />
+                    android:textSize="@dimen/text_body_secondary" />
 
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/switcher_empty_new"

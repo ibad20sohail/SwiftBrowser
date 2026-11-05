@@ -1,3 +1,4 @@
+/* Until view.js sets the page's colours (3.0.4: auto, light, sepia or dark, see THEMES there). */
 :root {
   --bg: #ffffff;
   --text: #1b1c20;
@@ -35,18 +36,27 @@ body {
   text-size-adjust: none;
 }
 
+/* 3.0.4: a little closer together, for the Aa button on a 360 px wide phone. */
 .bar {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 10px 16px;
+  gap: 6px;
+  padding: 10px 12px;
   border-bottom: 1px solid var(--rule);
   font: 15px/1 Roboto, "Noto Sans", sans-serif;
 }
 
-.spacer { flex: 1; }
+.spacer { flex: 1; margin-right: -6px; }
 
-.original { color: var(--link); text-decoration: none; padding: 8px 0; }
+.original {
+  color: var(--link);
+  text-decoration: none;
+  padding: 8px 0;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
 
 .size {
   min-width: 44px;
@@ -90,7 +100,7 @@ article hr { border: 0; border-top: 1px solid var(--rule); }
 
 .missing { color: var(--muted); font: 16px Roboto, sans-serif; }
 
-.listen { padding: 0 14px; }
+.listen { padding: 0 12px; }
 
 /* The read-aloud controls, at the bottom while reading. */
 .player {

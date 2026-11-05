@@ -131,7 +131,7 @@ class ToolbarEditor(private val a: Activity) : FrameLayout(a) {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(6), 0, dp(4), 0)
             background = GradientDrawable().apply {
-                cornerRadius = dp(14).toFloat()
+                cornerRadius = dp(Ui.R_SMALL).toFloat()
                 setColor(color(R.color.toolbar_bg))
                 setStroke(dp(1), color(R.color.divider))
             }
@@ -139,7 +139,7 @@ class ToolbarEditor(private val a: Activity) : FrameLayout(a) {
         column.addView(bar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(56)).apply { topMargin = dp(14) })
         address.apply {
             text = "Address"
-            textSize = 14f
+            Ui.size(this, Ui.Type.BODY_SECONDARY)
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.END
             gravity = Gravity.CENTER_VERTICAL
@@ -234,8 +234,7 @@ class ToolbarEditor(private val a: Activity) : FrameLayout(a) {
                 val photo = com.swiftbrowser.core.GoogleAccounts.picture(a, p.id)
                 addView(TextView(a).apply {
                     gravity = Gravity.CENTER
-                    textSize = 14f
-                    setTypeface(typeface, Typeface.BOLD)
+                    Ui.size(this, Ui.Type.SECTION)
                     setTextColor(0xFFFFFFFF.toInt())
                     if (photo != null) {
                         background = photo
@@ -276,7 +275,7 @@ class ToolbarEditor(private val a: Activity) : FrameLayout(a) {
         }
         val v = TextView(a).apply {
             text = b.label
-            textSize = 12f
+            Ui.size(this, Ui.Type.CAPTION)
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.END
             gravity = Gravity.CENTER_HORIZONTAL

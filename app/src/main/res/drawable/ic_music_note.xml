@@ -2,9 +2,12 @@
     android:width="24dp"
     android:height="24dp"
     android:tint="?attr/colorControlNormal"
-    android:viewportWidth="24"
-    android:viewportHeight="24">
-    <path
-        android:fillColor="@android:color/white"
-        android:pathData="M12,3v9.28c-0.47,-0.17 -0.97,-0.28 -1.5,-0.28C8.01,12 6,14.01 6,16.5S8.01,21 10.5,21c2.31,0 4.2,-1.75 4.45,-4H15V6h4V3h-7z" />
+    android:viewportWidth="960"
+    android:viewportHeight="960">
+    <!-- 3.0.4: Material Symbols Rounded "music_note". -->
+    <group android:translateY="960">
+        <path
+            android:fillColor="@android:color/white"
+            android:pathData="M400,-120q-66,0 -113,-47t-47,-113q0,-66 47,-113t113,-47q23,0 42.5,5.5T480,-418v-382q0,-17 11.5,-28.5T520,-840h160q17,0 28.5,11.5T720,-800v80q0,17 -11.5,28.5T680,-680H560v400q0,66 -47,113t-113,47Z" />
+    </group>
 </vector>

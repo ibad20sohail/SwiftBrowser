@@ -69,6 +69,7 @@ function onNative(msg) {
       keepPlaying: msg.keepPlaying === true,
       readerFont: msg.readerFont === 'sans' ? 'sans' : 'serif',
       readerSpacing: Number.isInteger(msg.readerSpacing) ? msg.readerSpacing : 1,
+      readerTheme: READER_THEMES.includes(msg.readerTheme) ? msg.readerTheme : 'auto',
       accentLight: /^#[0-9a-f]{6}$/i.test(msg.accentLight || '') ? msg.accentLight : '#1b66e4',
       accentDark: /^#[0-9a-f]{6}$/i.test(msg.accentDark || '') ? msg.accentDark : '#8ab4ff',
       pageLight: colours(msg.pageLight),
@@ -115,6 +116,9 @@ function onNative(msg) {
     }).catch(() => { });
   }
 }
+
+/** 3.0.4: reader view's page colours: Swift's light or dark (auto), or always light, sepia or dark. */
+const READER_THEMES = ['auto', 'light', 'sepia', 'dark'];
 
 /** The app's page colours for reader view (2.6): only well-formed colours are kept. */
 function colours(c) {
@@ -210,6 +214,7 @@ browser.storage.local.get('look').then(r => {
       keepPlaying: look.keepPlaying === true,
       readerFont: look.readerFont === 'sans' ? 'sans' : 'serif',
       readerSpacing: Number.isInteger(look.readerSpacing) ? look.readerSpacing : 1,
+      readerTheme: READER_THEMES.includes(look.readerTheme) ? look.readerTheme : 'auto',
       accentLight: /^#[0-9a-f]{6}$/i.test(look.accentLight || '') ? look.accentLight : '#1b66e4',
       accentDark: /^#[0-9a-f]{6}$/i.test(look.accentDark || '') ? look.accentDark : '#8ab4ff',
     });

@@ -23,15 +23,18 @@ import androidx.media3.common.Player
 import androidx.media3.common.Timeline
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Tracks
+import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.ForwardingRenderer
+import androidx.media3.exoplayer.PlayerMessage
 import androidx.media3.exoplayer.Renderer
 import androidx.media3.exoplayer.RendererConfiguration
 import androidx.media3.exoplayer.audio.AudioSink
+import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.exoplayer.audio.ForwardingAudioSink
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MediaSource
@@ -83,11 +86,15 @@ object LocalPlayback {
         /** 3.0: nothing about it is kept or shown outside the player (incognito, or Private's). */
         val private: Boolean get() = incognito || secure
 
+        /** 3.0.4: a file of a network folder, read from the share (files.net.NetDataSource). */
+        val network: Boolean get() = com.swiftbrowser.files.net.NetUri.isNet(uri)
+
         /** What a log line may say about it: the kind of file, never its name, path or address. */
         val logName: String
             get() = when {
                 stream -> if (hls) "a website stream" else "a website video"
                 file != null -> "a ${file.extension.lowercase(Locale.ROOT).take(5)} file"
+                network -> "a network folder's file"
                 else -> "a shared file"
             }
     }
@@ -193,12 +200,17 @@ object LocalPlayback {
 
     private fun obtain(ctx: Context): ExoPlayer = player ?: build(ctx).also { player = it }
 
+    /** 3.0.4: night sound in the player's sound output (one for each player made); its switch is [setNightSound]. */
+    private var night: NightSound? = null
+
     private fun build(ctx: Context): ExoPlayer {
         // The phone's hardware decoders first (smooth and light on the battery); another decoder
         // when one can't start, rather than an error. FFmpeg (2.9.2) only for sound none of the phone's
         // decoders can play (Dolby and DTS in films): "on" puts it after them, "prefer" would before.
-        // 3.0.3: with the subtitles' and the sound's timing (SyncedRenderers).
-        val renderers = SyncedRenderers(ctx)
+        // 3.0.3: with the subtitles' and the sound's timing (SyncedRenderers). 3.0.4: and night sound.
+        val nightSound = NightSound().apply { enabled = PlayerSettings.nightSound }
+        night = nightSound
+        val renderers = SyncedRenderers(ctx, nightSound)
             .setEnableDecoderFallback(true)
             .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
         // Smaller buffers than ExoPlayer's (up to 128 MB for video): the phone has 2 GB of memory
@@ -236,7 +248,8 @@ object LocalPlayback {
         val http = GeckoDataSource.Factory(headers.filterKeys { !it.equals("User-Agent", ignoreCase = true) } + ("User-Agent" to agent), private)
         // MP3, AAC and AMR files without a table of contents can still be skipped through.
         val extractors = DefaultExtractorsFactory().setConstantBitrateSeekingEnabled(true)
-        return DefaultMediaSourceFactory(DefaultDataSource.Factory(ctx, http), extractors)
+        // 3.0.4: network folders' files from their share, the rest as before.
+        return DefaultMediaSourceFactory(com.swiftbrowser.files.net.NetDataSource.Factory(ctx, DefaultDataSource.Factory(ctx, http)), extractors)
     }
 
     // No title of Swift's own in the item: it would win over the song's tags.
@@ -259,6 +272,7 @@ object LocalPlayback {
         saveNow()
         val p = obtain(a)
         cancelSleep(notify = false)
+        clearLoop(notify = false)
         entries = list
         playingIndex = start
         clearInfo()
@@ -271,7 +285,8 @@ object LocalPlayback {
         if (boost > 0f) setBoost(0f)
         val factory = sourcesFor(a, first.headers, first.incognito).also { sources = it }
         p.setMediaSources(list.map { factory.createMediaSource(mediaItem(it)) }, start, positionMs)
-        p.setWakeMode(if (first.stream) C.WAKE_MODE_NETWORK else C.WAKE_MODE_LOCAL)
+        // 3.0.4: a network folder's file needs the Wi-Fi awake too.
+        p.setWakeMode(if (first.stream || first.network) C.WAKE_MODE_NETWORK else C.WAKE_MODE_LOCAL)
         p.setAudioAttributes(attributes(first.video), true)
         p.setPlaybackSpeed(PlayerSettings.defaultSpeed)
         // Repeating and shuffling carry on from song to song, not into a video.
@@ -317,8 +332,11 @@ object LocalPlayback {
     fun play() {
         val p = player ?: return
         when (p.playbackState) {
-            // After an error: try again.
-            Player.STATE_IDLE -> p.prepare()
+            // After an error: try again (3.0.4: a part repeated is watched for again, as the error dropped it).
+            Player.STATE_IDLE -> {
+                p.prepare()
+                watchLoopEnd()
+            }
             // At the end: from the start.
             Player.STATE_ENDED -> p.seekTo(p.currentMediaItemIndex, 0)
         }
@@ -477,6 +495,17 @@ object LocalPlayback {
         }
     }
 
+    /** 3.0.4: night sound (NightSound) on everything the player plays, kept with the player's settings. */
+    val nightSoundOn: Boolean get() = PlayerSettings.nightSound
+
+    /** 3.0.4: night sound on or off, at once: it is always in the sound's way, so nothing starts again. */
+    fun setNightSound(on: Boolean) {
+        PlayerSettings.nightSound = on
+        night?.enabled = on
+        L.d("Player: night sound " + if (on) "on" else "off")
+        changed()
+    }
+
     /** Stops for good: the place is remembered, the notification goes, and the screen closes. */
     fun release() {
         val p = player ?: return
@@ -488,10 +517,12 @@ object LocalPlayback {
         saveNow()
         loadTimings(null)
         cancelSleep(notify = false)
+        clearLoop(notify = false)
         main.removeCallbacks(saver)
         p.removeListener(listener)
         p.release()
         player = null
+        night = null
         entries = emptyList()
         sources = null
         clearInfo()
@@ -662,6 +693,87 @@ object LocalPlayback {
         upNextWanted = screenVisible && e != null && e.video && p.repeatMode == Player.REPEAT_MODE_OFF && p.hasNextMediaItem()
         val pause = sleepAtEnd || upNextWanted
         if (p.pauseAtEndOfMediaItems != pause) p.pauseAtEndOfMediaItems = pause
+    }
+
+    // ------------------------------------------------------------------ repeating a part (3.0.4)
+
+    /**
+     * A-B repeat (PartRepeat), as VLC has it: where the part of what plays ([loopFor]) starts and
+     * ends, C.TIME_UNSET when not set. Not kept: another video or song, or another list, ends it.
+     */
+    var loopStartMs = C.TIME_UNSET
+        private set
+    var loopEndMs = C.TIME_UNSET
+        private set
+    private var loopFor: Entry? = null
+
+    /**
+     * The player's message at the end of the part: sent on the playback thread as playback goes
+     * past it, again each time (it isn't deleted once sent), so its seek back needs nothing more.
+     */
+    private var loopMessage: PlayerMessage? = null
+
+    /** The part to repeat starts at [ms] (a part set before goes); its end comes next. */
+    fun setLoopStart(ms: Long) {
+        clearLoop(notify = false)
+        val e = current ?: return
+        loopFor = e
+        loopStartMs = ms.coerceAtLeast(0)
+        L.d("Player: the start of a part to repeat")
+        changed()
+    }
+
+    /** The part ends at [ms]: false (and nothing changes) unless that is a second after its start, at least. */
+    fun setLoopEnd(ms: Long): Boolean {
+        val p = player ?: return false
+        if (loopStartMs == C.TIME_UNSET || current !== loopFor || !PartRepeat.endFits(loopStartMs, ms)) return false
+        loopEndMs = ms
+        watchLoopEnd()
+        L.d("Player: repeating a part")
+        changed()
+        // Set where playback is (the chip tapped at the end): round it goes, at once.
+        if (PartRepeat.backTo(loopStartMs, ms, p.currentPosition) != null) loopBack.run()
+        return true
+    }
+
+    /** The player's message at the end of the part (made again after an error, which the player forgets it with). */
+    private fun watchLoopEnd() {
+        loopMessage?.cancel()
+        loopMessage = null
+        val p = player ?: return
+        if (loopEndMs == C.TIME_UNSET || current !== loopFor) return
+        // Delivered on the playback thread; the seek is the main thread's.
+        loopMessage = p.createMessage { _, _ -> main.post(loopBack) }
+            .setPosition(p.currentMediaItemIndex, PartRepeat.watchAt(loopEndMs, p.duration))
+            .setDeleteAfterDelivery(false)
+            .send()
+    }
+
+    /** No part repeats any more. */
+    fun clearLoop(notify: Boolean = true) {
+        loopMessage?.cancel()
+        loopMessage = null
+        main.removeCallbacks(loopBack)
+        val was = loopStartMs != C.TIME_UNSET
+        loopStartMs = C.TIME_UNSET
+        loopEndMs = C.TIME_UNSET
+        loopFor = null
+        if (was && notify) changed()
+    }
+
+    /** Playback got to the end of the part (or past it, by a seek): back to its start. */
+    private val loopBack = Runnable {
+        val p = player ?: return@Runnable
+        if (loopEndMs == C.TIME_UNSET || current !== loopFor) return@Runnable
+        p.seekTo(loopStartMs)
+    }
+
+    /** A seek past the end of the part goes back to its start, as in VLC (not while the seek bar is dragged). */
+    private fun loopAfterSeek(newPosition: Player.PositionInfo) {
+        val p = player ?: return
+        if (loopEndMs == C.TIME_UNSET || current !== loopFor || p.isScrubbingModeEnabled) return
+        if (newPosition.mediaItemIndex != p.currentMediaItemIndex) return
+        if (PartRepeat.backTo(loopStartMs, PartRepeat.watchAt(loopEndMs, p.duration), newPosition.positionMs) != null) main.post(loopBack)
     }
 
     // ------------------------------------------------------------------ timing and tracks (3.0.3)
@@ -911,6 +1023,8 @@ object LocalPlayback {
             clearInfo()
             // 3.0.3: another file, its own timing and tracks (the same one round again keeps them).
             if (current !== timingFor) loadTimings(current)
+            // 3.0.4: and no part of the one before repeating.
+            if (current !== loopFor) clearLoop(notify = false)
             // The next episode of a series goes on where it was left off too.
             if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO) current?.let { e -> resumeAt(e)?.let { p.seekTo(it) } }
             syncPauseAtEnd()
@@ -982,6 +1096,8 @@ object LocalPlayback {
 
         override fun onPositionDiscontinuity(oldPosition: Player.PositionInfo, newPosition: Player.PositionInfo, reason: Int) {
             MusicService.positionChanged()
+            // 3.0.4: a seek outside the part repeated keeps it.
+            if (reason == Player.DISCONTINUITY_REASON_SEEK) loopAfterSeek(newPosition)
         }
 
         override fun onPlaybackParametersChanged(playbackParameters: PlaybackParameters) {
@@ -1000,18 +1116,27 @@ object LocalPlayback {
      * ExoPlayer's usual renderers, with the subtitles and the sound moved by their timing: the
      * subtitle renderer is told a position moved by the subtitles' ([DelayedText]), and the sound's
      * clock, which the picture follows, is moved by the sound's ([DelayedSound]). FFmpeg's sound
-     * renderer gets the same sound output as the phone's own, so the same clock.
+     * renderer gets the same sound output as the phone's own, so the same clock. 3.0.4: and the
+     * same [night] sound.
      */
     @OptIn(UnstableApi::class)
-    private class SyncedRenderers(ctx: Context) : DefaultRenderersFactory(ctx) {
+    private class SyncedRenderers(ctx: Context, private val night: NightSound) : DefaultRenderersFactory(ctx) {
         override fun buildTextRenderers(context: Context, output: TextOutput, outputLooper: Looper, extensionRendererMode: Int, out: ArrayList<Renderer>) {
             val made = ArrayList<Renderer>()
             super.buildTextRenderers(context, output, outputLooper, extensionRendererMode, made)
             for (r in made) out += if (r is TextRenderer) DelayedText(r) else r
         }
 
+        // The sink ExoPlayer's own factory makes (DefaultRenderersFactory.buildAudioSink, Media3
+        // 1.11), with night sound in its chain: the sink puts the speed's (Sonic) after it.
         override fun buildAudioSink(context: Context, enableFloatOutput: Boolean, enableAudioTrackPlaybackParams: Boolean): AudioSink? =
-            super.buildAudioSink(context, enableFloatOutput, enableAudioTrackPlaybackParams)?.let { DelayedSound(it) }
+            DelayedSound(
+                DefaultAudioSink.Builder(context)
+                    .setEnableFloatOutput(enableFloatOutput)
+                    .setEnableAudioOutputPlaybackParameters(enableAudioTrackPlaybackParams)
+                    .setAudioProcessors(arrayOf<AudioProcessor>(night))
+                    .build(),
+            )
     }
 
     /**

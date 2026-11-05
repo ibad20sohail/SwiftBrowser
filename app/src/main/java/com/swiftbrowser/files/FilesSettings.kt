@@ -21,6 +21,7 @@ object FilesSettings {
     const val KEY_RECYCLE_BIN = "files_recycle_bin"
     const val KEY_BIN_DAYS = "files_bin_days"
     const val KEY_WIFI_PORT = "files_wifi_port"
+    const val KEY_TWO_PANES = "files_two_panes"
 
     /** Files opens on its start page… */
     const val START_HOME = "home"
@@ -47,6 +48,14 @@ object FilesSettings {
     var startAt: String
         get() = sp.getString(KEY_START_AT, START_LAST).takeIf { it == START_HOME } ?: START_LAST
         set(v) = sp.edit().putString(KEY_START_AT, if (v == START_HOME) START_HOME else START_LAST).apply()
+
+    /**
+     * 3.0.4: two folders side by side when the screen is turned sideways and wide enough (TwoPanes);
+     * held upright, one folder always shows. Turned on and off with a button at the top of Files.
+     */
+    var twoPanes: Boolean
+        get() = sp.getBoolean(KEY_TWO_PANES, false)
+        set(v) = sp.edit().putBoolean(KEY_TWO_PANES, v).apply()
 
     /** Folders and categories as tiles instead of rows. */
     var grid: Boolean

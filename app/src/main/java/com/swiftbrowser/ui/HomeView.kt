@@ -325,7 +325,9 @@ class HomeView @JvmOverloads constructor(
     fun show(incognito: Boolean) {
         val changed = this.incognito != incognito
         this.incognito = incognito
-        setBackgroundColor(color(if (incognito) R.color.incognito_bg else R.color.home_bg))
+        // 3.0.4: a gradient or your own picture behind it, if chosen (never in incognito).
+        val behind = HomeBackground.drawable(context, incognito) { picture -> if (!this.incognito) background = picture }
+        if (behind != null) background = behind else setBackgroundColor(color(if (incognito) R.color.incognito_bg else R.color.home_bg))
         logo.visibility = if (incognito) View.GONE else View.VISIBLE
         updateProfile()
         incognitoBox.visibility = if (incognito) View.VISIBLE else View.GONE
@@ -619,9 +621,10 @@ class HomeView @JvmOverloads constructor(
         v.findViewById<TextView>(R.id.tile_letter).apply {
             text = "+"
             setTextColor(color(R.color.text_secondary))
+            // A sign standing in for an icon, as big as the tiles' icons: not text on the type scale.
             textSize = 26f
             background = GradientDrawable().apply {
-                cornerRadius = dp(15).toFloat()
+                cornerRadius = dp(Ui.R_MEDIUM).toFloat()
                 setStroke(dp(2), color(R.color.outline))
             }
         }

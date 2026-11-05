@@ -187,6 +187,8 @@
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"
             android:exported="false"
             android:windowSoftInputMode="stateAlwaysHidden" />
+        <!-- 3.0.4: Files' network folders (a computer's shared folders over SMB). -->
+        <activity android:name=".ui.NetworkActivity" android:exported="false" android:windowSoftInputMode="stateAlwaysHidden" />
 
         <activity android:name=".ui.DownloadsActivity" android:exported="false" android:windowSoftInputMode="stateAlwaysHidden" />
         <!-- 2.9.2: magnet links and .torrent files from other apps ("Open with Swift") are added to

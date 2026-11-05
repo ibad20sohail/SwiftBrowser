@@ -1,10 +1,11 @@
 'use strict';
 
 // Runs in every frame. Reports real link taps (so the app can tell a link the
-// user tapped from a script hijacking the tap), applies the playback speed, does
-// the full-screen video gestures (skip, hold for double speed), reports where long
-// videos are so the app can offer to continue them, and, in the top frame, tells
-// the app the page's icon and, on Google's pages, which account is signed in.
+// user tapped from a script hijacking the tap), applies the playback speed and
+// (3.0.4) mutes a muted tab, does the full-screen video gestures (skip, hold for
+// double speed), reports where long videos are so the app can offer to continue
+// them, and, in the top frame, tells the app the page's icon, (3.0.4) the colour
+// it asks for its bar and, on Google's pages, which account is signed in.
 (function () {
   if (window.__swiftHelper) { return; }
   window.__swiftHelper = true;
@@ -14,6 +15,11 @@
   let port = null;
   let tabId = -1;
   let rate = 1;
+  // 3.0.4: the tab is muted. Only what Swift muted is unmuted again (a video the page muted
+  // itself stays so), and a page that unmutes its player is muted again, a few times at most.
+  let muted = false;
+  const silenced = new WeakSet();
+  const unmutedByPage = new WeakMap();
 
   function hello() {
     try {
@@ -54,11 +60,30 @@
     }
   }
 
+  // A video or song as the tab's mute wants it.
+  function applyMuteTo(m) {
+    if (muted) {
+      if (!m.muted) {
+        try { m.muted = true; silenced.add(m); } catch (e) { }
+      }
+    } else if (silenced.has(m)) {
+      silenced.delete(m);
+      try { m.muted = false; } catch (e) { }
+    }
+  }
+
+  function applyMute() {
+    for (const m of document.querySelectorAll('video, audio')) { applyMuteTo(m); }
+  }
+
   function onNative(msg) {
     if (!msg || typeof msg !== 'object') { return; }
     if (msg.type === 'speed') {
       rate = Number(msg.rate) || 1;
       applyRate();
+    } else if (msg.type === 'mute') {
+      muted = msg.on === true;
+      applyMute();
     } else if (msg.type === 'reader') {
       // Only the page itself, not its frames; the background script does the work.
       if (isTop) { browser.runtime.sendMessage({ type: 'reader-start' }); }
@@ -221,6 +246,56 @@
       }
     }
     send({ type: 'icon', href: best, page: location.href });
+  }
+
+  // ---------------------------------------------------------------- the page's colour (3.0.4)
+
+  // The colour the page asks browsers to give their bar (<meta name="theme-color">), for Swift's
+  // address bar: the first one the browser can read whose media (if any) matches, so a page's dark
+  // colour goes with Swift's dark look (pages see that as prefers-color-scheme). Sent as written ('':
+  // none), and only when it changes. Pages change it from script, so <head> is watched; a change is
+  // looked at a moment later, however many came at once.
+  let themeSent = null;
+  let themeTimer = 0;
+
+  function themeColor() {
+    for (const meta of document.querySelectorAll('meta[name="theme-color" i][content]')) {
+      const media = (meta.getAttribute('media') || '').trim();
+      if (media && !window.matchMedia(media).matches) { continue; }
+      const c = (meta.getAttribute('content') || '').trim();
+      if (c && c.length <= 100 && CSS.supports('color', c)) { return c; }
+    }
+    return '';
+  }
+
+  function sendThemeColor() {
+    themeTimer = 0;
+    const c = themeColor();
+    if (c === themeSent) { return; }
+    themeSent = c;
+    send({ type: 'theme-color', top: true, color: c });
+  }
+
+  function themeColorSoon() {
+    if (!themeTimer) { themeTimer = setTimeout(sendThemeColor, 150); }
+  }
+
+  function watchThemeColor() {
+    sendThemeColor();
+    if (document.head) {
+      new MutationObserver(themeColorSoon).observe(document.head, {
+        childList: true, subtree: true, attributes: true, attributeFilter: ['name', 'content', 'media'],
+      });
+    }
+    // Swift turned light or dark: the other look's colour.
+    try { window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', themeColorSoon); } catch (e) { }
+    // Back from the back-forward cache: Swift forgot this page's colour when another page loaded.
+    window.addEventListener('pageshow', ev => {
+      if (ev.persisted) {
+        themeSent = null;
+        sendThemeColor();
+      }
+    });
   }
 
   // ---------------------------------------------------------------- the Google account
@@ -395,13 +470,30 @@
   }, true);
 
   // When any video starts, apply the chosen speed and make sure the app can reach this frame.
+  // 3.0.4: a muted tab's video or song is muted as it starts (one put in the page later too), and a
+  // frame that only plays sound connects as well, so that muting the tab reaches it.
   document.addEventListener('play', ev => {
     const v = ev.target;
-    if (!v || v.tagName !== 'VIDEO') { return; }
+    if (!v || (v.tagName !== 'VIDEO' && v.tagName !== 'AUDIO')) { return; }
+    if (muted) { applyMuteTo(v); }
+    if (v.tagName !== 'VIDEO') {
+      connect();
+      return;
+    }
     if (rate !== 1) {
       try { v.playbackRate = rate; } catch (e) { }
     }
     send({ type: 'playing', top: isTop });
+  }, true);
+
+  // 3.0.4: a page that unmutes its player while the tab is muted has it muted again (20 times at
+  // most for each video or song, so a page that keeps unmuting can't make a loop of it).
+  document.addEventListener('volumechange', ev => {
+    const m = ev.target;
+    if (!muted || !m || m.muted || (m.tagName !== 'VIDEO' && m.tagName !== 'AUDIO')) { return; }
+    const times = (unmutedByPage.get(m) || 0) + 1;
+    unmutedByPage.set(m, times);
+    if (times <= 20) { applyMuteTo(m); }
   }, true);
 
   if (isTop) {
@@ -416,6 +508,14 @@
         document.addEventListener('DOMContentLoaded', reportIcon, { once: true });
       } else {
         reportIcon();
+      }
+      // 3.0.4: the page's colour for the address bar (incognito tabs keep their own colours).
+      if (!(browser.extension && browser.extension.inIncognitoContext)) {
+        if (document.readyState === 'loading') {
+          document.addEventListener('DOMContentLoaded', watchThemeColor, { once: true });
+        } else {
+          watchThemeColor();
+        }
       }
       // 3.0.3: how tall the page is, for the app's fast scroll handle on long pages. Sent only when
       // it changes: once loaded, when turned, and now and then while scrolling (pages grow).

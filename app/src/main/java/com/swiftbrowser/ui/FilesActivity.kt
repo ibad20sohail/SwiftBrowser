@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
+import android.content.res.Configuration
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.Drawable
 import android.net.Uri
@@ -46,6 +47,7 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.swiftbrowser.R
 import com.swiftbrowser.SwiftApp
 import com.swiftbrowser.core.AppFiles
+import com.swiftbrowser.core.Background
 import com.swiftbrowser.core.L
 import com.swiftbrowser.core.Profiles
 import com.swiftbrowser.core.UrlUtils
@@ -65,11 +67,15 @@ import com.swiftbrowser.files.FileOps
 import com.swiftbrowser.files.FileProblem
 import com.swiftbrowser.files.FileThumbs
 import com.swiftbrowser.files.FilesSettings
+import com.swiftbrowser.files.FolderSizes
 import com.swiftbrowser.files.Parts
 import com.swiftbrowser.files.PlainAccess
 import com.swiftbrowser.files.PrivateFolder
 import com.swiftbrowser.files.RecycleBin
+import com.swiftbrowser.files.SpecialFolders
+import com.swiftbrowser.files.StorageKinds
 import com.swiftbrowser.files.Transfers
+import com.swiftbrowser.files.TwoPanes
 import com.swiftbrowser.files.Volumes
 import com.swiftbrowser.media.LocalMedia
 import com.swiftbrowser.media.Unfinished
@@ -77,9 +83,11 @@ import com.swiftbrowser.media.Watched
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.lang.ref.WeakReference
 import java.util.Calendar
@@ -113,6 +121,12 @@ import java.util.Locale
  * player; the browser's Continue keeps the web's). The title bar and the path scroll away with the
  * list and the search box stays at the top. After a hold, sliding the finger selects the files it
  * passes. Videos' pictures show how much of them was watched, and a tick once watched to the end.
+ *
+ * 3.0.4: folders show what they hold ("12 items · 1.40 GB", measured off the main thread by
+ * FolderSizes), and sorting by size sorts them by it too. Turned sideways on a wide screen, two
+ * folders side by side (a button at the top): each side has its own path and list (Pane), the side
+ * touched last has a thin accent line and is the one the title bar, the search box and the bars at
+ * the bottom work on, and selected files copy or move straight to the other side.
  */
 class FilesActivity : ListActivity() {
     /** A row: a file or folder on the phone ([file]) or in the archive being looked at ([entry]). */
@@ -138,8 +152,11 @@ class FilesActivity : ListActivity() {
     /** A section's title on the start page, with a link on the right ("Show all"). */
     private class Header(val text: String, val action: String? = null, val onAction: (() -> Unit)? = null)
 
-    /** A storage on the start page and how full it is (-1: not measured yet). */
-    private class StorageCard(val volume: Volumes.Volume, val free: Long, val total: Long)
+    /**
+     * A storage on the start page and how full it is (-1: not measured yet). 3.0.4: and [kinds], what
+     * fills it (null until the media index was read).
+     */
+    private class StorageCard(val volume: Volumes.Volume, val free: Long, val total: Long, val kinds: StorageKinds.Sizes? = null)
 
     /** The start page's categories, with their numbers once counted. */
     private class CategoryGrid(val counts: Map<FileIndex.Category, FileIndex.Summary>?)
@@ -166,6 +183,8 @@ class FilesActivity : ListActivity() {
         BIN("Recycle bin", R.drawable.ic_files_bin),
         PRIVATE("Private", R.drawable.ic_lock),
         TRANSFER("Wi-Fi transfer", R.drawable.ic_files_transfer),
+        // 3.0.4: a computer's or a home storage's shared folders (NetworkActivity).
+        NETWORK("Network folders", R.drawable.ic_files_network),
     }
 
     /** The tools' cards, with what the recycle bin holds once counted. */
@@ -191,6 +210,118 @@ class FilesActivity : ListActivity() {
         val continued: List<Unfinished.Item>,
     )
 
+    /**
+     * 3.0.4: one side of the screen, with its own place, list and path: two sides show side by side on
+     * a wide screen turned sideways, one otherwise. What the code below calls home, dir, rows,
+     * selected… is the side being worked on's ([pane]): the side touched last ([chosen]), or for a
+     * moment another one ([withPane]), whose slow read has just come back, say.
+     */
+    private inner class Pane(val side: Int) {
+        lateinit var list: RecyclerView
+        lateinit var empty: FrameLayout
+
+        /** The list with its empty screen, and that as one side of the row of lists (touching it chooses the side). */
+        lateinit var box: ViewGroup
+        lateinit var frame: SideFrame
+        lateinit var crumbs: LinearLayout
+        lateinit var pathScroll: HorizontalScrollView
+        lateinit var pathFrame: SideFrame
+
+        /** The thin accent line at the top of the side worked on, while two show. */
+        lateinit var mark: View
+        val adapter = Adapter(this)
+
+        /** On the screen now (the other side, while one folder shows, isn't). */
+        var attached = false
+
+        var home = false
+        var category: FileIndex.Category? = null
+        var dir: File = Volumes.internalRoot()
+        var index: Archives.Index? = null
+        var inArchive = ""
+        var listed: List<FileItem> = emptyList()
+        var rows: List<Row> = emptyList()
+        var rowsBytes = 0L
+        var searchRows: List<Row>? = null
+        var unreadable = false
+        var loading = false
+        var searching = false
+        var placeGen = 0
+        val selected = LinkedHashMap<String, Row>()
+        var loadJob: Job? = null
+        var searchJob: Job? = null
+        var focusPath: String? = null
+        var inBin = false
+        var binItems: Map<String, RecycleBin.Item> = emptyMap()
+        var archiveReading: File? = null
+        var tiles = false
+        var shownRowCount = 0
+        var pendingSlide = 0
+        var quietOnce = false
+        var loadingText = ""
+        var loadingLabel: TextView? = null
+        var wanted: String? = null
+        var sizing: Set<String> = emptySet()
+        var sizeJob: Job? = null
+        var touchedSinceShown = false
+
+        /** What is typed in the search box for this side (the box shows the side worked on's). */
+        var query = ""
+
+        /** Where this side was while it wasn't on show (one folder showing), for when it comes back. */
+        var pending: String? = null
+
+        /** Where this side was last remembered to be, for Files to open there again. */
+        var remembered: String? = null
+
+        val showLoading = Runnable { if (attached) withPane(this@Pane) { showLoadingNow() } }
+        val searchSoon = Runnable { if (attached) withPane(this@Pane) { runSearch() } }
+
+        val inPrivate: Boolean get() = !home && !inBin && category == null && PrivateFolder.isInside(this@FilesActivity, dir)
+    }
+
+    /** 3.0.4: a side's part of the screen: touching it, or TalkBack going into it, makes it the side worked on. */
+    private class SideFrame(ctx: Context, private val used: () -> Unit) : FrameLayout(ctx) {
+        override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+            if (ev.actionMasked == MotionEvent.ACTION_DOWN) used()
+            return super.dispatchTouchEvent(ev)
+        }
+
+        override fun onRequestSendAccessibilityEvent(child: View, event: android.view.accessibility.AccessibilityEvent): Boolean {
+            if (event.eventType == android.view.accessibility.AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUSED) used()
+            return super.onRequestSendAccessibilityEvent(child, event)
+        }
+    }
+
+    /** 3.0.4: the left side and the right one. */
+    private val panes = arrayOf(Pane(TwoPanes.LEFT), Pane(TwoPanes.RIGHT))
+
+    /** The side being worked on (see [withPane]), and the one touched last, which the title bar, the search box and the bars at the bottom show. */
+    private var pane = panes[0]
+    private var chosen = panes[0]
+
+    /** 3.0.4: [p] is the side worked on from now: its list and empty screen are the ones the screen's shell knows. */
+    private fun use(p: Pane) {
+        pane = p
+        list = p.list
+        empty = p.empty
+    }
+
+    /**
+     * 3.0.4: runs [block] for side [p] (its place, list and path), then goes back to the side worked
+     * on before. Never across a wait: code that runs after a slow read comes back here first.
+     */
+    private inline fun <T> withPane(p: Pane, block: () -> T): T {
+        val was = pane
+        if (was === p) return block()
+        use(p)
+        try {
+            return block()
+        } finally {
+            use(was)
+        }
+    }
+
     private val sp get() = SwiftApp.prefs.sp
 
     // 2.9: Files' options live in FilesSettings (Swift's Settings changes them too), read as they are now.
@@ -207,11 +338,15 @@ class FilesActivity : ListActivity() {
     /** The options as the list on show used them: another value means Settings changed them meanwhile. */
     private var settingsShown = ""
 
-    /** The recycle bin's things are on show (2.9). */
-    private var inBin = false
+    /** The recycle bin's things are on show (2.9). 3.0.4: this and the rest of a place's state are the side worked on's (Pane). */
+    private var inBin: Boolean
+        get() = pane.inBin
+        set(v) { pane.inBin = v }
 
     /** The bin's things by their rows' keys. */
-    private var binItems: Map<String, RecycleBin.Item> = emptyMap()
+    private var binItems: Map<String, RecycleBin.Item>
+        get() = pane.binItems
+        set(v) { pane.binItems = v }
 
     /**
      * Until when leaving Files is for a file of Private's opened in another screen (or Android's lock
@@ -228,29 +363,59 @@ class FilesActivity : ListActivity() {
     private var afterUnlock: (() -> Unit)? = null
 
     /** The start page is on show (an archive opened from it shows over it). */
-    private var home = false
+    private var home: Boolean
+        get() = pane.home
+        set(v) { pane.home = v }
 
     /** A category's files are on show (Images, Downloads…), or an archive opened from them. */
-    private var category: FileIndex.Category? = null
-    private var dir: File = Volumes.internalRoot()
-    private var index: Archives.Index? = null
-    private var inArchive = ""
-    private var listed: List<FileItem> = emptyList()
-    private var rows: List<Row> = emptyList()
-    private var rowsBytes = 0L
-    private var searchRows: List<Row>? = null
-    private var unreadable = false
-    private var loading = false
-    private var searching = false
+    private var category: FileIndex.Category?
+        get() = pane.category
+        set(v) { pane.category = v }
+    private var dir: File
+        get() = pane.dir
+        set(v) { pane.dir = v }
+    private var index: Archives.Index?
+        get() = pane.index
+        set(v) { pane.index = v }
+    private var inArchive: String
+        get() = pane.inArchive
+        set(v) { pane.inArchive = v }
+    private var listed: List<FileItem>
+        get() = pane.listed
+        set(v) { pane.listed = v }
+    private var rows: List<Row>
+        get() = pane.rows
+        set(v) { pane.rows = v }
+    private var rowsBytes: Long
+        get() = pane.rowsBytes
+        set(v) { pane.rowsBytes = v }
+    private var searchRows: List<Row>?
+        get() = pane.searchRows
+        set(v) { pane.searchRows = v }
+    private var unreadable: Boolean
+        get() = pane.unreadable
+        set(v) { pane.unreadable = v }
+    private var loading: Boolean
+        get() = pane.loading
+        set(v) { pane.loading = v }
+    private var searching: Boolean
+        get() = pane.searching
+        set(v) { pane.searching = v }
 
     /** Changes with every move to another place: what a slow read brings back for an old place is dropped. */
-    private var placeGen = 0
+    private var placeGen: Int
+        get() = pane.placeGen
+        set(v) { pane.placeGen = v }
 
     /** The screen opened without access to the files: they load once it is given. */
     private var needAccess = false
-    private val selected = LinkedHashMap<String, Row>()
-    private var loadJob: Job? = null
-    private var searchJob: Job? = null
+    private val selected get() = pane.selected
+    private var loadJob: Job?
+        get() = pane.loadJob
+        set(v) { pane.loadJob = v }
+    private var searchJob: Job?
+        get() = pane.searchJob
+        set(v) { pane.searchJob = v }
     private var homeJob: Job? = null
 
     /** When the start page's numbers were last read; [homeDirty]: something may have changed since. */
@@ -258,29 +423,34 @@ class FilesActivity : ListActivity() {
     private var homeDirty = false
 
     /** A file to bring into sight once its folder is read ("Show in folder"). */
-    private var focusPath: String? = null
-    private val adapter = Adapter()
+    private var focusPath: String?
+        get() = pane.focusPath
+        set(v) { pane.focusPath = v }
+    private val adapter get() = pane.adapter
     private var thumbPx = 0
     private var gridCols = 3
     private var tilePx = 0
     private var tileIconPad = 0
 
     /** Whether the list on show is drawn as tiles, and how many file rows it has (for "Select all"). */
-    private var tiles = false
-    private var shownRowCount = 0
+    private var tiles: Boolean
+        get() = pane.tiles
+        set(v) { pane.tiles = v }
+    private var shownRowCount: Int
+        get() = pane.shownRowCount
+        set(v) { pane.shownRowCount = v }
     private var menuShown = ""
     private var barShown = ""
     private var navClose: Boolean? = null
 
     private val secondaryTint by lazy { ColorStateList.valueOf(Ui.textSecondary(this)) }
     private val accentTint by lazy { ColorStateList.valueOf(Ui.accent(this)) }
-    private val dangerTint by lazy { ColorStateList.valueOf(Ui.danger(this)) }
     private val onContainerTint by lazy { ColorStateList.valueOf(Ui.onAccentContainer(this)) }
 
     /** Where Swift saves downloads (its own folder when it may not use the phone's Download). */
     private val swiftDownloads: File by lazy { Downloads.directory() }
 
-    private lateinit var pathScroll: HorizontalScrollView
+    private val pathScroll get() = pane.pathScroll
     /**
      * The search box and the path, at the top of the page: they scroll away with the list (2.9.1).
      * 3.0.3: the title bar and the path do; the search box stays.
@@ -288,7 +458,7 @@ class FilesActivity : ListActivity() {
     private lateinit var appBar: com.google.android.material.appbar.AppBarLayout
     /** How far [appBar] has gone up (0: all on show). */
     private var appBarOffset = 0
-    private lateinit var crumbs: LinearLayout
+    private val crumbs get() = pane.crumbs
     private lateinit var jobStrip: LinearLayout
     private lateinit var jobText: TextView
     private lateinit var jobBar: ProgressBar
@@ -364,18 +534,25 @@ class FilesActivity : ListActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         thumbPx = dp(44)
-        // 2.8: tiles about 112 dp wide: three across a phone held upright, more on a wide screen.
-        val widthDp = minOf(resources.configuration.screenWidthDp, Ui.MAX_CONTENT_WIDTH)
-        gridCols = (widthDp / 112).coerceIn(3, 6)
-        tilePx = dp((widthDp - 16) / gridCols - 16)
-        tileIconPad = (tilePx * 0.3f).toInt()
+        // 3.0.4: two folders side by side on a wide screen turned sideways (the button at the top,
+        // remembered); held upright, one: the side worked on last. The left side has the screen's own
+        // list, the right side one made like it (buildChrome).
+        val config = resources.configuration
+        twoOffered = TwoPanes.offered(config.orientation == Configuration.ORIENTATION_LANDSCAPE, config.screenWidthDp)
+        twoPanes = twoOffered && FilesSettings.twoPanes
+        chosen = panes[TwoPanes.side(savedInstanceState?.getInt(STATE_SIDE, -1) ?: sp.getInt(PREF_SIDE, TwoPanes.LEFT))]
+        panes[0].list = list
+        panes[0].empty = empty
+        chosen.attached = true
+        otherPane().attached = twoPanes
+        computeGrid()
         grid = FilesSettings.grid
         thumbsOn = FilesSettings.thumbnails
         settingsShown = settingsKey()
         readAnimationScale()
         if (savedInstanceState != null) {
             homeShown = true
-            quietOnce = true
+            for (p in panes) p.quietOnce = true
         }
         toolbar.title = "Files"
         // 2.8: the ← at the top goes back a step, like Android's Back (it closed Files from any folder).
@@ -388,29 +565,17 @@ class FilesActivity : ListActivity() {
         search.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
-            override fun afterTextChanged(s: Editable?) = scheduleSearch()
+            // 3.0.4: what is typed is the search of the side worked on.
+            override fun afterTextChanged(s: Editable?) {
+                if (syncingSearch) return
+                chosen.query = s?.toString().orEmpty()
+                withPane(chosen) { scheduleSearch() }
+            }
         })
         buildChrome()
-        // One list for rows, tiles and the start page: rows and the start page's parts take the whole width.
-        val lm = GridLayoutManager(this, 1)
-        lm.spanSizeLookup = object : GridLayoutManager.SpanSizeLookup() {
-            override fun getSpanSize(position: Int) = if (tiles && adapter.items.getOrNull(position) is Row) 1 else lm.spanCount
-        }
-        list.layoutManager = lm
-        list.adapter = adapter
-        // 2.9: only removals (and the rows closing up after them) move, briefly; everything else changes in place.
-        list.itemAnimator = androidx.recyclerview.widget.DefaultItemAnimator().apply {
-            removeDuration = Motion.SHORT
-            moveDuration = Motion.SHORT
-            addDuration = Motion.SHORT
-            changeDuration = 0
-            supportsChangeAnimations = false
-        }
-        list.setHasFixedSize(true)
-        // A screen of tiles and a few more, so going back and forth between list and grid makes few new ones.
-        list.recycledViewPool.setMaxRecycledViews(TYPE_TILE, gridCols * 6)
-        // 3.0.3: after a hold, sliding the finger selects (or unselects) the files it passes.
-        list.addOnItemTouchListener(slideTouch)
+        use(chosen)
+        for (p in panes) setUpList(p)
+        arrangePanes()
         // 3.0.3: videos' watched marks come from two small stores: read off the main thread now, so
         // the rows find them in memory.
         val app = applicationContext
@@ -431,9 +596,21 @@ class FilesActivity : ListActivity() {
         val asked = intent.getStringExtra(EXTRA_FOLDER)?.let { trustedPlace(it) ?: PLACE_HOME }
         val place = savedInstanceState?.getString(STATE_PLACE) ?: asked
             ?: if (FilesSettings.startAt == FilesSettings.START_LAST) sp.getString(PREF_LAST, null) else null
+        // 3.0.4: the other side: where it was left (kept while one folder showed), or the same folder.
+        val other = otherPane()
+        val otherPlace = savedInstanceState?.getString(STATE_OTHER)
+            ?: if (FilesSettings.startAt == FilesSettings.START_LAST) sp.getString(PREF_OTHER, null) else null
+        other.pending = otherPlace
+        other.remembered = otherPlace
+        val places = TwoPanes.places(chosen.side, place, otherPlace, twoPanes)
         // Without access Android hides the folders (they can't even be checked): there once it is given.
         if (needAccess) wanted = place
         goTo(place)
+        if (twoPanes) withPane(other) {
+            val there = otherStart(places[other.side])
+            if (needAccess) wanted = there
+            goTo(there)
+        }
         if (needAccess && Build.VERSION.SDK_INT < 30) requestAccess()
     }
 
@@ -475,16 +652,20 @@ class FilesActivity : ListActivity() {
     }
 
     /** Where to go once access to the files is given. */
-    private var wanted: String? = null
+    private var wanted: String?
+        get() = pane.wanted
+        set(v) { pane.wanted = v }
 
     /** Access was given: the place asked for, or the one on show, now with its files. */
     private fun accessGiven() {
         needAccess = false
         Volumes.refresh(this)
         clearLeftParts()
-        val place = wanted ?: placeKey()
-        wanted = null
-        goTo(place)
+        for (p in shownPanes()) withPane(p) {
+            val place = wanted ?: placeKey()
+            wanted = null
+            goTo(place)
+        }
     }
 
     /**
@@ -524,16 +705,21 @@ class FilesActivity : ListActivity() {
     }
 
     /** A folder of Private's is on show (2.9). */
-    private val inPrivate get() = !home && !inBin && category == null && PrivateFolder.isInside(this, dir)
+    private val inPrivate get() = pane.inPrivate
 
     /** Files' options as they are now, to tell when Settings changed them. */
     private fun settingsKey() = listOf(
         FilesSettings.grid, FilesSettings.showHidden, FilesSettings.thumbnails, FilesSettings.sort, FilesSettings.categorySort, FilesSettings.binDays,
+        FilesSettings.twoPanes,
     ).joinToString("|")
 
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
-        outState.putString(STATE_PLACE, placeKey())
+        outState.putString(STATE_PLACE, withPane(chosen) { placeKey() })
+        // 3.0.4: which side was worked on, and where the other one is (on show or not): turned upright,
+        // the side worked on shows alone; turned back, both come back.
+        outState.putInt(STATE_SIDE, chosen.side)
+        otherPlaceKey()?.let { outState.putString(STATE_OTHER, it) }
     }
 
     private val jobListener: () -> Unit = { onJobsChanged() }
@@ -546,13 +732,17 @@ class FilesActivity : ListActivity() {
     private var animationsOn = true
 
     /** How the next place comes in: from the right (deeper), the left (back up), or a short fade. */
-    private var pendingSlide = 0
+    private var pendingSlide: Int
+        get() = pane.pendingSlide
+        set(v) { pane.pendingSlide = v }
 
     /** The start page has shown once (its cards come in one after another only then). */
     private var homeShown = false
 
     /** The screen was made again (turned sideways): what it shows first doesn't come in again. */
-    private var quietOnce = false
+    private var quietOnce: Boolean
+        get() = pane.quietOnce
+        set(v) { pane.quietOnce = v }
 
     private fun readAnimationScale() {
         animationsOn = try {
@@ -583,11 +773,12 @@ class FilesActivity : ListActivity() {
     /** The start page's first cards, one after another (the few on screen, never a long list). */
     private fun stagger() {
         if (!animationsOn) return
-        // Once the cards are laid out, just before they are first drawn.
-        list.viewTreeObserver.addOnPreDrawListener(object : android.view.ViewTreeObserver.OnPreDrawListener {
+        // Once the cards are laid out, just before they are first drawn (3.0.4: this side's list).
+        val rv = list
+        rv.viewTreeObserver.addOnPreDrawListener(object : android.view.ViewTreeObserver.OnPreDrawListener {
             override fun onPreDraw(): Boolean {
-                list.viewTreeObserver.removeOnPreDrawListener(this)
-                Motion.stagger(list, step = 28, max = 8)
+                rv.viewTreeObserver.removeOnPreDrawListener(this)
+                Motion.stagger(rv, step = 28, max = 8)
                 return true
             }
         })
@@ -607,19 +798,25 @@ class FilesActivity : ListActivity() {
         FileJobs.addScreen(jobListener)
         onJobsChanged()
         // 2.9: Private locks after a minute out of sight; if it was on show, it asks to be unlocked again.
+        // 3.0.4: every side showing it goes to its start page first; then the side worked on asks.
         PrivateFolder.back()
-        if (inPrivate && !PrivateFolder.isUnlocked && afterUnlock == null) {
-            val where = dir
-            showHome()
-            openPrivate(where)
+        if (!PrivateFolder.isUnlocked && afterUnlock == null) {
+            var again: File? = null
+            for (p in shownPanes()) withPane(p) {
+                if (inPrivate) {
+                    if (p === chosen) again = dir
+                    showHome()
+                }
+            }
+            again?.let { openPrivate(it) }
         }
         if (started) {
             readAnimationScale()
             RecycleBin.purgeSoon(this)
             applySettings()
-            pruneGone()
+            for (p in shownPanes()) withPane(p) { pruneGone() }
             // 3.0.3: back from the player: the videos' pictures show how much is watched now.
-            adapter.notifyItemRangeChanged(0, adapter.itemCount, PAYLOAD_WATCHED)
+            for (p in shownPanes()) p.adapter.notifyItemRangeChanged(0, p.adapter.itemCount, PAYLOAD_WATCHED)
         }
         started = true
     }
@@ -645,14 +842,18 @@ class FilesActivity : ListActivity() {
         grid = FilesSettings.grid
         thumbsOn = FilesSettings.thumbnails
         menuShown = ""
-        if (index == null) {
-            if (!home && category == null && !inBin) listed = FileOps.sorted(listed, sort)
-            else if (category != null) listed = FileOps.sorted(listed, categorySort)
-            rows = listed.map { rowOf(it) }
+        // 3.0.4: two folders turned on or off in Settings meanwhile; then each side follows the options.
+        setTwoPanes(twoOffered && FilesSettings.twoPanes)
+        for (p in shownPanes()) withPane(p) {
+            if (index == null) {
+                if (!home && category == null && !inBin) listed = sortedWithSizes(listed, sort)
+                else if (category != null) listed = FileOps.sorted(listed, categorySort)
+                rows = listed.map { rowOf(it) }
+            }
+            applyLayout()
+            render()
+            if (!home && category == null && !inBin && index == null) load(keepScroll = true)
         }
-        applyLayout()
-        render()
-        if (!home && category == null && !inBin && index == null) load(keepScroll = true)
     }
 
     /**
@@ -666,12 +867,13 @@ class FilesActivity : ListActivity() {
         val gen = placeGen
         val app = applicationContext
         val fromIndex = category != null
+        val p = pane
         lifecycleScope.launch {
             val gone = withContext(Dispatchers.IO) {
                 shownNow.mapNotNull { r -> r.file?.takeIf { !it.exists() } }.also { g -> if (fromIndex) FileOps.forgetPaths(app, g.map { it.path }) }
             }
-            if (gen != placeGen || gone.isEmpty()) return@launch
-            dropRows(gone, quietly = true)
+            if (gen != p.placeGen || gone.isEmpty()) return@launch
+            withPane(p) { dropRows(gone, quietly = true) }
         }
     }
 
@@ -680,7 +882,7 @@ class FilesActivity : ListActivity() {
         // Back from Android's settings with access now, or a card put in.
         if (needAccess && hasAccess()) {
             accessGiven()
-        } else if (home && homeDirty) {
+        } else if (homeDirty && shownPanes().any { it.home }) {
             loadHome()
         }
     }
@@ -712,7 +914,7 @@ class FilesActivity : ListActivity() {
             when {
                 // 3.0: an archive being read (a big tar.gz takes a while): the reading stops.
                 archiveReading != null -> stopReadingArchive()
-                search.text.isNotEmpty() -> search.setText("")
+                query.isNotEmpty() -> clearQuery()
                 selected.isNotEmpty() -> clearSelection()
                 idx != null && inArchive.isNotEmpty() -> showArchiveFolder(inArchive.substringBeforeLast('/', ""))
                 idx != null -> leaveArchive()
@@ -732,60 +934,84 @@ class FilesActivity : ListActivity() {
     }
 
     private fun buildChrome() {
-        val box = list.parent as ViewGroup
+        val box = panes[0].list.parent as ViewGroup
         val column = box.parent as LinearLayout
-        crumbs = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(Ui.dp(this@FilesActivity, 8), 0, Ui.dp(this@FilesActivity, 12), 0)
-        }
-        pathScroll = HorizontalScrollView(this).apply {
-            isHorizontalScrollBarEnabled = false
-            overScrollMode = View.OVER_SCROLL_NEVER
-            addView(crumbs)
-        }
         // 2.9.1: the search box and the path belong to the top of the page: scrolling down takes them
         // away with the list (more room for files), and they come back once the list is at its top.
         // The list only moves by an offset as they go, so scrolling costs no new layout.
-        // 3.0.3: the title bar and the path scroll away, and the search box stays at the top once they
-        // have gone (it has no scroll flags, so what is above it goes and it doesn't). Files' title bar
-        // only: the other lists keep theirs where it was.
+        // 3.0.3: the title bar stays where it is; scrolling down takes the search box away, and the path
+        // (with Home) moves up under the title bar and stays there, as part of the header.
         val searchBox = search.parent as View
-        val at = column.indexOfChild(toolbar)
-        val barHeight = toolbar.layoutParams.height
-        column.removeView(toolbar)
+        val at = column.indexOfChild(searchBox)
         column.removeView(searchBox)
         column.removeView(box)
+        // 3.0.4: the right side's list and empty screen, made as activity_list makes the left side's.
+        panes[0].box = box
+        val right = panes[1]
+        right.list = RecyclerView(this).apply {
+            clipToPadding = false
+            setPadding(0, 0, 0, dp(24))
+            isFocusableInTouchMode = true
+        }
+        right.empty = FrameLayout(this).apply { visibility = View.GONE }
+        right.box = MaxWidthLayout(this).apply {
+            addView(right.list, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+            addView(right.empty, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        }
+        for (p in panes) {
+            p.crumbs = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(Ui.dp(this@FilesActivity, 8), 0, Ui.dp(this@FilesActivity, 12), 0)
+            }
+            p.pathScroll = HorizontalScrollView(this).apply {
+                isHorizontalScrollBarEnabled = false
+                overScrollMode = View.OVER_SCROLL_NEVER
+                addView(p.crumbs)
+            }
+            // 3.0.4: a thin accent line along the top of the side worked on (two sides showing).
+            p.mark = View(this).apply {
+                setBackgroundColor(Ui.accent(this@FilesActivity))
+                visibility = View.GONE
+            }
+            p.pathFrame = SideFrame(this) { setChosen(p) }.apply {
+                addView(p.pathScroll, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+                addView(p.mark, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(2), Gravity.TOP))
+            }
+            p.frame = SideFrame(this) { setChosen(p) }.apply {
+                addView(p.box, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+            }
+        }
+        pathRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        listRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         appBar = com.google.android.material.appbar.AppBarLayout(this).apply {
             background = null
             stateListAnimator = null
             elevation = 0f
             addOnOffsetChangedListener { _, offset -> appBarOffset = offset }
         }
-        fun scrollsAway(height: Int) = com.google.android.material.appbar.AppBarLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, height).apply {
+        appBar.addView(searchBox, com.google.android.material.appbar.AppBarLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
             scrollFlags = com.google.android.material.appbar.AppBarLayout.LayoutParams.SCROLL_FLAG_SCROLL
-        }
-        appBar.addView(toolbar, scrollsAway(barHeight))
-        appBar.addView(pathScroll, scrollsAway(Ui.dp(this, 40)))
-        // No scroll flags, so it stays once the two above have gone. (Made in code, AppBarLayout's
-        // LayoutParams scroll by default: unlike from XML, the flag has to be cleared.)
-        appBar.addView(searchBox, com.google.android.material.appbar.AppBarLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { scrollFlags = 0 })
+        })
+        // No scroll flags, so it stays once the search box has gone. (Made in code, AppBarLayout's
+        // LayoutParams scroll by default: unlike from XML, the flag has to be cleared.) 3.0.4: the row
+        // of paths: one side's, or both sides' side by side.
+        appBar.addView(pathRow, com.google.android.material.appbar.AppBarLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(this, 40)).apply { scrollFlags = 0 })
         // Only a list longer than the room under them takes them away (an empty or short folder keeps them).
         val topBehavior = object : com.google.android.material.appbar.AppBarLayout.Behavior() {
             override fun onStartNestedScroll(parent: androidx.coordinatorlayout.widget.CoordinatorLayout, child: com.google.android.material.appbar.AppBarLayout, directTargetChild: View, target: View, nestedScrollAxes: Int, type: Int) =
-                (appBarOffset != 0 || listOverflows()) && super.onStartNestedScroll(parent, child, directTargetChild, target, nestedScrollAxes, type)
+                (appBarOffset != 0 || listOverflows(target as? RecyclerView ?: list)) && super.onStartNestedScroll(parent, child, directTargetChild, target, nestedScrollAxes, type)
         }
         topBehavior.setDragCallback(object : com.google.android.material.appbar.AppBarLayout.Behavior.DragCallback() {
             override fun canDrag(appBarLayout: com.google.android.material.appbar.AppBarLayout) = appBarOffset != 0 || listOverflows()
         })
-        val page = androidx.coordinatorlayout.widget.CoordinatorLayout(this)
+        page = androidx.coordinatorlayout.widget.CoordinatorLayout(this)
         page.addView(appBar, androidx.coordinatorlayout.widget.CoordinatorLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { behavior = topBehavior })
-        page.addView(box, androidx.coordinatorlayout.widget.CoordinatorLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT).apply {
+        // 3.0.4: the row of lists, one side's or both, under the paths (arrangePanes).
+        page.addView(listRow, androidx.coordinatorlayout.widget.CoordinatorLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT).apply {
             behavior = com.google.android.material.appbar.AppBarLayout.ScrollingViewBehavior()
         })
         column.addView(page, at, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
-        // Moving the list took its focus away: back to it, so the search box shows no cursor until tapped.
-        list.requestFocus()
 
         bottom = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -846,7 +1072,7 @@ class FilesActivity : ListActivity() {
     }
 
     /** A button of the bar at the bottom: an icon over a short word. */
-    private fun barButton(icon: Int, label: String, danger: Boolean = false, onClick: () -> Unit): View = LinearLayout(this).apply {
+    private fun barButton(icon: Int, label: String, danger: Boolean = false, lines: Int = 1, onClick: () -> Unit): View = LinearLayout(this).apply {
         val ctx = this@FilesActivity
         orientation = LinearLayout.VERTICAL
         gravity = Gravity.CENTER_HORIZONTAL
@@ -860,7 +1086,7 @@ class FilesActivity : ListActivity() {
             setImageDrawable(Ui.icon(ctx, icon, color))
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }, LinearLayout.LayoutParams(Ui.dp(ctx, 24), Ui.dp(ctx, 24)))
-        addView(Ui.text(ctx, Ui.Type.CAPTION, label, color, lines = 1).apply {
+        addView(Ui.text(ctx, Ui.Type.CAPTION, label, color, lines = lines).apply {
             gravity = Gravity.CENTER
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
             setPadding(Ui.dp(ctx, 2), Ui.dp(ctx, 4), Ui.dp(ctx, 2), 0)
@@ -881,6 +1107,7 @@ class FilesActivity : ListActivity() {
         placeGen++
         loadJob?.cancel()
         searchJob?.cancel()
+        stopSizing()
         loading = false
         searching = false
         home = false
@@ -893,7 +1120,7 @@ class FilesActivity : ListActivity() {
         focusPath = null
         selected.clear()
         searchRows = null
-        if (search.text.isNotEmpty()) search.setText("")
+        clearQuery()
     }
 
     /** Shows [to] (leaving an archive, a category or a search), remembered for next time. */
@@ -916,7 +1143,7 @@ class FilesActivity : ListActivity() {
         }
         leavePlace()
         dir = to
-        if (remember) sp.edit().putString(PREF_LAST, if (private) PLACE_HOME else to.path).apply()
+        if (remember) rememberPlace(if (private) PLACE_HOME else to.path)
         if (private) PrivateFolder.tidyOrigins(this)
         load()
     }
@@ -926,7 +1153,7 @@ class FilesActivity : ListActivity() {
         pendingSlide = SLIDE_FORWARD
         leavePlace()
         inBin = true
-        sp.edit().putString(PREF_LAST, PLACE_BIN).apply()
+        rememberPlace(PLACE_BIN)
         loadBin()
     }
 
@@ -935,7 +1162,7 @@ class FilesActivity : ListActivity() {
         pendingSlide = SLIDE_BACK
         leavePlace()
         home = true
-        sp.edit().putString(PREF_LAST, PLACE_HOME).apply()
+        rememberPlace(PLACE_HOME)
         render()
         restorePosition()
         if (homeDirty || homeCache == null || SystemClock.elapsedRealtime() - homeLoadedAt > HOME_FRESH_MS) loadHome()
@@ -946,7 +1173,7 @@ class FilesActivity : ListActivity() {
         pendingSlide = SLIDE_FORWARD
         leavePlace()
         category = cat
-        sp.edit().putString(PREF_LAST, CATEGORY + cat.key).apply()
+        rememberPlace(CATEGORY + cat.key)
         loadCategory()
     }
 
@@ -966,56 +1193,33 @@ class FilesActivity : ListActivity() {
     }
 
     /**
-     * The search box and the path on show again, as at the top of the page (2.9.1); with [atTop]
-     * false, gone as when scrolled down to where the list now is. 3.0.3: the title bar and the path
-     * (the search box always shows).
+     * The search box on show again, as at the top of the page (2.9.1); with [atTop] false, gone as
+     * when scrolled down to where the list now is. (3.0.3: the path stays either way.)
      */
     private fun showPageTop(atTop: Boolean = true) {
-        titleBarAnim?.cancel()
+        // 3.0.4: the search box is above both sides: only the side worked on moves it.
+        if (pane !== chosen) return
         if ((appBarOffset == 0) != atTop) appBar.setExpanded(atTop, false)
     }
 
-    /** 3.0.3: the title bar coming back (see [showTitleBar]). */
-    private var titleBarAnim: android.animation.ValueAnimator? = null
-
-    /**
-     * 3.0.3: selecting started: the title bar comes back (it shows the count and Select all), sliding
-     * down. While a finger is on the list (the hold that started it, maybe sliding on), once it is
-     * lifted: the files mustn't move under it.
-     */
-    private fun showTitleBar() {
-        if (appBarOffset == 0) return
-        if (fingerDown) {
-            expandOnLift = true
-            return
-        }
-        val behavior = (appBar.layoutParams as? androidx.coordinatorlayout.widget.CoordinatorLayout.LayoutParams)?.behavior as? com.google.android.material.appbar.AppBarLayout.Behavior
-        if (!animationsOn || behavior == null) {
-            appBar.setExpanded(true, false)
-            return
-        }
-        // Material's own slide takes up to 300 ms: a short one, moving the bar (the list follows it).
-        titleBarAnim?.cancel()
-        titleBarAnim = android.animation.ValueAnimator.ofInt(behavior.getTopAndBottomOffset(), 0).apply {
-            duration = Motion.SHORT
-            interpolator = Motion.standard
-            addUpdateListener { a ->
-                val offset = a.animatedValue as Int
-                behavior.setTopAndBottomOffset(offset)
-                appBarOffset = offset
-            }
-            start()
-        }
+    /** The list [rv] goes on past the bottom of the screen (asked once a swipe starts, not as it moves). */
+    private fun listOverflows(rv: RecyclerView = list): Boolean {
+        if (rv.canScrollVertically(1) || rv.canScrollVertically(-1)) return true
+        var bottom = 0
+        for (i in 0 until rv.childCount) bottom = maxOf(bottom, rv.getChildAt(i).bottom)
+        if (bottom == 0) return false
+        return topInPage(rv) + bottom > page.height
     }
 
-    /** The list goes on past the bottom of the screen (asked once a swipe starts, not as it moves). */
-    private fun listOverflows(): Boolean {
-        if (list.canScrollVertically(1) || list.canScrollVertically(-1)) return true
-        var bottom = 0
-        for (i in 0 until list.childCount) bottom = maxOf(bottom, list.getChildAt(i).bottom)
-        if (bottom == 0) return false
-        val box = list.parent as View
-        return box.top + list.top + bottom > (box.parent as View).height
+    /** 3.0.4: how far down the page (under the title bar) [v]'s top is now: a side's list sits in the row of lists. */
+    private fun topInPage(v: View): Int {
+        var y = 0
+        var at: View = v
+        while (at !== page) {
+            y += at.top
+            at = at.parent as? View ?: break
+        }
+        return y
     }
 
     /** Reads the folder off the main thread (a big one takes a moment on a slow phone). */
@@ -1029,14 +1233,28 @@ class FilesActivity : ListActivity() {
         val hidden = showHidden
         val order = sort
         val gen = placeGen
+        val p = pane
         loading = true
         if (!keepScroll) showLoadingSoon("Opening the folder…")
         renderPath()
         updateChrome()
         loadJob = lifecycleScope.launch {
-            val found = withContext(Dispatchers.IO) { FileOps.list(target, hidden, order) }
-            if (gen != placeGen) return@launch
-            showRead(found, keepScroll)
+            var found = withContext(Dispatchers.IO) { FileOps.list(target, hidden, order) }
+            if (gen != p.placeGen) return@launch
+            // 3.0.4: sorted by size, the folders wait a moment for theirs (most take less), then go by
+            // them; any still being measured go last and take their places once all are known.
+            if (order == FileOps.SORT_SIZE && found != null) {
+                val folders = found.filter { it.isDir }.map { it.file.path }
+                val sizing = withPane(p) { startSizing(folders) }
+                if (sizing != null) {
+                    withPane(p) { updateLoadingText("Measuring the folders…") }
+                    withTimeoutOrNull(SIZE_WAIT_MS) { sizing.join() }
+                    if (gen != p.placeGen) return@launch
+                }
+                val all = found
+                found = withContext(Dispatchers.Default) { sortedWithSizes(all, order) }
+            }
+            withPane(p) { showRead(found, keepScroll) }
         }
     }
 
@@ -1051,6 +1269,7 @@ class FilesActivity : ListActivity() {
         val order = categorySort
         val gen = placeGen
         val app = applicationContext
+        val p = pane
         loading = true
         if (!keepScroll) showLoadingSoon("Looking for files…")
         renderPath()
@@ -1061,8 +1280,8 @@ class FilesActivity : ListActivity() {
                 // The index gives them newest first already.
                 if (order == FileOps.SORT_DATE) all else FileOps.sorted(all, order)
             }
-            if (gen != placeGen) return@launch
-            showRead(found, keepScroll)
+            if (gen != p.placeGen) return@launch
+            withPane(p) { showRead(found, keepScroll) }
         }
     }
 
@@ -1075,6 +1294,7 @@ class FilesActivity : ListActivity() {
         loadJob?.cancel()
         val gen = placeGen
         val app = applicationContext
+        val p = pane
         loading = true
         if (!keepScroll) showLoadingSoon("Opening the recycle bin…")
         renderPath()
@@ -1087,19 +1307,27 @@ class FilesActivity : ListActivity() {
                     FileItem(b.file, b.name, b.isDir, b.size, b.deletedAt, if (b.isDir) b.files else -1, FileKind.of(b.name, b.isDir), where)
                 }
             }
-            if (gen != placeGen) return@launch
-            binItems = items.associateBy { it.file.path }
-            showRead(found, keepScroll)
+            if (gen != p.placeGen) return@launch
+            withPane(p) {
+                binItems = items.associateBy { it.file.path }
+                showRead(found, keepScroll)
+            }
         }
     }
 
     /** A folder or a category was read: its rows show. */
     private fun showRead(found: List<FileItem>?, keepScroll: Boolean) {
         loading = false
+        if (!keepScroll) touchedSinceShown = false
         unreadable = found == null
         listed = found.orEmpty()
         rows = listed.map { rowOf(it) }
         rowsBytes = listed.sumOf { it.size.coerceAtLeast(0) }
+        // 3.0.4: what is selected and no longer there (the other side deleted or moved it) is selected no more.
+        if (selected.isNotEmpty() && searchRows == null) {
+            val keys = rows.mapTo(HashSet()) { it.key }
+            selected.keys.retainAll(keys)
+        }
         render()
         if (!keepScroll) restorePosition()
         focusPath?.let { p ->
@@ -1107,7 +1335,7 @@ class FilesActivity : ListActivity() {
             val i = rows.indexOfFirst { it.file?.path == p }
             if (i >= 0) (list.layoutManager as? LinearLayoutManager)?.scrollToPositionWithOffset(i, list.height / 3)
         }
-        if (searchRows != null || ((category != null || inBin) && search.text.isNotBlank())) runSearch()
+        if (searchRows != null || ((category != null || inBin) && query.isNotBlank())) runSearch()
     }
 
     /** Reads the place on show again after a change, keeping where the list was. */
@@ -1154,7 +1382,8 @@ class FilesActivity : ListActivity() {
             var docs: List<Docs.Doc> = emptyList()
             var continued: List<Unfinished.Item> = emptyList()
             val (storages, favourites, bin) = withContext(Dispatchers.IO) {
-                val cards = Volumes.refresh(app).map { v -> v.space().let { (free, total) -> StorageCard(v, free, total) } }
+                // 3.0.4: with what fills each storage as measured last (while Swift runs), until it is again below.
+                val cards = Volumes.refresh(app).map { v -> v.space().let { (free, total) -> StorageCard(v, free, total, StorageKinds.cached(v.root)) } }
                 val favs = Favourites.paths().map { File(it) }.filter { it.isDirectory && !PrivateFolder.isInside(app, it) }
                     .map { rowOf(FileItem.of(it, count = true, where = FileIndex.placeOf(app, it.parentFile))) }
                 docs = recentDocuments()
@@ -1163,11 +1392,22 @@ class FilesActivity : ListActivity() {
             }
             val before = homeCache
             homeCache = HomeData(storages, favourites, before?.counts, before?.recent, bin, docs, continued)
-            if (onStartPage) render()
+            // 3.0.4: on each side showing its start page.
+            renderHomes()
+            // 3.0.4: what fills each storage (pictures, videos, music, documents), for its bar: one
+            // quick question to Android's media index for each. Shown as it comes, kept for next time.
+            val kinds = withContext(Dispatchers.IO) { storages.associate { it.volume.root.path to StorageKinds.measure(app, it.volume.root) } }
+            homeCache?.let { c ->
+                val fresh = c.storages.map { s -> kinds[s.volume.root.path]?.takeIf { it != s.kinds }?.let { StorageCard(s.volume, s.free, s.total, it) } ?: s }
+                if (fresh.indices.any { fresh[it] !== c.storages[it] }) {
+                    homeCache = c.copy(storages = fresh)
+                    renderHomes()
+                }
+            }
             val overview = withContext(Dispatchers.IO) { FileIndex.overview(app) { !isActive } }
             // 3.0.3: what changed meanwhile (a card taken off, a folder deleted) stays as it is now.
             homeCache = homeCache?.copy(counts = overview.counts, recent = overview.recent.map { rowOf(it) })
-            if (onStartPage) render()
+            renderHomes()
         }
     }
 
@@ -1249,14 +1489,15 @@ class FilesActivity : ListActivity() {
     private fun rowOf(e: Archives.Entry, idx: Archives.Index, where: String? = null) =
         Row("a:" + e.path, e.name, e.isDir, e.size, e.time, if (e.isDir) idx.count(e.path) else -1, FileKind.of(e.name, e.isDir), null, e, where)
 
-    private val showLoading = Runnable {
+    /** The loading screen, once a place takes more than a moment to read (3.0.4: each side its own, see Pane). */
+    private fun showLoadingNow() {
         if (loading) {
             empty.removeAllViews()
             val label = Ui.text(this@FilesActivity, Ui.Type.BODY_SECONDARY, loadingText).apply { setPadding(0, Ui.dp(this@FilesActivity, 12), 0, 0) }
             empty.addView(LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 gravity = Gravity.CENTER_HORIZONTAL
-                addView(ProgressBar(this@FilesActivity).apply { indeterminateTintList = ColorStateList.valueOf(Ui.accent(this@FilesActivity)) })
+                addView(LoadingIndicator(this@FilesActivity))
                 addView(label)
             }, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
             empty.visibility = View.VISIBLE
@@ -1264,12 +1505,17 @@ class FilesActivity : ListActivity() {
             loadingLabel = label
         }
     }
-    private var loadingText = ""
+    private val showLoading get() = pane.showLoading
+    private var loadingText: String
+        get() = pane.loadingText
+        set(v) { pane.loadingText = v }
 
     /** 3.0: the loading screen's words, while it shows (a tar.gz's reading says how far it is). */
-    private var loadingLabel: TextView? = null
+    private var loadingLabel: TextView?
+        get() = pane.loadingLabel
+        set(v) { pane.loadingLabel = v }
 
-    private fun setLoadingText(text: String) {
+    private fun updateLoadingText(text: String) {
         loadingText = text
         loadingLabel?.takeIf { loading && it.isAttachedToWindow }?.text = text
     }
@@ -1323,7 +1569,7 @@ class FilesActivity : ListActivity() {
         renderPath()
         updateChrome()
         val cat = category
-        val q = search.text.toString().trim()
+        val q = query.trim()
         when {
             !access && index == null -> showNoAccess()
             loading && shown.isEmpty() -> {}
@@ -1348,6 +1594,8 @@ class FilesActivity : ListActivity() {
             unreadable -> showEmpty(true, "Swift can't open this folder", "Android keeps it private, or it is no longer there.", R.drawable.ic_folder)
             else -> showEmpty(shown.isEmpty(), "This folder is empty", if (!showHidden) "Hidden files (names starting with a dot) aren't shown." else null, R.drawable.ic_folder)
         }
+        // 3.0.4: the folders on show are measured (FolderSizes).
+        measureShown()
     }
 
     /**
@@ -1399,9 +1647,11 @@ class FilesActivity : ListActivity() {
         val idx = index
         if (home && idx == null) {
             pathScroll.visibility = View.GONE
+            updatePathRow()
             return
         }
         pathScroll.visibility = View.VISIBLE
+        updatePathRow()
         crumbs.removeAllViews()
         crumbs.addView(ImageView(this).apply {
             setImageDrawable(Ui.icon(this@FilesActivity, R.drawable.ic_home, Ui.accent(this@FilesActivity)))
@@ -1461,7 +1711,15 @@ class FilesActivity : ListActivity() {
                 if (!last) setOnClickListener { go() }
             })
         }
-        pathScroll.post { pathScroll.fullScroll(View.FOCUS_RIGHT) }
+        val ps = pathScroll
+        ps.post { ps.fullScroll(View.FOCUS_RIGHT) }
+    }
+
+    /** 3.0.4: the row of paths shows while a side has one; with two sides, always (each keeps its half). */
+    private fun updatePathRow() {
+        val want = twoPanes || shownPanes().any { it.pathScroll.visibility == View.VISIBLE }
+        val v = if (want) View.VISIBLE else View.GONE
+        if (pathRow.visibility != v) pathRow.visibility = v
     }
 
     /** The name a folder goes by: "Phone storage" and "SD card" for their tops. */
@@ -1483,7 +1741,8 @@ class FilesActivity : ListActivity() {
 
     /** 3.0: while Private's files are on show, the screen stays out of screenshots and recent apps. */
     private fun updateSecure() {
-        val want = inPrivate
+        // 3.0.4: on either side.
+        val want = shownPanes().any { it.inPrivate }
         if (want == secured) return
         secured = want
         SecureScreen.set(this, want)
@@ -1504,7 +1763,10 @@ class FilesActivity : ListActivity() {
         return fromPrivate
     }
 
-    private fun updateChrome() {
+    /** The title bar, the search box's hint and the bars at the bottom: 3.0.4: the side worked on's, always (the one touched last). */
+    private fun updateChrome() = withPane(chosen) { updateChromeNow() }
+
+    private fun updateChromeNow() {
         updateSecure()
         dropLockedClip()
         val idx = index
@@ -1524,8 +1786,6 @@ class FilesActivity : ListActivity() {
         if (navClose != selecting) {
             navClose = selecting
             toolbar.setNavigationIcon(if (selecting) R.drawable.ic_close else R.drawable.ic_back)
-            // 3.0.3: the title bar may have scrolled away: selecting brings it back.
-            if (selecting) showTitleBar()
         }
         if (selecting) {
             toolbar.title = if (selected.size == 1) "1 selected" else "${number(selected.size)} selected"
@@ -1558,12 +1818,16 @@ class FilesActivity : ListActivity() {
         // the selection as it is when tapped, so they are made again only when the bar itself changes
         // (2.8: not on every tap that selects one more).
         val oneFile = selected.values.singleOrNull()?.takeIf { !it.isDir }
+        // 3.0.4: with two folders side by side, things go straight to the other side's folder, named by
+        // which way it is ("Copy to the right"): the bar is made again when the side worked on changes.
+        val two = twoPanes
+        val toward = if (two) otherSideWord() else ""
         val bar = when {
-            selecting && idx != null -> "entries:" + (oneFile != null)
+            selecting && idx != null -> "entries:" + (oneFile != null) + ":$toward"
             selecting && inBin -> "bin"
-            selecting && private -> "private"
-            selecting -> "files"
-            idx != null -> "archive:" + idx.file.path
+            selecting && private -> "private:$toward"
+            selecting -> "files:$toward"
+            idx != null -> "archive:" + idx.file.path + ":$toward"
             else -> ""
         }
         if (bar != barShown) {
@@ -1571,6 +1835,7 @@ class FilesActivity : ListActivity() {
             when {
                 selecting && idx != null -> setActions(listOfNotNull(
                     barButton(R.drawable.ic_unarchive, "Extract") { extractSelected(named = true) },
+                    if (two) barButton(R.drawable.ic_unarchive, "Extract to the\u00A0$toward", lines = 2) { extractSelectedTo(toOther = true) } else null,
                     barButton(R.drawable.ic_folder, "Extract to…") { extractSelectedTo() },
                     oneFile?.let { barButton(R.drawable.ic_open_new, "Open") { selected.values.singleOrNull()?.entry?.let { e -> openEntry(e) } } },
                     barButton(R.drawable.ic_info, "Details") { entryDetails(selected.values.toList()) },
@@ -1580,10 +1845,20 @@ class FilesActivity : ListActivity() {
                     barButton(R.drawable.ic_files_restore, "Restore") { restoreFromBin(selectedBinItems()) },
                     barButton(R.drawable.ic_delete, "Delete forever", danger = true) { eraseFromBin(selectedBinItems()) },
                 ))
-                // 2.9: in Private, "Move out" first.
-                bar == "private" -> setActions(listOf(
+                // 2.9: in Private, "Move out" first (3.0.4: after the other side, with two folders).
+                bar.startsWith("private") -> setActions(listOfNotNull(
+                    if (two) barButton(R.drawable.ic_copy, "Copy to the\u00A0$toward", lines = 2) { toOtherSide(selectedFiles(), move = false) } else null,
+                    if (two) barButton(R.drawable.ic_move, "Move to the\u00A0$toward", lines = 2) { toOtherSide(selectedFiles(), move = true) } else null,
                     barButton(R.drawable.ic_move, "Move out") { moveOut(selectedFiles()) },
                     barButton(R.drawable.ic_share, "Share") { share(selectedFiles()) },
+                    barButton(R.drawable.ic_delete, "Delete", danger = true) { delete(selectedFiles()) },
+                    barButton(R.drawable.ic_more, "More") { moreSheet() },
+                ))
+                // 3.0.4: with two folders, Copy and Move are to the other side (to a folder gone to: More).
+                selecting && two -> setActions(listOf(
+                    barButton(R.drawable.ic_copy, "Copy to the\u00A0$toward", lines = 2) { toOtherSide(selectedFiles(), move = false) },
+                    barButton(R.drawable.ic_move, "Move to the\u00A0$toward", lines = 2) { toOtherSide(selectedFiles(), move = true) },
+                    barButton(R.drawable.ic_share, "Share") { FileOpener.share(this, selectedFiles()) },
                     barButton(R.drawable.ic_delete, "Delete", danger = true) { delete(selectedFiles()) },
                     barButton(R.drawable.ic_more, "More") { moreSheet() },
                 ))
@@ -1594,8 +1869,9 @@ class FilesActivity : ListActivity() {
                     barButton(R.drawable.ic_delete, "Delete", danger = true) { delete(selectedFiles()) },
                     barButton(R.drawable.ic_more, "More") { moreSheet() },
                 ))
-                idx != null -> setActions(listOf(
+                idx != null -> setActions(listOfNotNull(
                     barButton(R.drawable.ic_unarchive, "Extract all") { index?.let { i -> extract(i.file, i, null, "", besideArchive(i.file), named = true) } },
+                    if (two) barButton(R.drawable.ic_unarchive, "Extract to the\u00A0$toward", lines = 2) { index?.let { i -> extractToOther(i.file, i, null, "") } } else null,
                     barButton(R.drawable.ic_folder, "Extract to…") { index?.let { i -> clipExtract(i.file, i, null, "") } },
                 ))
                 else -> actionBar.removeAllViews()
@@ -1626,15 +1902,17 @@ class FilesActivity : ListActivity() {
     /**
      * At most two buttons at the top (2.8: four left the folder's name cut short, "Phone st…"): grid
      * or list, and ⋮ for the rest. While selecting, "Select all" or "Clear selection" in words.
-     * Made again only when they change (a tap that selects one more doesn't rebuild them).
+     * Made again only when they change (a tap that selects one more doesn't rebuild them). 3.0.4:
+     * turned sideways on a wide screen (room for the name), Two folders before them.
      */
     private fun updateMenu() {
         val selecting = selected.isNotEmpty()
         val all = selecting && selected.size >= shownRowCount
+        val two = if (!twoOffered) "" else if (twoPanes) ":two" else ":one"
         val key = when {
             selecting -> "select:$all"
-            onStartPage -> "home"
-            else -> "place:$grid"
+            onStartPage -> "home$two"
+            else -> "place:$grid$two"
         }
         if (key == menuShown) return
         menuShown = key
@@ -1642,11 +1920,27 @@ class FilesActivity : ListActivity() {
         val color = Ui.text(this)
         when {
             selecting -> addTextAction(MENU_SELECT_ALL, if (all) "Clear selection" else "Select all")
-            onStartPage -> addMenu(MENU_MORE, "More", R.drawable.ic_more, color)
+            onStartPage -> {
+                addTwoPanesButton()
+                addMenu(MENU_MORE, "More", R.drawable.ic_more, color)
+            }
             else -> {
+                addTwoPanesButton()
                 addMenu(MENU_VIEW, if (grid) "Show as a list" else "Show as a grid", if (grid) R.drawable.ic_view_list else R.drawable.ic_grid_view, color)
                 addMenu(MENU_MORE, "More", R.drawable.ic_more, color)
             }
+        }
+    }
+
+    /** 3.0.4: "Two folders" (a hold says its name), in the accent colour while two show. */
+    private fun addTwoPanesButton() {
+        if (!twoOffered) return
+        toolbar.menu.add(0, MENU_TWO, MENU_SELECT_ALL, "Two folders").apply {
+            // 3.0.4: and its icon filled then.
+            setIcon(Ui.icon(this@FilesActivity, OnIcons.of(R.drawable.ic_two_panes, twoPanes), if (twoPanes) Ui.accent(this@FilesActivity) else Ui.text(this@FilesActivity)))
+            setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS)
+            androidx.core.view.MenuItemCompat.setTooltipText(this, "Two folders")
+            androidx.core.view.MenuItemCompat.setContentDescription(this, if (twoPanes) "Two folders, on" else "Two folders, off")
         }
     }
 
@@ -1721,20 +2015,24 @@ class FilesActivity : ListActivity() {
         when (id) {
             MENU_VIEW -> toggleGrid()
             MENU_MORE -> optionsSheet()
+            MENU_TWO -> toggleTwoPanes()
             MENU_SELECT_ALL -> if (selected.isNotEmpty() && selected.size >= shownRowCount) clearSelection() else selectAll()
         }
     }
 
     /** List or grid (2.8), remembered; the same file stays at the top. */
     private fun toggleGrid() {
-        rememberPosition()
+        // 3.0.4: on both sides.
+        for (p in shownPanes()) withPane(p) { rememberPosition() }
         grid = !grid
         FilesSettings.grid = grid
         settingsShown = settingsKey()
-        applyLayout()
-        adapter.notifyDataSetChanged()
-        restorePosition()
-        crossFade()
+        for (p in shownPanes()) withPane(p) {
+            applyLayout()
+            adapter.notifyDataSetChanged()
+            restorePosition()
+            crossFade()
+        }
         updateChrome()
     }
 
@@ -1743,7 +2041,7 @@ class FilesActivity : ListActivity() {
         FilesSettings.showHidden = show
         settingsShown = settingsKey()
         say(if (show) "Hidden files (names starting with a dot) show now" else "Hidden files aren't shown now")
-        if (!home && category == null && index == null && !inBin) load(keepScroll = true)
+        for (p in shownPanes()) withPane(p) { if (!home && category == null && index == null && !inBin) load(keepScroll = true) }
     }
 
     private fun hiddenAction() = Sheets.Action(
@@ -1815,11 +2113,12 @@ class FilesActivity : ListActivity() {
                 actions += Sheets.Action(R.drawable.ic_select_all, "Select all", primary = true) { selectAll() }
                 actions += Sheets.Action(R.drawable.ic_lock, "Lock now", primary = true) {
                     PrivateFolder.lock()
-                    showHome()
+                    // 3.0.4: both sides leave it.
+                    for (p in shownPanes()) withPane(p) { if (inPrivate) showHome() }
                     say("Private is locked")
                 }
                 actions += hiddenAction()
-                actions += Sheets.Action(R.drawable.ic_refresh, "Refresh") { load(keepScroll = true) }
+                actions += Sheets.Action(R.drawable.ic_refresh, "Refresh") { refreshFolder() }
                 actions += Sheets.Action(R.drawable.ic_info, "About Private") {
                     Dialogs.info(
                         this, "Private",
@@ -1838,7 +2137,7 @@ class FilesActivity : ListActivity() {
                 actions += Sheets.Action(R.drawable.ic_folder_add, "New folder", primary = true) { newFolder() }
                 actions += Sheets.Action(R.drawable.ic_sort, "Sort", primary = true) { chooseSort() }
                 actions += Sheets.Action(R.drawable.ic_select_all, "Select all", primary = true) { selectAll() }
-                actions += Sheets.Action(R.drawable.ic_refresh, "Refresh", primary = true) { load(keepScroll = true) }
+                actions += Sheets.Action(R.drawable.ic_refresh, "Refresh", primary = true) { refreshFolder() }
                 actions += hiddenAction()
                 actions += Sheets.Action(if (fav) R.drawable.ic_star else R.drawable.ic_star_border, if (fav) "Remove from favourites" else "Add to favourites") { setFavourite(here, !fav) }
                 actions += Sheets.Action(R.drawable.ic_files_transfer, "Wi-Fi transfer") { WifiTransferActivity.open(this) }
@@ -1857,12 +2156,18 @@ class FilesActivity : ListActivity() {
                 if (forCategory) FilesSettings.categorySort = which else FilesSettings.sort = which
                 settingsShown = settingsKey()
                 d.dismiss()
-                // An archive sorts as it shows; the folder or category under it keeps its order.
-                if (index == null) {
-                    listed = FileOps.sorted(listed, which)
-                    rows = listed.map { rowOf(it) }
+                // An archive sorts as it shows; the folder or category under it keeps its order. 3.0.4:
+                // on each side the order is for (folders and archives, or categories); folders sorted
+                // by size take their places as they are measured.
+                for (p in shownPanes()) withPane(p) {
+                    if ((category != null && index == null) != forCategory || (home && index == null) || inBin) return@withPane
+                    if (index == null) {
+                        listed = sortedWithSizes(listed, which)
+                        rows = listed.map { rowOf(it) }
+                        touchedSinceShown = false
+                    }
+                    render()
                 }
-                render()
             }
             .setNegativeButton(android.R.string.cancel, null)
             .showImmersive()
@@ -1873,13 +2178,15 @@ class FilesActivity : ListActivity() {
         if (on) Favourites.add(f) else Favourites.remove(f)
         say(if (on) "Added to favourites on the Files start page" else "Removed from favourites")
         homeDirty = true
-        if (home) loadHome()
+        if (shownPanes().any { it.home }) loadHome()
     }
 
     // ------------------------------------------------------------------ archives
 
     /** 3.0: the archive being read now (Back stops it), or null. */
-    private var archiveReading: File? = null
+    private var archiveReading: File?
+        get() = pane.archiveReading
+        set(v) { pane.archiveReading = v }
 
     private fun openArchive(f: File, password: String? = null) {
         loadJob?.cancel()
@@ -1888,15 +2195,25 @@ class FilesActivity : ListActivity() {
         archiveReading = f
         val reading = "Reading “${f.name}”…"
         showLoadingSoon(reading)
+        val p = pane
+        val rv = list
         loadJob = lifecycleScope.launch {
             val result = withContext(Dispatchers.IO) {
                 runCatching {
                     // 3.0: a tar.gz is read through to be listed: how far, on the loading screen.
                     Archives.read(f, password, { !isActive }) { fraction ->
-                        list.post { if (archiveReading === f) setLoadingText("$reading ${(fraction * 100).toInt()}%") }
+                        rv.post { withPane(p) { if (archiveReading === f) updateLoadingText("$reading ${(fraction * 100).toInt()}%") } }
                     }
                 }
             }
+            withPane(p) { archiveRead(f, result) }
+        }
+    }
+
+    /** The archive [f] was read (or not): its entries show, on the side it was opened on. */
+    private fun archiveRead(f: File, result: Result<Archives.Index>) {
+        val p = pane
+        run {
             loading = false
             archiveReading = null
             result.onSuccess { idx ->
@@ -1909,7 +2226,7 @@ class FilesActivity : ListActivity() {
                 inArchive = ""
                 selected.clear()
                 searchRows = null
-                if (search.text.isNotEmpty()) search.setText("")
+                clearQuery()
                 pendingSlide = SLIDE_FORWARD
                 render()
                 list.scrollToPosition(0)
@@ -1924,7 +2241,7 @@ class FilesActivity : ListActivity() {
                 restorePosition()
                 when (e) {
                     is CancellationException -> {}
-                    is Archives.NeedPassword -> askPassword(f.name, e.wrong, onCancel = {}) { pw -> openArchive(f, pw) }
+                    is Archives.NeedPassword -> askPassword(f.name, e.wrong, onCancel = {}) { pw -> withPane(p) { openArchive(f, pw) } }
                     is FileProblem -> say(e.message ?: "Swift couldn't open this archive", long = true)
                     else -> say("Swift couldn't open this archive")
                 }
@@ -1947,7 +2264,7 @@ class FilesActivity : ListActivity() {
         pendingSlide = if (path.length > inArchive.length && path.startsWith(inArchive)) SLIDE_FORWARD else SLIDE_BACK
         inArchive = path
         selected.clear()
-        if (search.text.isNotEmpty()) search.setText("")
+        clearQuery()
         searchRows = null
         render()
         restorePosition()
@@ -1989,7 +2306,8 @@ class FilesActivity : ListActivity() {
         val target = File(folder, Archives.outputName(e.name))
         opening?.dismiss()
         opening = Messages.sticky(this, "Opening “${e.name}”…", "Cancel") { FileJobs.active.firstOrNull { it.kind == FileJobs.Kind.OPEN }?.cancel() }
-        FileJobs.start(this, FileJobs.Kind.OPEN, "Opening ${e.name}", onDone = { job -> visible?.get()?.entryOpened(job) }) { w ->
+        val side = pane.side
+        FileJobs.start(this, FileJobs.Kind.OPEN, "Opening ${e.name}", onDone = { job -> visible?.get()?.entryOpenedOn(side, job) }) { w ->
             if (!(target.isFile && (e.size < 0 || target.length() == e.size))) {
                 w.replaceAll()
                 Archives.extract(w, idx.file, idx, setOf(e.path), e.parent, folder, PlainAccess)
@@ -1999,6 +2317,12 @@ class FilesActivity : ListActivity() {
             target.setLastModified(System.currentTimeMillis())
             w.result(target)
         }
+    }
+
+    /** 3.0.4: an archive's file came out for the side it was opened on (still on show; otherwise the side worked on). */
+    private fun entryOpenedOn(side: Int, job: FileJobs.Job) {
+        val p = panes[side].takeIf { it.attached } ?: chosen
+        withPane(p) { entryOpened(job) }
     }
 
     private fun entryOpened(job: FileJobs.Job) {
@@ -2021,11 +2345,24 @@ class FilesActivity : ListActivity() {
         extract(idx.file, idx, select, inArchive, besideArchive(idx.file), named)
     }
 
-    private fun extractSelectedTo() {
+    private fun extractSelectedTo(toOther: Boolean = false) {
         val idx = index ?: return
         val select = selected.values.mapNotNull { it.entry?.path }.toSet()
+        // 3.0.4: with two folders, straight into the other side's.
+        if (toOther) {
+            val dest = otherFolder() ?: return say(noOtherFolder())
+            clearSelection()
+            extract(idx.file, idx, select, inArchive, dest, named = false)
+            return
+        }
         clearSelection()
         clipExtract(idx.file, idx, select, inArchive)
+    }
+
+    /** 3.0.4: an archive (or some of it) into the other side's folder, as Extract here there would. */
+    private fun extractToOther(archive: File, idx: Archives.Index?, select: Set<String>?, base: String) {
+        val dest = otherFolder() ?: return say(noOtherFolder())
+        extract(archive, idx, select, base, dest, named = select == null)
     }
 
     /** "Extract to…": the archive waits while the user goes to the folder, then taps Extract here. */
@@ -2109,8 +2446,13 @@ class FilesActivity : ListActivity() {
         if (private) {
             actions += Sheets.Action(R.drawable.ic_copy, "Copy") { setClip(files, move = false) }
             actions += Sheets.Action(R.drawable.ic_move, "Move to another folder") { setClip(files, move = true) }
-        } else if (files.all { canGoPrivate(it) }) {
-            actions += Sheets.Action(R.drawable.ic_lock, "Move to Private") { moveToPrivate(files) }
+        } else {
+            // 3.0.4: with two folders the bar's Copy and Move are to the other side; to a folder gone to, here.
+            if (twoPanes) {
+                actions += Sheets.Action(R.drawable.ic_copy, "Copy to another folder") { setClip(files, move = false) }
+                actions += Sheets.Action(R.drawable.ic_move, "Move to another folder") { setClip(files, move = true) }
+            }
+            if (files.all { canGoPrivate(it) }) actions += Sheets.Action(R.drawable.ic_lock, "Move to Private") { moveToPrivate(files) }
         }
         actions += Sheets.Action(R.drawable.ic_archive, "Compress") { compress(files) }
         if (files.all { it.isFile && Archives.formatOf(it.name) != null }) {
@@ -2138,7 +2480,7 @@ class FilesActivity : ListActivity() {
         val e = r.entry
         when {
             e != null && e.isDir -> {
-                if (search.text.isNotEmpty()) search.setText("")
+                clearQuery()
                 showArchiveFolder(e.path)
             }
             e != null -> openEntry(e)
@@ -2158,6 +2500,12 @@ class FilesActivity : ListActivity() {
      * screens, the rest in another app. Leaving Files for them gives Private a minute before it locks.
      */
     private fun openPrivateFile(r: Row, f: File) {
+        // 3.0.4: never once Private has locked (no side should still show it then).
+        if (!PrivateFolder.isUnlocked) {
+            showHome()
+            say("Private is locked")
+            return
+        }
         val name = f.name
         keepPrivateOpen()
         when {
@@ -2238,6 +2586,8 @@ class FilesActivity : ListActivity() {
             }
         }
         // 2.8: a file found in a category, a search or recent files can be seen where it is.
+        // 3.0.4: with two folders, to the other side's.
+        actions += otherSideActions(listOf(f))
         if (!r.isDir && !r.where.isNullOrEmpty()) actions += Sheets.Action(R.drawable.ic_folder, "Show in folder") { showInFolder(f) }
         actions += Sheets.Action(R.drawable.ic_edit, "Rename") { rename(f) }
         if (canGoPrivate(f)) actions += Sheets.Action(R.drawable.ic_lock, "Move to Private") { moveToPrivate(listOf(f)) }
@@ -2256,6 +2606,7 @@ class FilesActivity : ListActivity() {
         if (!r.isDir && Archives.formatOf(r.name) != null) actions += Sheets.Action(R.drawable.ic_unarchive, "Extract here") { extract(f, null, null, "", f.parentFile ?: dir, named = true) }
         if (!r.isDir) actions += Sheets.Action(R.drawable.ic_reopen, "Open with another app") { openWith(f) }
         actions += Sheets.Action(R.drawable.ic_move, "Move to another folder") { setClip(listOf(f), move = true) }
+        actions += otherSideActions(listOf(f))
         actions += Sheets.Action(R.drawable.ic_edit, "Rename") { rename(f) }
         actions += Sheets.Action(R.drawable.ic_info, "Details") { details(listOf(f)) }
         actions += Sheets.Action(R.drawable.ic_delete, "Delete", danger = true) { delete(listOf(f)) }
@@ -2283,24 +2634,9 @@ class FilesActivity : ListActivity() {
             return
         }
         when (val c = clip) {
-            is Clip.Files -> {
-                val dest = dir
-                if (c.files.any { it.isDirectory && FileOps.isInside(dest, it) }) {
-                    say("A folder can't go inside itself")
-                    return
-                }
-                if (c.move && c.files.all { it.parentFile?.path == dest.path }) {
-                    say("They're in this folder already")
-                    return
-                }
-                withChanges(if (c.move) c.files + dest else listOf(dest)) {
-                    clip = null
-                    updateChrome()
-                    val what = if (c.files.size == 1) c.files[0].name else FileJobs.items(c.files.size)
-                    val kind = if (c.move) FileJobs.Kind.MOVE else FileJobs.Kind.COPY
-                    val job = FileJobs.start(this, kind, "${kind.doing} $what", onDone = ::doneHere) { w -> Transfers.copy(w, c.files, dest, c.move) }
-                    showProgress(job)
-                }
+            is Clip.Files -> transfer(c.files, dir, c.move, here = true) {
+                clip = null
+                updateChrome()
             }
             is Clip.Extract -> {
                 clip = null
@@ -2308,6 +2644,30 @@ class FilesActivity : ListActivity() {
                 extract(c.archive, c.index, c.select, c.base, dir, named = c.select == null)
             }
             null -> {}
+        }
+    }
+
+    /**
+     * Copies or moves [files] into [dest] as a file job, with its progress (and a question when a
+     * name is taken there); [started] once it is under way. [here]: [dest] is the folder on show (a
+     * paste), not the other side's (3.0.4).
+     */
+    private fun transfer(files: List<File>, dest: File, move: Boolean, here: Boolean, started: () -> Unit) {
+        if (files.isEmpty()) return
+        if (files.any { it.isDirectory && FileOps.isInside(dest, it) }) {
+            say("A folder can't go inside itself")
+            return
+        }
+        if (move && files.all { it.parentFile?.path == dest.path }) {
+            say(if (here) "They're in this folder already" else "They're in that folder already")
+            return
+        }
+        withChanges(if (move) files + dest else listOf(dest)) {
+            started()
+            val what = if (files.size == 1) files[0].name else FileJobs.items(files.size)
+            val kind = if (move) FileJobs.Kind.MOVE else FileJobs.Kind.COPY
+            val job = FileJobs.start(this, kind, "${kind.doing} $what", onDone = ::doneHere) { w -> Transfers.copy(w, files, dest, move) }
+            showProgress(job)
         }
     }
 
@@ -2323,25 +2683,29 @@ class FilesActivity : ListActivity() {
             return
         }
         // 3.0: the bin at a card's top may need the card's access even when the files don't (Swift's own folder there).
+        val p = pane
         withChanges(files + RecycleBin.binsFor(this, files)) {
-            clearSelection()
-            // Off the list at once: the move itself is a rename, but a big folder is counted first.
-            dropRows(files)
-            RecycleBin.move(this, files) { b -> (visible?.get() ?: this).binned(b) }
+            withPane(p) {
+                clearSelection()
+                // Off the list at once: the move itself is a rename, but a big folder is counted first.
+                dropRows(files)
+            }
+            val side = p.side
+            RecycleBin.move(this, files) { b -> (visible?.get() ?: this).binned(b, side) }
         }
     }
 
-    private fun binned(b: RecycleBin.Batch) {
+    private fun binned(b: RecycleBin.Batch, side: Int) {
         homeDirty = true
         if (isFinishing) return
-        // Read again once the rows taken off have closed up.
-        list.postDelayed({ if (!isFinishing) reload() }, if (animationsOn) Motion.SHORT + 100 else 0L)
+        // Read again once the rows taken off have closed up (3.0.4: each side, which may show them too).
+        list.postDelayed({ if (!isFinishing) reloadShown() }, if (animationsOn) Motion.SHORT + 100 else 0L)
         if (b.items.isNotEmpty()) {
             say("Moved ${RecycleBin.movedText(b.items)} to the recycle bin", "Undo") {
                 RecycleBin.restore(this, b.items) { back, failed ->
                     homeDirty = true
                     // A category and the start page read Android's media index, which learns of them a moment later.
-                    if (!isFinishing) list.postDelayed({ if (!isFinishing) reload() }, if (home || category != null) 900L else 0L)
+                    if (!isFinishing) list.postDelayed({ if (!isFinishing) reloadShown() }, if (shownPanes().any { it.home || it.category != null }) 900L else 0L)
                     when {
                         failed > 0 -> say("$failed couldn't be put back: they're still in the recycle bin", long = true)
                         // 3.0: put back under another name (the old one was taken meanwhile): said.
@@ -2356,7 +2720,7 @@ class FilesActivity : ListActivity() {
                 this, "Delete for good?",
                 RecycleBin.couldntText(failed) + " Delete " + (if (failed.size == 1) "it" else "them") + " for good instead? Swift can't bring " + (if (failed.size == 1) "it" else "them") + " back.",
                 "Delete", danger = true,
-            ) { eraseNow(failed) }
+            ) { withPane(panes[side].takeIf { it.attached } ?: chosen) { eraseNow(failed) } }
         }
     }
 
@@ -2429,7 +2793,8 @@ class FilesActivity : ListActivity() {
             RecycleBin.restore(this, items) { back, failed ->
                 homeDirty = true
                 if (isFinishing) return@restore
-                if (inBin) loadBin(keepScroll = true)
+                // 3.0.4: the bin and the folders they went back to, on either side.
+                reloadShown()
                 val first = back.firstOrNull()
                 // 3.0: one that came back under a new name (the old one was taken) says so.
                 val renamed = RecycleBin.renamedText(items, back)
@@ -2453,7 +2818,7 @@ class FilesActivity : ListActivity() {
                 RecycleBin.erase(this, items) { n ->
                     homeDirty = true
                     if (isFinishing) return@erase
-                    if (inBin) loadBin(keepScroll = true)
+                    reloadShown()
                     say(if (n == items.size) "Deleted " + (if (n == 1) "“${items[0].name}”" else FileJobs.items(n)) + " for good" else "Deleted $n. ${items.size - n} couldn't be.")
                 }
             }
@@ -2473,7 +2838,7 @@ class FilesActivity : ListActivity() {
                 RecycleBin.empty(this) { n ->
                     homeDirty = true
                     if (isFinishing) return@empty
-                    if (inBin) loadBin(keepScroll = true)
+                    reloadShown()
                     say(if (n == 1) "Deleted 1 item for good" else "Deleted $n items for good")
                 }
             }
@@ -2486,9 +2851,11 @@ class FilesActivity : ListActivity() {
     private fun openPrivate(to: File? = null) {
         val root = PrivateFolder.root(this)
         val target = to?.takeIf { PrivateFolder.isInside(this, it) && it.isDirectory } ?: root
+        // 3.0.4: on the side that asked, once unlocked (a PIN or Android's own question comes between).
+        val p = pane
         unlockPrivate {
             if (!root.isDirectory) root.mkdirs()
-            openFolder(target)
+            if (p.attached) withPane(p) { openFolder(target) } else openFolder(target)
         }
     }
 
@@ -2631,6 +2998,8 @@ class FilesActivity : ListActivity() {
                     val ok = withContext(Dispatchers.IO) {
                         val access = Volumes.accessFor(this@FilesActivity, f) ?: return@withContext false
                         access.rename(f, name).also { done ->
+                            // 3.0.4: a folder's size goes with its old name (measured again under the new one).
+                            if (done && to.isDirectory) FolderSizes.changed(listOf(f.path))
                             // 2.9: Private's files were never in Android's media index, and mustn't be.
                             if (done && !PrivateFolder.isInside(this@FilesActivity, f)) {
                                 FileOps.forget(this@FilesActivity, f)
@@ -2663,20 +3032,23 @@ class FilesActivity : ListActivity() {
         PrivateFolder.renamed(this, from, to)
         homeDirty = true
         val swap = { r: Row -> if (r.file?.path == from.path) rowOf(FileItem.of(to, count = to.isDirectory, where = r.where)) else r }
-        when {
-            index != null -> {}
-            home -> homeCache?.let { c ->
-                // 3.0.3: where a video was left is kept by its path: a renamed one leaves Continue.
-                homeCache = c.copy(favourites = c.favourites.map(swap), recent = c.recent?.map(swap), continued = c.continued.filter { it.localPath != from.path })
-                if (onStartPage) render()
+        homeCache?.let { c ->
+            // 3.0.3: where a video was left is kept by its path: a renamed one leaves Continue.
+            homeCache = c.copy(favourites = c.favourites.map(swap), recent = c.recent?.map(swap), continued = c.continued.filter { it.localPath != from.path })
+        }
+        // 3.0.4: on each side (the other may show the same place).
+        for (p in shownPanes()) withPane(p) {
+            when {
+                index != null -> {}
+                home -> if (onStartPage) render()
+                category != null -> {
+                    listed = listed.map { if (it.file.path == from.path) FileItem.of(to, where = it.where) else it }
+                    rows = rows.map(swap)
+                    searchRows = searchRows?.map(swap)
+                    render()
+                }
+                else -> load(keepScroll = true)
             }
-            category != null -> {
-                listed = listed.map { if (it.file.path == from.path) FileItem.of(to, where = it.where) else it }
-                rows = rows.map(swap)
-                searchRows = searchRows?.map(swap)
-                render()
-            }
-            else -> load(keepScroll = true)
         }
     }
 
@@ -2694,7 +3066,8 @@ class FilesActivity : ListActivity() {
                 lifecycleScope.launch {
                     val ok = withContext(Dispatchers.IO) { Volumes.accessFor(this@FilesActivity, f)?.mkdir(f) == true }
                     if (ok) {
-                        load(keepScroll = true)
+                        // 3.0.4: on each side showing this folder.
+                        for (p in shownPanes()) withPane(p) { if (!home && category == null && !inBin && index == null && dir.path == parent.path) load(keepScroll = true) }
                         say(if (name.startsWith(".") && !showHidden) "Made the hidden folder “$name”. ⋮ → Show hidden files shows it." else "Made the folder “$name”", long = name.startsWith("."))
                     } else {
                         say("Swift couldn't make a folder here")
@@ -2855,11 +3228,16 @@ class FilesActivity : ListActivity() {
 
     // ------------------------------------------------------------------ search
 
-    private val searchSoon = Runnable { runSearch() }
+    private val searchSoon get() = pane.searchSoon
+
+    /** What is typed in the search box, for the side worked on (3.0.4: each side keeps its own). */
+    private var query: String
+        get() = pane.query
+        set(v) { pane.query = v }
 
     private fun scheduleSearch() {
         list.removeCallbacks(searchSoon)
-        if (search.text.isNullOrBlank()) {
+        if (query.isBlank()) {
             searchJob?.cancel()
             searching = false
             if (searchRows != null) {
@@ -2878,7 +3256,7 @@ class FilesActivity : ListActivity() {
      * category, among its files; on the start page, every file on the phone (Android's media index).
      */
     private fun runSearch() {
-        val q = search.text?.toString()?.trim().orEmpty()
+        val q = query.trim()
         if (q.isEmpty()) return
         searchJob?.cancel()
         selected.clear()
@@ -2904,18 +3282,21 @@ class FilesActivity : ListActivity() {
         val everywhere = home
         val gen = placeGen
         val app = applicationContext
+        val p = pane
         searching = true
         updateChrome()
         searchJob = lifecycleScope.launch {
             val found = withContext(Dispatchers.IO) {
                 if (everywhere) FileIndex.search(app, q, hidden, MAX_FOUND) { !isActive } else FileOps.search(from, q, hidden, MAX_FOUND) { !isActive }
             }
-            searching = false
-            if (gen != placeGen) return@launch
-            searchRows = found.map { rowOf(it) }
-            render()
-            list.scrollToPosition(0)
-            showPageTop()
+            withPane(p) {
+                searching = false
+                if (gen != placeGen) return@launch
+                searchRows = found.map { rowOf(it) }
+                render()
+                list.scrollToPosition(0)
+                showPageTop()
+            }
         }
     }
 
@@ -2935,21 +3316,30 @@ class FilesActivity : ListActivity() {
         }
         if (isFinishing) return
         homeDirty = true
-        when {
-            index != null -> {}
-            home || category != null || inBin -> reload()
-            dir.path in job.touched || job.touched.isEmpty() || job.result?.path == dir.path -> {
-                // 2.9: what was deleted or moved away closes up first (a folder of a few hundred at most is looked at), then the folder is read again.
-                val gone = if ((job.kind == FileJobs.Kind.DELETE || job.kind == FileJobs.Kind.MOVE) && animationsOn && rows.size <= 300) {
-                    rows.mapNotNull { r -> r.file?.takeIf { !it.exists() } }
-                } else {
-                    emptyList()
+        // 3.0.4: each side on show follows what changed (a copy to the other side changes both).
+        var homeRead = false
+        for (p in shownPanes()) withPane(p) {
+            when {
+                index != null -> {}
+                home -> if (!homeRead) {
+                    homeRead = true
+                    loadHome()
                 }
-                if (gone.isNotEmpty() && gone.size <= MAX_ANIMATED) {
-                    dropRows(gone)
-                    list.postDelayed({ if (!isFinishing) load(keepScroll = true) }, Motion.SHORT + 100)
-                } else {
-                    load(keepScroll = true)
+                category != null || inBin -> reload()
+                dir.path in job.touched || job.touched.isEmpty() || job.result?.path == dir.path -> {
+                    // 2.9: what was deleted or moved away closes up first (a folder of a few hundred at most is looked at), then the folder is read again.
+                    val gone = if ((job.kind == FileJobs.Kind.DELETE || job.kind == FileJobs.Kind.MOVE) && animationsOn && rows.size <= 300) {
+                        rows.mapNotNull { r -> r.file?.takeIf { !it.exists() } }
+                    } else {
+                        emptyList()
+                    }
+                    if (gone.isNotEmpty() && gone.size <= MAX_ANIMATED) {
+                        dropRows(gone)
+                        val gen = placeGen
+                        list.postDelayed({ if (!isFinishing && p.attached && gen == p.placeGen) withPane(p) { load(keepScroll = true) } }, Motion.SHORT + 100)
+                    } else {
+                        load(keepScroll = true)
+                    }
                 }
             }
         }
@@ -3113,9 +3503,9 @@ class FilesActivity : ListActivity() {
 
     // ------------------------------------------------------------------ the list
 
-    private fun subtitleOf(r: Row): String {
+    private fun subtitleOf(r: Row, owner: Pane = pane): String {
         // 2.9: in the bin, when it was deleted and how long it stays, then where it was (a second line).
-        binItems[r.key]?.takeIf { inBin }?.let { b ->
+        owner.binItems[r.key]?.takeIf { owner.inBin }?.let { b ->
             val size = if (b.isDir) FileJobs.items(b.files).replace("item", "file") else UrlUtils.formatBytes(b.size)
             val deleted = if (DateUtils.isToday(b.deletedAt)) "today" else dateText(b.deletedAt)
             return "$size · deleted $deleted · ${binText(b)}\nfrom ${r.where}"
@@ -3124,6 +3514,8 @@ class FilesActivity : ListActivity() {
         if (r.entry?.encrypted == true) parts += "Locked"
         if (r.isDir) {
             if (r.count >= 0) parts += FileJobs.items(r.count)
+            // 3.0.4: and what it holds once measured ("12 items · 1.40 GB").
+            sizeText(r, owner)?.let { parts += it }
         } else if (r.size >= 0) {
             parts += UrlUtils.formatBytes(r.size)
         }
@@ -3156,6 +3548,8 @@ class FilesActivity : ListActivity() {
     private class FileHolder(
         root: View, val tile: Boolean, val card: View, val box: View, val icon: ImageView, val check: ImageView,
         val title: TextView, val subtitle: TextView?, val more: ImageButton, val play: ImageView?,
+        /** 3.0.4: a folder tile's size, under its icon. */
+        val size: TextView? = null,
     ) : RecyclerView.ViewHolder(root) {
         var thumb: FileThumbs.Request? = null
         var marked = false
@@ -3163,6 +3557,9 @@ class FilesActivity : ListActivity() {
 
         /** 3.0.3: a video's watched line and tick, over its picture (made the first time one is needed). */
         var marks: WatchMarks? = null
+
+        /** 3.0.4: the standard folders' icons this row or tile has shown, by their mark, made once each (FolderIcons). */
+        var folderIcons: Array<Drawable?>? = null
         lateinit var folderFill: Drawable
         lateinit var fileFill: Drawable
         lateinit var plain: Drawable
@@ -3171,7 +3568,14 @@ class FilesActivity : ListActivity() {
 
     private class HeaderHolder(v: View, val title: TextView, val action: TextView) : RecyclerView.ViewHolder(v)
 
-    private class StorageHolder(v: View, val icon: ImageView, val name: TextView, val bar: ProgressBar, val detail: TextView) : RecyclerView.ViewHolder(v)
+    /**
+     * A storage's card. 3.0.4: [bar] split by what fills the storage, with [legend] under it: a dot,
+     * a name and a size in each of [cells] ([dots] their dots), in [lines].
+     */
+    private class StorageHolder(
+        v: View, val card: View, val icon: ImageView, val name: TextView, val bar: StorageBar, val detail: TextView,
+        val legend: LinearLayout, val lines: List<View>, val cells: List<View>, val dots: List<View>, val texts: List<TextView>,
+    ) : RecyclerView.ViewHolder(v)
 
     private class CategoriesHolder(v: View, val counts: Map<FileIndex.Category, Pair<View, TextView>>) : RecyclerView.ViewHolder(v)
 
@@ -3222,7 +3626,7 @@ class FilesActivity : ListActivity() {
             val card = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 setPadding(dp(4), dp(4), dp(4), dp(6))
-                background = Ui.ripple(this@FilesActivity, null, 14)
+                background = Ui.ripple(this@FilesActivity, null, Ui.R_SMALL)
                 Ui.pressable(this, 0.96f)
                 setOnClickListener { openDoc(doc) }
                 setOnLongClickListener { v ->
@@ -3248,7 +3652,7 @@ class FilesActivity : ListActivity() {
                 }
             }
             card.addView(Ui.text(this, Ui.Type.BODY, doc.name, lines = 2).apply {
-                textSize = 13f
+                Ui.size(this, Ui.Type.CAPTION, keepFont = true)
                 setPadding(dp(2), dp(6), dp(2), 0)
             }, LinearLayout.LayoutParams(w, ViewGroup.LayoutParams.WRAP_CONTENT))
             val progress = progressText(doc) ?: dateText(doc.opened)?.let { "Opened $it" }
@@ -3282,7 +3686,7 @@ class FilesActivity : ListActivity() {
             lifecycleScope.launch {
                 withContext(Dispatchers.IO) { runCatching { SwiftApp.db.forgetDocument(doc.id) } }
                 homeCache?.let { c -> homeCache = c.copy(docs = c.docs.filter { it.id != doc.id }) }
-                if (onStartPage) render()
+                renderHomes()
             }
         }
         Sheets.actions(this, doc.name, progressText(doc) ?: doc.kind.label, actions, iconRes = R.drawable.ic_documents)
@@ -3327,7 +3731,7 @@ class FilesActivity : ListActivity() {
         if (!f.isFile) {
             say("“${f.name}” isn't there any more")
             homeCache?.let { c -> homeCache = c.copy(continued = c.continued.filter { it.url != item.url }) }
-            if (onStartPage) render(removals = true)
+            renderHomes(removals = true)
             return
         }
         if (FileOpener.open(this, f)) finish()
@@ -3356,8 +3760,10 @@ class FilesActivity : ListActivity() {
             homeCache?.let { now ->
                 if (now.continued.none { it.url == item.url }) homeCache = now.copy(continued = (now.continued + item).sortedByDescending { it.updated })
             }
-            if (onStartPage) render()
+            renderHomes()
         }
+        // 3.0.4: the other side's start page, if on show, follows at once.
+        renderHomes(others = true)
         if (homeCache?.continued.isNullOrEmpty() && onStartPage) render(removals = true)
     }
 
@@ -3367,8 +3773,8 @@ class FilesActivity : ListActivity() {
      * A video's picture shows how much of it was watched in Swift's player, and a tick once it was
      * watched to its end: looked up by the path and size the row has (no disk access while binding).
      */
-    private fun markWatched(h: FileHolder, r: Row) {
-        val path = r.file?.path?.takeIf { r.kind == FileKind.VIDEO && !inBin }
+    private fun markWatched(owner: Pane, h: FileHolder, r: Row) {
+        val path = r.file?.path?.takeIf { r.kind == FileKind.VIDEO && !owner.inBin }
         val share = path?.let { LocalMedia.progress(this, it, r.size) }
         val done = path != null && Watched.isFinished(this, path, r.size)
         if (share == null && !done) {
@@ -3382,9 +3788,8 @@ class FilesActivity : ListActivity() {
 
     // ------------------------------------------------------------------ 3.0.3: sliding to select
 
-    /** A finger is on the list; selecting that starts meanwhile brings the title bar back once it is lifted. */
+    /** A finger is on the list (a hold may start a slide only while it is). */
     private var fingerDown = false
-    private var expandOnLift = false
 
     /** Where the hold that began a slide was (a position in the list; -1: no slide), and where the finger is now. */
     private var slideFrom = -1
@@ -3420,7 +3825,7 @@ class FilesActivity : ListActivity() {
             when (e.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     fingerDown = true
-                    titleBarAnim?.cancel()
+                    touchedSinceShown = true
                     endSlide()
                 }
                 // The hold selected: from now on the finger selects, and the list doesn't follow it.
@@ -3457,18 +3862,10 @@ class FilesActivity : ListActivity() {
     private fun lifted() {
         fingerDown = false
         endSlide()
-        if (expandOnLift) {
-            expandOnLift = false
-            if (selected.isNotEmpty()) showTitleBar()
-        }
     }
 
     /** The part of the list on show, top and bottom in its own coordinates (the bars above can push its end below the screen). */
-    private fun listShown(): Pair<Int, Int> {
-        val box = list.parent as View
-        val page = box.parent as View
-        return list.paddingTop to minOf(list.height, page.height - box.top - list.top)
-    }
+    private fun listShown(): Pair<Int, Int> = list.paddingTop to minOf(list.height, page.height - topInPage(list))
 
     /** The files from the held one to the one under the finger are as the slide makes them; those it left are as they were. */
     private fun slideOver() {
@@ -3517,7 +3914,398 @@ class FilesActivity : ListActivity() {
         }
     }
 
-    private inner class Adapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
+    // ------------------------------------------------------------------ 3.0.4: two folders side by side
+
+    /** The button for two folders is offered (the screen sideways, wide enough), and two show now. */
+    private var twoOffered = false
+    private var twoPanes = false
+
+    /** How wide one side's list is now (dp). */
+    private var paneWidthDp = Ui.MAX_CONTENT_WIDTH
+
+    /** The row of paths and the row of lists (one side's, or both with a line between), and the page under the title bar holding them. */
+    private lateinit var pathRow: LinearLayout
+    private lateinit var listRow: LinearLayout
+    private lateinit var page: androidx.coordinatorlayout.widget.CoordinatorLayout
+
+    /** The search box is being given a side's words (not typed): nothing is searched for that. */
+    private var syncingSearch = false
+
+    /** The sides on the screen: the one worked on, and the other while two show. */
+    private fun shownPanes(): List<Pane> = if (twoPanes) panes.asList() else listOf(chosen)
+
+    /** The side that isn't [p]. */
+    private fun otherPane(p: Pane = chosen) = panes[TwoPanes.other(p.side)]
+
+    /** The items of the list [h] is in. */
+    private fun rowsOf(h: RecyclerView.ViewHolder): List<Any> = (h.bindingAdapter as? Adapter)?.items.orEmpty()
+
+    /** Tiles about 112 dp wide (2.8): three across a phone held upright, more on a wide screen; 3.0.4: across a side. */
+    private fun computeGrid() {
+        paneWidthDp = TwoPanes.paneWidthDp(resources.configuration.screenWidthDp, twoPanes, Ui.MAX_CONTENT_WIDTH)
+        gridCols = TwoPanes.gridColumns(paneWidthDp)
+        tilePx = dp((paneWidthDp - 16) / gridCols - 16)
+        tileIconPad = (tilePx * 0.3f).toInt()
+    }
+
+    /** The sides on show in the row of paths and the row of lists: one, or both with a thin line between. */
+    private fun arrangePanes() {
+        pathRow.removeAllViews()
+        listRow.removeAllViews()
+        shownPanes().sortedBy { it.side }.forEachIndexed { i, p ->
+            if (i > 0) {
+                pathRow.addView(sideLine(), LinearLayout.LayoutParams(dp(1), ViewGroup.LayoutParams.MATCH_PARENT))
+                listRow.addView(sideLine(), LinearLayout.LayoutParams(dp(1), ViewGroup.LayoutParams.MATCH_PARENT))
+            }
+            pathRow.addView(p.pathFrame, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
+            listRow.addView(p.frame, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
+        }
+        updateMarks()
+        updatePathRow()
+        // Moving the lists took their focus away: back to the side worked on, so the search box shows no cursor until tapped.
+        chosen.list.requestFocus()
+    }
+
+    private fun sideLine() = View(this).apply { setBackgroundColor(Palette.color(this@FilesActivity, R.color.divider)) }
+
+    /** The thin accent line along the top of the side worked on, while two show (it fades in as a side is chosen). */
+    private fun updateMarks() {
+        for (p in panes) {
+            val on = twoPanes && p === chosen
+            if (on && p.mark.visibility != View.VISIBLE) {
+                p.mark.visibility = View.VISIBLE
+                if (animationsOn) {
+                    p.mark.alpha = 0f
+                    p.mark.animate().alpha(1f).setDuration(Motion.SHORT).start()
+                }
+            } else if (!on && p.mark.visibility != View.GONE) {
+                p.mark.animate().cancel()
+                p.mark.visibility = View.GONE
+            }
+        }
+    }
+
+    /**
+     * The side touched last is the one the title bar, the search box and the bars at the bottom are
+     * for, with its accent line; each side keeps its own selection and search meanwhile. A slide to
+     * select stays on the side it began on.
+     */
+    private fun setChosen(p: Pane) {
+        if (p === chosen || !p.attached || pane !== chosen) return
+        endSlide()
+        val was = chosen
+        chosen = p
+        use(p)
+        syncSearchBox()
+        updateMarks()
+        // Files opens again with the side worked on where it was, and the other side where it was.
+        val e = sp.edit().putInt(PREF_SIDE, p.side)
+        p.remembered?.let { e.putString(PREF_LAST, it) }
+        was.remembered?.let { e.putString(PREF_OTHER, it) }
+        e.apply()
+        updateChrome()
+    }
+
+    /** Where Files was left (2.9): 3.0.4: the side worked on's, the other side's apart. */
+    private fun rememberPlace(key: String) {
+        pane.remembered = key
+        sp.edit().putString(if (pane === chosen) PREF_LAST else PREF_OTHER, key).apply()
+    }
+
+    /** The search box shows the side worked on's words (given, not typed: nothing is searched for that). */
+    private fun syncSearchBox() {
+        val q = chosen.query
+        if (search.text.toString() == q) return
+        syncingSearch = true
+        search.setText(q)
+        search.setSelection(q.length)
+        syncingSearch = false
+    }
+
+    /** The side's search ends, as when its words are cleared by hand (the box too, for the side worked on). */
+    private fun clearQuery() {
+        if (query.isEmpty()) return
+        query = ""
+        if (pane === chosen) syncSearchBox()
+        scheduleSearch()
+    }
+
+    /** Where the other side is (on show), or was left (not on show). */
+    private fun otherPlaceKey(): String? = otherPane().let { o -> if (o.attached) withPane(o) { placeKey() } else o.pending }
+
+    /** The other side's folder, when it can take files: not its start page, a category, the bin, nor inside an archive. */
+    private fun otherFolder(): File? {
+        if (!twoPanes) return null
+        val o = otherPane()
+        return TwoPanes.target(withPane(o) { placeKey() }, o.index != null)?.let { o.dir }
+    }
+
+    /** "Copy to the right" and "Move to the left": into the folder on show there, as a paste there would (the same job, questions and progress). */
+    private fun toOtherSide(files: List<File>, move: Boolean) {
+        if (files.isEmpty()) return
+        val dest = otherFolder() ?: return say(noOtherFolder())
+        transfer(files, dest, move, here = false) { clearSelection() }
+    }
+
+    /** The same in one thing's sheet, while two folders show. */
+    private fun otherSideActions(files: List<File>): List<Sheets.Action> = if (!twoPanes) emptyList() else otherSideWord().let { toward ->
+        listOf(
+            Sheets.Action(R.drawable.ic_copy, "Copy to the $toward") { toOtherSide(files, move = false) },
+            Sheets.Action(R.drawable.ic_move, "Move to the $toward") { toOtherSide(files, move = true) },
+        )
+    }
+
+    /** Which way the other side is on the screen, "right" or "left" (the sides swap round in a right-to-left language). */
+    private fun otherSideWord(): String =
+        TwoPanes.toward(chosen.side, resources.configuration.layoutDirection == View.LAYOUT_DIRECTION_RTL)
+
+    /** Said when the other side shows no folder to put things in (its start page, a category, the bin, an archive). */
+    private fun noOtherFolder() = "Open a folder on the ${otherSideWord()} first"
+
+    /** The button at the top: two folders side by side, or one (remembered in FilesSettings). */
+    private fun toggleTwoPanes() {
+        FilesSettings.twoPanes = !FilesSettings.twoPanes
+        settingsShown = settingsKey()
+        setTwoPanes(twoOffered && FilesSettings.twoPanes)
+    }
+
+    /**
+     * Two sides, or one. The other side comes back where it was left (the first time, at this side's
+     * folder), or goes, kept as it is for when it comes back. The side worked on stays, its list made
+     * again for its new width (tiles, the start page's cards).
+     */
+    private fun setTwoPanes(two: Boolean) {
+        if (two == twoPanes) return
+        val here = withPane(chosen) { placeKey() }
+        val o = otherPane()
+        if (!two) withPane(o) {
+            o.pending = placeKey()
+            hidePane()
+        }
+        twoPanes = two
+        o.attached = two
+        computeGrid()
+        arrangePanes()
+        remake(chosen)
+        if (two) withPane(o) { goTo(otherStart(TwoPanes.places(chosen.side, here, o.pending, two = true)[o.side])) }
+        updateChrome()
+    }
+
+    /** Where the other side comes back to, but not into Private while it is locked (its start page then, with no question). */
+    private fun otherStart(place: String?): String? =
+        place?.takeUnless { it.startsWith("/") && PrivateFolder.isInside(this, File(it)) && !PrivateFolder.isUnlocked }
+
+    /**
+     * The side goes off the screen: what it was doing stops, and what it read goes (light on a 2 GB
+     * phone: it is read again when it comes back, where it was, kept in [Pane.pending]).
+     */
+    private fun hidePane() {
+        rememberPosition()
+        placeGen++
+        loadJob?.cancel()
+        searchJob?.cancel()
+        stopSizing()
+        list.removeCallbacks(showLoading)
+        list.removeCallbacks(searchSoon)
+        loading = false
+        searching = false
+        selected.clear()
+        listed = emptyList()
+        rows = emptyList()
+        searchRows = null
+        binItems = emptyMap()
+        index = null
+        adapter.set(emptyList())
+    }
+
+    /** [p]'s list is made again for its new width (its tiles, the start page's cards), at the same place. */
+    private fun remake(p: Pane) = withPane(p) {
+        val lm = list.layoutManager as? LinearLayoutManager
+        val at = lm?.findFirstVisibleItemPosition() ?: 0
+        list.adapter = null
+        list.recycledViewPool.clear()
+        list.recycledViewPool.setMaxRecycledViews(TYPE_TILE, gridCols * 6)
+        list.adapter = adapter
+        applyLayout()
+        if (at > 0) lm?.scrollToPositionWithOffset(at, 0)
+    }
+
+    /** Each side on show reads its place again (something changed that either may show); the start page once. */
+    private fun reloadShown() {
+        var homeRead = false
+        for (p in shownPanes()) withPane(p) {
+            if (home && index == null) {
+                if (!homeRead) {
+                    homeRead = true
+                    loadHome()
+                }
+            } else {
+                reload()
+            }
+        }
+    }
+
+    /** The start page again on each side showing it (what it shows is shared); [others]: not on the side worked on. */
+    private fun renderHomes(removals: Boolean = false, others: Boolean = false) {
+        for (p in shownPanes()) if (!others || p !== pane) withPane(p) { if (onStartPage) render(removals) }
+    }
+
+    // ------------------------------------------------------------------ 3.0.4: folder sizes
+
+    /** The folders whose sizes are being measured now, and the work doing it (one folder at a time, off the main thread). */
+    private var sizing: Set<String>
+        get() = pane.sizing
+        set(v) { pane.sizing = v }
+    private var sizeJob: Job?
+        get() = pane.sizeJob
+        set(v) { pane.sizeJob = v }
+
+    /** The list was touched since it showed: sorted by size, its folders no longer move once measured. */
+    private var touchedSinceShown: Boolean
+        get() = pane.touchedSinceShown
+        set(v) { pane.touchedSinceShown = v }
+
+    /**
+     * 3.0.4: the folders on show are measured (FolderSizes), and each row fills in its size as it
+     * comes: in folders on the phone, the SD card and Private, in search results and among the start
+     * page's favourites. Not in an archive, nor in the recycle bin (its rows say what they hold).
+     */
+    private fun measureShown() {
+        if (loading) return
+        if (!hasAccess() || index != null || inBin) {
+            stopSizing()
+            return
+        }
+        startSizing(adapter.items.mapNotNull { (it as? Row)?.takeIf { r -> r.isDir && r.file != null && r.entry == null }?.key })
+    }
+
+    /**
+     * Measures those of [folders] not measured lately, in their order; null when none needs it.
+     * Each size shows as it comes ([sizeKnown]); once all are known, [sizesDone]. Already being
+     * measured: that goes on.
+     */
+    private fun startSizing(folders: List<String>): Job? {
+        val now = SystemClock.elapsedRealtime()
+        val todo = folders.filter { !FolderSizes.fresh(it, now) }
+        val running = sizeJob
+        if (todo.isNotEmpty() && running?.isActive == true && sizing.containsAll(todo)) return running
+        stopSizing()
+        if (todo.isEmpty()) return null
+        // What the job still has to do (one it has passed and that changed since is measured anew).
+        val left = LinkedHashSet(todo)
+        sizing = left
+        val gen = placeGen
+        val p = pane
+        val job = lifecycleScope.launch {
+            for (path in todo) {
+                // Measured meanwhile (the folder above it was, or the other side's job): nothing to walk.
+                var s = withContext(sizeThread) { if (FolderSizes.fresh(path)) FolderSizes.cached(path) else FolderSizes.measure(File(path)) { !isActive } }
+                // Something in it changed while it was walked: once more.
+                if (s == null && isActive) s = withContext(sizeThread) { FolderSizes.measure(File(path)) { !isActive } }
+                left.remove(path)
+                if (s != null) sizeKnown(path)
+            }
+            if (gen == p.placeGen) withPane(p) { sizesDone() }
+        }
+        sizeJob = job
+        return job
+    }
+
+    private fun stopSizing() {
+        sizeJob?.cancel()
+        sizeJob = null
+        sizing = emptySet()
+    }
+
+    /** 3.0.4: [path]'s size came: its row or tile shows it, and nothing else moves. */
+    private fun sizeKnown(path: String) {
+        // 3.0.4: on either side.
+        for (p in shownPanes()) {
+            val items = p.adapter.items
+            for (i in items.indices) if ((items[i] as? Row)?.key == path) p.adapter.notifyItemChanged(i, PAYLOAD_SIZE)
+        }
+    }
+
+    /**
+     * 3.0.4: every folder on show has its size. Sorted by size, they take their places now, unless
+     * the list was touched since it showed (rows mustn't move under a finger): then they stay as
+     * they are until the folder is opened again.
+     */
+    private fun sizesDone() {
+        if (sort != FileOps.SORT_SIZE || loading || home || category != null || inBin || index != null || searchRows != null) return
+        if (touchedSinceShown || selected.isNotEmpty()) return
+        val sorted = sortedWithSizes(listed, sort)
+        if (sorted.map { it.file.path } == listed.map { it.file.path }) return
+        listed = sorted
+        rows = listed.map { rowOf(it) }
+        render()
+    }
+
+    /** 3.0.4: [items] in [order]; by size, folders go by their sizes as known now (a copy: they mustn't change while it sorts). */
+    private fun sortedWithSizes(items: List<FileItem>, order: Int): List<FileItem> {
+        if (order != FileOps.SORT_SIZE) return FileOps.sorted(items, order)
+        val known = FolderSizes.bytesFor(items.filter { it.isDir }.map { it.file.path })
+        return FileOps.sorted(items, order) { known[it] }
+    }
+
+    /** "1.40 GB" (or "over 1.40 GB") for a folder's row once measured; null otherwise, and for an empty one. */
+    private fun sizeText(r: Row, owner: Pane = pane): String? {
+        val f = r.file ?: return null
+        if (!r.isDir || r.entry != null || r.count == 0 || owner.inBin) return null
+        return FolderSizes.cached(f.path)?.let { FolderSizes.text(it) }
+    }
+
+    /** A row's line under its name again; a tile's size under its icon, when it fits there. */
+    private fun bindSize(owner: Pane, h: FileHolder, r: Row) {
+        if (!h.tile) {
+            h.subtitle?.text = subtitleOf(r, owner)
+            return
+        }
+        val label = h.size ?: return
+        val text = sizeText(r, owner)
+        if (text != null && label.paint.measureText(text) <= tilePx - dp(12)) {
+            if (label.text != text) label.text = text
+            label.visibility = View.VISIBLE
+        } else {
+            label.visibility = View.GONE
+        }
+    }
+
+    /** "Refresh" in a folder: read again, its folders measured again too. */
+    private fun refreshFolder() {
+        FolderSizes.changed(listOf(dir.path))
+        load(keepScroll = true)
+    }
+
+    /**
+     * One list for rows, tiles and the start page: rows and the start page's parts take the whole
+     * width. 3.0.4: each side's list ([p]'s), made the same way.
+     */
+    private fun setUpList(p: Pane) {
+        val rv = p.list
+        val lm = GridLayoutManager(this, 1)
+        lm.spanSizeLookup = object : GridLayoutManager.SpanSizeLookup() {
+            override fun getSpanSize(position: Int) = if (p.tiles && p.adapter.items.getOrNull(position) is Row) 1 else lm.spanCount
+        }
+        rv.layoutManager = lm
+        rv.adapter = p.adapter
+        // 2.9: only removals (and the rows closing up after them) move, briefly; everything else changes in place.
+        rv.itemAnimator = androidx.recyclerview.widget.DefaultItemAnimator().apply {
+            removeDuration = Motion.SHORT
+            moveDuration = Motion.SHORT
+            addDuration = Motion.SHORT
+            changeDuration = 0
+            supportsChangeAnimations = false
+        }
+        rv.setHasFixedSize(true)
+        // A screen of tiles and a few more, so going back and forth between list and grid makes few new ones.
+        rv.recycledViewPool.setMaxRecycledViews(TYPE_TILE, gridCols * 6)
+        // 3.0.3: after a hold, sliding the finger selects (or unselects) the files it passes.
+        rv.addOnItemTouchListener(slideTouch)
+    }
+
+    /** A side's list: [owner]'s rows, bound as that side has them (the other side may be the one worked on). */
+    private inner class Adapter(val owner: Pane) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
         var items: List<Any> = emptyList()
             private set
 
@@ -3526,8 +4314,8 @@ class FilesActivity : ListActivity() {
          * moved away), those close up one by one; otherwise (and for many at once) all show anew.
          */
         fun set(list: List<Any>, removals: Boolean = false) {
-            // 3.0.3: a slide's positions belong to the list as it was.
-            endSlide()
+            // 3.0.3: a slide's positions belong to the list as it was (3.0.4: a slide is on the side touched).
+            if (owner === chosen) endSlide()
             val old = items
             items = list
             val gone = old.size - list.size
@@ -3561,7 +4349,7 @@ class FilesActivity : ListActivity() {
         override fun getItemCount() = items.size
 
         override fun getItemViewType(position: Int) = when (items[position]) {
-            is Row -> if (tiles) TYPE_TILE else TYPE_ROW
+            is Row -> if (owner.tiles) TYPE_TILE else TYPE_ROW
             is Header -> TYPE_HEADER
             is StorageCard -> TYPE_STORAGE
             is CategoryGrid -> TYPE_CATEGORIES
@@ -3596,17 +4384,18 @@ class FilesActivity : ListActivity() {
         override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int, payloads: MutableList<Any>) {
             val item = items[position]
             // 3.0.3: only the videos' watched marks are asked for again: nothing else changes.
-            if (payloads.isNotEmpty() && item !is Row && payloads.all { it == PAYLOAD_WATCHED }) return
+            if (payloads.isNotEmpty() && item !is Row && payloads.all { it == PAYLOAD_WATCHED || it == PAYLOAD_SIZE }) return
             when (item) {
                 is Row -> {
                     val h = holder as FileHolder
                     // Only the selection changed: the tick and the marking, not the picture (3.0.3: or
                     // only how much of a video was watched).
                     if (payloads.isNotEmpty() && h.boundKey == item.key) {
-                        if (PAYLOAD_WATCHED in payloads) markWatched(h, item)
-                        if (PAYLOAD_TOGGLED in payloads || PAYLOAD_SELECTION in payloads) bindSelection(h, item, PAYLOAD_TOGGLED in payloads, fade = PAYLOAD_SELECTION in payloads)
+                        if (PAYLOAD_WATCHED in payloads) markWatched(owner, h, item)
+                        if (PAYLOAD_SIZE in payloads) bindSize(owner, h, item)
+                        if (PAYLOAD_TOGGLED in payloads || PAYLOAD_SELECTION in payloads) bindSelection(owner, h, item, PAYLOAD_TOGGLED in payloads, fade = PAYLOAD_SELECTION in payloads)
                     } else {
-                        bind(h, item)
+                        bind(owner, h, item)
                     }
                 }
                 is Header -> bindHeader(holder as HeaderHolder, item)
@@ -3628,7 +4417,11 @@ class FilesActivity : ListActivity() {
         }
     }
 
-    private fun rowAt(h: RecyclerView.ViewHolder): Row? = adapter.items.getOrNull(h.bindingAdapterPosition) as? Row
+    /** The row [h] shows (3.0.4: in its own side's list). */
+    private fun rowAt(h: RecyclerView.ViewHolder): Row? = (h.bindingAdapter as? Adapter)?.items?.getOrNull(h.bindingAdapterPosition) as? Row
+
+    /** 3.0.4: the side [h] is on. */
+    private fun paneOf(h: RecyclerView.ViewHolder): Pane? = (h.bindingAdapter as? Adapter)?.owner
 
     private fun makeRow(): FileHolder {
         val ctx = this
@@ -3714,13 +4507,20 @@ class FilesActivity : ListActivity() {
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }
         box.addView(check, FrameLayout.LayoutParams(dp(28), dp(28), Gravity.TOP or Gravity.END).apply { setMargins(0, dp(6), dp(6), 0) })
+        // 3.0.4: a folder's size, in the room under its icon (only when it fits there).
+        val size = Ui.text(ctx, Ui.Type.CAPTION, "", Ui.onAccentContainer(ctx)).apply {
+            isSingleLine = true
+            visibility = View.GONE
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }
+        box.addView(size, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin = dp(5) })
         card.addView(box, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         val line = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
         val title = Ui.text(ctx, Ui.Type.BODY, "").apply {
-            textSize = 13.5f
+            Ui.size(this, Ui.Type.LABEL, keepFont = true)
             isSingleLine = true
             ellipsize = TextUtils.TruncateAt.MIDDLE
             setPadding(dp(2), 0, 0, 0)
@@ -3735,7 +4535,7 @@ class FilesActivity : ListActivity() {
         }
         line.addView(more, LinearLayout.LayoutParams(dp(32), dp(36)))
         card.addView(line, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(2) })
-        val h = FileHolder(root, true, card, box, icon, check, title, null, more, play)
+        val h = FileHolder(root, true, card, box, icon, check, title, null, more, play, size)
         h.plain = Ui.ripple(ctx, null, 16)
         h.markedFill = Ui.ripple(ctx, Ui.shape(ctx, Ui.accentContainer(ctx), 16), 16)
         card.background = h.plain
@@ -3747,11 +4547,14 @@ class FilesActivity : ListActivity() {
         val radius = if (h.tile) 14 else 10
         h.folderFill = Ui.shape(this, Ui.accentContainer(this), radius)
         h.fileFill = Ui.shape(this, Palette.color(this, R.color.surface_alt), radius)
+        // 3.0.4: a row's side is the one worked on once it is used (TalkBack's taps come without a touch).
         h.card.setOnClickListener {
+            paneOf(h)?.let { setChosen(it) }
             val r = rowAt(h) ?: return@setOnClickListener
             if (selected.isNotEmpty()) toggle(r, h.bindingAdapterPosition) else open(r)
         }
         h.card.setOnLongClickListener { v ->
+            paneOf(h)?.let { setChosen(it) }
             val r = rowAt(h) ?: return@setOnLongClickListener false
             if (canSelect) {
                 Haptics.hold(v)
@@ -3763,25 +4566,29 @@ class FilesActivity : ListActivity() {
             }
             true
         }
-        h.more.setOnClickListener { rowAt(h)?.let { itemSheet(it) } }
+        h.more.setOnClickListener {
+            paneOf(h)?.let { setChosen(it) }
+            rowAt(h)?.let { itemSheet(it) }
+        }
         return h
     }
 
-    private fun bind(h: FileHolder, r: Row) {
+    private fun bind(owner: Pane, h: FileHolder, r: Row) {
         h.boundKey = r.key
         h.title.text = r.name
         h.subtitle?.let { s ->
             // The bin's rows say where things were on a second line.
-            val lines = if (inBin) 2 else 1
+            val lines = if (owner.inBin) 2 else 1
             if (s.maxLines != lines) s.maxLines = lines
-            s.text = subtitleOf(r)
+            s.text = subtitleOf(r, owner)
         }
+        if (h.tile) bindSize(owner, h, r)
         h.thumb?.cancel()
         h.thumb = null
         h.icon.tag = r.key
         setIcon(h, r)
         h.play?.visibility = if (r.kind == FileKind.VIDEO) View.VISIBLE else View.GONE
-        markWatched(h, r)
+        markWatched(owner, h, r)
         val f = r.file
         if (f != null && !r.isDir && thumbsOn && FileThumbs.has(r.kind)) {
             val key = r.key
@@ -3796,7 +4603,7 @@ class FilesActivity : ListActivity() {
                 h.icon.setImageBitmap(bmp)
             }
         }
-        bindSelection(h, r, false)
+        bindSelection(owner, h, r, false)
     }
 
     /** The kind's icon (a folder in the accent's soft colour, a document's own mark), until a picture comes. */
@@ -3814,14 +4621,43 @@ class FilesActivity : ListActivity() {
         val pad = if (h.tile) tileIconPad else 0
         v.setPadding(pad, pad, pad, pad)
         v.scaleType = if (h.tile) ImageView.ScaleType.FIT_CENTER else ImageView.ScaleType.CENTER
+        // 3.0.4: a storage's standard folders (DCIM, Download, Pictures…) show what they hold, with a
+        // small mark inside the folder (in its own colours: no tint over it).
+        val mark = if (r.isDir) r.file?.let { specialFolder(it.path) } else null
+        val marked = mark?.let { folderIcon(h, it) }
+        if (marked != null) {
+            v.imageTintList = null
+            v.setImageDrawable(marked)
+            return
+        }
         v.setImageResource(if (r.isDir) R.drawable.ic_folder else r.kind.icon)
         v.imageTintList = if (r.isDir) onContainerTint else secondaryTint
     }
 
+    /** 3.0.4: the storages' top folders, as SpecialFolders takes them (worked out again only when the storages change). */
+    private var markRoots: List<String> = emptyList()
+    private var markVolumes: List<Volumes.Volume>? = null
+
+    /** 3.0.4: the mark of the folder at [path] if it is one of a storage's standard folders. */
+    private fun specialFolder(path: String): SpecialFolders.Mark? {
+        val all = Volumes.all(this)
+        if (all !== markVolumes) {
+            markVolumes = all
+            markRoots = all.map { it.root.path }
+        }
+        return SpecialFolders.of(path, markRoots)
+    }
+
+    /** 3.0.4: [mark]'s folder icon for [h], made the first time it shows one (a recycled row keeps it). */
+    private fun folderIcon(h: FileHolder, mark: SpecialFolders.Mark): Drawable? {
+        val icons = h.folderIcons ?: arrayOfNulls<Drawable>(SpecialFolders.Mark.entries.size).also { h.folderIcons = it }
+        return icons[mark.ordinal] ?: FolderIcons.make(this, mark, Ui.onAccentContainer(this), Ui.accentContainer(this))?.also { icons[mark.ordinal] = it }
+    }
+
     /** The tick box while selecting (a small pop when tapped), and the selected row's or tile's marking. */
-    private fun bindSelection(h: FileHolder, r: Row, toggled: Boolean, fade: Boolean = false) {
-        val selecting = selected.isNotEmpty()
-        val on = r.key in selected
+    private fun bindSelection(owner: Pane, h: FileHolder, r: Row, toggled: Boolean, fade: Boolean = false) {
+        val selecting = owner.selected.isNotEmpty()
+        val on = r.key in owner.selected
         // 2.9: the tick boxes fade in as selecting starts (only the rows on screen are bound, so it is a few).
         if (fade && selecting && h.check.visibility != View.VISIBLE && animationsOn) {
             h.check.alpha = 0f
@@ -3891,7 +4727,11 @@ class FilesActivity : ListActivity() {
         h.action.setOnClickListener { item.onAction?.invoke() }
     }
 
-    /** A storage: its name, a bar of how full it is, and what is free; tapping opens its top folder. */
+    /**
+     * A storage: its name, what is used and free, and a bar of how full it is; tapping opens its top
+     * folder. 3.0.4: the bar goes across the card, split by what fills the storage (pictures,
+     * videos, music, documents, the rest), with a small legend under it once that is known.
+     */
     private fun makeStorage(): StorageHolder {
         val ctx = this
         val outer = FrameLayout(ctx).apply {
@@ -3899,43 +4739,124 @@ class FilesActivity : ListActivity() {
             layoutParams = RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         }
         val card = LinearLayout(ctx).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
+            orientation = LinearLayout.VERTICAL
             setPadding(dp(16), dp(14), dp(16), dp(14))
             background = cardFill()
             Ui.pressable(this, 0.98f)
         }
+        val head = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
         val icon = Ui.iconBadge(ctx, R.drawable.ic_phone, 40)
-        card.addView(icon, LinearLayout.LayoutParams(dp(40), dp(40)).apply { marginEnd = dp(14) })
+        head.addView(icon, LinearLayout.LayoutParams(dp(40), dp(40)).apply { marginEnd = dp(14) })
         val texts = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
         val name = Ui.text(ctx, Ui.Type.SUBTITLE, "", lines = 1)
-        // The bar's track is in the page's colours too (its drawable is made from XML).
-        val bar = Palette.paint(horizontalBar())
         val detail = Ui.text(ctx, Ui.Type.CAPTION, "", lines = 1)
         texts.addView(name)
-        texts.addView(bar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(6)).apply {
-            topMargin = dp(8)
-            bottomMargin = dp(6)
-        })
-        texts.addView(detail)
-        card.addView(texts, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        texts.addView(detail, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(2) })
+        head.addView(texts, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        card.addView(head)
+        val bar = StorageBar(ctx)
+        card.addView(bar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(8)).apply { topMargin = dp(14) })
+        // The legend: a dot, a name and a size for each part that has anything, two (on a wide side
+        // three) to a line.
+        val perLine = if (paneWidthDp >= 480) 3 else 2
+        val legend = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+        }
+        val lines = ArrayList<View>()
+        val cells = ArrayList<View>()
+        val dots = ArrayList<View>()
+        val labels = ArrayList<TextView>()
+        repeat((LEGEND_PARTS + perLine - 1) / perLine) {
+            val line = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL }
+            repeat(perLine) {
+                val dot = View(ctx).apply { background = Ui.circle(0) }
+                val label = Ui.text(ctx, Ui.Type.CAPTION, "", lines = 1)
+                val cell = LinearLayout(ctx).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    addView(dot, LinearLayout.LayoutParams(dp(8), dp(8)).apply { marginEnd = dp(8) })
+                    addView(label, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                }
+                line.addView(cell, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                cells += cell
+                dots += dot
+                labels += label
+            }
+            legend.addView(line, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6) })
+            lines += line
+        }
+        card.addView(legend, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6) })
         outer.addView(card, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-        val h = StorageHolder(outer, icon, name, bar, detail)
-        card.setOnClickListener { (adapter.items.getOrNull(h.bindingAdapterPosition) as? StorageCard)?.let { openFolder(it.volume.root) } }
+        val h = StorageHolder(outer, card, icon, name, bar, detail, legend, lines, cells, dots, labels)
+        card.setOnClickListener { (rowsOf(h).getOrNull(h.bindingAdapterPosition) as? StorageCard)?.let { openFolder(it.volume.root) } }
         return h
     }
+
+    /** 3.0.4: the storage bar's colours for pictures, videos, music and documents, and the rest: with the accent chosen (StorageColours). */
+    private val kindColors by lazy { StorageColours.kinds(Ui.accent(this), Palette.color(this, R.color.card_bg), Palette.isNight(this)) }
+    private val otherColor by lazy { StorageColours.other(Palette.color(this, R.color.card_bg), Palette.isNight(this)) }
 
     private fun bindStorage(h: StorageHolder, s: StorageCard) {
         h.icon.setImageDrawable(Ui.icon(this, if (s.volume.removable) R.drawable.ic_sd_card else R.drawable.ic_phone, Ui.onAccentContainer(this)))
         h.name.text = s.volume.name
         val known = s.total > 0 && s.free >= 0
         val used = if (known) s.total - s.free else 0L
-        h.bar.progress = if (known) (used * 1000 / s.total).toInt() else 0
-        // Nearly full: the bar turns the warning colour.
-        h.bar.progressTintList = if (known && s.free < s.total / 10) dangerTint else accentTint
+        // Nearly full: what is left shows in the warning colour, and so does the line saying it.
+        val full = known && s.free < s.total / 10
+        val freeColor = if (full) Ui.danger(this) else Palette.color(this, R.color.surface_alt)
+        val split = if (known) s.kinds?.let { StorageKinds.split(s.total, s.free, it) } else null
+        when {
+            split != null -> h.bar.show(split.parts(), intArrayOf(kindColors[0], kindColors[1], kindColors[2], kindColors[3], otherColor, freeColor))
+            // Until what fills it is known: used and free, as before.
+            known -> h.bar.show(longArrayOf(used, s.free), intArrayOf(Ui.accent(this), freeColor))
+            else -> h.bar.show(longArrayOf(0, 1), intArrayOf(Ui.accent(this), freeColor))
+        }
         h.detail.text = if (known) "${UrlUtils.formatBytes(used)} used · ${UrlUtils.formatBytes(s.free)} free" else "Measuring…"
-        (h.bar.parent.parent as View).contentDescription = s.volume.name +
-            if (known) ", ${UrlUtils.formatBytes(used)} used, ${UrlUtils.formatBytes(s.free)} free of ${UrlUtils.formatBytes(s.total)}" else ""
+        h.detail.setTextColor(if (full) Ui.danger(this) else Ui.textSecondary(this))
+        val said = bindLegend(h, split)
+        h.card.contentDescription = s.volume.name +
+            (if (known) ", ${UrlUtils.formatBytes(used)} used, ${UrlUtils.formatBytes(s.free)} free of ${UrlUtils.formatBytes(s.total)}" else "") +
+            (if (said.isNotEmpty()) ". $said" else "")
+    }
+
+    /**
+     * 3.0.4: the legend under the bar: each part with anything in it (in the bar's order), or nothing
+     * until [split] is known. It fades in the first time it comes. Returns what it says, for TalkBack.
+     */
+    private fun bindLegend(h: StorageHolder, split: StorageKinds.Split?): String {
+        if (split == null) {
+            h.legend.visibility = View.GONE
+            return ""
+        }
+        val sizes = longArrayOf(split.pictures, split.videos, split.music, split.documents, split.other)
+        val colors = intArrayOf(kindColors[0], kindColors[1], kindColors[2], kindColors[3], otherColor)
+        val said = StringBuilder()
+        var cell = 0
+        for (i in sizes.indices) {
+            if (sizes[i] <= 0 || cell >= h.cells.size) continue
+            val size = UrlUtils.formatBytes(sizes[i])
+            (h.dots[cell].background as? android.graphics.drawable.GradientDrawable)?.setColor(colors[i])
+            h.texts[cell].text = android.text.SpannableString("${LEGEND_NAMES[i]}  $size").apply {
+                // The size in the text's colour, the name a little softer.
+                setSpan(android.text.style.ForegroundColorSpan(Ui.text(this@FilesActivity)), length - size.length, length, 0)
+            }
+            h.cells[cell].visibility = View.VISIBLE
+            if (said.isNotEmpty()) said.append(", ")
+            said.append(LEGEND_NAMES[i]).append(' ').append(size)
+            cell++
+        }
+        for (i in cell until h.cells.size) h.cells[i].visibility = View.INVISIBLE
+        // A line with nothing in it takes no room.
+        val perLine = h.cells.size / h.lines.size
+        for ((n, line) in h.lines.withIndex()) line.visibility = if (n * perLine < cell) View.VISIBLE else View.GONE
+        if (h.legend.visibility != View.VISIBLE) {
+            if (animationsOn && h.legend.isAttachedToWindow) Motion.fadeIn(h.legend, fromDy = 4) else h.legend.visibility = View.VISIBLE
+        }
+        return said.toString()
     }
 
     /** Images, Videos, Music, Documents, Archives, APKs and Downloads: two (or three) cards to a line. */
@@ -3947,7 +4868,8 @@ class FilesActivity : ListActivity() {
             layoutParams = RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         }
         val counts = HashMap<FileIndex.Category, Pair<View, TextView>>()
-        val perLine = if (minOf(resources.configuration.screenWidthDp, Ui.MAX_CONTENT_WIDTH) >= 480) 3 else 2
+        // 3.0.4: as wide as a side is.
+        val perLine = if (paneWidthDp >= 480) 3 else 2
         for (line in FileIndex.Category.shown.chunked(perLine)) {
             val row = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL }
             for (c in line) {
@@ -4006,6 +4928,8 @@ class FilesActivity : ListActivity() {
                 captions[t] = card to caption
                 row.addView(card, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { setMargins(dp(4), dp(4), dp(4), dp(4)) })
             }
+            // 3.0.4: a last card on its own keeps the others' width.
+            repeat(2 - line.size) { row.addView(View(ctx), LinearLayout.LayoutParams(0, 1, 1f).apply { setMargins(dp(4), 0, dp(4), 0) }) }
             col.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         }
         return ToolsHolder(col, captions)
@@ -4028,6 +4952,7 @@ class FilesActivity : ListActivity() {
                     else -> "Locked"
                 }
                 Tool.TRANSFER -> "Files to a computer"
+                Tool.NETWORK -> com.swiftbrowser.files.net.NetServers.count(this).let { n -> if (n == 0) "On your Wi-Fi" else "$n saved" }
             }
             views.second.text = text
             views.first.contentDescription = "${t.label}, $text"
@@ -4040,6 +4965,7 @@ class FilesActivity : ListActivity() {
             Tool.BIN -> openBin()
             Tool.PRIVATE -> openPrivate()
             Tool.TRANSFER -> WifiTransferActivity.open(this)
+            Tool.NETWORK -> NetworkActivity.open(this)
         }
     }
 
@@ -4062,7 +4988,13 @@ class FilesActivity : ListActivity() {
 
         // 2.9: the options' keys are in FilesSettings; this is where Files was left.
         private const val PREF_LAST = "files_last_folder"
+
+        /** 3.0.4: where the other side was left, and which side was worked on. */
+        private const val PREF_OTHER = "files_last_other"
+        private const val PREF_SIDE = "files_last_side"
         private const val STATE_PLACE = "place"
+        private const val STATE_SIDE = "side"
+        private const val STATE_OTHER = "other"
         private const val PLACE_HOME = "home"
         private const val PLACE_BIN = "bin"
 
@@ -4080,6 +5012,7 @@ class FilesActivity : ListActivity() {
         private const val MENU_SELECT_ALL = 4
         private const val MENU_VIEW = 5
         private const val MENU_MORE = 6
+        private const val MENU_TWO = 7
 
         private const val TYPE_ROW = 0
         private const val TYPE_TILE = 1
@@ -4102,6 +5035,10 @@ class FilesActivity : ListActivity() {
         /** Recent documents on the start page. */
         private const val HOME_DOCS = 12
 
+        /** 3.0.4: the storage bar's legend: its parts' names, in the bar's order (what is free isn't in it: the line above says it). */
+        private val LEGEND_NAMES = arrayOf("Pictures", "Videos", "Music", "Documents", "Other")
+        private const val LEGEND_PARTS = 5
+
         /** The kind of documents picked in their category (2.9), kept while Swift runs; null: all. */
         private var docGroup: DocGroup? = null
 
@@ -4111,6 +5048,15 @@ class FilesActivity : ListActivity() {
 
         /** 3.0.3: rows rebound for their videos' watched marks only (back from the player). */
         private const val PAYLOAD_WATCHED = "watched"
+
+        /** 3.0.4: rows rebound for a folder's size only, once measured. */
+        private const val PAYLOAD_SIZE = "size"
+
+        /** 3.0.4: sorted by size, a folder waits this long at most for its folders' sizes before it shows. */
+        private const val SIZE_WAIT_MS = 1_200L
+
+        /** 3.0.4: folders are measured on a thread of their own, one at a time (a slow phone's storage does one thing best). */
+        private val sizeThread by lazy { Background.single("folder-sizes").asCoroutineDispatcher() }
 
         /** Files to copy or move (or an archive to extract) once the user is in the right folder; kept while Swift runs. */
         private var clip: Clip? = null

@@ -42,6 +42,8 @@ class SwiftApp : Application() {
         Diagnostics.onAppStart(this)
         prefs = Prefs(this)
         migratePrefs()
+        // 3.0.4: Swift's own font, before any screen is made (it stands in for the system's).
+        com.swiftbrowser.ui.AppFont.install(this)
         db = Db(this)
         com.swiftbrowser.ui.Looks.start()
         Profiles.init(db, prefs)
@@ -132,6 +134,8 @@ class SwiftApp : Application() {
             com.swiftbrowser.docs.DocThumbs.trim()
             com.swiftbrowser.files.FileThumbs.trim()
             Favicons.trim()
+            // 3.0.4: and the home page's picture, read again when it shows.
+            com.swiftbrowser.ui.HomeBackground.trim()
         }
         // Android is about to start closing apps: Swift could be next, so pages of other tabs go
         // (they reload when opened) and the log is saved. Merely leaving the app (UI_HIDDEN) isn't a

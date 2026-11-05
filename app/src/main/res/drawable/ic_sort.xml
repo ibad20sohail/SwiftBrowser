@@ -2,9 +2,12 @@
     android:width="24dp"
     android:height="24dp"
     android:tint="?attr/colorControlNormal"
-    android:viewportWidth="24"
-    android:viewportHeight="24">
-    <path
-        android:fillColor="@android:color/white"
-        android:pathData="M3,18h6v-2H3v2zM3,6v2h18V6H3zM3,13h12v-2H3v2z" />
+    android:viewportWidth="960"
+    android:viewportHeight="960">
+    <!-- 3.0.4: Material Symbols Rounded "sort". -->
+    <group android:translateY="960">
+        <path
+            android:fillColor="@android:color/white"
+            android:pathData="M160,-240q-17,0 -28.5,-11.5T120,-280q0,-17 11.5,-28.5T160,-320h160q17,0 28.5,11.5T360,-280q0,17 -11.5,28.5T320,-240H160Zm0,-200q-17,0 -28.5,-11.5T120,-480q0,-17 11.5,-28.5T160,-520h400q17,0 28.5,11.5T600,-480q0,17 -11.5,28.5T560,-440H160Zm0,-200q-17,0 -28.5,-11.5T120,-680q0,-17 11.5,-28.5T160,-720h640q17,0 28.5,11.5T840,-680q0,17 -11.5,28.5T800,-640H160Z" />
+    </group>
 </vector>

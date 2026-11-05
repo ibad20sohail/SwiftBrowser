@@ -43,6 +43,9 @@ object PlayerSettings {
     const val HINT_PINCH = "player_hint_pinch"
     const val HINT_TAPS = "player_hint_taps"
 
+    // 3.0.4: night sound (NightSound).
+    const val NIGHT_SOUND = "player_night_sound"
+
     /** As the video is: wide videos in landscape, tall ones upright (either way round). */
     const val ROTATE_AUTO = "auto"
     /** Turns with the phone, even when its auto-rotate is off. */
@@ -141,6 +144,11 @@ object PlayerSettings {
     var tapsHintShown: Boolean
         get() = sp.getBoolean(HINT_TAPS, false)
         set(v) = sp.edit { putBoolean(HINT_TAPS, v) }
+
+    /** 3.0.4: night sound on everything the player plays: loud parts quieter, quiet voices louder. */
+    var nightSound: Boolean
+        get() = sp.getBoolean(NIGHT_SOUND, false)
+        set(v) = sp.edit { putBoolean(NIGHT_SOUND, v) }
 
     fun rotationLabel(key: String) = when (key) {
         ROTATE_SENSOR -> "Turn with the phone"

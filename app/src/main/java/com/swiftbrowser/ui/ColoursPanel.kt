@@ -38,6 +38,11 @@ object ColoursPanel {
         box.addView(heading(a, "Ready-made", preset?.label ?: "Your mix"))
         box.addView(presets(a, preset))
 
+        // 3.0.4: colours that go with the home page's picture or the phone's wallpaper.
+        val fromPicture = heading(a, "From your picture", "")
+        box.addView(fromPicture)
+        box.addView(pictureMixes(a, fromPicture))
+
         box.addView(heading(a, "Accent", accent.label))
         val accents = Accent.entries.map { acc ->
             swatch(a, if (acc == Accent.CUSTOM) prefs.accentCustom else acc.seed, acc == accent, round = true,
@@ -77,6 +82,7 @@ object ColoursPanel {
     private fun presets(a: Activity, chosen: Preset?): View = android.widget.HorizontalScrollView(a).apply {
         isHorizontalScrollBarEnabled = false
         overScrollMode = View.OVER_SCROLL_NEVER
+        Ui.fadeEdges(this)
         addView(LinearLayout(a).apply {
             orientation = LinearLayout.HORIZONTAL
             for (p in PRESETS) addView(presetCard(a, p, p === chosen), LinearLayout.LayoutParams(Ui.dp(a, 84), ViewGroup.LayoutParams.WRAP_CONTENT))
@@ -92,7 +98,7 @@ object ColoursPanel {
         val tile = LinearLayout(a).apply {
             orientation = LinearLayout.VERTICAL
             background = GradientDrawable().apply {
-                cornerRadius = Ui.dpf(a, 14f)
+                cornerRadius = Ui.dpf(a, Ui.R_SMALL.toFloat())
                 setColor(dark)
                 if (chosen) setStroke(Ui.dp(a, 2), Palette.accentColors(a, p.accent, Palette.isNight(a))[0])
                 else setStroke(Ui.dp(a, 1), Palette.color(a, R.color.outline))
@@ -119,6 +125,101 @@ object ColoursPanel {
         setOnClickListener {
             Haptics.tick(this)
             Looks.setColours(a, p.accent, p.light, p.dark)
+        }
+    }
+
+    private val pictureWork by lazy { com.swiftbrowser.core.Background.single("picture-colours") }
+
+    /**
+     * 3.0.4: colours made from the home page's picture and the phone's wallpaper, as Material You
+     * makes a phone's colours from its wallpaper (Android 7 has none of it): up to three of each
+     * picture's main colours, each as a mix of accent, light background and dark background. The
+     * pictures are read off the main thread, so the row fills in a moment after the panel opens.
+     */
+    private fun pictureMixes(a: Activity, heading: View): View {
+        val row = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
+        val note = Ui.text(a, Ui.Type.CAPTION, "Looking at your pictures…").apply { setPadding(Ui.dp(a, 2), 0, Ui.dp(a, 2), 0) }
+        val box = LinearLayout(a).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(note)
+            addView(android.widget.HorizontalScrollView(a).apply {
+                isHorizontalScrollBarEnabled = false
+                overScrollMode = View.OVER_SCROLL_NEVER
+                addView(row)
+                Ui.fadeEdges(this)
+            })
+        }
+        val app = a.applicationContext
+        pictureWork.execute {
+            val mixes = ArrayList<Pair<String, IntArray>>()
+            for ((name, read) in listOf<Pair<String, () -> android.graphics.Bitmap?>>(
+                "Home picture" to { HomeBackground.smallPicture(app) },
+                "Wallpaper" to { PictureColours.wallpaper(app) },
+            )) {
+                val bmp = read() ?: continue
+                PictureColours.seeds(bmp, 3).forEachIndexed { i, seed ->
+                    val mix = PictureColours.mix(seed)
+                    // The wallpaper's colour that the home picture already gave isn't offered twice.
+                    if (mixes.none { Tones.hueDistance(it.second[0], mix[0]) < 12f }) mixes += (if (i == 0) name else "$name ${i + 1}") to mix
+                }
+                bmp.recycle()
+            }
+            a.runOnUiThread {
+                if (a.isFinishing || a.isDestroyed) return@runOnUiThread
+                val prefs = SwiftApp.prefs
+                fun chosen(m: IntArray) = prefs.accent == Accent.CUSTOM.key && prefs.accentCustom == m[0] &&
+                    prefs.lightBg == Palette.CUSTOM && prefs.lightBgCustom == m[1] && prefs.darkBg == Palette.CUSTOM && prefs.darkBgCustom == m[2]
+                if (mixes.isEmpty()) {
+                    note.text = "Choose a picture for the home page (Home & news → Background of the home page) to see colours that go with it."
+                    return@runOnUiThread
+                }
+                note.visibility = View.GONE
+                for ((label, m) in mixes) {
+                    row.addView(mixCard(a, label, m, chosen(m)), LinearLayout.LayoutParams(Ui.dp(a, 84), ViewGroup.LayoutParams.WRAP_CONTENT))
+                }
+                mixes.firstOrNull { chosen(it.second) }?.let { (label, _) -> ((heading as ViewGroup).getChildAt(1) as TextView).text = label }
+                Motion.fadeIn(row)
+            }
+        }
+        return box
+    }
+
+    /** One colour mix from a picture: light mode's half over dark mode's, each with the accent. */
+    private fun mixCard(a: Activity, label: String, m: IntArray, chosen: Boolean): View = LinearLayout(a).apply {
+        orientation = LinearLayout.VERTICAL
+        gravity = Gravity.CENTER_HORIZONTAL
+        setPadding(Ui.dp(a, 4), Ui.dp(a, 2), Ui.dp(a, 4), Ui.dp(a, 2))
+        val accentLight = Palette.customAccent(m[0], false, listOf(m[1])).first
+        val accentDark = Palette.customAccent(m[0], true, listOf(m[2])).first
+        val tile = LinearLayout(a).apply {
+            orientation = LinearLayout.VERTICAL
+            background = GradientDrawable().apply {
+                cornerRadius = Ui.dpf(a, Ui.R_SMALL.toFloat())
+                setColor(m[2])
+                if (chosen) setStroke(Ui.dp(a, 2), Ui.accent(a)) else setStroke(Ui.dp(a, 1), Palette.color(a, R.color.outline))
+            }
+            clipToOutline = true
+            val inset = if (chosen) Ui.dp(a, 2) else Ui.dp(a, 1)
+            setPadding(inset, inset, inset, 0)
+            fun half(bg: Int, dot: Int) = FrameLayout(a).apply {
+                setBackgroundColor(bg)
+                addView(View(a).apply { background = Ui.circle(dot) }, FrameLayout.LayoutParams(Ui.dp(a, 14), Ui.dp(a, 14), Gravity.CENTER))
+            }
+            addView(half(m[1], accentLight), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(a, 26)))
+            addView(half(m[2], accentDark), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(a, 26)))
+        }
+        addView(tile, LinearLayout.LayoutParams(Ui.dp(a, 64), ViewGroup.LayoutParams.WRAP_CONTENT))
+        addView(Ui.text(a, Ui.Type.CAPTION, label, lines = 2).apply {
+            gravity = Gravity.CENTER
+            setPadding(0, Ui.dp(a, 6), 0, 0)
+            if (chosen) setTextColor(Ui.accent(a))
+        })
+        contentDescription = "Colours from your ${label.lowercase()}" + if (chosen) ", chosen" else ""
+        background = Ui.ripple(a, null, Ui.R_SMALL)
+        Ui.pressable(this, 0.92f)
+        setOnClickListener {
+            Haptics.tick(this)
+            Looks.setPictureColours(a, m[0], m[1], m[2])
         }
     }
 
@@ -244,13 +345,12 @@ object ColoursPanel {
             setPadding(dp(10), dp(8), dp(10), dp(10))
             addView(TextView(a).apply {
                 text = if (night) "Dark" else "Light"
-                textSize = 13f
-                setTypeface(Ui.MEDIUM)
+                Ui.size(this, Ui.Type.LABEL)
                 setTextColor(c(R.color.text_primary))
             })
             addView(TextView(a).apply {
                 text = if (current) "Now" else " "
-                textSize = 11f
+                Ui.size(this, Ui.Type.SMALL, keepFont = true)
                 setTextColor(c(R.color.text_secondary))
             })
             addView(LinearLayout(a).apply {
@@ -259,7 +359,7 @@ object ColoursPanel {
                 setPadding(0, dp(8), 0, 0)
                 addView(TextView(a).apply {
                     text = "OK"
-                    textSize = 11f
+                    Ui.size(this, Ui.Type.SMALL)
                     gravity = Gravity.CENTER
                     setTypeface(Ui.MEDIUM)
                     setTextColor(c(R.color.on_accent))

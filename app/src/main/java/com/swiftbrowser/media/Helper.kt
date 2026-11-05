@@ -186,6 +186,11 @@ object Helper {
                 if (tab.speed != 1.0 && port != null) {
                     port.postMessage(JSONObject().put("type", "speed").put("rate", tab.speed))
                 }
+                // 3.0.4: a muted tab's new frames (and each new page) are muted too.
+                if (tab.muted) {
+                    port?.postMessage(JSONObject().put("type", "mute").put("on", true))
+                    if (msg.optBoolean("top")) muteEngine(tab, true)
+                }
             }
             "click" -> tab.lastClick = NavPolicy.Click(msg.optString("href"), System.currentTimeMillis())
             "icon" -> if (!tab.incognito) Favicons.onPageIcon(msg.optString("page"), msg.optString("href").ifBlank { null })
@@ -205,6 +210,19 @@ object Helper {
                 }
             }
             "reader-place" -> Unfinished.onReaderPlace(tab, msg)
+            // 3.0.4: the colour the page asks for (its theme-color), for the address bar: from the top
+            // frame, and never kept for an incognito tab (it keeps its own colours).
+            "theme-color" -> if (!tab.incognito && msg.optBoolean("top")) {
+                val colour = com.swiftbrowser.ui.CssColour.parse(msg.optString("color"))
+                val changed = colour != tab.siteColour
+                tab.siteColour = colour
+                tab.siteColourStale = false
+                if (changed) TabManager.ui?.onSiteColour(tab)
+            }
+            // 3.0.4: reader view's Aa button: Swift's panel for its font, line spacing and page colour.
+            "reader-style" -> TabManager.ui?.let { ui ->
+                if (tab === TabManager.current && ui.onScreen) com.swiftbrowser.ui.Sheets.readerStyle(ui.activity)
+            }
             // Swift's document viewer (2.4); 3.0: with the page's address, for its own document only.
             "doc-hello", "doc-read", "doc-range", "doc-place", "doc-action", "doc-reading", "doc-zip", "doc-save", "doc-convert", "doc-thumb" ->
                 com.swiftbrowser.docs.Docs.onMessage(tab, msg, port, sender?.url)
@@ -316,6 +334,8 @@ object Helper {
                     .put("darkSitesKeep", org.json.JSONArray(com.swiftbrowser.core.SiteSettings.darkPagesKept()))
                     .put("keepPlaying", prefs.keepPlaying)
                     .put("readerFont", prefs.readerFont).put("readerSpacing", prefs.readerSpacing)
+                    // 3.0.4: and its page colour (auto, light, sepia or dark).
+                    .put("readerTheme", prefs.readerTheme)
                     .put("accentLight", accentHex(night = false)).put("accentDark", accentHex(night = true))
                     .put("pageLight", pageColors(false)).put("pageDark", pageColors(true)),
             )
@@ -400,6 +420,37 @@ object Helper {
             }
         }
     }
+
+    /**
+     * 3.0.4: mutes or unmutes everything [tab] plays. Its frames' content scripts mute their videos
+     * and songs (ones added later too, and frames that connect later: see "hello"), and the engine
+     * mutes the whole page as well, for sound a script can't reach (Web Audio, a song not in the page).
+     */
+    fun setMuted(tab: Tab, on: Boolean) {
+        if (tab.muted == on) return
+        tab.muted = on
+        L.d("Tab ${tab.id} ${if (on) "muted" else "unmuted"}")
+        postToFrames(tab, JSONObject().put("type", "mute").put("on", on))
+        muteEngine(tab, on)
+        TabManager.ui?.onPlayingChanged(tab)
+    }
+
+    /**
+     * 3.0.4: GeckoView's own mute of a page (MediaSession.muteAudio, which mutes the tab's browser as
+     * Firefox's tab mute does). It is only handed to the app with a media session that started; a
+     * MediaSession made for the tab's session sends the same request at any time.
+     */
+    fun muteEngine(tab: Tab, on: Boolean) {
+        val session = tab.session ?: return
+        if (!session.isOpen) return
+        try {
+            EngineMute(session).muteAudio(on)
+        } catch (e: Exception) {
+            L.w("Couldn't ${if (on) "mute" else "unmute"} tab ${tab.id} in the engine", e)
+        }
+    }
+
+    private class EngineMute(session: GeckoSession) : org.mozilla.geckoview.MediaSession(session)
 
     /** Skips the full-screen video forward or back (double-tap on its sides). */
     fun seek(tab: Tab, deltaSeconds: Double) {

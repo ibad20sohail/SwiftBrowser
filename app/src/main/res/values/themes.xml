@@ -34,9 +34,18 @@
         <item name="bottomSheetDialogTheme">@style/Theme.Swift.BottomSheet</item>
         <item name="materialAlertDialogTheme">@style/ThemeOverlay.Swift.Dialog</item>
         <item name="android:windowAnimationStyle">@style/Swift.WindowAnimations</item>
+        <!-- 3.0.4: no words split at the end of a line in any text (Android 7 hyphenates by default). -->
+        <item name="android:textViewStyle">@style/Swift.TextView</item>
+        <!-- 3.0.4: title bars' titles in bold (bolder headlines). -->
+        <item name="textAppearanceTitleLarge">@style/Swift.TitleLarge</item>
         <!-- Text buttons in title bars ("Clear all") as written, not in capitals. -->
         <item name="actionMenuTextAppearance">@style/Swift.ActionMenuText</item>
         <item name="android:actionMenuTextAppearance">@style/Swift.ActionMenuText</item>
+    </style>
+
+    <style name="Swift.TitleLarge" parent="TextAppearance.Material3.TitleLarge">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:textStyle">bold</item>
     </style>
 
     <style name="Swift.ActionMenuText" parent="TextAppearance.Material3.LabelLarge">
@@ -104,7 +113,7 @@
 
     <style name="Swift.DialogShape" parent="">
         <item name="cornerFamily">rounded</item>
-        <item name="cornerSize">26dp</item>
+        <item name="cornerSize">24dp</item>
     </style>
 
     <style name="Swift.DialogTitle" parent="MaterialAlertDialog.Material3.Title.Text">
@@ -127,11 +136,18 @@
     <!-- 48 dp high to tap (2.6); 40 wide, so the address keeps its room. -->
     <!-- 2.8: the title of Documents, Files, History, Bookmarks and Downloads, a little smaller. -->
     <style name="Swift.ListTitle" parent="TextAppearance.Material3.TitleLarge">
-        <item name="android:textSize">19sp</item>
+        <!-- 3.0.4: the type scale's TITLE, with a line just tall enough for Swift's font, so the line
+             under it fits in the 52 dp bar (Material's 28 sp line cut its letters off). -->
+        <item name="android:textSize">@dimen/text_title</item>
+        <item name="lineHeight">24sp</item>
+        <!-- 3.0.4: bolder headlines. -->
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:textStyle">bold</item>
     </style>
 
     <style name="Swift.ListSubtitle" parent="TextAppearance.Material3.BodySmall">
-        <item name="android:textSize">12sp</item>
+        <item name="android:textSize">@dimen/text_caption</item>
+        <item name="lineHeight">16sp</item>
     </style>
 
     <!-- 3.0: 48 dp wide too (40 before), so every address bar button is finger-sized. -->
@@ -221,5 +237,10 @@
         <item name="colorAccent">@color/accent_teal</item>
         <item name="colorControlActivated">@color/accent_teal</item>
         <item name="android:colorAccent">@color/accent_teal</item>
+    </style>
+
+    <!-- 3.0.4: every TextView (from layouts and from code) without hyphenation. -->
+    <style name="Swift.TextView" parent="android:Widget.TextView">
+        <item name="android:hyphenationFrequency">none</item>
     </style>
 </resources>

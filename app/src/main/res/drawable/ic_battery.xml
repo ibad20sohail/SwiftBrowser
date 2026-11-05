@@ -2,10 +2,13 @@
     android:width="24dp"
     android:height="24dp"
     android:tint="?attr/colorControlNormal"
-    android:viewportWidth="24"
-    android:viewportHeight="24">
+    android:viewportWidth="960"
+    android:viewportHeight="960">
     <!-- Battery saver (2.3). -->
-    <path
-        android:fillColor="@android:color/white"
-        android:pathData="M15.67,4H14V2h-4v2H8.33C7.6,4 7,4.6 7,5.33v15.33C7,21.4 7.6,22 8.33,22h7.33c0.74,0 1.34,-0.6 1.34,-1.33V5.33C17,4.6 16.4,4 15.67,4zM15,13h-2v2h-2v-2H9v-2h2V9h2v2h2V13z" />
+    <!-- 3.0.4: Material Symbols Rounded "battery_saver". -->
+    <group android:translateY="960">
+        <path
+            android:fillColor="@android:color/white"
+            android:pathData="M640,-200h-80q-17,0 -28.5,-11.5T520,-240q0,-17 11.5,-28.5T560,-280h80v-80q0,-17 11.5,-28.5T680,-400q17,0 28.5,11.5T720,-360v80h80q17,0 28.5,11.5T840,-240q0,17 -11.5,28.5T800,-200h-80v80q0,17 -11.5,28.5T680,-80q-17,0 -28.5,-11.5T640,-120v-80Zm-280,40Zm-40,80q-17,0 -28.5,-11.5T280,-120v-640q0,-17 11.5,-28.5T320,-800h80v-40q0,-17 11.5,-28.5T440,-880h80q17,0 28.5,11.5T560,-840v40h80q17,0 28.5,11.5T680,-760v240q0,17 -11.5,28.5T640,-480q-17,0 -28.5,-11.5T600,-520v-200H360v560h101q17,0 28.5,11.5T501,-120q0,17 -11.5,28.5T461,-80H320Z" />
+    </group>
 </vector>

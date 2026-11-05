@@ -76,7 +76,7 @@ object PrivateLock {
         filters = arrayOf(InputFilter.LengthFilter(8))
         gravity = Gravity.CENTER
         letterSpacing = 0.3f
-        textSize = 22f
+        Ui.size(this, Ui.Type.HEADLINE, keepFont = true)
     }
 
     private fun box(a: Activity): LinearLayout = LinearLayout(a).apply {

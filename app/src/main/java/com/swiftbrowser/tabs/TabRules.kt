@@ -149,6 +149,58 @@ object TabRules {
         else -> Warning.NONE
     }
 
+    // ------------------------------------------------------------------ pinned tabs (3.0.4)
+
+    /** Pinned tabs first, in their own order, then the others in theirs. */
+    fun <T> pinnedFirst(tabs: List<T>, pinned: (T) -> Boolean): List<T> {
+        val out = ArrayList<T>(tabs.size)
+        tabs.filterTo(out, pinned)
+        tabs.filterNotTo(out, pinned)
+        return out
+    }
+
+    /**
+     * [tab] was just pinned or unpinned ([pinned] already says which): it goes right after the other
+     * pinned tabs. Pinned, it is the last of them (they keep the order they were pinned in); unpinned,
+     * it is the first of the others. The rest keep their order.
+     */
+    fun <T> withPinChanged(tabs: List<T>, tab: T, pinned: (T) -> Boolean): List<T> {
+        val out = ArrayList(pinnedFirst(tabs.filter { it != tab }, pinned))
+        out.add(out.indexOfLast(pinned) + 1, tab)
+        return out
+    }
+
+    // ------------------------------------------------------------------ a tab's sound (3.0.4)
+
+    /** What a tab's speaker mark shows: nothing, its sound playing, or muted. */
+    enum class Sound { NONE, PLAYING, MUTED }
+
+    /** A muted tab says so until it is unmuted, playing or not; otherwise only while its sound plays. */
+    fun sound(playing: Boolean, muted: Boolean): Sound = when {
+        muted -> Sound.MUTED
+        playing -> Sound.PLAYING
+        else -> Sound.NONE
+    }
+
+    // ------------------------------------------------------------------ the group strip (3.0.4)
+
+    /**
+     * The group strip by the address bar: none; ROOM, its room is part of the bar for the engine but
+     * it makes way for something (the home page over the tab's page, a crashed tab, typing an
+     * address), so the page isn't laid out again for those; SHOWN.
+     */
+    enum class Strip { NONE, ROOM, SHOWN }
+
+    /**
+     * [grouped]: the open tab is in a group; [hasPage]: it isn't a new tab's home page; [pageShown]:
+     * its page is on screen (not the home page over it, nor the crash view); [typing] in the address bar.
+     */
+    fun strip(enabled: Boolean, grouped: Boolean, hasPage: Boolean, fullScreen: Boolean, pageShown: Boolean, typing: Boolean): Strip = when {
+        !enabled || !grouped || !hasPage || fullScreen -> Strip.NONE
+        !pageShown || typing -> Strip.ROOM
+        else -> Strip.SHOWN
+    }
+
     // ------------------------------------------------------------------ links from other apps
 
     /** A tab showing [tabUrl] shows exactly [url] (a link another app sent): the same, or with the slash a site's address gets. */

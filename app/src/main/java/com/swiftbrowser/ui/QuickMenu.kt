@@ -212,6 +212,9 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
     private val share: IconAction
     private val find: IconAction
 
+    /** 3.0.4: "Mute this tab" or "Unmute", only while the tab plays sound or is muted. */
+    private val mute: IconAction
+
     /** Every button by MenuButtons key, made once; moving one moves its view between the pages. */
     private val items = LinkedHashMap<String, Item>()
     private val grids = ArrayList<PageGrid>()
@@ -293,11 +296,16 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
         }
         share = iconAction(actions, R.drawable.ic_share, "Share") { a.share(it.url) }
         find = iconAction(actions, R.drawable.ic_find, "Find in page") { a.openFind() }
+        mute = iconAction(actions, R.drawable.ic_volume, "Mute this tab") { tab ->
+            Helper.setMuted(tab, !tab.muted)
+            a.snack(if (tab.muted) "Tab muted" else "Tab unmuted")
+        }
+        mute.view.visibility = View.GONE
         actionsRow = actions
         topColumn.addView(actions)
         content.addView(hint.apply {
             text = "Hold a button to move it. Drag it to the top to hide it."
-            textSize = 12.5f
+            Ui.size(this, Ui.Type.CAPTION, keepFont = true)
             gravity = Gravity.CENTER
             setTextColor(color(Looks.accent.onContainer))
             background = Ui.shape(a, color(Looks.accent.container), 12)
@@ -317,7 +325,7 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
             gravity = Gravity.CENTER_HORIZONTAL
             setPadding(dp(2), dp(8), dp(2), dp(6))
             compoundDrawablePadding = dp(8)
-            textSize = 12.5f
+            Ui.size(this, Ui.Type.CAPTION, keepFont = true)
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.END
             setTextColor(color(R.color.text_secondary))
@@ -460,20 +468,25 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
         if (showHint) prefs.sp.edit().putBoolean(HINT_SEEN, true).apply()
         scrim.animate().cancel()
         panel.animate().cancel()
+        val wasMoving = panel.visibility == View.VISIBLE
         scrim.visibility = View.VISIBLE
         panel.visibility = View.VISIBLE
         if (!animate) {
+            Motion.stopSprings(panel)
             scrim.alpha = 1f
             panel.translationY = 0f
             return
         }
-        scrim.alpha = 0f
-        panel.translationY = panelHeight()
+        // 3.0.4: on a spring; opened again while it was closing, it turns back from where it is.
+        if (!wasMoving) {
+            scrim.alpha = 0f
+            panel.translationY = panelHeight()
+        }
         scrim.animate().alpha(1f).setDuration(180).start()
-        panel.animate().translationY(0f).setDuration(200).setInterpolator(DecelerateInterpolator(2f)).withLayer().start()
+        Motion.spring(panel, androidx.dynamicanimation.animation.SpringAnimation.TRANSLATION_Y, 0f)
     }
 
-    fun close() {
+    fun close(velocity: Float = 0f) {
         if (!isOpen) return
         cancelDrag()
         isOpen = false
@@ -482,8 +495,10 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
         val h = panelHeight()
         val remaining = ((h - panel.translationY) / h).coerceIn(0.2f, 1f)
         scrim.animate().alpha(0f).setDuration((140 * remaining).toLong()).withEndAction { scrim.visibility = View.GONE }.start()
-        panel.animate().translationY(h).setDuration((140 * remaining).toLong()).setInterpolator(AccelerateInterpolator())
-            .withLayer().withEndAction { panel.visibility = View.GONE }.start()
+        // 3.0.4: away on a spring, as fast as a fling sent it.
+        Motion.spring(panel, androidx.dynamicanimation.animation.SpringAnimation.TRANSLATION_Y, h, stiffness = 900f, velocity = velocity) {
+            if (!isOpen) panel.visibility = View.GONE
+        }
     }
 
     /** Back: lets go of a held button first, then closes. */
@@ -547,6 +562,12 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
         }
         share.set(R.drawable.ic_share, enabled = http)
         find.set(R.drawable.ic_find, enabled = page)
+        // 3.0.4: its speaker as the tab grid shows it, crossed out (in the accent) while muted.
+        val sound = com.swiftbrowser.tabs.TabRules.sound(tab.playing, tab.muted)
+        mute.view.visibility = if (sound == com.swiftbrowser.tabs.TabRules.Sound.NONE) View.GONE else View.VISIBLE
+        mute.set(if (tab.muted) R.drawable.ic_volume_off else R.drawable.ic_volume, active = tab.muted)
+        mute.view.contentDescription = if (tab.muted) "Unmute" else "Mute this tab"
+        androidx.appcompat.widget.TooltipCompat.setTooltipText(mute.view, mute.view.contentDescription)
 
         val prefs = SwiftApp.prefs
         items["lite"]?.set(R.drawable.ic_lite, "Lite mode", active = prefs.liteMode)
@@ -658,7 +679,7 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
 
     private fun hideStrip(): View = hideStrip.apply {
         text = "Drop here to hide"
-        textSize = 14f
+        Ui.size(this, Ui.Type.BODY_SECONDARY, keepFont = true)
         setTypeface(Ui.MEDIUM)
         gravity = Gravity.CENTER_VERTICAL or Gravity.START
         compoundDrawablePadding = dp(10)
@@ -853,7 +874,7 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
                         gravity = Gravity.CENTER_HORIZONTAL
                         setPadding(dp(2), dp(10), dp(2), dp(8))
                         compoundDrawablePadding = dp(8)
-                        textSize = 12.5f
+                        Ui.size(this, Ui.Type.CAPTION, keepFont = true)
                         maxLines = 1
                         ellipsize = TextUtils.TruncateAt.END
                         setTextColor(color(R.color.text_primary))
@@ -992,14 +1013,17 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
                         val v = velocity
                         v?.addMovement(ev)
                         v?.computeCurrentVelocity(1000)
-                        val flungDown = (v?.yVelocity ?: 0f) > ViewConfiguration.get(a).scaledMinimumFlingVelocity * 6
+                        // Read before the tracker is given back.
+                        val vy = v?.yVelocity ?: 0f
+                        val flungDown = vy > ViewConfiguration.get(a).scaledMinimumFlingVelocity * 6
                         velocity?.recycle()
                         velocity = null
                         dragging = false
                         if (translationY > height * 0.25f || flungDown) {
-                            close()
+                            close(if (flungDown) vy else 0f)
                         } else {
-                            animate().translationY(0f).setDuration(150).start()
+                            // 3.0.4: back up on a spring, carrying the finger's speed.
+                            Motion.spring(this, androidx.dynamicanimation.animation.SpringAnimation.TRANSLATION_Y, 0f, velocity = vy)
                             scrim.animate().alpha(1f).setDuration(150).start()
                         }
                     }
@@ -1020,6 +1044,7 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
             dragging = true
             downY = ev.rawY
             animate().cancel()
+            Motion.stopSprings(this)
             scrim.animate().cancel()
             velocity?.recycle()
             velocity = VelocityTracker.obtain().also { it.addMovement(ev) }
@@ -1180,14 +1205,14 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(12), 0, dp(8), 0)
             addView(headerTitle.apply {
-                textSize = 15f
+                Ui.size(this, Ui.Type.BODY, keepFont = true)
                 maxLines = 1
                 ellipsize = TextUtils.TruncateAt.END
                 setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL))
                 setTextColor(color(R.color.text_primary))
             })
             addView(headerSite.apply {
-                textSize = 12.5f
+                Ui.size(this, Ui.Type.CAPTION, keepFont = true)
                 // 3.0: a long address is cut at its start, so its end, the real site, always shows
                 // ("…verify-session.example.ru", not "accounts.google.com.verif…").
                 isSingleLine = true
@@ -1218,7 +1243,8 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
             if (icon != this.icon || active != this.active) {
                 this.icon = icon
                 this.active = active
-                view.setImageResource(icon)
+                // 3.0.4: filled while on (muted), as Swift's icons are.
+                view.setImageResource(OnIcons.of(icon, active))
                 view.imageTintList = ColorStateList.valueOf(color(if (active) Looks.accent.primary else R.color.text_primary))
             }
             if (view.isEnabled != enabled) {
@@ -1262,11 +1288,18 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
                 this.active = active
                 val layers = view.compoundDrawablesRelative[1] as? LayerDrawable
                 val circle = layers?.getDrawable(0) as? GradientDrawable
+                val fromInk = if (active) color(R.color.text_primary) else onInk()
+                // 3.0.4: its icon fills as it turns on, and is outlined again as it turns off.
+                if (layers != null && OnIcons.filled(icon) != icon) {
+                    ContextCompat.getDrawable(a, OnIcons.of(icon, active))?.mutate()?.let {
+                        it.setTint(fromInk)
+                        layers.setDrawable(1, it)
+                    }
+                }
                 val glyph = layers?.getDrawable(1)
                 if (circle != null && glyph != null) {
                     val fromFill = if (active) color(R.color.surface_alt) else onFill()
                     val toFill = if (active) onFill() else color(R.color.surface_alt)
-                    val fromInk = if (active) color(R.color.text_primary) else onInk()
                     val toInk = if (active) onInk() else color(R.color.text_primary)
                     val tick = (2 until layers.numberOfLayers).map { layers.getDrawable(it) }
                     val argb = android.animation.ArgbEvaluator()
@@ -1366,7 +1399,8 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
             shape = GradientDrawable.OVAL
             setColor(fill ?: if (active) onFill() else color(R.color.surface_alt))
         }
-        val glyph = ContextCompat.getDrawable(a, icon)!!.mutate()
+        // 3.0.4: on, the icon is filled too (Swift's icons are outlined, filled when on).
+        val glyph = ContextCompat.getDrawable(a, OnIcons.of(icon, active))!!.mutate()
         glyph.setTint(if (active) onInk() else color(R.color.text_primary))
         val layers = if (!tick) arrayOf(circle, glyph) else {
             // The tick's badge has a ring in the menu's colour, so it stands apart from the filled circle.

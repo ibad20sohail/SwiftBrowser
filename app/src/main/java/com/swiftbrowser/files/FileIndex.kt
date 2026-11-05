@@ -61,7 +61,8 @@ object FileIndex {
      * the settings, logs and subtitles apps leave in shared folders aren't documents to anyone.
      */
     private val NOT_DOCUMENTS = setOf("json", "xml", "ini", "cfg", "yaml", "yml", "log", "srt", "vtt", "sub")
-    private val DOCUMENT_EXTS: List<String> = Docs.Kind.entries.filter { it != Docs.Kind.ZIP }.flatMap { it.extensions }.filter { it !in NOT_DOCUMENTS }
+    // 3.0.4: also what the storage bar counts as documents (StorageKinds).
+    internal val DOCUMENT_EXTS: List<String> = Docs.Kind.entries.filter { it != Docs.Kind.ZIP }.flatMap { it.extensions }.filter { it !in NOT_DOCUMENTS }
     private val ARCHIVE_EXTS = listOf("zip", "7z", "rar", "tar", "tgz", "tbz2", "tbz", "txz", "gz", "bz2", "xz")
 
     /** Settings and logs that apps leave in shared folders: not what anyone means by recent files. */

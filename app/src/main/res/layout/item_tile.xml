@@ -29,7 +29,7 @@
             android:layout_height="match_parent"
             android:gravity="center"
             android:textColor="#FFFFFFFF"
-            android:textSize="17sp"
+            android:textSize="@dimen/text_heading"
             android:textStyle="bold" />
     </FrameLayout>
 
@@ -42,5 +42,5 @@
         android:maxWidth="62dp"
         android:singleLine="true"
         android:textColor="@color/text_primary"
-        android:textSize="11.5sp" />
+        android:textSize="@dimen/text_small" />
 </LinearLayout>

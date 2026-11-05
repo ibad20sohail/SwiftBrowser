@@ -660,7 +660,7 @@ class CleanerActivity : ListActivity() {
         }
         val icon = ImageView(ctx).apply {
             clipToOutline = true
-            background = Ui.ripple(ctx, Ui.shape(ctx, Palette.color(ctx, R.color.surface_alt), 10), 10)
+            background = Ui.ripple(ctx, Ui.shape(ctx, Palette.color(ctx, R.color.surface_alt), Ui.R_SMALL), Ui.R_SMALL)
             contentDescription = "Open"
         }
         root.addView(icon, LinearLayout.LayoutParams(thumbPx, thumbPx))

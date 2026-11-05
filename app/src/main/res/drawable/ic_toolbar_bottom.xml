@@ -2,15 +2,13 @@
     android:width="24dp"
     android:height="24dp"
     android:tint="?attr/colorControlNormal"
-    android:viewportWidth="24"
-    android:viewportHeight="24">
-    <!-- The toolbar icon upside down: a bar at the bottom. -->
-    <group
-        android:pivotX="12"
-        android:pivotY="12"
-        android:rotation="180">
+    android:viewportWidth="960"
+    android:viewportHeight="960">
+    <!-- The toolbar icon's opposite: a bar at the bottom. -->
+    <!-- 3.0.4: Material Symbols Rounded "vertical_align_bottom", its own symbol (it was the toolbar icon turned over). -->
+    <group android:translateY="960">
         <path
             android:fillColor="@android:color/white"
-            android:pathData="M8,11h3v10h2V11h3l-4,-4 -4,4zM4,3v2h16V3H4z" />
+            android:pathData="M200,-120q-17,0 -28.5,-11.5T160,-160q0,-17 11.5,-28.5T200,-200h560q17,0 28.5,11.5T800,-160q0,17 -11.5,28.5T760,-120H200Zm280,-177q-8,0 -15,-2.5t-13,-8.5L308,-452q-11,-11 -11,-28t11,-28q11,-11 28,-11t28,11l76,76v-368q0,-17 11.5,-28.5T480,-840q17,0 28.5,11.5T520,-800v368l76,-76q11,-11 28,-11t28,11q11,11 11,28t-11,28L508,-308q-6,6 -13,8.5t-15,2.5Z" />
     </group>
 </vector>

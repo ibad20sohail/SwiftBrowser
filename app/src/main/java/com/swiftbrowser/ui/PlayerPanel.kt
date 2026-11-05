@@ -102,10 +102,15 @@ class PlayerPanel(private val root: FrameLayout, private val host: Host) {
         isOpen = true
         b.animate().cancel()
         if (!wasOpen) {
-            b.translationX = if (side) size.toFloat() else 0f
-            b.translationY = if (side) 0f else size.toFloat()
-            b.animate().translationX(0f).translationY(0f).setDuration(DURATION).setInterpolator(Motion.enter).withLayer().start()
+            // 3.0.4: in on a spring (closing it on the way in turns it back smoothly).
+            if (b.parent == null || !b.isLaidOut || (b.translationX == 0f && b.translationY == 0f)) {
+                b.translationX = if (side) size.toFloat() else 0f
+                b.translationY = if (side) 0f else size.toFloat()
+            }
+            Motion.spring(b, androidx.dynamicanimation.animation.SpringAnimation.TRANSLATION_X, 0f)
+            Motion.spring(b, androidx.dynamicanimation.animation.SpringAnimation.TRANSLATION_Y, 0f)
         } else {
+            Motion.stopSprings(b)
             b.translationX = 0f
             b.translationY = 0f
             if (fresh) {
@@ -126,18 +131,25 @@ class PlayerPanel(private val root: FrameLayout, private val host: Host) {
         host.onPanelMoved(side, 0, animate)
         b.animate().cancel()
         if (!animate || !b.isShown) {
+            Motion.stopSprings(b)
             root.removeView(b)
             b.removeAllViews()
             return
         }
-        b.animate().translationX(if (side) size.toFloat() else 0f).translationY(if (side) 0f else size.toFloat())
-            .setDuration(EXIT_DURATION).setInterpolator(Motion.exit).withLayer()
-            .withEndAction {
-                if (!isOpen) {
-                    root.removeView(b)
-                    b.removeAllViews()
-                }
-            }.start()
+        // 3.0.4: out on a spring, as it came in.
+        val gone = {
+            if (!isOpen) {
+                root.removeView(b)
+                b.removeAllViews()
+            }
+        }
+        if (side) {
+            Motion.spring(b, androidx.dynamicanimation.animation.SpringAnimation.TRANSLATION_Y, 0f)
+            Motion.spring(b, androidx.dynamicanimation.animation.SpringAnimation.TRANSLATION_X, size.toFloat(), end = gone)
+        } else {
+            Motion.spring(b, androidx.dynamicanimation.animation.SpringAnimation.TRANSLATION_X, 0f)
+            Motion.spring(b, androidx.dynamicanimation.animation.SpringAnimation.TRANSLATION_Y, size.toFloat(), end = gone)
+        }
     }
 
     /** The screen turned: the panel goes to its side or the bottom once the screen has its new size. */
@@ -210,8 +222,6 @@ class PlayerPanel(private val root: FrameLayout, private val host: Host) {
     }
 
     companion object {
-        private const val DURATION = 180L
-        private const val EXIT_DURATION = 150L
 
         /** Over a video: dark and a little see-through. */
         private const val DARK_FILL = 0xF0121418.toInt()

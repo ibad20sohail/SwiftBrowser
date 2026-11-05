@@ -53,6 +53,11 @@ class Prefs(ctx: Context) {
         get() = sp.getString(HOME_ORDER, "") ?: ""
         set(v) = sp.edit { putString(HOME_ORDER, v) }
 
+    /** 3.0.4: behind the home page: "" Swift's colour, a gradient's name, "accent" or "picture" (HomeBackground). */
+    var homeBackground: String
+        get() = sp.getString(HOME_BACKGROUND, "") ?: ""
+        set(v) = sp.edit { putString(HOME_BACKGROUND, v) }
+
     /** The home page's "Continue" row: videos and articles left half-way (2.3). */
     var homeContinue: Boolean
         get() = sp.getBoolean(HOME_CONTINUE, true)
@@ -214,6 +219,16 @@ class Prefs(ctx: Context) {
         get() = sp.getBoolean(TOOLBAR_BOTTOM, false)
         set(v) = sp.edit { putBoolean(TOOLBAR_BOTTOM, v) }
 
+    /** 3.0.4: the address bar's style: [BAR_FULL] (across the screen, as before) or [BAR_FLOATING] (a rounded pill). */
+    var barStyle: String
+        get() = sp.getString(BAR_STYLE, BAR_FULL) ?: BAR_FULL
+        set(v) = sp.edit { putString(BAR_STYLE, v) }
+
+    /** 3.0.4: the address bar takes the colour a website asks for (its theme-color), as in Vivaldi. */
+    var siteColours: Boolean
+        get() = sp.getBoolean(SITE_COLOURS, true)
+        set(v) = sp.edit { putBoolean(SITE_COLOURS, v) }
+
     var pullToRefresh: Boolean
         get() = sp.getBoolean(PULL_TO_REFRESH, true)
         set(v) = sp.edit { putBoolean(PULL_TO_REFRESH, v) }
@@ -258,6 +273,16 @@ class Prefs(ctx: Context) {
     var hintBarSwipe: Boolean
         get() = sp.getBoolean("hint_bar_swipe", false)
         set(v) = sp.edit { putBoolean("hint_bar_swipe", v) }
+
+    /** 3.0.4: the tab grid shows its tabs as a compact list instead of picture cards. */
+    var tabsAsList: Boolean
+        get() = sp.getBoolean("tabs_as_list", false)
+        set(v) = sp.edit { putBoolean("tabs_as_list", v) }
+
+    /** 3.0.4: a strip of the open tab's group by the address bar (Settings → Browsing & tabs). */
+    var groupStrip: Boolean
+        get() = sp.getBoolean("group_strip", true)
+        set(v) = sp.edit { putBoolean("group_strip", v) }
 
     /** A light vibration on long presses, dragging tabs and grouping them. */
     var haptics: Boolean
@@ -310,6 +335,11 @@ class Prefs(ctx: Context) {
         get() = sp.getInt(READER_SPACING, 1)
         set(v) = sp.edit { putInt(READER_SPACING, v) }
 
+    /** 3.0.4: reader view's page colour: "auto" (Swift's light or dark, as before), "light", "sepia" or "dark". */
+    var readerTheme: String
+        get() = sp.getString(READER_THEME, "auto")?.takeIf { it in READER_THEMES } ?: "auto"
+        set(v) = sp.edit { putString(READER_THEME, v) }
+
     /** Swiping in from the left or right edge of a page goes back or forward. */
     var edgeSwipe: Boolean
         get() = sp.getBoolean(EDGE_SWIPE, true)
@@ -331,6 +361,11 @@ class Prefs(ctx: Context) {
     var fullScreen: Boolean
         get() = sp.getBoolean(FULL_SCREEN, false)
         set(v) = sp.edit { putBoolean(FULL_SCREEN, v) }
+
+    /** 3.0.4: Swift's own font (Google Sans Flex) for its text; off = the phone's font. Read at start. */
+    var swiftFont: Boolean
+        get() = sp.getBoolean(SWIFT_FONT, true)
+        set(v) = sp.edit { putBoolean(SWIFT_FONT, v) }
 
     /**
      * Tabs not opened for this many days move to "Inactive tabs" at the end of the tab grid
@@ -456,6 +491,7 @@ class Prefs(ctx: Context) {
         const val NEWS_ENABLED = "news_enabled"
         const val HOME_CONTINUE = "home_continue"
         const val HOME_ORDER = "home_order"
+        const val HOME_BACKGROUND = "home_background"
         const val NIGHT_LIGHT = "night_light"
         const val NIGHT_LIGHT_STRENGTH = "night_light_strength"
         const val WELCOME_DONE = "welcome_done"
@@ -504,10 +540,17 @@ class Prefs(ctx: Context) {
         const val WIFI_ONLY_DOWNLOADS = "wifi_only_downloads"
         const val READER_FONT = "reader_font"
         const val READER_SPACING = "reader_spacing"
+        const val READER_THEME = "reader_theme"
+        val READER_THEMES = listOf("auto", "light", "sepia", "dark")
+        const val BAR_STYLE = "bar_style"
+        const val BAR_FULL = "full"
+        const val BAR_FLOATING = "floating"
+        const val SITE_COLOURS = "site_colours"
         const val EDGE_SWIPE = "edge_swipe"
         const val LITE_SITES = "lite_sites"
         const val LITE_MODE = "lite_mode"
         const val FULL_SCREEN = "full_screen"
+        const val SWIFT_FONT = "swift_font"
         const val LAST_UPDATE_CHECK = "last_update_check"
         const val UPDATE_FILES = "update_files"
         const val INACTIVE_DAYS = "inactive_days"

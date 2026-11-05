@@ -95,6 +95,156 @@ abstract class ListActivity : AppCompatActivity() {
         list.isFocusableInTouchMode = true
         list.requestFocus()
         SystemBars.keepHidden(this)
+        if (grouped) groupedLook()
+    }
+
+    // ------------------------------------------------------------------ 3.0.4: grouped rows and a large title
+
+    /**
+     * 3.0.4: History, Bookmarks and Downloads: their rows as rounded pieces on the settings' background
+     * (GroupedRows), under a large title that moves up under the title bar as the list scrolls while
+     * the bar's own title fades in. Files and the other screens built on this keep their look.
+     */
+    protected open val grouped: Boolean get() = false
+
+    private var largeTitle: TextView? = null
+    private var largeSubtitle: TextView? = null
+    private var appBar: com.google.android.material.appbar.AppBarLayout? = null
+    private var page: androidx.coordinatorlayout.widget.CoordinatorLayout? = null
+
+    /** How far the large title has gone up (0: all on show). */
+    private var appBarOffset = 0
+
+    /** The screen's name and the line under it: in the title bar and (3.0.4) in the large title. */
+    protected fun setTitles(title: CharSequence, subtitle: CharSequence?) {
+        toolbar.title = title
+        toolbar.subtitle = subtitle
+        largeTitle?.text = title
+        largeSubtitle?.let {
+            it.text = subtitle
+            it.visibility = if (subtitle.isNullOrEmpty()) View.GONE else View.VISIBLE
+        }
+        followTitle()
+    }
+
+    /** 3.0.4: the large title on show again (the list went back to its top: another folder, another filter). */
+    protected fun showLargeTitle() {
+        if (appBarOffset != 0) appBar?.setExpanded(true, Motion.enabled(this))
+    }
+
+    private fun groupedLook() {
+        val bg = Palette.color(this, R.color.settings_bg)
+        val column = toolbar.parent as LinearLayout
+        // The page's colour is the window's own: the rows' pieces are drawn over it, and a slow
+        // graphics chip doesn't fill the screen twice under them.
+        window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(bg))
+        column.background = null
+        toolbar.background = null
+        window.statusBarColor = bg
+        // The search box in the card colour, like the rows (the softer grey hardly shows on this background).
+        search.background = search.background?.mutate()?.also { it.setTint(Palette.color(this, R.color.card_bg)) }
+        // The rows' pieces a little in from the sides, like Settings' groups.
+        list.setPadding(Ui.dp(this, Ui.M), Ui.dp(this, Ui.XS), Ui.dp(this, Ui.M), list.paddingBottom)
+
+        // The large title (and the line under it) scrolls away; the search box (and what a screen adds
+        // under it: Downloads' filters) stays, as before. Done as Files' header is (buildChrome).
+        val searchBox = search.parent as View
+        val listBox = list.parent as View
+        column.removeView(searchBox)
+        column.removeView(listBox)
+        val title = Ui.text(this, Ui.Type.DISPLAY, "", lines = 2)
+        val subtitle = Ui.text(this, Ui.Type.BODY_SECONDARY, "", lines = 1).apply { visibility = View.GONE }
+        largeTitle = title
+        largeSubtitle = subtitle
+        val head = MaxWidthLayout(this).apply {
+            addView(LinearLayout(this@ListActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(Ui.dp(this@ListActivity, Ui.XXL), Ui.dp(this@ListActivity, Ui.S), Ui.dp(this@ListActivity, Ui.XXL), Ui.dp(this@ListActivity, Ui.M))
+                addView(title)
+                addView(subtitle)
+            })
+        }
+        val pinned = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(searchBox)
+        }
+        val bar = com.google.android.material.appbar.AppBarLayout(this).apply {
+            background = null
+            stateListAnimator = null
+            elevation = 0f
+            addOnOffsetChangedListener { _, offset ->
+                appBarOffset = offset
+                followTitle()
+            }
+        }
+        // Let go half-way, it goes all the way up or back down (Android's large title bars do the same).
+        bar.addView(head, com.google.android.material.appbar.AppBarLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            scrollFlags = com.google.android.material.appbar.AppBarLayout.LayoutParams.SCROLL_FLAG_SCROLL or
+                com.google.android.material.appbar.AppBarLayout.LayoutParams.SCROLL_FLAG_SNAP
+        })
+        // Made in code, AppBarLayout's children scroll by default: the flag has to be cleared to keep it.
+        bar.addView(pinned, com.google.android.material.appbar.AppBarLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { scrollFlags = 0 })
+        // Only a list longer than the room under it moves the title (a short one keeps it where it is).
+        val behavior = object : com.google.android.material.appbar.AppBarLayout.Behavior() {
+            override fun onStartNestedScroll(
+                parent: androidx.coordinatorlayout.widget.CoordinatorLayout, child: com.google.android.material.appbar.AppBarLayout,
+                directTargetChild: View, target: View, nestedScrollAxes: Int, type: Int,
+            ) = (appBarOffset != 0 || listOverflows()) && super.onStartNestedScroll(parent, child, directTargetChild, target, nestedScrollAxes, type)
+        }
+        behavior.setDragCallback(object : com.google.android.material.appbar.AppBarLayout.Behavior.DragCallback() {
+            override fun canDrag(appBarLayout: com.google.android.material.appbar.AppBarLayout) = appBarOffset != 0 || listOverflows()
+        })
+        val coordinator = androidx.coordinatorlayout.widget.CoordinatorLayout(this)
+        coordinator.addView(bar, androidx.coordinatorlayout.widget.CoordinatorLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            this.behavior = behavior
+        })
+        coordinator.addView(listBox, androidx.coordinatorlayout.widget.CoordinatorLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT).apply {
+            this.behavior = com.google.android.material.appbar.AppBarLayout.ScrollingViewBehavior()
+        })
+        column.addView(coordinator, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        appBar = bar
+        page = coordinator
+        // A list that got short while the title was up (a search, a removal): the title comes back down.
+        list.viewTreeObserver.addOnGlobalLayoutListener {
+            if (appBarOffset != 0 && !listOverflows()) showLargeTitle()
+        }
+    }
+
+    /**
+     * The large title fades as it goes up under the bar; the bar's own title (and the line under it)
+     * fades in over the second half of the way. TalkBack reads the bar's title only while it shows.
+     */
+    private fun followTitle() {
+        val title = largeTitle ?: return
+        val range = (title.parent as View).height
+        val gone = if (range > 0) (-appBarOffset.toFloat() / range).coerceIn(0f, 1f) else 0f
+        title.alpha = 1f - gone
+        largeSubtitle?.alpha = 1f - gone
+        val a = ((gone - 0.5f) * 2f).coerceIn(0f, 1f)
+        for (i in 0 until toolbar.childCount) {
+            val c = toolbar.getChildAt(i) as? TextView ?: continue
+            if (c.alpha != a) c.alpha = a
+            c.importantForAccessibility = if (a > 0f) View.IMPORTANT_FOR_ACCESSIBILITY_AUTO else View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }
+    }
+
+    /** The list goes on past the bottom of the screen (asked as a swipe starts and after a layout, not as it moves). */
+    private fun listOverflows(): Boolean {
+        val coordinator = page ?: return false
+        if (list.canScrollVertically(1) || list.canScrollVertically(-1)) return true
+        var bottom = 0
+        for (i in 0 until list.childCount) bottom = maxOf(bottom, list.getChildAt(i).bottom)
+        if (bottom == 0) return false
+        // Where the list's top is under the title bar with the large title all on show (it moves up
+        // with it): a list that fits only once the title has gone up still counts as longer, so the
+        // title doesn't come back down by itself while it is up.
+        var y = 0
+        var at: View = list
+        while (at !== coordinator) {
+            y += at.top
+            at = at.parent as? View ?: break
+        }
+        return y - appBarOffset + bottom > coordinator.height
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -146,6 +296,11 @@ abstract class ListActivity : AppCompatActivity() {
 
     private val swipePaint = Paint(Paint.ANTI_ALIAS_FLAG)
 
+    /** 3.0.4: the band behind a grouped row being swiped, shaped like its piece (made again only when that changes). */
+    private val swipePath = android.graphics.Path()
+    private val swipeRect = android.graphics.RectF()
+    private var swipeRadii: FloatArray? = null
+
     /** Rows for which [canSwipe] says yes can be swiped away sideways; [onSwiped] then removes them. */
     protected fun enableSwipe(canSwipe: (RecyclerView.ViewHolder) -> Boolean, onSwiped: (RecyclerView.ViewHolder) -> Unit) {
         val icon = Ui.icon(this, R.drawable.ic_delete, Ui.danger(this))
@@ -164,9 +319,26 @@ abstract class ListActivity : AppCompatActivity() {
                     // What is revealed behind the row: a soft red band with a bin on the near side.
                     val v = vh.itemView
                     swipePaint.color = Palette.color(this@ListActivity, R.color.danger_container)
-                    val left = if (dX > 0) v.left.toFloat() else v.right + dX
-                    val right = if (dX > 0) v.left + dX else v.right.toFloat()
-                    c.drawRect(left, v.top.toFloat(), right, v.bottom.toFloat(), swipePaint)
+                    val piece = Piece.of(v)
+                    if (piece != null) {
+                        // 3.0.4: a grouped row's band is its piece's shape where it was; the row moving
+                        // over it shows it at its own rounded corners too.
+                        val l = v.left.toFloat()
+                        val t = v.top.toFloat()
+                        val r = v.right.toFloat()
+                        val b = v.bottom.toFloat()
+                        if (swipeRadii !== piece.radii || swipeRect.left != l || swipeRect.top != t || swipeRect.right != r || swipeRect.bottom != b) {
+                            swipeRect.set(l, t, r, b)
+                            swipeRadii = piece.radii
+                            swipePath.reset()
+                            swipePath.addRoundRect(swipeRect, piece.radii, android.graphics.Path.Direction.CW)
+                        }
+                        c.drawPath(swipePath, swipePaint)
+                    } else {
+                        val left = if (dX > 0) v.left.toFloat() else v.right + dX
+                        val right = if (dX > 0) v.left + dX else v.right.toFloat()
+                        c.drawRect(left, v.top.toFloat(), right, v.bottom.toFloat(), swipePaint)
+                    }
                     if (icon != null && kotlin.math.abs(dX) > margin) {
                         val top = v.top + (v.height - iconSize) / 2
                         val x = if (dX > 0) v.left + margin else v.right - margin - iconSize
@@ -237,10 +409,12 @@ class HistoryActivity : ListActivity() {
     private val hiddenIds = HashSet<Long>()
     private val hiddenDays = ArrayList<Pair<Long, Long>>()
 
+    // 3.0.4: each day's pages a group of rounded pieces, under a large title.
+    override val grouped: Boolean get() = true
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        toolbar.title = "History"
-        toolbar.subtitle = Profiles.current().name
+        setTitles("History", Profiles.current().name)
         // The last hour, day, week or all of it (2.6), and what else to clear with the history.
         toolbar.menu.add(0, 1, 0, "Clear").setShowAsAction(android.view.MenuItem.SHOW_AS_ACTION_ALWAYS)
         toolbar.setOnMenuItemClickListener {
@@ -411,17 +585,26 @@ class HistoryActivity : ListActivity() {
                 notifyDataSetChanged()
             }
 
+        /** 3.0.4: a day's pages go together; its heading ends the group before. */
+        private val groupOf: (Int) -> Any? = { i -> if (items[i] is Day) null else 0 }
+
         override fun getItemCount() = items.size
 
         override fun getItemViewType(position: Int) = if (items[position] is Day) 1 else 0
 
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder {
-            if (viewType == 0) return RowHolder(Palette.paint(LayoutInflater.from(parent.context).inflate(R.layout.item_row, parent, false)))
+            if (viewType == 0) {
+                return RowHolder(Palette.paint(LayoutInflater.from(parent.context).inflate(R.layout.item_row, parent, false))).also {
+                    GroupedRows.prepare(it.itemView)
+                    it.keepBackground()
+                }
+            }
             val ctx = parent.context
             val row = LinearLayout(ctx).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                setPadding(Ui.dp(ctx, 20), Ui.dp(ctx, 18), Ui.dp(ctx, 8), Ui.dp(ctx, 4))
+                // 3.0.4: the day lines up with what is in the rows under it (they sit a little in from the sides).
+                setPadding(Ui.dp(ctx, 16), Ui.dp(ctx, 18), Ui.dp(ctx, 8), Ui.dp(ctx, 4))
                 layoutParams = RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
                 addView(Ui.text(ctx, Ui.Type.SECTION, "").apply { id = R.id.row_title }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
                 addView(Ui.text(ctx, Ui.Type.LABEL, "Delete day", Ui.textSecondary(ctx)).apply {
@@ -446,6 +629,7 @@ class HistoryActivity : ListActivity() {
                 }
                 is HistoryRow -> {
                     val h = holder as RowHolder
+                    GroupedRows.place(h.itemView, position, items.size, groupOf)
                     val time = DateUtils.formatDateTime(this@HistoryActivity, item.lastVisit, DateUtils.FORMAT_SHOW_TIME)
                     h.set(R.drawable.ic_globe, marked(UrlUtils.readableTitle(item.title, item.url)), marked("${UrlUtils.siteName(item.url)} · $time"))
                     h.setFavicon(item.url)
@@ -521,7 +705,11 @@ class BookmarksActivity : ListActivity() {
                 is Item.Mark -> rowMenu(item.row)
             }
         },
+        // 3.0.4: the folders one group, the bookmarks another.
+        groupOf = { item -> item is Item.Folder },
     )
+
+    override val grouped: Boolean get() = true
 
     /** Back leaves a search, then a folder, then the screen. */
     private val back = object : androidx.activity.OnBackPressedCallback(false) {
@@ -536,8 +724,7 @@ class BookmarksActivity : ListActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        toolbar.title = "Bookmarks"
-        toolbar.subtitle = Profiles.current().name
+        setTitles("Bookmarks", Profiles.current().name)
         toolbar.setNavigationOnClickListener { onBackPressedDispatcher.onBackPressed() }
         toolbar.menu.add(0, 1, 0, "Import").setShowAsAction(android.view.MenuItem.SHOW_AS_ACTION_ALWAYS)
         toolbar.setOnMenuItemClickListener {
@@ -584,8 +771,9 @@ class BookmarksActivity : ListActivity() {
 
     private fun openFolder(name: String) {
         folder = name
-        toolbar.title = name.ifEmpty { "Bookmarks" }
+        setTitles(name.ifEmpty { "Bookmarks" }, toolbar.subtitle)
         list.scrollToPosition(0)
+        showLargeTitle()
         render()
     }
 
@@ -846,10 +1034,13 @@ class DownloadsActivity : ListActivity() {
     private val listener: () -> Unit = { refresh() }
     private val hiddenIds = HashSet<Long>()
 
+    // 3.0.4: the downloads one group of rounded pieces, newest first as before (sections by state would
+    // make a row jump to another place as its download finishes), under a large title.
+    override val grouped: Boolean get() = true
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        toolbar.title = "Downloads"
-        toolbar.subtitle = Downloads.describe(Downloads.directory())
+        setTitles("Downloads", Downloads.describe(Downloads.directory()))
         // Search by name (2.6), like History and Bookmarks.
         search.visibility = View.VISIBLE
         search.hint = "Search your downloads"
@@ -939,6 +1130,7 @@ class DownloadsActivity : ListActivity() {
             filter = i
             refresh()
             list.scrollToPosition(0)
+            showLargeTitle()
         }.apply { setPadding(Ui.dp(this@DownloadsActivity, 12), 0, Ui.dp(this@DownloadsActivity, 12), Ui.dp(this@DownloadsActivity, 4)) }
         top.addView(Palette.paint(chips), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         column.addView(top, column.indexOfChild(box) + 1)
@@ -1153,7 +1345,7 @@ class DownloadsActivity : ListActivity() {
         val iconBadge: android.graphics.drawable.Drawable? = icon.background
         val iconPad = icon.paddingLeft
         val iconScale: ImageView.ScaleType = icon.scaleType
-        val frameFill = Ui.shape(v.context, Palette.color(v.context, R.color.surface_alt), 10)
+        val frameFill = Ui.shape(v.context, Palette.color(v.context, R.color.surface_alt), Ui.R_SMALL)
         var frameRequest: com.swiftbrowser.files.FileThumbs.Request? = null
         var frameFor: String? = null
         var frame: android.graphics.Bitmap? = null
@@ -1168,14 +1360,19 @@ class DownloadsActivity : ListActivity() {
 
         override fun getItemCount() = items.size
 
+        /** 3.0.4: every download is in the one group. */
+        private val groupOf: (Int) -> Any? = { 0 }
+
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int) =
             DownloadHolder(Palette.paint(LayoutInflater.from(parent.context).inflate(R.layout.item_download, parent, false))).also {
                 // The bar in the accent chosen (2.6), your own included.
                 it.progress.progressTintList = android.content.res.ColorStateList.valueOf(Ui.accent(parent.context))
+                GroupedRows.prepare(it.itemView)
             }
 
         override fun onBindViewHolder(h: DownloadHolder, position: Int) {
             val d = items[position]
+            GroupedRows.place(h.itemView, position, items.size, groupOf)
             val mime = d.mime ?: UrlUtils.mimeFromName(d.fileName) ?: ""
             val video = d.kind == Downloads.KIND_HLS || mime.startsWith("video")
             h.icon.setImageResource(

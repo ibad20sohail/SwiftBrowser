@@ -8,6 +8,13 @@
     <item name="motion_text" type="id" />
     <!-- Palette.paint leaves the view and what's in it as they are (colour swatches, previews). -->
     <item name="palette_keep" type="id" />
+    <!-- 3.0.4 Ui.pressable: how far the pressed view has changed shape, and its own corners. -->
+    <item name="press_shape" type="id" />
+    <item name="press_radius" type="id" />
+    <!-- 3.0.4 Motion.spring: the springs running on the view, by property. -->
+    <item name="motion_springs" type="id" />
     <!-- A news row's picture address, to load it again after it was let go. -->
     <item name="row_image" type="id" />
+    <!-- 3.0.4 Piece: a grouped row's rounded background and its corners. -->
+    <item name="group_piece" type="id" />
 </resources>

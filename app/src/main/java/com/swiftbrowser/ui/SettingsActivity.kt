@@ -139,9 +139,11 @@ class SettingsActivity : AppCompatActivity() {
         prefs = SwiftApp.prefs
         val bg = color(R.color.settings_bg)
         window.statusBarColor = bg
+        // 3.0.4: the page's colour is the window's own: the rows' pieces are drawn over it, and a slow
+        // graphics chip doesn't fill the screen twice under them.
+        window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(bg))
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(bg)
         }
         root.addView(topBar(), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(56)))
         container = FrameLayout(this)
@@ -222,9 +224,9 @@ class SettingsActivity : AppCompatActivity() {
             setOnClickListener { onBackPressedDispatcher.onBackPressed() }
         }, LinearLayout.LayoutParams(dp(48), dp(48)))
         titleView = TextView(this@SettingsActivity).apply {
-            // The same size as the other screens' titles (2.6).
-            textSize = 22f
-            setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL))
+            // The same size as the other screens' titles (2.6). 3.0.4: in bold.
+            Ui.size(this, Ui.Type.HEADLINE, keepFont = true)
+            setTypeface(Ui.BOLD)
             setTextColor(color(R.color.text_primary))
             setPadding(dp(8), 0, 0, 0)
             maxLines = 1
@@ -246,6 +248,11 @@ class SettingsActivity : AppCompatActivity() {
             // On a turned phone the page doesn't stretch across the whole screen.
             addView(MaxWidthLayout(this@SettingsActivity).apply { addView(Palette.paint(if (t == null) mainPage() else topicPage(t))) })
         }
+        // 3.0.4: the page opens with its large title; scrolled, it goes up under the bar, whose own
+        // title fades in as it goes (and out again back at the top). A page too short to scroll keeps it.
+        val big = pageTitle
+        setBarTitle(0f)
+        page.setOnScrollChangeListener { _, _, y, _, _ -> followTitle(big, y) }
         val old = container.getChildAt(0)
         container.addView(page)
         // The search box waits for a tap rather than taking the focus (and a blinking cursor).
@@ -269,8 +276,37 @@ class SettingsActivity : AppCompatActivity() {
         setPadding(dp(12), dp(4), dp(12), dp(28))
     }
 
+    /** 3.0.4: the large title of the page being made (see [largeTitle]), for [show] to follow as it scrolls. */
+    private var pageTitle: TextView? = null
+
+    /** 3.0.4: the page's large title, at its top. */
+    private fun largeTitle(col: LinearLayout, text: String) {
+        val big = Ui.text(this, Ui.Type.DISPLAY, text, lines = 2).apply { setPadding(dp(12), dp(8), dp(12), dp(16)) }
+        col.addView(big)
+        pageTitle = big
+    }
+
+    /**
+     * 3.0.4: the page scrolled to [y]: the large title fades as it goes up under the bar, and the bar's
+     * own title fades in over the second half of the way.
+     */
+    private fun followTitle(big: View?, y: Int) {
+        if (big == null || big.height <= 0) return
+        val gone = ((y - big.top).toFloat() / big.height).coerceIn(0f, 1f)
+        big.alpha = 1f - gone
+        setBarTitle(((gone - 0.5f) * 2f).coerceIn(0f, 1f))
+    }
+
+    /** The bar's own title at [alpha]; TalkBack reads it only while it shows (the large title says it otherwise). */
+    private fun setBarTitle(alpha: Float) {
+        if (titleView.alpha == alpha) return
+        titleView.alpha = alpha
+        titleView.importantForAccessibility = if (alpha > 0f) View.IMPORTANT_FOR_ACCESSIBILITY_AUTO else View.IMPORTANT_FOR_ACCESSIBILITY_NO
+    }
+
     private fun mainPage(): View {
         val col = column()
+        largeTitle(col, "Settings")
         val results = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             visibility = View.GONE
@@ -279,13 +315,14 @@ class SettingsActivity : AppCompatActivity() {
 
         val search = EditText(this).apply {
             hint = "Search settings"
-            textSize = 15f
+            Ui.size(this, Ui.Type.BODY, keepFont = true)
             setSingleLine()
             imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH or android.view.inputmethod.EditorInfo.IME_FLAG_NO_EXTRACT_UI
             setTextColor(color(R.color.text_primary))
             setHintTextColor(color(R.color.text_secondary))
+            // 3.0.4: in the card colour, like the rows under it (the softer grey hardly showed on the page).
             background = ContextCompat.getDrawable(this@SettingsActivity, R.drawable.bg_url)?.mutate()?.also {
-                it.setTint(color(R.color.surface_alt))
+                it.setTint(color(R.color.card_bg))
             }
             setPadding(dp(14), 0, dp(14), 0)
             compoundDrawablePadding = dp(10)
@@ -323,7 +360,7 @@ class SettingsActivity : AppCompatActivity() {
         normal.addView(card)
         normal.addView(TextView(this).apply {
             text = "Swift ${BuildConfig.VERSION_NAME} · Firefox engine · uBlock Origin ${AdBlock.uboVersion}".trimEnd(' ', '·')
-            textSize = 12.5f
+            Ui.size(this, Ui.Type.CAPTION, keepFont = true)
             gravity = Gravity.CENTER
             setTextColor(color(R.color.text_secondary))
             setPadding(0, dp(18), 0, 0)
@@ -360,6 +397,7 @@ class SettingsActivity : AppCompatActivity() {
 
     private fun topicPage(t: Topic): View {
         val col = column()
+        largeTitle(col, t.title)
         if (t == Topic.ABOUT) col.addView(aboutHeader())
         addDefs(col, defs.filter { it.topic == t && !it.advanced })
         // Settings for experts, folded away until asked for.
@@ -414,7 +452,9 @@ class SettingsActivity : AppCompatActivity() {
      * 3.0.1: each part of a topic's summary stays on one line ("Back up" was split as "Back" and
      * "up"); lines break only between the parts.
      */
-    private fun keepParts(summary: String) = summary.split(" · ").joinToString(" · ") { it.replace(' ', '\u00A0') }
+    // 3.0.4: only short parts are kept together; a long one ("Change your country for free (Proton
+    // VPN)") is longer than a line, and glued together it was cut wherever the line ended ("VP" "N)").
+    private fun keepParts(summary: String) = summary.split(" · ").joinToString(" · ") { if (it.length <= 24) it.replace(' ', '\u00A0') else it }
 
     /** What is set in a topic, in a few words. */
     private fun topicSummary(t: Topic): String = when (t) {
@@ -486,6 +526,17 @@ class SettingsActivity : AppCompatActivity() {
                 else "${if (mode == NightLight.AT_NIGHT) "7 pm to 7 am" else "Always"} · ${NightLight.strengthLabel(prefs.nightLightStrength).lowercase()}"
             }) { nightLightSheet() }
         }
+        // 3.0.4: Google Sans Flex for Swift's own text, or the phone's font.
+        def(Topic.LOOK, null, "Swift's font", "font typeface letters google sans flex roboto text style look") {
+            switch(
+                R.drawable.ic_text_size, "Swift's font",
+                { if (prefs.swiftFont) "Google Sans Flex for Swift's own text; sites keep theirs" else "Off: the phone's own font" },
+                checked = { prefs.swiftFont },
+            ) {
+                prefs.swiftFont = it
+                confirmRestart(if (it) "Swift's text changes to its own font after it restarts." else "Swift's text changes to the phone's font after it restarts.")
+            }
+        }
         def(Topic.LOOK, null, "Text size", "font letters bigger smaller zoom") {
             action(R.drawable.ic_text_size, "Text size", { textSizeText(prefs.textScale) }) { chooseTextSize() }
         }
@@ -504,6 +555,21 @@ class SettingsActivity : AppCompatActivity() {
         def(Topic.LOOK, "Address bar", "Address bar at the bottom", "toolbar bottom one hand reach position") {
             switch(R.drawable.ic_toolbar_bottom, "Address bar at the bottom", { "Easier to reach with one hand" }, checked = { prefs.toolbarAtBottom }) {
                 prefs.toolbarAtBottom = it
+            }
+        }
+        // 3.0.4: a floating, fully rounded bar, and websites' own colours in the bar.
+        def(Topic.LOOK, "Address bar", "Address bar style", "floating pill rounded full width style shape toolbar address bar") {
+            action(R.drawable.ic_bar_style, "Address bar style", {
+                if (prefs.barStyle == Prefs.BAR_FLOATING) "Floating: a rounded bar with a little room around it" else "Full width, across the screen"
+            }) {
+                choose("Address bar style", listOf("Full width", "Floating"), if (prefs.barStyle == Prefs.BAR_FLOATING) 1 else 0) { i ->
+                    prefs.barStyle = if (i == 1) Prefs.BAR_FLOATING else Prefs.BAR_FULL
+                }
+            }
+        }
+        def(Topic.LOOK, "Address bar", "Website colours in the address bar", "theme color colour site website brand tint adaptive vivaldi address bar toolbar") {
+            switch(R.drawable.ic_bar_colour, "Website colours in the address bar", { "The bar takes the colour a site asks for" }, checked = { prefs.siteColours }) {
+                prefs.siteColours = it
             }
         }
         def(Topic.LOOK, "Address bar", "Address bar buttons", "toolbar buttons home house profile tabs menu reload share bookmark new tab scan qr arrange customize") {
@@ -558,6 +624,14 @@ class SettingsActivity : AppCompatActivity() {
         def(Topic.FILES, "Files", "Grid", "grid list view tiles") {
             switch(R.drawable.ic_grid_view, "Grid", { if (FilesSettings.grid) "Folders show as tiles with pictures" else "Folders show as a list" }, checked = { FilesSettings.grid }) {
                 FilesSettings.grid = it
+            }
+        }
+        // 3.0.4: two folders next to each other with the phone sideways (also the button in Files' bar).
+        def(Topic.FILES, "Files", "Two folders side by side", "two folders panes side by side dual split landscape sideways copy move") {
+            switch(R.drawable.ic_two_panes, "Two folders side by side", {
+                if (FilesSettings.twoPanes) "With the phone sideways, to copy and move between them" else "Off: one folder, also sideways"
+            }, checked = { FilesSettings.twoPanes }) {
+                FilesSettings.twoPanes = it
             }
         }
         def(Topic.FILES, "Files", "Sort folders by", "sort order name date size type") {
@@ -723,6 +797,10 @@ class SettingsActivity : AppCompatActivity() {
                 com.swiftbrowser.core.HomeOrder.parse(prefs.homeOrder).joinToString(" · ") { com.swiftbrowser.core.HomeOrder.label(it) }
             }) { chooseHomeOrder() }
         }
+        // 3.0.4: a gradient or a picture of your own behind the home page.
+        def(Topic.NEWS, null, "Background of the home page", "background wallpaper picture photo image gradient colour color home page") {
+            action(R.drawable.ic_image, "Background of the home page", { HomeBackground.label(HomeBackground.current(this@SettingsActivity)) }) { chooseHomeBackground() }
+        }
         def(Topic.NEWS, "News", "Stories with big pictures", "news pictures images cards big chrome compact layout") {
             switch(
                 R.drawable.ic_image, "Stories with big pictures",
@@ -775,10 +853,18 @@ class SettingsActivity : AppCompatActivity() {
                 prefs.edgeSwipe = it
             }
         }
+        // 3.0.4: a strip of the open group's tabs by the address bar (GroupStrip).
+        def(Topic.BROWSING, "Tabs", "Group's tabs by the address bar", "group tabs strip bar switch chips") {
+            switch(R.drawable.ic_tab, "Group's tabs by the address bar", {
+                if (prefs.groupStrip) "In a group, its tabs in a strip by the bar, to switch between them" else "Off: switch through the tab grid"
+            }, checked = { prefs.groupStrip }) {
+                prefs.groupStrip = it
+            }
+        }
         def(Topic.BROWSING, "Tabs", "Inactive tabs", "old tabs archive unused") {
             action(R.drawable.ic_history, "Inactive tabs", { inactiveText(prefs.inactiveDays) }) { chooseInactiveDays() }
         }
-        def(Topic.BROWSING, "Reader view", "Reader view text", "font serif spacing lines reading") {
+        def(Topic.BROWSING, "Reader view", "Reader view text", "font serif spacing lines reading sepia page colour color dark light paper") {
             action(R.drawable.ic_font, "Reader view text", { readerText() }) { Sheets.readerStyle(this@SettingsActivity) { refreshAll() } }
         }
 
@@ -897,6 +983,14 @@ class SettingsActivity : AppCompatActivity() {
         def(Topic.VIDEO, "Playing", "Sleep timer", "stop music video sleep night minutes") {
             action(R.drawable.ic_timer, "Sleep timer", { SleepTimer.label() ?: "Off. Also in the ≡ menu and the playback notification." }) {
                 Sheets.sleepTimer(this@SettingsActivity) { refreshAll() }
+            }
+        }
+        // 3.0.4: also in the player's ⋮ menu; changes what plays at once.
+        def(Topic.VIDEO, "Playing", "Night sound", "night sound quiet loud compress compressor dynamic range volume voices explosions") {
+            switch(R.drawable.ic_night_light, "Night sound", {
+                if (com.swiftbrowser.media.LocalPlayback.nightSoundOn) "Loud parts quieter, quiet voices louder, for watching at low volume" else "Off: the sound as the film has it"
+            }, checked = { com.swiftbrowser.media.LocalPlayback.nightSoundOn }) {
+                com.swiftbrowser.media.LocalPlayback.setNightSound(it)
             }
         }
         def(Topic.VIDEO, "Playing", "Continue watching", "resume position film movie episode") {
@@ -1252,19 +1346,17 @@ class SettingsActivity : AppCompatActivity() {
 
     // ------------------------------------------------------------------ building blocks
 
-    private fun card() = LinearLayout(this).apply {
-        orientation = LinearLayout.VERTICAL
-        background = GradientDrawable().apply {
-            cornerRadius = dp(20).toFloat()
-            setColor(color(R.color.card_bg))
-        }
-        clipToOutline = true
-    }
+    /**
+     * A section's rows. 3.0.4: as Android 16's settings have them, each row a rounded piece of its own,
+     * a little apart (GroupLayout), instead of one card with lines between the rows.
+     */
+    private fun card(): LinearLayout = GroupLayout(this)
 
     private fun label(text: String) = TextView(this).apply {
         this.text = text
-        textSize = 13.5f
-        setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL))
+        // 3.0.4: group headings bolder (Colours, Address bar...).
+        Ui.size(this, Ui.Type.BODY, keepFont = true)
+        setTypeface(Ui.BOLD)
         setTextColor(color(Looks.accent.primary))
         setPadding(dp(16), dp(20), dp(16), dp(8))
     }
@@ -1276,10 +1368,8 @@ class SettingsActivity : AppCompatActivity() {
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
         setPadding(dp(18), dp(16), dp(18), dp(16))
-        background = GradientDrawable().apply {
-            cornerRadius = dp(20).toFloat()
-            setColor(color(R.color.card_bg))
-        }
+        // 3.0.4: rounded like a row alone in its group.
+        background = Ui.shape(this@SettingsActivity, color(R.color.card_bg), Ui.R_LARGE)
         layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
             topMargin = dp(8)
             bottomMargin = dp(14)
@@ -1290,13 +1380,13 @@ class SettingsActivity : AppCompatActivity() {
             setPadding(dp(16), 0, 0, 0)
             addView(TextView(this@SettingsActivity).apply {
                 text = "Swift ${BuildConfig.VERSION_NAME}"
-                textSize = 20f
+                Ui.size(this, Ui.Type.TITLE, keepFont = true)
                 setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL))
                 setTextColor(color(R.color.text_primary))
             })
             addView(TextView(this@SettingsActivity).apply {
                 text = "Built on Firefox, with uBlock Origin ${AdBlock.uboVersion}\nProfile: ${Profiles.current().name}"
-                textSize = 13f
+                Ui.size(this, Ui.Type.CAPTION, keepFont = true)
                 setTextColor(color(R.color.text_secondary))
                 setPadding(0, dp(2), 0, 0)
             })
@@ -1316,10 +1406,10 @@ class SettingsActivity : AppCompatActivity() {
         }
 
         fun add(view: View) {
-            if (card.childCount > 0) {
-                card.addView(View(this@SettingsActivity).apply { setBackgroundColor(color(R.color.divider)) },
-                    LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 1).apply { marginStart = dp(62) })
-            }
+            // 3.0.4: each row is a piece of its own (no lines between them): GroupLayout gives it its
+            // corners and the gap above it. A row that can be tapped has its piece already; a run of
+            // rows (the VPN's locations) is no piece itself, its rows are.
+            if (Piece.of(view) == null && view !is GroupLayout.Run) Piece.attach(view, tappable = false)
             card.addView(view)
         }
 
@@ -1333,7 +1423,7 @@ class SettingsActivity : AppCompatActivity() {
                 refresh += { setRowIcon(image, icon(), badge) }
             }
             row.isClickable = true
-            row.setBackgroundResource(RowHolder.selectableBackground(this@SettingsActivity))
+            Piece.attach(row, tappable = true)
             row.setOnClickListener { onClick() }
             row.addView(ImageView(this@SettingsActivity).apply {
                 setImageResource(R.drawable.ic_chevron_right)
@@ -1382,7 +1472,7 @@ class SettingsActivity : AppCompatActivity() {
             sw.setChecked(checked(), animate = false)
             row.addView(sw, LinearLayout.LayoutParams(dp(46), dp(32)))
             row.isClickable = true
-            row.setBackgroundResource(RowHolder.selectableBackground(this@SettingsActivity))
+            Piece.attach(row, tappable = true)
             row.accessibilityDelegate = SwitchRowAccessibility(sw)
             row.setOnClickListener {
                 if (!enabled()) return@setOnClickListener
@@ -1396,9 +1486,13 @@ class SettingsActivity : AppCompatActivity() {
                 sw.setChecked(checked(), animate = false)
                 setSummary(sub, summary())
                 val e = enabled()
-                // 3.0.3: a row that becomes available (or not) fades rather than jumps.
+                // 3.0.3: a row that becomes available (or not) fades rather than jumps. 3.0.4: what is
+                // in it, not its piece, which stays as solid as its neighbours.
                 val a = if (e) 1f else 0.5f
-                if (row.isAttachedToWindow && row.alpha != a) row.animate().alpha(a).setDuration(150).start() else row.alpha = a
+                for (i in 0 until row.childCount) {
+                    val c = row.getChildAt(i)
+                    if (row.isAttachedToWindow && c.alpha != a) c.animate().alpha(a).setDuration(150).start() else c.alpha = a
+                }
             }
             update()
             refresh += update
@@ -1443,11 +1537,11 @@ class SettingsActivity : AppCompatActivity() {
         }
         texts.addView(TextView(this).apply {
             text = title
-            textSize = 15.5f
+            Ui.size(this, Ui.Type.SUBTITLE, keepFont = true)
             setTextColor(color(R.color.text_primary))
         })
         val sub = TextView(this).apply {
-            textSize = 13f
+            Ui.size(this, Ui.Type.CAPTION, keepFont = true)
             maxLines = 3
             ellipsize = TextUtils.TruncateAt.END
             setTextColor(color(R.color.text_secondary))
@@ -1484,14 +1578,14 @@ class SettingsActivity : AppCompatActivity() {
             }
         }
         val summary = TextView(this).apply {
-            textSize = 13.5f
+            Ui.size(this, Ui.Type.LABEL, keepFont = true)
             setTextColor(color(R.color.text_secondary))
             setPadding(dp(4), dp(10), dp(4), 0)
         }
         val views = AdLevel.entries.map { level ->
             TextView(this).apply {
                 text = level.label
-                textSize = 13.5f
+                Ui.size(this, Ui.Type.LABEL, keepFont = true)
                 gravity = Gravity.CENTER
                 maxLines = 1
                 setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL))
@@ -2019,7 +2113,8 @@ class SettingsActivity : AppCompatActivity() {
      * one that needs extending says "I extended it" on its row.
      */
     private fun vpnLocations(target: MutableList<() -> Unit>): View {
-        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        // 3.0.4: each location a piece of the section's group, like the rows after it.
+        val box = GroupLayout.Run(this)
         val update = {
             box.removeAllViews()
             val vpn = com.swiftbrowser.vpn.Vpn
@@ -2028,13 +2123,12 @@ class SettingsActivity : AppCompatActivity() {
             // With none yet, the card above says so.
             val chosen = vpn.current()?.id
             for (loc in list) {
-                if (box.childCount > 0) box.addView(Ui.divider(this, 62))
                 box.addView(LinearLayout(this).apply {
                     orientation = LinearLayout.HORIZONTAL
                     gravity = Gravity.CENTER_VERTICAL
                     minimumHeight = dp(64)
                     setPadding(dp(14), dp(8), dp(4), dp(8))
-                    background = Ui.ripple(this@SettingsActivity, null, 0)
+                    Piece.attach(this, tappable = true)
                     // 2.2: how it did in the last test, and when it needs extending at Proton.
                     val result = VpnUi.testResult(loc)
                     val soon = loc.renewBy - System.currentTimeMillis() < 14L * 24 * 3600 * 1000
@@ -2045,7 +2139,7 @@ class SettingsActivity : AppCompatActivity() {
                     contentDescription = listOf(loc.countryName, loc.server + if (loc.id == chosen) ", in use" else "", state).joinToString(", ")
                     addView(TextView(this@SettingsActivity).apply {
                         text = loc.flag
-                        textSize = 24f
+                        Ui.size(this, Ui.Type.HEADLINE, keepFont = true)
                         gravity = Gravity.CENTER
                     }, LinearLayout.LayoutParams(dp(38), dp(38)).apply { marginEnd = dp(14) })
                     addView(LinearLayout(this@SettingsActivity).apply {
@@ -2252,7 +2346,7 @@ class SettingsActivity : AppCompatActivity() {
             gravity = Gravity.TOP
             inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE or
                 android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
-            textSize = 13f
+            Ui.size(this, Ui.Type.CAPTION, keepFont = true)
             typeface = android.graphics.Typeface.MONOSPACE
         }
         val box = LinearLayout(this).apply {
@@ -2357,6 +2451,81 @@ class SettingsActivity : AppCompatActivity() {
 
     private fun pickBackupFile() {
         restorePicker.launch(arrayOf("application/json", "text/plain", "application/octet-stream"))
+    }
+
+    /** 3.0.4: the picture for the home page's background, kept small in Swift's files. */
+    private val homePicturePicker = registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) return@registerForActivityResult
+        com.swiftbrowser.core.Background.single("home-picture").execute {
+            val ok = HomeBackground.savePicture(this, uri)
+            runOnUiThread {
+                if (isFinishing) return@runOnUiThread
+                if (ok) {
+                    prefs.homeBackground = HomeBackground.PICTURE
+                    snack("Your picture is behind the home page now")
+                } else {
+                    snack("Swift couldn't read that picture")
+                }
+                refreshAll()
+            }
+        }
+    }
+
+    /** 3.0.4: Swift's colour, a gradient, your accent colour or your own picture behind the home page. */
+    private fun chooseHomeBackground() {
+        val now = HomeBackground.current(this)
+        val list = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, dp(4), 0, dp(4))
+        }
+        var dialog: androidx.appcompat.app.AlertDialog? = null
+        fun row(key: String, swatch: android.graphics.drawable.Drawable?, icon: Int, label: String, pick: () -> Unit) {
+            list.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER_VERTICAL
+                minimumHeight = dp(52)
+                setPadding(dp(22), dp(4), dp(16), dp(4))
+                setBackgroundResource(RowHolder.selectableBackground(this@SettingsActivity))
+                addView(android.widget.ImageView(this@SettingsActivity).apply {
+                    if (swatch != null) setImageDrawable(swatch) else setImageDrawable(Ui.icon(this@SettingsActivity, icon, Palette.color(this@SettingsActivity, R.color.text_secondary)))
+                    importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+                }, LinearLayout.LayoutParams(dp(28), dp(28)))
+                addView(Ui.text(this@SettingsActivity, Ui.Type.BODY, label).apply { setPadding(dp(16), 0, dp(8), 0) }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                if (key == now) addView(android.widget.ImageView(this@SettingsActivity).apply {
+                    setImageDrawable(Ui.icon(this@SettingsActivity, R.drawable.ic_check, Ui.accent(this@SettingsActivity)))
+                }, LinearLayout.LayoutParams(dp(24), dp(24)))
+                contentDescription = label + if (key == now) ", chosen" else ""
+                setOnClickListener {
+                    dialog?.dismiss()
+                    pick()
+                }
+            })
+        }
+        fun choose(key: String) {
+            prefs.homeBackground = key
+            refreshAll()
+        }
+        row(HomeBackground.NONE, HomeBackground.swatch(this, HomeBackground.NONE), 0, HomeBackground.label(HomeBackground.NONE)) { choose(HomeBackground.NONE) }
+        for (p in HomeBackground.PRESETS) row(p.key, HomeBackground.swatch(this, p.key), 0, p.label) { choose(p.key) }
+        row(HomeBackground.ACCENT, HomeBackground.swatch(this, HomeBackground.ACCENT), 0, HomeBackground.label(HomeBackground.ACCENT)) { choose(HomeBackground.ACCENT) }
+        if (HomeBackground.hasPicture(this)) {
+            row(HomeBackground.PICTURE, null, R.drawable.ic_image, "Your picture") { choose(HomeBackground.PICTURE) }
+            row("-", null, R.drawable.ic_image, "Another picture…") { homePicturePicker.launch(arrayOf("image/*")) }
+            row("--", null, R.drawable.ic_delete, "Remove your picture") {
+                HomeBackground.removePicture(this)
+                refreshAll()
+            }
+        } else {
+            row("-", null, R.drawable.ic_image, "Your own picture…") { homePicturePicker.launch(arrayOf("image/*")) }
+        }
+        list.addView(Ui.text(this, Ui.Type.CAPTION, "A picture is shown softly, so the shortcuts stay readable. Not in incognito.").apply {
+            setPadding(dp(22), dp(10), dp(22), dp(4))
+        })
+        dialog = MaterialAlertDialogBuilder(this)
+            .setTitle("Background of the home page")
+            .setView(android.widget.ScrollView(this).apply { addView(list) })
+            .setNegativeButton("Close", null)
+            .showImmersive()
     }
 
     private val restorePicker = registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenDocument()) { uri ->
@@ -2795,7 +2964,7 @@ class SettingsActivity : AppCompatActivity() {
             setPadding(dp(16), dp(16), dp(16), dp(12))
         }
         val total = TextView(this).apply {
-            textSize = 22f
+            Ui.size(this, Ui.Type.HEADLINE, keepFont = true)
             setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL))
             setTextColor(color(R.color.text_primary))
         }
@@ -2815,7 +2984,7 @@ class SettingsActivity : AppCompatActivity() {
         val rows = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         box.addView(rows)
         val note = TextView(this).apply {
-            textSize = 12.5f
+            Ui.size(this, Ui.Type.CAPTION, keepFont = true)
             setTextColor(color(R.color.text_secondary))
             setPadding(0, dp(10), 0, 0)
         }
@@ -2857,12 +3026,12 @@ class SettingsActivity : AppCompatActivity() {
                         }, LinearLayout.LayoutParams(dp(10), dp(10)).apply { marginEnd = dp(12) })
                         addView(TextView(this@SettingsActivity).apply {
                             text = label
-                            textSize = 14.5f
+                            Ui.size(this, Ui.Type.BODY, keepFont = true)
                             setTextColor(color(R.color.text_primary))
                         }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
                         addView(TextView(this@SettingsActivity).apply {
                             text = UrlUtils.formatBytes(bytes)
-                            textSize = 14.5f
+                            Ui.size(this, Ui.Type.BODY_SECONDARY, keepFont = true)
                             setTextColor(color(R.color.text_secondary))
                         })
                     })
@@ -2929,6 +3098,13 @@ class SettingsActivity : AppCompatActivity() {
                 0 -> "tight lines"
                 2 -> "loose lines"
                 else -> "normal lines"
+            } +
+            // 3.0.4: and the page's colour when it isn't Swift's own.
+            when (prefs.readerTheme) {
+                "light" -> " · light page"
+                "sepia" -> " · sepia page"
+                "dark" -> " · dark page"
+                else -> ""
             }
 
     // ------------------------------------------------------------------ helpers

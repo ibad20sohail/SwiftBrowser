@@ -32,3 +32,17 @@
 # (and looks them up by name), so they keep their names and members.
 -keep class org.libtorrent4j.swig.** { *; }
 -dontwarn org.libtorrent4j.**
+
+# 3.0.4, network folders (smbj, smbj-rpc). smbj's event bus (mbassador) finds the methods that take
+# its events by their @Handler mark and makes their calls by reflection: without them, a share or
+# connection that closed stays in smbj's tables and is handed out again, closed. So mbassador stays
+# whole (it is small) and so do those methods.
+-keep class net.engio.mbassy.** { *; }
+-keepclassmembers class com.hierynomus.** {
+    @net.engio.mbassy.listener.Handler <methods>;
+}
+# Kerberos sign-in (smbj leaves it out on Android), mbassador's EL filters (unused) and the
+# java.rmi exceptions smbj-rpc throws only for an answer it can't read aren't on Android.
+-dontwarn org.ietf.jgss.**
+-dontwarn javax.el.**
+-dontwarn java.rmi.**

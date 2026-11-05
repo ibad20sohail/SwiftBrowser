@@ -152,7 +152,7 @@ object Messages {
             val c = colours(ctx)
             val fg = c.fg
             val accent = c.accent
-            background = Ui.shape(ctx, c.bg, 18, c.stroke)
+            background = Ui.shape(ctx, c.bg, Ui.R_MEDIUM, c.stroke)
             elevation = Ui.dpf(ctx, 6f)
             clipToOutline = true
             accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
@@ -218,7 +218,9 @@ object Messages {
             translationY = Ui.dpf(context, 40f)
             scaleX = 0.96f
             scaleY = 0.96f
-            animate().alpha(1f).translationY(0f).scaleX(1f).scaleY(1f).setDuration(Motion.LONG).setInterpolator(Motion.enter).start()
+            // 3.0.4: it rises on a spring, settling with a touch of bounce.
+            animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(Motion.NORMAL).setInterpolator(Motion.enter).start()
+            Motion.spring(this, androidx.dynamicanimation.animation.SpringAnimation.TRANSLATION_Y, 0f, stiffness = 500f, bounce = true)
             startTimer(duration)
         }
 
@@ -246,6 +248,7 @@ object Messages {
             mainHandler.removeCallbacks(timeout)
             if (current === this) current = null
             gone()
+            Motion.stopSprings(this)
             val a = animate().alpha(0f).setDuration(if (quick) 120 else Motion.NORMAL).setInterpolator(Motion.exit)
             if (toSide != 0f) a.translationX(toSide) else a.translationY(Ui.dpf(context, if (quick) 12f else 24f))
             a.withEndAction { removeNow() }.start()

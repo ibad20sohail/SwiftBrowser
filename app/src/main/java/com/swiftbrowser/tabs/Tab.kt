@@ -77,6 +77,15 @@ class Tab(
     /** "Keep loaded" (3.0.1): Swift never unloads this tab's page to save memory. */
     var kept = false
 
+    /**
+     * 3.0.4: pinned. It comes first in the tab grid (and the bar's swipe), can't be swiped away, stays
+     * when all tabs are closed, never becomes inactive and is in no group (TabManager.setPinned).
+     */
+    var pinned = false
+
+    /** 3.0.4: muted from the tab grid or the menu (Helper.setMuted); kept until unmuted, not saved. */
+    var muted = false
+
     /** The page couldn't load for lack of a connection: it loads again when there is one. */
     var waitingForConnection = false
 
@@ -143,6 +152,20 @@ class Tab(
     var pageScrollMax = 0f
     var pageViewHeight = 0f
     var pageY = 0f
+
+    /**
+     * 3.0.4: the colour the page asks browsers to give their bar (its theme-color), as the helper
+     * read it: ARGB, or null for none. The address bar takes it (MainActivity.siteColourFor); never
+     * set in incognito tabs.
+     */
+    var siteColour: Int? = null
+
+    /**
+     * 3.0.4: another page started loading: [siteColour] is still the last page's, kept until the new
+     * page says its own (no flash of Swift's colour between two pages of a site), or forgotten soon
+     * after it loaded without saying (an error page).
+     */
+    var siteColourStale = false
 
     val isBlank: Boolean get() = UrlUtils.isBlank(url)
 
@@ -220,6 +243,9 @@ interface BrowserUi {
 
     /** 3.0.3: the page said how tall it is ([Tab.pageScrollMax]). */
     fun onPageSize(tab: Tab) {}
+
+    /** 3.0.4: [tab]'s page said its colour, or that it has none ([Tab.siteColour]): the address bar follows. */
+    fun onSiteColour(tab: Tab) {}
 
     /** The page asks for the toolbar to be shown or hidden (e.g. to reveal a focused field). */
     fun onToolbarRequest(tab: Tab, show: Boolean)

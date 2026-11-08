@@ -94,7 +94,7 @@ class FileJobService : Service() {
         val text = when {
             q?.password == true -> "Waiting for you: ${q.name} needs its password"
             q != null -> "Waiting for you: “${q.name}” is already there"
-            else -> listOfNotNull(job.current.ifBlank { null }, FileJobs.detail(job).ifBlank { null }).joinToString(" · ")
+            else -> listOfNotNull(job.current.ifBlank { null }?.takeUnless { job.hideNames }, FileJobs.detail(job).ifBlank { null }).joinToString(" · ")
         } + if (more > 0) " (${more} more waiting)" else ""
         val percent = if (job.fraction >= 0) (job.fraction * 100).toInt() else 0
         return Shown(job.title, text, percent, job.fraction < 0 || job.counting, q != null)

@@ -8,11 +8,12 @@
     android:gravity="center_vertical"
     android:orientation="horizontal"
     android:paddingStart="16dp"
-    android:minHeight="72dp"
-    android:paddingTop="12dp"
+    android:minHeight="@dimen/row_two_lines"
+    android:paddingTop="10dp"
     android:paddingEnd="4dp"
-    android:paddingBottom="12dp">
+    android:paddingBottom="10dp">
 
+    <!-- 3.0.5: the one row icon holder, a rounded square (Ui.ICON_BOX, Ui.R_SMALL). -->
     <ImageView
         android:id="@+id/dl_icon"
         android:layout_width="40dp"
@@ -54,6 +55,8 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:ellipsize="end"
+            android:fontFamily="swift-small"
+            android:fontFeatureSettings="tnum"
             android:maxLines="2"
             android:textColor="@color/text_secondary"
             android:textSize="@dimen/text_caption" />

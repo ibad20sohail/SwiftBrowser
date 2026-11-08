@@ -69,13 +69,17 @@ abstract class ListActivity : AppCompatActivity() {
         empty = findViewById(R.id.list_empty)
         search = findViewById(R.id.list_search)
         toolbar.setNavigationIcon(R.drawable.ic_back)
+        // 3.0.5: the one title bar of every screen: the arrow in the text colour, as Settings' (it was grey here).
+        toolbar.setNavigationIconTint(Palette.color(this, R.color.text_primary))
         toolbar.navigationContentDescription = "Back"
         toolbar.setNavigationOnClickListener { finish() }
         toolbar.setTitleTextAppearance(this, R.style.Swift_ListTitle)
         toolbar.setTitleTextColor(Palette.color(this, R.color.text_primary))
         toolbar.setSubtitleTextAppearance(this, R.style.Swift_ListSubtitle)
         toolbar.setSubtitleTextColor(Palette.color(this, R.color.text_secondary))
-        window.statusBarColor = Palette.color(this, R.color.page_bg)
+        // 3.0.5: the one search box of every screen; Files' and the others' as History's.
+        Ui.searchBox(search)
+        pageLook()
         list.layoutManager = LinearLayoutManager(this)
         // Back clears a search first (2.6), then leaves the screen.
         val clearSearch = object : androidx.activity.OnBackPressedCallback(false) {
@@ -96,14 +100,35 @@ abstract class ListActivity : AppCompatActivity() {
         list.requestFocus()
         SystemBars.keepHidden(this)
         if (grouped) groupedLook()
+        // 3.0.5: the list can lose it while the page is put together, and the search box then takes it.
+        val page = findViewById<View>(android.R.id.content)
+        page.isFocusableInTouchMode = true
+        page.post { if (search.isFocused && search.text.isEmpty()) page.requestFocus() }
     }
 
     // ------------------------------------------------------------------ 3.0.4: grouped rows and a large title
 
     /**
+     * 3.0.5: every list screen has the settings' colour behind it, with cards and the search box in
+     * the card colour, so a card shows on it plainly, with no outline or shadow (Files' start page,
+     * Free up space and Wi-Fi transfer used to draw outlines against a white page). The title bar has
+     * no colour of its own: it is the page (Files' was lighter than its page in dark mode). The
+     * page's colour is the window's own: what is drawn over it doesn't fill the screen twice on a
+     * slow graphics chip.
+     */
+    private fun pageLook() {
+        val bg = Palette.color(this, R.color.settings_bg)
+        window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(bg))
+        (toolbar.parent as View).background = null
+        toolbar.background = null
+        window.statusBarColor = bg
+    }
+
+    /**
      * 3.0.4: History, Bookmarks and Downloads: their rows as rounded pieces on the settings' background
      * (GroupedRows), under a large title that moves up under the title bar as the list scrolls while
-     * the bar's own title fades in. Files and the other screens built on this keep their look.
+     * the bar's own title fades in. Files and the other screens built on this keep their look (3.0.5:
+     * apart from the page's colour, [pageLook]).
      */
     protected open val grouped: Boolean get() = false
 
@@ -133,18 +158,9 @@ abstract class ListActivity : AppCompatActivity() {
     }
 
     private fun groupedLook() {
-        val bg = Palette.color(this, R.color.settings_bg)
         val column = toolbar.parent as LinearLayout
-        // The page's colour is the window's own: the rows' pieces are drawn over it, and a slow
-        // graphics chip doesn't fill the screen twice under them.
-        window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(bg))
-        column.background = null
-        toolbar.background = null
-        window.statusBarColor = bg
-        // The search box in the card colour, like the rows (the softer grey hardly shows on this background).
-        search.background = search.background?.mutate()?.also { it.setTint(Palette.color(this, R.color.card_bg)) }
-        // The rows' pieces a little in from the sides, like Settings' groups.
-        list.setPadding(Ui.dp(this, Ui.M), Ui.dp(this, Ui.XS), Ui.dp(this, Ui.M), list.paddingBottom)
+        // 3.0.5: the rows' pieces at the one side margin, lined up with the search box above them.
+        list.setPadding(Ui.dp(this, Ui.MARGIN), Ui.dp(this, Ui.XS), Ui.dp(this, Ui.MARGIN), list.paddingBottom)
 
         // The large title (and the line under it) scrolls away; the search box (and what a screen adds
         // under it: Downloads' filters) stays, as before. Done as Files' header is (buildChrome).
@@ -159,7 +175,8 @@ abstract class ListActivity : AppCompatActivity() {
         val head = MaxWidthLayout(this).apply {
             addView(LinearLayout(this@ListActivity).apply {
                 orientation = LinearLayout.VERTICAL
-                setPadding(Ui.dp(this@ListActivity, Ui.XXL), Ui.dp(this@ListActivity, Ui.S), Ui.dp(this@ListActivity, Ui.XXL), Ui.dp(this@ListActivity, Ui.M))
+                // 3.0.5: lined up with the section headings and row icons under it.
+                setPadding(Ui.dp(this@ListActivity, Ui.CONTENT_X), Ui.dp(this@ListActivity, Ui.S), Ui.dp(this@ListActivity, Ui.CONTENT_X), Ui.dp(this@ListActivity, Ui.M))
                 addView(title)
                 addView(subtitle)
             })
@@ -352,14 +369,14 @@ abstract class ListActivity : AppCompatActivity() {
         }).attachToRecyclerView(list)
     }
 
-    /** An empty list: an icon, what is missing, and how to fill it. */
-    protected fun showEmpty(isEmpty: Boolean, title: String, hint: String? = null, icon: Int = R.drawable.ic_info) {
+    /** An empty list: an icon (3.0.5: or a drawing of its own, [art]), what is missing, and how to fill it. */
+    protected fun showEmpty(isEmpty: Boolean, title: String, hint: String? = null, icon: Int = R.drawable.ic_info, art: EmptyArt? = null) {
         if (!isEmpty) {
             empty.visibility = View.GONE
             return
         }
         empty.removeAllViews()
-        empty.addView(Ui.emptyState(this, icon, title, hint), FrameLayout.LayoutParams(
+        empty.addView(Ui.emptyState(this, icon, title, hint, art), FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER,
         ))
         if (empty.visibility != View.VISIBLE) Motion.fadeIn(empty, fromDy = 12)
@@ -485,7 +502,7 @@ class HistoryActivity : ListActivity() {
         // 3.0: too few left to fill the screen (a day deleted, say) while there are more: the next ones.
         if (shown.size < 40 && hasMore) list.post { loadMore() }
         if (query.isBlank()) {
-            showEmpty(shown.isEmpty(), "No history yet", "Pages you open show up here, newest first.", R.drawable.ic_history)
+            showEmpty(shown.isEmpty(), "No history yet", "Pages you open show up here, newest first.", R.drawable.ic_history, EmptyArt.HISTORY)
         } else {
             showEmpty(shown.isEmpty(), "Nothing found", "No page in your history has \"$query\" in its title or address.", R.drawable.ic_search)
         }
@@ -603,14 +620,19 @@ class HistoryActivity : ListActivity() {
             val row = LinearLayout(ctx).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                // 3.0.4: the day lines up with what is in the rows under it (they sit a little in from the sides).
-                setPadding(Ui.dp(ctx, 16), Ui.dp(ctx, 18), Ui.dp(ctx, 8), Ui.dp(ctx, 4))
+                // 3.0.4: the day lines up with what is in the rows under it (they sit a little in from
+                // the sides). 3.0.5: at Ui.ROW_INSET like every heading, with the one section rhythm;
+                // the "Delete day" button (a little taller, and only sometimes there) leaves it alone.
+                setPadding(Ui.dp(ctx, Ui.ROW_INSET), Ui.dp(ctx, Ui.SECTION_ABOVE), Ui.dp(ctx, 8), Ui.dp(ctx, Ui.SECTION_BELOW))
                 layoutParams = RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
                 addView(Ui.text(ctx, Ui.Type.SECTION, "").apply { id = R.id.row_title }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
                 addView(Ui.text(ctx, Ui.Type.LABEL, "Delete day", Ui.textSecondary(ctx)).apply {
                     id = R.id.row_action
                     setPadding(Ui.dp(ctx, 12), Ui.dp(ctx, 8), Ui.dp(ctx, 12), Ui.dp(ctx, 8))
                     background = Ui.ripple(ctx, null, 16)
+                }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                    topMargin = -Ui.dp(ctx, 8)
+                    bottomMargin = -Ui.dp(ctx, 8)
                 })
             }
             return object : RecyclerView.ViewHolder(row) {}
@@ -731,7 +753,7 @@ class BookmarksActivity : ListActivity() {
             Dialogs.confirm(
                 this, "Import bookmarks",
                 "From a bookmarks file another browser saved: in Chrome on a computer, Bookmarks → Bookmark manager → ⋮ → Export bookmarks; " +
-                    "in Firefox, Bookmarks → Manage bookmarks → Import and Backup → Export. Copy the file to this phone, then choose it.",
+                    "in Firefox, Bookmarks → Manage bookmarks → Import and Backup → Export. Copy the file to your phone, then choose it.",
                 "Choose file",
             ) {
                 try {
@@ -793,8 +815,8 @@ class BookmarksActivity : ListActivity() {
         back.isEnabled = query.isNotEmpty() || folder.isNotEmpty()
         when {
             query.isNotEmpty() -> showEmpty(items.isEmpty(), "Nothing found", "No bookmark has \"$query\" in its name or address.", R.drawable.ic_search)
-            folder.isNotEmpty() -> showEmpty(items.isEmpty(), "This folder is empty", "Move bookmarks here with ⋮ → Move to folder.", R.drawable.ic_folder)
-            else -> showEmpty(items.isEmpty(), "No bookmarks yet", "Tap the star in the ≡ menu to keep a page here.", R.drawable.ic_star_border)
+            folder.isNotEmpty() -> showEmpty(items.isEmpty(), "This folder is empty", "Move bookmarks here with ⋮ → Move to folder.", R.drawable.ic_folder, EmptyArt.FOLDER)
+            else -> showEmpty(items.isEmpty(), "No bookmarks yet", "Tap the star in the ≡ menu to keep a page here.", R.drawable.ic_star_border, EmptyArt.BOOKMARKS)
         }
     }
 
@@ -1126,12 +1148,13 @@ class DownloadsActivity : ListActivity() {
         top.addView(magnetCard, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
             setMargins(Ui.dp(this@DownloadsActivity, 16), Ui.dp(this@DownloadsActivity, 2), Ui.dp(this@DownloadsActivity, 16), Ui.dp(this@DownloadsActivity, 8))
         })
-        val chips = Sheets.chipRow(this, FILTERS, filter) { i ->
+        // 3.0.5: at the one side margin, lined up with the search box and the rows.
+        val chips = Sheets.chipRow(this, FILTERS, filter, sideDp = Ui.MARGIN) { i ->
             filter = i
             refresh()
             list.scrollToPosition(0)
             showLargeTitle()
-        }.apply { setPadding(Ui.dp(this@DownloadsActivity, 12), 0, Ui.dp(this@DownloadsActivity, 12), Ui.dp(this@DownloadsActivity, 4)) }
+        }.apply { setPadding(0, 0, 0, Ui.dp(this@DownloadsActivity, 4)) }
         top.addView(Palette.paint(chips), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         column.addView(top, column.indexOfChild(box) + 1)
     }
@@ -1290,14 +1313,14 @@ class DownloadsActivity : ListActivity() {
         if (query.isNotEmpty()) {
             showEmpty(items.isEmpty(), "Nothing found", "No download has \"$query\" in its name.", R.drawable.ic_search)
         } else if (filter == FILTER_TORRENTS) {
-            showEmpty(items.isEmpty(), "No torrents yet", "Tap a magnet link on a site, or open a .torrent file, and it downloads here.", R.drawable.ic_torrent)
+            showEmpty(items.isEmpty(), "No torrents yet", "Tap a magnet link on a site, or open a .torrent file, and it downloads here.", R.drawable.ic_torrent, EmptyArt.DOWNLOADS)
         } else if (filter != 0) {
-            showEmpty(items.isEmpty(), "Nothing here", "No download of this kind yet.", R.drawable.ic_download)
+            showEmpty(items.isEmpty(), "Nothing here", "No download of this kind yet.", R.drawable.ic_download, EmptyArt.DOWNLOADS)
         } else {
             showEmpty(
                 items.isEmpty(), "No downloads yet",
                 "Hold a link, picture or video and choose Download. On pages with videos, the download button appears next to the address.",
-                R.drawable.ic_download,
+                R.drawable.ic_download, EmptyArt.DOWNLOADS,
             )
         }
     }
@@ -1460,19 +1483,10 @@ class DownloadsActivity : ListActivity() {
         }
     }
 
-    /** When it was downloaded: the time today, else the day (2.6). */
-    private fun dateText(time: Long): String {
-        val now = java.util.Calendar.getInstance()
-        val then = java.util.Calendar.getInstance().apply { timeInMillis = time }
-        return when {
-            now.get(java.util.Calendar.YEAR) == then.get(java.util.Calendar.YEAR) &&
-                now.get(java.util.Calendar.DAY_OF_YEAR) == then.get(java.util.Calendar.DAY_OF_YEAR) ->
-                android.text.format.DateFormat.getTimeFormat(this).format(java.util.Date(time))
-            now.get(java.util.Calendar.YEAR) == then.get(java.util.Calendar.YEAR) ->
-                java.text.SimpleDateFormat("d MMM", java.util.Locale.getDefault()).format(java.util.Date(time))
-            else -> java.text.SimpleDateFormat("d MMM yyyy", java.util.Locale.getDefault()).format(java.util.Date(time))
-        }
-    }
+    /** When it was downloaded (2.6; 3.0.5: the same short date as Files and the bin). */
+    private val dates by lazy { ShortDates(this) }
+
+    private fun dateText(time: Long): String = dates.text(time).orEmpty()
 
     private fun statusText(d: Downloads.Item): String = if (d.kind == Downloads.KIND_TORRENT) torrentStatus(d) else when (d.status) {
         // 3.0: with what to know about it (kept as .ts, only part of it, its sound apart).
@@ -1567,7 +1581,7 @@ class DownloadsActivity : ListActivity() {
         try {
             startActivity(intent)
         } catch (_: Exception) {
-            Messages.show(this, "No app on this phone can open this file")
+            Messages.show(this, "No app on your phone can open this file")
         }
     }
 
@@ -1586,7 +1600,7 @@ class DownloadsActivity : ListActivity() {
                 ),
             )
         } catch (_: Exception) {
-            Messages.show(this, "No app on this phone can open this file")
+            Messages.show(this, "No app on your phone can open this file")
         }
     }
 

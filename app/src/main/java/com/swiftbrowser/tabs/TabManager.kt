@@ -244,6 +244,9 @@ object TabManager {
     fun bySession(session: GeckoSession): Tab? = tabs.firstOrNull { it.session === session }
 
     /** The tab to show for the current profile; creates a blank one if the profile has none. */
+    /** 3.0.5: the tab [ensureCurrent] will show, if any: the start screen asks before the browser is built. */
+    fun tabToOpen(): Tab? = current?.takeIf { tabs.contains(it) } ?: profileTabs(Profiles.currentId).maxByOrNull { it.lastUsed }
+
     fun ensureCurrent(): Tab {
         val pid = Profiles.currentId
         current?.let { if (tabs.contains(it) && (it.incognito || it.profileId == pid)) return it }
@@ -726,6 +729,7 @@ object TabManager {
         val now = System.currentTimeMillis()
         var leftHome = false
         var pinnedBack = false
+        var keptBack = false
         for (e in c.entries) {
             val old = e.tab
             if (!old.incognito && old.profileId !in profiles) continue
@@ -757,7 +761,9 @@ object TabManager {
             // 3.0.4: pinned (and muted) as it was.
             tab.pinned = old.pinned
             tab.muted = old.muted
+            tab.kept = old.kept
             if (tab.pinned && !tab.incognito) pinnedBack = true
+            if (tab.kept && !tab.incognito) keptBack = true
             tab.groupId = old.groupId?.let { gid -> newGroupIds[gid] ?: gid.takeIf { group(it) != null } }
             tabs.add(e.index.coerceIn(0, tabs.size), tab)
             Thumbnails.move(old, tab)
@@ -767,6 +773,7 @@ object TabManager {
         }
         if (leftHome) saveLeftHome()
         if (pinnedBack) savePinned()
+        if (keptBack) saveKept()
         // They are open again, so they leave the recently closed list.
         io.safe("update the recently closed tabs") { for (e in c.entries) if (e.rowId >= 0) db.deleteClosedTab(e.rowId) }
         keepGroupsTogether()

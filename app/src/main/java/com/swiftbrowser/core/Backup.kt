@@ -21,7 +21,7 @@ import java.util.Locale
  * to what is there (nothing is deleted), the backup's settings replace these, and then Swift restarts.
  * Passwords and cookies aren't in it: sign in again after restoring on a new phone.
  *
- * 3.0: only the user's own settings go in (BackupSettings), never secrets or what only this phone
+ * 3.0: only the user's own settings go in (BackupSettings), never secrets or what only the phone
  * knows. A backup is read as something that may be broken or made by someone else: every item is
  * checked, the data goes in in one go (all of it or none), and the settings come last.
  */
@@ -294,7 +294,7 @@ object Backup {
             n(r.siteLevels, "site's ad blocking level", "sites' ad blocking levels").takeIf { r.siteLevels > 0 },
         )
         val data = when (added.size) {
-            0 -> "Nothing in it was new for this phone."
+            0 -> "Nothing in it was new for your phone."
             1 -> "Added ${added[0]}."
             else -> "Added ${added.dropLast(1).joinToString(", ")} and ${added.last()}."
         }
@@ -308,7 +308,7 @@ object Backup {
 
     /**
      * The backup's settings (3.0: last, once the data is in): only those Swift restores, of the kind
-     * each one holds. A list setting replaces this phone's (merged, an old backup could add
+     * each one holds. A list setting replaces the phone's (merged, an old backup could add
      * "Saved passwords" to what Quit clears).
      */
     private fun restoreSettings(ctx: Context, root: JSONObject, ids: Map<Long, Long>): Int {

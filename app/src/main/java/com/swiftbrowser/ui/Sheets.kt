@@ -172,12 +172,13 @@ object Sheets {
         setOnClickListener { onClick() }
     }
 
-    fun chips(ctx: Context, labels: List<String>, selected: Int, onSelect: (Int) -> Unit): ChipGroup =
+    /** [sideDp] (3.0.5): how far in from the side the chips begin (sheets 20, full-width screens Ui.MARGIN). */
+    fun chips(ctx: Context, labels: List<String>, selected: Int, sideDp: Int = 20, onSelect: (Int) -> Unit): ChipGroup =
         ChipGroup(ctx).apply {
             isSingleSelection = true
             isSelectionRequired = true
             chipSpacingHorizontal = ctx.dp(8)
-            setPadding(ctx.dp(20), 0, ctx.dp(20), 0)
+            setPadding(ctx.dp(sideDp), 0, ctx.dp(sideDp), 0)
             val states = arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf())
             val bg = ColorStateList(states, intArrayOf(Ui.accentContainer(ctx), ctx.color(R.color.surface_alt)))
             val fg = ColorStateList(states, intArrayOf(Ui.onAccentContainer(ctx), ctx.color(R.color.text_primary)))
@@ -217,16 +218,16 @@ object Sheets {
         }
 
     /** [chips] in one row that scrolls sideways when it doesn't fit (2.6: they wrapped onto two lines). */
-    fun chipRow(ctx: Context, labels: List<String>, selected: Int, onSelect: (Int) -> Unit): View =
+    fun chipRow(ctx: Context, labels: List<String>, selected: Int, sideDp: Int = 20, onSelect: (Int) -> Unit): View =
         android.widget.HorizontalScrollView(ctx).apply {
             isHorizontalScrollBarEnabled = false
             overScrollMode = View.OVER_SCROLL_NEVER
-            val group = chips(ctx, labels, selected, onSelect).apply { isSingleLine = true }
+            val group = chips(ctx, labels, selected, sideDp, onSelect).apply { isSingleLine = true }
             addView(group)
             // 3.0.4: chips fade out at the edge where more of them wait.
             Ui.fadeEdges(this)
             // The chosen one in sight from the start.
-            post { group.getChildAt(selected)?.let { scrollTo((it.left - ctx.dp(20)).coerceAtLeast(0), 0) } }
+            post { group.getChildAt(selected)?.let { scrollTo((it.left - ctx.dp(sideDp)).coerceAtLeast(0), 0) } }
         }
 
     /** Text sizes a site can have of its own (as in Settings → Text size). */
@@ -351,7 +352,8 @@ object Sheets {
             }
             val picture = ImageView(a).apply {
                 scaleType = ImageView.ScaleType.CENTER_CROP
-                background = Ui.shape(a, a.color(R.color.surface_alt), 12)
+                // 3.0.5: corners the site icon inside (10 dp in, about 6 dp corners) nests in.
+                background = Ui.shape(a, a.color(R.color.surface_alt), Ui.R_MEDIUM)
                 clipToOutline = true
                 importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
                 if (icon != null) {
@@ -391,8 +393,8 @@ object Sheets {
                 }
             }
             head.addView(texts, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            // 3.0.5: no line under the head: space alone tells it from the buttons and rows below.
             col.addView(head)
-            col.addView(Ui.divider(a))
         }
         val pick: (Action) -> Unit = { action ->
             dialog.dismiss()
@@ -530,7 +532,7 @@ object Sheets {
         }
         if (!tab.isBlank) button("Reload page") { TabManager.reload(tab) }
         tab.uboAction?.let { action -> button("uBlock Origin's own panel") { action.click() } }
-        AdBlock.extension?.metaData?.optionsPageUrl?.let { url -> button("uBlock Origin settings") { TabManager.newTab(url, incognito = false) } }
+        AdBlock.extension?.metaData?.optionsPageUrl?.let { url -> button("Advanced ad blocking") { TabManager.newTab(url, incognito = false) } }
         button("Update the block lists now") {
             AdBlock.updateFilterLists()
             a.snack("Updating the block lists…")
@@ -1077,6 +1079,8 @@ object Sheets {
                         if (bmp != null && h.bindingAdapterPosition >= 0) {
                             h.icon.imageTintList = null
                             h.icon.setImageBitmap(bmp)
+                            // 3.0.5: a little dimmer in the dark look.
+                            SoftPictures.apply(h.icon)
                         }
                     }
                 },

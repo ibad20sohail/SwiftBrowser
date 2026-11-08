@@ -20,7 +20,7 @@ class RowHolder(view: View) : RecyclerView.ViewHolder(view) {
     /** The ripple this row was given, so it isn't made again on every bind (2.6). */
     private var ripple: android.graphics.drawable.Drawable? = null
 
-    /** The icon's round badge and padding while a picture fills its place (3.0, see setPicture). */
+    /** The icon's soft badge and padding while a picture fills its place (3.0, see setPicture). */
     private var badge: android.graphics.drawable.Drawable? = null
     private var badgePadding = 0
     private var pictured = false
@@ -40,6 +40,8 @@ class RowHolder(view: View) : RecyclerView.ViewHolder(view) {
         }
         icon.setImageResource(iconRes)
         icon.imageTintList = android.content.res.ColorStateList.valueOf(Palette.color(icon.context, R.color.text_secondary))
+        // 3.0.5: a plain icon at full strength, also in a recycled row that showed a site's icon.
+        SoftPictures.apply(icon, false)
         this.title.text = title
         if (twoLines) {
             this.subtitle.setSingleLine(true)
@@ -64,11 +66,13 @@ class RowHolder(view: View) : RecyclerView.ViewHolder(view) {
             if (bmp != null && icon.tag == url) {
                 icon.imageTintList = null
                 icon.setImageBitmap(bmp)
+                // 3.0.5: a little dimmer in the dark look.
+                SoftPictures.apply(icon)
             }
         }
     }
 
-    /** A picture filling the icon's place without the round badge behind it (3.0: a Google account's photo). */
+    /** A picture filling the icon's place without the soft badge behind it (3.0: a Google account's photo). */
     fun setPicture(picture: android.graphics.drawable.Drawable) {
         if (!pictured) {
             badge = icon.background

@@ -74,6 +74,8 @@ function onNative(msg) {
       accentDark: /^#[0-9a-f]{6}$/i.test(msg.accentDark || '') ? msg.accentDark : '#8ab4ff',
       pageLight: colours(msg.pageLight),
       pageDark: colours(msg.pageDark),
+      // 3.0.5: reader view takes Swift's font or the phone's as the app does.
+      swiftFont: msg.swiftFont !== false,
     }, {
       // 3.0.1: the same lists without what incognito tabs chose: only these are written down.
       liteExcept: Array.isArray(msg.liteExceptKeep) ? msg.liteExceptKeep : null,
@@ -217,6 +219,7 @@ browser.storage.local.get('look').then(r => {
       readerTheme: READER_THEMES.includes(look.readerTheme) ? look.readerTheme : 'auto',
       accentLight: /^#[0-9a-f]{6}$/i.test(look.accentLight || '') ? look.accentLight : '#1b66e4',
       accentDark: /^#[0-9a-f]{6}$/i.test(look.accentDark || '') ? look.accentDark : '#8ab4ff',
+      swiftFont: look.swiftFont !== false,
     });
   }
 }, () => {

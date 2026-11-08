@@ -90,7 +90,6 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.lang.ref.WeakReference
-import java.util.Calendar
 import java.util.Locale
 
 /**
@@ -533,7 +532,7 @@ class FilesActivity : ListActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        thumbPx = dp(44)
+        thumbPx = dp(Ui.ICON_BOX)
         // 3.0.4: two folders side by side on a wide screen turned sideways (the button at the top,
         // remembered); held upright, one: the side worked on last. The left side has the screen's own
         // list, the right side one made like it (buildChrome).
@@ -754,20 +753,20 @@ class FilesActivity : ListActivity() {
 
     /**
      * The list (one view, drawn through one layer while it moves: cheap on a slow graphics chip)
-     * comes in a little from the side, or fades and rises a little.
+     * comes in from the side it was reached from, 3.0.5: the same change as anywhere in Swift
+     * (Motion.pageIn), or, with no side to come from, fades and rises a little.
      */
     private fun slideList(direction: Int) {
         if (!animationsOn || direction == 0) return
+        if (direction != SLIDE_FADE) {
+            Motion.pageIn(list, direction)
+            return
+        }
         list.animate().cancel()
         list.alpha = 0f
-        if (direction == SLIDE_FADE) {
-            list.translationX = 0f
-            list.translationY = Ui.dpf(this, 8f)
-        } else {
-            list.translationY = 0f
-            list.translationX = Ui.dpf(this, 28f) * direction
-        }
-        list.animate().alpha(1f).translationX(0f).translationY(0f).setDuration(Motion.NORMAL).setInterpolator(Motion.enter).withLayer().start()
+        list.translationX = 0f
+        list.translationY = Ui.dpf(this, 8f)
+        list.animate().alpha(1f).translationY(0f).setStartDelay(0).setDuration(Motion.PAGE_MS).setInterpolator(Motion.page).withLayer().start()
     }
 
     /** The start page's first cards, one after another (the few on screen, never a long list). */
@@ -890,6 +889,8 @@ class FilesActivity : ListActivity() {
     override fun onDestroy() {
         progressDialog?.dismiss()
         opening?.dismiss()
+        // 3.0.5: leaving Files lets go of its small pictures (up to 12 MB, kept while browsing before).
+        if (isFinishing) FileThumbs.trim()
         super.onDestroy()
     }
 
@@ -952,6 +953,8 @@ class FilesActivity : ListActivity() {
             clipToPadding = false
             setPadding(0, 0, 0, dp(24))
             isFocusableInTouchMode = true
+            // 3.0.5: the glow at its ends in the accent chosen, as the left side's has.
+            Palette.glow(this)
         }
         right.empty = FrameLayout(this).apply { visibility = View.GONE }
         right.box = MaxWidthLayout(this).apply {
@@ -962,7 +965,8 @@ class FilesActivity : ListActivity() {
             p.crumbs = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                setPadding(Ui.dp(this@FilesActivity, 8), 0, Ui.dp(this@FilesActivity, 12), 0)
+                // 3.0.5: the Home icon (24 dp in a 36 dp button) starts at the one side margin, like the search box above and the rows below.
+                setPadding(Ui.dp(this@FilesActivity, Ui.MARGIN - 6), 0, Ui.dp(this@FilesActivity, 12), 0)
             }
             p.pathScroll = HorizontalScrollView(this).apply {
                 isHorizontalScrollBarEnabled = false
@@ -1018,7 +1022,7 @@ class FilesActivity : ListActivity() {
             visibility = View.GONE
             setBackgroundColor(Palette.color(this@FilesActivity, R.color.sheet_bg))
         }
-        bottom.addView(Ui.divider(this))
+        // 3.0.5: no line above it: its own colour against the page's says where it begins.
         jobStrip = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(Ui.dp(this@FilesActivity, 16), Ui.dp(this@FilesActivity, 10), Ui.dp(this@FilesActivity, 16), Ui.dp(this@FilesActivity, 10))
@@ -1029,6 +1033,7 @@ class FilesActivity : ListActivity() {
         jobText = Ui.text(this, Ui.Type.LABEL, "").apply {
             isSingleLine = true
             ellipsize = TextUtils.TruncateAt.MIDDLE
+            Ui.steadyFigures(this)
         }
         jobBar = horizontalBar()
         jobStrip.addView(jobText)
@@ -1493,7 +1498,11 @@ class FilesActivity : ListActivity() {
     private fun showLoadingNow() {
         if (loading) {
             empty.removeAllViews()
-            val label = Ui.text(this@FilesActivity, Ui.Type.BODY_SECONDARY, loadingText).apply { setPadding(0, Ui.dp(this@FilesActivity, 12), 0, 0) }
+            val label = Ui.text(this@FilesActivity, Ui.Type.BODY_SECONDARY, loadingText).apply {
+                setPadding(0, Ui.dp(this@FilesActivity, 12), 0, 0)
+                // 3.0.5: "Reading… 45%" counts up here.
+                Ui.steadyFigures(this)
+            }
             empty.addView(LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 gravity = Gravity.CENTER_HORIZONTAL
@@ -1576,7 +1585,7 @@ class FilesActivity : ListActivity() {
             searchRows != null -> showEmpty(
                 shown.isEmpty() && !searching, "Nothing found",
                 when {
-                    home -> "No file or folder on this phone has “$q” in its name."
+                    home -> "No file or folder on your phone has “$q” in its name."
                     cat != null -> "No file here has “$q” in its name."
                     else -> "No file or folder here has “$q” in its name."
                 },
@@ -1592,7 +1601,7 @@ class FilesActivity : ListActivity() {
             )
             cat != null -> showEmpty(shown.isEmpty(), cat.nothing, cat.hint, cat.icon)
             unreadable -> showEmpty(true, "Swift can't open this folder", "Android keeps it private, or it is no longer there.", R.drawable.ic_folder)
-            else -> showEmpty(shown.isEmpty(), "This folder is empty", if (!showHidden) "Hidden files (names starting with a dot) aren't shown." else null, R.drawable.ic_folder)
+            else -> showEmpty(shown.isEmpty(), "This folder is empty", if (!showHidden) "Hidden files (names starting with a dot) aren't shown." else null, R.drawable.ic_folder, EmptyArt.FOLDER)
         }
         // 3.0.4: the folders on show are measured (FolderSizes).
         measureShown()
@@ -2924,8 +2933,8 @@ class FilesActivity : ListActivity() {
             val go = {
                 withChanges(list) {
                     clearSelection()
-                    val what = if (list.size == 1) list[0].name else FileJobs.items(list.size)
-                    val job = FileJobs.start(this, FileJobs.Kind.MOVE, "Moving $what to Private", onDone = ::doneHere) { w -> PrivateFolder.moveIn(w, list) }
+                    val what = FileJobs.items(list.size)
+                    val job = FileJobs.start(this, FileJobs.Kind.MOVE, "Moving $what to Private", hideNames = true, onDone = ::doneHere) { w -> PrivateFolder.moveIn(w, list) }
                     showProgress(job)
                 }
             }
@@ -2961,8 +2970,8 @@ class FilesActivity : ListActivity() {
         val all = groups.values.flatten()
         withChanges(groups.keys) {
             clearSelection()
-            val what = if (all.size == 1) all[0].name else FileJobs.items(all.size)
-            val job = FileJobs.start(this, FileJobs.Kind.MOVE, "Moving $what out of Private", onDone = ::doneHere) { w ->
+            val what = FileJobs.items(all.size)
+            val job = FileJobs.start(this, FileJobs.Kind.MOVE, "Moving $what out of Private", hideNames = true, onDone = ::doneHere) { w ->
                 for ((dest, list) in groups) {
                     if (!dest.isDirectory) {
                         val a = Volumes.accessFor(w.ctx, dest) ?: throw com.swiftbrowser.files.FileProblem(Transfers.CARD_TEXT)
@@ -3170,7 +3179,7 @@ class FilesActivity : ListActivity() {
         }
         if (place != null) detailRow(col, "Where", place)
         if (one != null) detailRow(col, "Full path", one.path)
-        val sizeView = detailRow(col, "Size", if (one != null && one.isFile) bytesText(one.length()) else "Counting…")
+        val sizeView = detailRow(col, "Size", if (one != null && one.isFile) bytesText(one.length()) else "Counting…").also { Ui.steadyFigures(it) }
         val holds = if (files.any { it.isDirectory }) detailRow(col, "Holds", "Counting…") else null
         if (one != null) detailRow(col, "Changed", longDate(one.lastModified()))
         if (v != null) {
@@ -3396,7 +3405,7 @@ class FilesActivity : ListActivity() {
             ellipsize = TextUtils.TruncateAt.MIDDLE
         }
         val bar = horizontalBar()
-        val detail = Ui.text(this, Ui.Type.CAPTION, FileJobs.detail(job))
+        val detail = Ui.steadyFigures(Ui.text(this, Ui.Type.CAPTION, FileJobs.detail(job)))
         box.addView(name)
         box.addView(bar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(this, 6)).apply {
             topMargin = Ui.dp(this@FilesActivity, 12)
@@ -3524,16 +3533,10 @@ class FilesActivity : ListActivity() {
         return parts.joinToString(" · ")
     }
 
-    private val calendar: Calendar = Calendar.getInstance()
-    private val thisYear = calendar.get(Calendar.YEAR)
+    // 3.0.5: the same short date as Downloads.
+    private val dates by lazy { ShortDates(this) }
 
-    private fun dateText(t: Long): String? {
-        if (t <= 0) return null
-        if (DateUtils.isToday(t)) return DateUtils.formatDateTime(this, t, DateUtils.FORMAT_SHOW_TIME)
-        calendar.timeInMillis = t
-        val year = if (calendar.get(Calendar.YEAR) == thisYear) DateUtils.FORMAT_NO_YEAR else DateUtils.FORMAT_SHOW_YEAR
-        return DateUtils.formatDateTime(this, t, DateUtils.FORMAT_SHOW_DATE or DateUtils.FORMAT_ABBREV_MONTH or year)
-    }
+    private fun dateText(t: Long): String? = dates.text(t)
 
     /** A box as tall as it is wide: a tile's picture. */
     private class SquareBox(ctx: Context) : FrameLayout(ctx) {
@@ -3550,6 +3553,8 @@ class FilesActivity : ListActivity() {
         val title: TextView, val subtitle: TextView?, val more: ImageButton, val play: ImageView?,
         /** 3.0.4: a folder tile's size, under its icon. */
         val size: TextView? = null,
+        /** 3.0.5: a row of the start page: a rounded piece of a group, as History's rows (GroupedRows); other rows lie flat on the page. */
+        val onCard: Boolean = false,
     ) : RecyclerView.ViewHolder(root) {
         var thumb: FileThumbs.Request? = null
         var marked = false
@@ -3626,7 +3631,8 @@ class FilesActivity : ListActivity() {
             val card = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 setPadding(dp(4), dp(4), dp(4), dp(6))
-                background = Ui.ripple(this@FilesActivity, null, Ui.R_SMALL)
+                // 3.0.5: the press's corners around the document's picture (12 dp, 4 dp in), so they nest.
+                background = Ui.ripple(this@FilesActivity, null, Ui.R_MEDIUM)
                 Ui.pressable(this, 0.96f)
                 setOnClickListener { openDoc(doc) }
                 setOnLongClickListener { v ->
@@ -3636,7 +3642,8 @@ class FilesActivity : ListActivity() {
                 }
             }
             val thumb = ImageView(this).apply {
-                background = Ui.shape(this@FilesActivity, Palette.color(this@FilesActivity, R.color.card_bg), 12, Palette.color(this@FilesActivity, R.color.outline))
+                // 3.0.5: a plain filled card (no outline): the page behind it is a step darker.
+                background = Ui.shape(this@FilesActivity, Palette.color(this@FilesActivity, R.color.card_bg), Ui.R_SMALL)
                 clipToOutline = true
                 scaleType = ImageView.ScaleType.CENTER
                 setImageDrawable(DocIcon(doc.kind, dp(40)))
@@ -3698,7 +3705,7 @@ class FilesActivity : ListActivity() {
         if (key == h.shown) return
         h.shown = key
         h.box.removeAllViews()
-        val chips = Sheets.chipRow(this, f.labels, f.chosen) { i ->
+        val chips = Sheets.chipRow(this, f.labels, f.chosen, sideDp = Ui.MARGIN) { i ->
             val label = f.labels.getOrNull(i)
             docGroup = DocGroup.entries.firstOrNull { it.label == label }
             selected.clear()
@@ -3966,7 +3973,8 @@ class FilesActivity : ListActivity() {
         chosen.list.requestFocus()
     }
 
-    private fun sideLine() = View(this).apply { setBackgroundColor(Palette.color(this@FilesActivity, R.color.divider)) }
+    // 3.0.5: kept: nothing else tells two folders side by side apart; the outline colour, as the divider colour hardly shows on the settings' page colour.
+    private fun sideLine() = View(this).apply { setBackgroundColor(Palette.color(this@FilesActivity, R.color.outline)) }
 
     /** The thin accent line along the top of the side worked on, while two show (it fades in as a side is chosen). */
     private fun updateMarks() {
@@ -4327,11 +4335,19 @@ class FilesActivity : ListActivity() {
                 }
                 if (j == list.size && removed.size == gone) {
                     for (p in removed.asReversed()) notifyItemRemoved(p)
+                    // 3.0.5: the start page's rows are grouped pieces: those left get their corners again.
+                    if (startPage) notifyItemRangeChanged(0, list.size, PAYLOAD_CORNERS)
                     return
                 }
             }
             notifyDataSetChanged()
         }
+
+        /** 3.0.5: this side shows its start page (a search or an archive show their own rows). */
+        private val startPage: Boolean get() = owner.home && owner.index == null && owner.searchRows == null
+
+        /** 3.0.5: a start page row's group: rows next to each other go together, anything else ends a group. */
+        private val groupOf: (Int) -> Any? = { i -> if (items[i] is Row) 0 else null }
 
         private fun keyOf(o: Any): Any = when (o) {
             is Row -> o.key
@@ -4349,7 +4365,8 @@ class FilesActivity : ListActivity() {
         override fun getItemCount() = items.size
 
         override fun getItemViewType(position: Int) = when (items[position]) {
-            is Row -> if (owner.tiles) TYPE_TILE else TYPE_ROW
+            // 3.0.5: on the start page, rows as grouped pieces on the settings' page; elsewhere flat rows.
+            is Row -> if (owner.tiles) TYPE_TILE else if (startPage) TYPE_HOME_ROW else TYPE_ROW
             is Header -> TYPE_HEADER
             is StorageCard -> TYPE_STORAGE
             is CategoryGrid -> TYPE_CATEGORIES
@@ -4362,6 +4379,7 @@ class FilesActivity : ListActivity() {
 
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder = when (viewType) {
             TYPE_ROW -> makeRow()
+            TYPE_HOME_ROW -> makeRow(onCard = true)
             TYPE_TILE -> makeTile()
             TYPE_HEADER -> makeHeader()
             TYPE_STORAGE -> makeStorage()
@@ -4374,7 +4392,7 @@ class FilesActivity : ListActivity() {
                 layoutParams = RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
             })
             else -> HintHolder(Ui.text(this@FilesActivity, Ui.Type.BODY_SECONDARY, "").apply {
-                setPadding(dp(20), dp(2), dp(20), dp(8))
+                setPadding(dp(Ui.MARGIN), dp(2), dp(Ui.MARGIN), dp(8))
                 layoutParams = RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
             })
         }
@@ -4384,7 +4402,7 @@ class FilesActivity : ListActivity() {
         override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int, payloads: MutableList<Any>) {
             val item = items[position]
             // 3.0.3: only the videos' watched marks are asked for again: nothing else changes.
-            if (payloads.isNotEmpty() && item !is Row && payloads.all { it == PAYLOAD_WATCHED || it == PAYLOAD_SIZE }) return
+            if (payloads.isNotEmpty() && item !is Row && payloads.all { it == PAYLOAD_WATCHED || it == PAYLOAD_SIZE || it == PAYLOAD_CORNERS }) return
             when (item) {
                 is Row -> {
                     val h = holder as FileHolder
@@ -4394,8 +4412,10 @@ class FilesActivity : ListActivity() {
                         if (PAYLOAD_WATCHED in payloads) markWatched(owner, h, item)
                         if (PAYLOAD_SIZE in payloads) bindSize(owner, h, item)
                         if (PAYLOAD_TOGGLED in payloads || PAYLOAD_SELECTION in payloads) bindSelection(owner, h, item, PAYLOAD_TOGGLED in payloads, fade = PAYLOAD_SELECTION in payloads)
+                        if (PAYLOAD_CORNERS in payloads && h.onCard) GroupedRows.place(h.itemView, position, items.size, groupOf)
                     } else {
                         bind(owner, h, item)
+                        if (h.onCard) GroupedRows.place(h.itemView, position, items.size, groupOf)
                     }
                 }
                 is Header -> bindHeader(holder as HeaderHolder, item)
@@ -4405,7 +4425,12 @@ class FilesActivity : ListActivity() {
                 is DocFilter -> bindDocFilter(holder as FilterHolder, item)
                 is RecentDocs -> bindRecentDocs(holder as DocsHolder, item)
                 is ContinueCards -> (holder as ContinueHolder).row.show(item.items)
-                is Hint -> (holder as HintHolder).text.text = item.text
+                is Hint -> (holder as HintHolder).text.let { t ->
+                    t.text = item.text
+                    // 3.0.5: lined up with the section headings and cards around it on the start page, with the rows elsewhere.
+                    val x = dp(if (startPage) Ui.CONTENT_X else Ui.MARGIN)
+                    if (t.paddingLeft != x) t.setPadding(x, t.paddingTop, x, t.paddingBottom)
+                }
             }
         }
 
@@ -4423,16 +4448,27 @@ class FilesActivity : ListActivity() {
     /** 3.0.4: the side [h] is on. */
     private fun paneOf(h: RecyclerView.ViewHolder): Pane? = (h.bindingAdapter as? Adapter)?.owner
 
-    private fun makeRow(): FileHolder {
+    /**
+     * A row of a folder: flat on the page, at the side margin. [onCard] (3.0.5): a row of the start
+     * page: a rounded piece of a group at the side margin (GroupedRows), like History's rows and the
+     * start page's cards, so everything on that page lines up under its heading.
+     */
+    private fun makeRow(onCard: Boolean = false): FileHolder {
         val ctx = this
         val root = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(16), dp(8), dp(8), dp(8))
-            minimumHeight = dp(64)
-            setBackgroundResource(RowHolder.selectableBackground(ctx))
-            layoutParams = RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            setPadding(dp(Ui.MARGIN), dp(8), dp(8), dp(8))
+            minimumHeight = dp(Ui.ROW_TWO_LINES)
+            if (!onCard) setBackgroundResource(RowHolder.selectableBackground(ctx))
+            layoutParams = RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                if (onCard) {
+                    leftMargin = dp(Ui.MARGIN)
+                    rightMargin = dp(Ui.MARGIN)
+                }
+            }
         }
+        if (onCard) GroupedRows.prepare(root)
         val icon = ImageView(ctx).apply {
             clipToOutline = true
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
@@ -4463,7 +4499,7 @@ class FilesActivity : ListActivity() {
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }
         root.addView(check, LinearLayout.LayoutParams(dp(44), dp(44)))
-        val h = FileHolder(root, false, root, icon, icon, check, title, subtitle, more, null)
+        val h = FileHolder(root, false, root, icon, icon, check, title, subtitle, more, null, onCard = onCard)
         h.plain = root.background
         h.markedFill = Ui.ripple(ctx, ColorDrawable(Ui.accentContainer(ctx)), 0)
         return wire(h)
@@ -4478,7 +4514,7 @@ class FilesActivity : ListActivity() {
         }
         val card = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(4), dp(4), 0, dp(2))
+            setPadding(dp(TILE_GAP), dp(TILE_GAP), 0, dp(2))
         }
         root.addView(card, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         val box = SquareBox(ctx)
@@ -4500,7 +4536,7 @@ class FilesActivity : ListActivity() {
         box.addView(play, FrameLayout.LayoutParams(dp(26), dp(26), Gravity.BOTTOM or Gravity.START).apply { setMargins(dp(6), 0, 0, dp(6)) })
         // The tick box sits on a patch of the page's colour, so it shows on any picture.
         val check = ImageView(ctx).apply {
-            background = Ui.shape(ctx, Tones.withAlpha(Palette.color(ctx, R.color.page_bg), 0xE6), 6)
+            background = Ui.shape(ctx, Tones.withAlpha(Palette.color(ctx, R.color.page_bg), 0xE6), Ui.R_XSMALL)
             scaleType = ImageView.ScaleType.FIT_CENTER
             setPadding(dp(2), dp(2), dp(2), dp(2))
             visibility = View.GONE
@@ -4536,17 +4572,21 @@ class FilesActivity : ListActivity() {
         line.addView(more, LinearLayout.LayoutParams(dp(32), dp(36)))
         card.addView(line, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(2) })
         val h = FileHolder(root, true, card, box, icon, check, title, null, more, play, size)
-        h.plain = Ui.ripple(ctx, null, 16)
-        h.markedFill = Ui.ripple(ctx, Ui.shape(ctx, Ui.accentContainer(ctx), 16), 16)
+        h.plain = Ui.ripple(ctx, null, TILE_RADIUS)
+        h.markedFill = Ui.ripple(ctx, Ui.shape(ctx, Ui.accentContainer(ctx), TILE_RADIUS), TILE_RADIUS)
         card.background = h.plain
         return wire(h)
     }
 
     /** What a row or tile does when tapped, held or its ⋮ is tapped; and its two backgrounds. */
     private fun wire(h: FileHolder): FileHolder {
-        val radius = if (h.tile) 14 else 10
+        // 3.0.5: the one row icon holder, a rounded square (Ui.R_SMALL; rows had 10 dp and tiles 14 dp
+        // corners). On a card its fill is a step off the card (surface_alt, as History's rows); flat on the
+        // page (rows, tiles) it is the card colour, which shows on the settings' colour behind it. A
+        // tile's picture nests in the tile's own corners (the tile shows when selected or pressed).
+        val radius = if (h.tile) Corners.nested(TILE_RADIUS, TILE_GAP) else Ui.R_SMALL
         h.folderFill = Ui.shape(this, Ui.accentContainer(this), radius)
-        h.fileFill = Ui.shape(this, Palette.color(this, R.color.surface_alt), radius)
+        h.fileFill = Ui.shape(this, Palette.color(this, if (h.onCard) R.color.surface_alt else R.color.card_bg), radius)
         // 3.0.4: a row's side is the one worked on once it is used (TalkBack's taps come without a touch).
         h.card.setOnClickListener {
             paneOf(h)?.let { setChosen(it) }
@@ -4698,16 +4738,18 @@ class FilesActivity : ListActivity() {
 
     // ------------------------------------------------------------------ the start page's parts
 
-    /** The start page's cards: a soft outline on the card colour. */
+    /** The start page's cards: 3.0.5: plain filled like every card, no outline (the page behind them is a step darker). */
     private fun cardFill(): Drawable =
-        Ui.ripple(this, Ui.shape(this, Palette.color(this, R.color.card_bg), Ui.R_MEDIUM, Palette.color(this, R.color.outline)), Ui.R_MEDIUM)
+        Ui.ripple(this, Ui.shape(this, Palette.color(this, R.color.card_bg), Ui.R_MEDIUM), Ui.R_MEDIUM)
 
     private fun makeHeader(): HeaderHolder {
         val ctx = this
         val row = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(20), dp(18), dp(12), dp(6))
+            // 3.0.5: lined up with the first icon or text in the cards and rows under it, with the
+            // one section rhythm (the taller "Show all" doesn't change it).
+            setPadding(dp(Ui.CONTENT_X), dp(Ui.SECTION_ABOVE), dp(12), dp(Ui.SECTION_BELOW))
             layoutParams = RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         }
         val title = Ui.text(ctx, Ui.Type.SECTION, "")
@@ -4716,7 +4758,10 @@ class FilesActivity : ListActivity() {
             setPadding(dp(8), dp(4), dp(8), dp(4))
             setBackgroundResource(RowHolder.selectableBackground(ctx))
         }
-        row.addView(action)
+        row.addView(action, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            topMargin = -dp(4)
+            bottomMargin = -dp(4)
+        })
         return HeaderHolder(row, title, action)
     }
 
@@ -4735,12 +4780,12 @@ class FilesActivity : ListActivity() {
     private fun makeStorage(): StorageHolder {
         val ctx = this
         val outer = FrameLayout(ctx).apply {
-            setPadding(dp(16), dp(4), dp(16), dp(4))
+            setPadding(dp(Ui.MARGIN), dp(4), dp(Ui.MARGIN), dp(4))
             layoutParams = RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         }
         val card = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(16), dp(14), dp(16), dp(14))
+            setPadding(dp(Ui.ROW_INSET), dp(14), dp(Ui.ROW_INSET), dp(14))
             background = cardFill()
             Ui.pressable(this, 0.98f)
         }
@@ -4748,8 +4793,8 @@ class FilesActivity : ListActivity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        val icon = Ui.iconBadge(ctx, R.drawable.ic_phone, 40)
-        head.addView(icon, LinearLayout.LayoutParams(dp(40), dp(40)).apply { marginEnd = dp(14) })
+        val icon = Ui.iconBadge(ctx, R.drawable.ic_phone)
+        head.addView(icon, LinearLayout.LayoutParams(dp(Ui.ICON_BOX), dp(Ui.ICON_BOX)).apply { marginEnd = dp(14) })
         val texts = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
         val name = Ui.text(ctx, Ui.Type.SUBTITLE, "", lines = 1)
         val detail = Ui.text(ctx, Ui.Type.CAPTION, "", lines = 1)
@@ -4876,12 +4921,12 @@ class FilesActivity : ListActivity() {
                 val card = LinearLayout(ctx).apply {
                     orientation = LinearLayout.HORIZONTAL
                     gravity = Gravity.CENTER_VERTICAL
-                    setPadding(dp(12), dp(12), dp(8), dp(12))
+                    setPadding(dp(Ui.ROW_INSET), dp(12), dp(8), dp(12))
                     background = cardFill()
                     Ui.pressable(this, 0.96f)
                     setOnClickListener { openCategory(c) }
                 }
-                card.addView(Ui.iconBadge(ctx, c.icon, 36), LinearLayout.LayoutParams(dp(36), dp(36)).apply { marginEnd = dp(12) })
+                card.addView(Ui.iconBadge(ctx, c.icon), LinearLayout.LayoutParams(dp(Ui.ICON_BOX), dp(Ui.ICON_BOX)).apply { marginEnd = dp(12) })
                 val count = Ui.text(ctx, Ui.Type.CAPTION, "", lines = 1)
                 card.addView(LinearLayout(ctx).apply {
                     orientation = LinearLayout.VERTICAL
@@ -4913,12 +4958,12 @@ class FilesActivity : ListActivity() {
                 val card = LinearLayout(ctx).apply {
                     orientation = LinearLayout.HORIZONTAL
                     gravity = Gravity.CENTER_VERTICAL
-                    setPadding(dp(12), dp(12), dp(8), dp(12))
+                    setPadding(dp(Ui.ROW_INSET), dp(12), dp(8), dp(12))
                     background = cardFill()
                     Ui.pressable(this, 0.96f)
                     setOnClickListener { onTool(t) }
                 }
-                card.addView(Ui.iconBadge(ctx, t.icon, 36), LinearLayout.LayoutParams(dp(36), dp(36)).apply { marginEnd = dp(12) })
+                card.addView(Ui.iconBadge(ctx, t.icon), LinearLayout.LayoutParams(dp(Ui.ICON_BOX), dp(Ui.ICON_BOX)).apply { marginEnd = dp(12) })
                 val caption = Ui.text(ctx, Ui.Type.CAPTION, "", lines = 1)
                 card.addView(LinearLayout(ctx).apply {
                     orientation = LinearLayout.VERTICAL
@@ -5025,9 +5070,16 @@ class FilesActivity : ListActivity() {
         private const val TYPE_DOCS = 8
         private const val TYPE_CONTINUE = 9
 
+        /** 3.0.5: a start page row: a grouped piece; the kinds of holders don't change on a recycled row. */
+        private const val TYPE_HOME_ROW = 10
+
         private const val SLIDE_FORWARD = 1
         private const val SLIDE_BACK = -1
         private const val SLIDE_FADE = 2
+
+        /** 3.0.5: a grid tile's corners (dp), and how far in from them its picture sits. */
+        private const val TILE_RADIUS = Ui.R_MEDIUM
+        private const val TILE_GAP = 4
 
         /** More rows than this removed at once show anew instead of closing up one by one. */
         private const val MAX_ANIMATED = 30
@@ -5051,6 +5103,9 @@ class FilesActivity : ListActivity() {
 
         /** 3.0.4: rows rebound for a folder's size only, once measured. */
         private const val PAYLOAD_SIZE = "size"
+
+        /** 3.0.5: the start page's rows given their corners again, after one of them went. */
+        private const val PAYLOAD_CORNERS = "corners"
 
         /** 3.0.4: sorted by size, a folder waits this long at most for its folders' sizes before it shows. */
         private const val SIZE_WAIT_MS = 1_200L

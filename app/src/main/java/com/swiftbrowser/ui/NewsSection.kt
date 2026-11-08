@@ -22,11 +22,10 @@ import com.swiftbrowser.news.News
 import com.swiftbrowser.news.Story
 
 /**
- * The news under the home page's shortcuts (2.0): topic chips, then compact rows (the site's icon,
- * name and how long ago, the headline, and a small picture on the right when the story has one),
- * or, with "Stories with big pictures" (2.2), cards with the picture across the top, as in Chrome.
- * Grey shapes stand in while the first stories load; more rows appear while scrolling down, and
- * pictures load only as their rows come near the screen.
+ * The news under the home page's shortcuts (2.0): topic chips, then a card for each story, with
+ * its picture across the top, the site and the headline (3.0.5: always; compact rows are gone).
+ * Grey shapes stand in while the first stories load; more cards appear while scrolling down, and
+ * pictures load only as their cards come near the screen.
  */
 @SuppressLint("ViewConstructor")
 class NewsSection(context: Context, private val listener: Listener) : LinearLayout(context) {
@@ -44,8 +43,6 @@ class NewsSection(context: Context, private val listener: Listener) : LinearLayo
          */
         const val FIRST = 5
         const val PAGE = 10
-        const val PICTURE_DP = 76
-
         /** A card's picture is decoded to this many dp high, and 16:9 wide (sharp, still light). */
         const val CARD_PICTURE_DP = 180
 
@@ -67,17 +64,11 @@ class NewsSection(context: Context, private val listener: Listener) : LinearLayo
         visibility = View.GONE
     }
     private val refreshButton: ImageButton
+    private val settingsButton: ImageButton
+    private val title: TextView
     private var refreshing = false
-    private val pictureSize = Ui.dp(context, PICTURE_DP)
     private val cardPictureSize = Ui.dp(context, CARD_PICTURE_DP)
     private val cardPictureWidth = cardPictureSize * 16 / 9
-
-    /** The look the rows were made in (Settings can change it while the home page is away). */
-    private var builtCards = com.swiftbrowser.SwiftApp.prefs.newsCards
-
-    /** The box a picture is decoded for: a row's square, or a card's 16:9 band (3.0). */
-    private fun pictureSize() = if (builtCards) cardPictureSize else pictureSize
-    private fun pictureWidth() = if (builtCards) cardPictureWidth else pictureSize
 
     private val iconListener: (String) -> Unit = { key ->
         for (i in 0 until body.childCount) {
@@ -93,24 +84,29 @@ class NewsSection(context: Context, private val listener: Listener) : LinearLayo
         val head = LinearLayout(context).apply {
             orientation = HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(Ui.dp(context, 8), 0, 0, Ui.dp(context, 4))
+            setPadding(0, 0, 0, Ui.dp(context, 4))
         }
-        // 3.0.4: as bold as the home page's other headings (the scale's HEADING).
-        head.addView(Ui.text(context, Ui.Type.HEADING, "News"), LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        // 3.0.4: as bold as the home page's other headings (the scale's HEADING). 3.0.5: just its word
+        // wide, 8 dp in by its own padding as before, so a soft backing can go behind it on the picture.
+        title = Ui.text(context, Ui.Type.HEADING, "News").apply { setPadding(Ui.dp(context, 8), 0, Ui.dp(context, 8), 0) }
+        head.addView(title, LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        head.addView(View(context), LayoutParams(0, 0, 1f))
         refreshButton = iconButton(R.drawable.ic_refresh, "Refresh news") { refresh(force = true) }
         head.addView(refreshButton)
-        head.addView(iconButton(R.drawable.ic_tune, "News settings") { listener.onNewsSettings() })
+        settingsButton = iconButton(R.drawable.ic_tune, "News settings") { listener.onNewsSettings() }
+        head.addView(settingsButton)
         addView(head)
 
         chips.isSingleLine = true
         chips.isSingleSelection = true
         chips.isSelectionRequired = true
         chips.chipSpacingHorizontal = Ui.dp(context, 8)
+        // 3.0.5: the row's side padding is the chips' own, so the fade below reaches the row's real end
+        // (padding on the row left a sliver of the next chip showing past the fade).
+        chips.setPadding(Ui.dp(context, 4), 0, Ui.dp(context, 4), 0)
         addView(HorizontalScrollView(context).apply {
             isHorizontalScrollBarEnabled = false
             overScrollMode = View.OVER_SCROLL_NEVER
-            clipToPadding = false
-            setPadding(Ui.dp(context, 4), 0, Ui.dp(context, 4), 0)
             addView(chips)
             // 3.0.4: topics fade out at the edge where more of them wait (they used to be cut off hard).
             Ui.fadeEdges(this)
@@ -211,7 +207,7 @@ class NewsSection(context: Context, private val listener: Listener) : LinearLayo
 
     private fun showKept(kept: List<Story>, switched: Boolean) {
         // Opening the home page again doesn't rebuild the same rows.
-        if (kept != stories || body.childCount == 0 || builtCards != com.swiftbrowser.SwiftApp.prefs.newsCards) setStories(kept, animate = switched)
+        if (kept != stories || body.childCount == 0) setStories(kept, animate = switched)
         if (News.stale(topic)) refresh(force = false)
     }
 
@@ -263,7 +259,6 @@ class NewsSection(context: Context, private val listener: Listener) : LinearLayo
         ready.clear()
         readyFrom = -1
         lastScan = Int.MIN_VALUE
-        builtCards = com.swiftbrowser.SwiftApp.prefs.newsCards
         skeleton.visibility = View.GONE
         message.visibility = View.GONE
         body.removeAllViews()
@@ -274,18 +269,22 @@ class NewsSection(context: Context, private val listener: Listener) : LinearLayo
         post { checkVisible() }
     }
 
-    private fun build(s: Story): View = if (builtCards) card(s) else row(s)
+    /** 3.0.5: the home page's picture is behind the news (HomeView.setOnPicture). */
+    fun setOnPicture(on: Boolean) {
+        // Its heading on a soft pill, its two buttons on soft round backings, as they have one colour.
+        title.background = if (on) Ui.shape(context, HomeBackground.backing(context, Ui.text(context)), Ui.R_SMALL) else null
+        title.setPadding(Ui.dp(context, 8), if (on) Ui.dp(context, 3) else 0, if (on) Ui.dp(context, 12) else Ui.dp(context, 8), if (on) Ui.dp(context, 3) else 0)
+        val fill = if (on) HomeBackground.backing(context, Ui.textSecondary(context), 3.0) else 0
+        for (b in listOf(refreshButton, settingsButton)) b.background = if (on) Ui.ripple(context, Ui.circle(fill), 22) else Ui.rippleBorderless(context)
+    }
 
     private fun showMore() {
         val end = (shown + if (shown == 0) FIRST else PAGE).coerceAtMost(stories.size)
         val prebuilt = if (readyFrom == shown) ready.toList() else emptyList()
         ready.clear()
         readyFrom = -1
-        for (i in shown until end) {
-            val view = prebuilt.getOrNull(i - shown) ?: build(stories[i])
-            if (!builtCards && body.childCount > 0) body.addView(Ui.divider(context, 16))
-            body.addView(view)
-        }
+        // 3.0.5: no lines between the stories: each has room around it.
+        for (i in shown until end) body.addView(prebuilt.getOrNull(i - shown) ?: card(stories[i]))
         shown = end
         prepareMore()
     }
@@ -307,7 +306,7 @@ class NewsSection(context: Context, private val listener: Listener) : LinearLayo
             if (stories !== list || readyFrom != shown || !isAttachedToWindow || next >= (shown + PAGE).coerceAtMost(stories.size)) {
                 return@addIdleHandler false
             }
-            ready += build(stories[next])
+            ready += card(stories[next])
             true
         }
     }
@@ -361,7 +360,7 @@ class NewsSection(context: Context, private val listener: Listener) : LinearLayo
             val pending = row.getTag(R.id.row_action) as? String ?: continue
             row.setTag(R.id.row_action, null)
             val picture = row.findViewById<ImageView>(R.id.row_icon)
-            PreviewLoader.load(context as Activity, pending, pictureSize(), pictureWidth()) { bmp ->
+            PreviewLoader.load(context as Activity, pending, cardPictureSize, cardPictureWidth) { bmp ->
                 picture.setImageBitmap(bmp)
                 picture.alpha = 0f
                 picture.animate().alpha(1f).setDuration(Motion.NORMAL).start()
@@ -369,64 +368,16 @@ class NewsSection(context: Context, private val listener: Listener) : LinearLayo
         }
     }
 
-    private fun row(s: Story): View {
-        val ctx = context
-        val row = LinearLayout(ctx).apply {
-            orientation = HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(Ui.dp(ctx, 8), Ui.dp(ctx, 12), Ui.dp(ctx, 8), Ui.dp(ctx, 12))
-            background = Ui.ripple(ctx, null, Ui.R_MEDIUM)
-            tag = s
-            contentDescription = "${s.title}. ${s.source}"
-            setOnClickListener { listener.onStoryClicked(s) }
-            setOnLongClickListener {
-                Haptics.hold(this)
-                listener.onStoryLongClicked(s)
-                true
-            }
-        }
-        Ui.pressable(row, 0.98f)
-        val texts = LinearLayout(ctx).apply { orientation = VERTICAL }
-        val meta = LinearLayout(ctx).apply {
-            orientation = HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        meta.addView(FixedImage(ctx).apply {
-            id = R.id.tile_icon
-            setImageDrawable(Ui.icon(ctx, R.drawable.ic_globe, Ui.textSecondary(ctx)))
-            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-        }, LayoutParams(Ui.dp(ctx, 16), Ui.dp(ctx, 16)).apply { marginEnd = Ui.dp(ctx, 8) })
-        val ago = if (s.time > 0) " · " + DateUtils.getRelativeTimeSpanString(s.time, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS, DateUtils.FORMAT_ABBREV_RELATIVE) else ""
-        meta.addView(Ui.text(ctx, Ui.Type.CAPTION, s.source + ago, lines = 1), LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        texts.addView(meta)
-        texts.addView(Ui.text(ctx, Ui.Type.SUBTITLE, s.title, lines = 3).apply { setPadding(0, Ui.dp(ctx, 6), 0, 0) })
-        row.addView(texts, LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        if (s.image != null && !DataSaver.active) {
-            val picture = FixedImage(ctx).apply {
-                id = R.id.row_icon
-                scaleType = ImageView.ScaleType.CENTER_CROP
-                background = Ui.shape(ctx, Ui.color(ctx, R.color.skeleton), Ui.R_SMALL)
-                clipToOutline = true
-                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-            }
-            row.addView(picture, LayoutParams(pictureSize, pictureSize).apply { marginStart = Ui.dp(ctx, 14) })
-            val kept = PreviewLoader.cached(s.image, pictureSize)
-            if (kept != null) picture.setImageBitmap(kept) else row.setTag(R.id.row_action, s.image)
-            row.setTag(R.id.row_image, s.image)
-        }
-        bindIcon(row, s)
-        return row
-    }
-
     /** A story as a card (2.2): the picture across the top when it has one, then the site and the headline. */
     private fun card(s: Story): View {
         val ctx = context
         val card = LinearLayout(ctx).apply {
             orientation = VERTICAL
-            background = Ui.shape(ctx, Ui.color(ctx, R.color.card_bg), Ui.R_MEDIUM)
+            // 3.0.5: plain filled, no shadow: tile_bg (a step off the home page, as the Continue cards
+            // and shortcuts are), so it shows on a white page and over a picture too.
+            background = Ui.shape(ctx, Ui.color(ctx, R.color.tile_bg), Ui.R_MEDIUM)
             foreground = Ui.ripple(ctx, null, Ui.R_MEDIUM)
             clipToOutline = true
-            elevation = Ui.dp(ctx, 1).toFloat()
             tag = s
             contentDescription = "${s.title}. ${s.source}"
             setOnClickListener { listener.onStoryClicked(s) }
@@ -435,8 +386,9 @@ class NewsSection(context: Context, private val listener: Listener) : LinearLayo
                 listener.onStoryLongClicked(s)
                 true
             }
+            // 3.0.5: at the home page's side margin (16 dp), no more in than the cards above and below.
             layoutParams = LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                setMargins(Ui.dp(ctx, 4), Ui.dp(ctx, 6), Ui.dp(ctx, 4), Ui.dp(ctx, 6))
+                setMargins(0, Ui.dp(ctx, 6), 0, Ui.dp(ctx, 6))
             }
         }
         Ui.pressable(card, 0.98f)
@@ -446,6 +398,8 @@ class NewsSection(context: Context, private val listener: Listener) : LinearLayo
                 scaleType = ImageView.ScaleType.CENTER_CROP
                 setBackgroundColor(Ui.color(ctx, R.color.skeleton))
                 importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+                // 3.0.5: a little dimmer in the dark look.
+                SoftPictures.apply(this)
             }
             card.addView(picture, LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
             val kept = PreviewLoader.cached(s.image, cardPictureSize, cardPictureWidth)
@@ -464,11 +418,18 @@ class NewsSection(context: Context, private val listener: Listener) : LinearLayo
             id = R.id.tile_icon
             setImageDrawable(Ui.icon(ctx, R.drawable.ic_globe, Ui.textSecondary(ctx)))
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            // 3.0.5: the site's icon when it comes, a little dimmer in the dark look.
+            SoftPictures.apply(this)
         }, LayoutParams(Ui.dp(ctx, 16), Ui.dp(ctx, 16)).apply { marginEnd = Ui.dp(ctx, 8) })
         val ago = if (s.time > 0) " · " + DateUtils.getRelativeTimeSpanString(s.time, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS, DateUtils.FORMAT_ABBREV_RELATIVE) else ""
         meta.addView(Ui.text(ctx, Ui.Type.CAPTION, s.source + ago, lines = 1), LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         texts.addView(meta)
-        texts.addView(Ui.text(ctx, Ui.Type.TITLE, s.title, lines = 3).apply { setPadding(0, Ui.dp(ctx, 8), 0, 0) })
+        // 3.0.5: calmer headlines, in medium at the scale's heading size (bold at 19 sp over three
+        // lines was heavy); the card's picture still leads, and they read beside the 15.5 sp news rows.
+        texts.addView(Ui.text(ctx, Ui.Type.HEADING, s.title, lines = 3).apply {
+            typeface = Ui.MEDIUM
+            setPadding(0, Ui.dp(ctx, 8), 0, 0)
+        })
         card.addView(texts)
         bindIcon(card, s)
         return card

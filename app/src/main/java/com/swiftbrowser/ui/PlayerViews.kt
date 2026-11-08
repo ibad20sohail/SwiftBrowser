@@ -198,6 +198,45 @@ class LoopMarks(ctx: Context, colour: Int) : Drawable() {
 }
 
 /**
+ * 3.0.5: the picture of a song with no cover: over the accent's soft colour (the view's background)
+ * a softer disc and a small note in the middle of it, in proportion to any size. A calm, still
+ * picture; one giant note used to fill the screen.
+ */
+class NoCoverArt(disc: Int, private val note: Drawable) : Drawable() {
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = disc }
+
+    override fun onBoundsChange(bounds: Rect) {
+        val half = (minOf(bounds.width(), bounds.height()) * NOTE / 2).toInt()
+        note.setBounds(bounds.centerX() - half, bounds.centerY() - half, bounds.centerX() + half, bounds.centerY() + half)
+    }
+
+    override fun draw(canvas: Canvas) {
+        val b = bounds
+        canvas.drawCircle(b.exactCenterX(), b.exactCenterY(), minOf(b.width(), b.height()) * DISC / 2, paint)
+        note.draw(canvas)
+    }
+
+    override fun setAlpha(alpha: Int) {
+        paint.alpha = alpha
+        note.alpha = alpha
+    }
+
+    override fun setColorFilter(colorFilter: ColorFilter?) {
+        paint.colorFilter = colorFilter
+        note.colorFilter = colorFilter
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
+
+    private companion object {
+        /** The disc's and the note's width, as shares of the picture's. */
+        const val DISC = 0.72f
+        const val NOTE = 0.2f
+    }
+}
+
+/**
  * 2.9: the player's touch layer, over the video, under the controls: a tap shows or hides the
  * controls, a double tap on the left or right skips back or on (in the middle: play or pause),
  * holding plays faster until let go, swiping up and down changes the brightness (left half) or the

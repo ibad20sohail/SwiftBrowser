@@ -65,7 +65,7 @@ object Translate {
     }
 
     private fun describe(e: Throwable?): String = when ((e as? TranslationsException)?.code) {
-        TranslationsException.ERROR_ENGINE_NOT_SUPPORTED -> "This phone can't run the translation engine."
+        TranslationsException.ERROR_ENGINE_NOT_SUPPORTED -> "Your phone can't run the translation engine."
         TranslationsException.ERROR_LANGUAGE_NOT_SUPPORTED -> "That language can't be translated yet."
         TranslationsException.ERROR_MODEL_COULD_NOT_DOWNLOAD, TranslationsException.ERROR_MODEL_DOWNLOAD_REQUIRED ->
             "The language couldn't be downloaded. Check the connection and try again."
@@ -81,7 +81,7 @@ object Translate {
         }
         RuntimeTranslation.isTranslationsEngineSupported().accept({ ok ->
             if (ok != true) {
-                Dialogs.info(a, "Translate", "This phone can't run the translation engine.")
+                Dialogs.info(a, "Translate", "Your phone can't run the translation engine.")
                 return@accept
             }
             if (from.isEmpty() || to.isEmpty()) {
@@ -96,7 +96,7 @@ object Translate {
             } else {
                 show(a, tab, session)
             }
-        }, { _ -> Dialogs.info(a, "Translate", "This phone can't run the translation engine.") })
+        }, { _ -> Dialogs.info(a, "Translate", "Your phone can't run the translation engine.") })
     }
 
     private fun show(a: MainActivity, tab: Tab, session: GeckoSession) {
@@ -112,7 +112,7 @@ object Translate {
         var target = translated?.toLanguage ?: to.firstOrNull { it.code == mine }?.code ?: to.firstOrNull { it.code == "en" }?.code ?: to.first().code
 
         val col = Sheets.column(a)
-        col.addView(Sheets.header(a, "Translate page", "Translated on this phone: the page isn't sent anywhere."))
+        col.addView(Sheets.header(a, "Translate page", "Translated on your phone: the page isn't sent anywhere."))
         val size = Sheets.note(a, "")
         lateinit var fromRow: TextView
         lateinit var toRow: TextView
@@ -225,6 +225,6 @@ object Translate {
                 }
                 .setNegativeButton("Close", null)
                 .showImmersive()
-        }, { _ -> Dialogs.info(a, "Translation languages", "This phone can't run the translation engine.") })
+        }, { _ -> Dialogs.info(a, "Translation languages", "Your phone can't run the translation engine.") })
     }
 }

@@ -153,7 +153,7 @@ object MenuButtons {
  * Hidden buttons wait behind the "Hidden" tile on the last page. Swiping the menu down (or tapping
  * outside it) closes it.
  * It is built once and lives in the browser screen itself (a dialog would make a new window every
- * time, which takes a moment on this phone); opening it only updates what depends on the page.
+ * time, which takes a moment on older phones); opening it only updates what depends on the page.
  */
 class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
 
@@ -1249,7 +1249,7 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
             }
             if (view.isEnabled != enabled) {
                 view.isEnabled = enabled
-                view.alpha = if (enabled) 1f else 0.35f
+                view.alpha = if (enabled) 1f else Ui.DISABLED_ALPHA
             }
         }
     }
@@ -1277,14 +1277,10 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
         private var active = false
         private var colors: android.animation.ValueAnimator? = null
 
-        /** The switches (Lite mode, Dark mode, Desktop, Full screen) show a tick while on (3.0). */
-        private val ticks = key in MenuButtons.switches
-
         /** [description]: what screen readers say, when the name alone doesn't. */
         fun set(icon: Int, label: String, active: Boolean = false, enabled: Boolean = true, description: String? = null) {
             if (icon == this.icon && active != this.active && view.isShown) {
-                // A switch turned on or off: its circle takes the new colour smoothly (2.3), and its tick
-                // comes or goes (3.0).
+                // A switch turned on or off: its circle takes the new colour smoothly (2.3).
                 this.active = active
                 val layers = view.compoundDrawablesRelative[1] as? LayerDrawable
                 val circle = layers?.getDrawable(0) as? GradientDrawable
@@ -1301,7 +1297,6 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
                     val fromFill = if (active) color(R.color.surface_alt) else onFill()
                     val toFill = if (active) onFill() else color(R.color.surface_alt)
                     val toInk = if (active) onInk() else color(R.color.text_primary)
-                    val tick = (2 until layers.numberOfLayers).map { layers.getDrawable(it) }
                     val argb = android.animation.ArgbEvaluator()
                     colors?.cancel()
                     colors = android.animation.ValueAnimator.ofFloat(0f, 1f).apply {
@@ -1311,20 +1306,18 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
                             val f = it.animatedFraction
                             circle.setColor(argb.evaluate(f, fromFill, toFill) as Int)
                             glyph.setTint(argb.evaluate(f, fromInk, toInk) as Int)
-                            val shown = ((if (active) f else 1f - f) * 255).toInt()
-                            tick.forEach { d -> d.alpha = shown }
                         }
                         start()
                     }
                     Motion.bump(view, 1.06f)
                 } else {
-                    view.setCompoundDrawablesRelativeWithIntrinsicBounds(null, roundIcon(icon, active, tick = ticks), null, null)
+                    view.setCompoundDrawablesRelativeWithIntrinsicBounds(null, roundIcon(icon, active), null, null)
                 }
             } else if (icon != this.icon || active != this.active) {
                 colors?.cancel()
                 this.icon = icon
                 this.active = active
-                view.setCompoundDrawablesRelativeWithIntrinsicBounds(null, roundIcon(icon, active, tick = ticks), null, null)
+                view.setCompoundDrawablesRelativeWithIntrinsicBounds(null, roundIcon(icon, active), null, null)
             }
             if (view.text.toString() != label) view.text = label
             fitLabel(view, label)
@@ -1333,7 +1326,7 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
             if (view.isEnabled != enabled) {
                 view.isEnabled = enabled
                 // Fades rather than jumps (2.3).
-                view.animate().alpha(if (enabled) 1f else 0.38f).setDuration(Motion.SHORT).start()
+                view.animate().alpha(if (enabled) 1f else Ui.DISABLED_ALPHA).setDuration(Motion.SHORT).start()
             }
         }
     }
@@ -1391,10 +1384,10 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
 
     /**
      * A button's round icon. 3.0: on, it is filled with the accent and the icon takes the colour on
-     * it (the soft accent of before was hardly told from off in the light look, about 1.1:1); with
-     * [tick], a small tick at its top corner says it too, shown only while on.
+     * it (the soft accent of before was hardly told from off in the light look, about 1.1:1), and
+     * its icon is the filled one (3.0.5: without the small tick at its corner).
      */
-    private fun roundIcon(icon: Int, active: Boolean, size: Int = 48, fill: Int? = null, tick: Boolean = false): Drawable {
+    private fun roundIcon(icon: Int, active: Boolean, size: Int = 48, fill: Int? = null): Drawable {
         val circle = GradientDrawable().apply {
             shape = GradientDrawable.OVAL
             setColor(fill ?: if (active) onFill() else color(R.color.surface_alt))
@@ -1402,39 +1395,17 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
         // 3.0.4: on, the icon is filled too (Swift's icons are outlined, filled when on).
         val glyph = ContextCompat.getDrawable(a, OnIcons.of(icon, active))!!.mutate()
         glyph.setTint(if (active) onInk() else color(R.color.text_primary))
-        val layers = if (!tick) arrayOf(circle, glyph) else {
-            // The tick's badge has a ring in the menu's colour, so it stands apart from the filled circle.
-            val badge = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                setColor(color(Looks.accent.primary))
-                setStroke(dp(2), color(R.color.sheet_bg))
-            }
-            val check = ContextCompat.getDrawable(a, R.drawable.ic_check)!!.mutate().apply { setTint(color(Looks.accent.onPrimary)) }
-            if (!active) {
-                badge.alpha = 0
-                check.alpha = 0
-            }
-            arrayOf(circle, glyph, badge, check)
-        }
-        return LayerDrawable(layers).apply {
+        return LayerDrawable(arrayOf(circle, glyph)).apply {
             setLayerSize(0, dp(size), dp(size))
             setLayerSize(1, dp(size * 22 / 48), dp(size * 22 / 48))
             setLayerGravity(1, Gravity.CENTER)
-            if (tick) {
-                // At the circle's top end corner: the badge 18 dp, its tick 10 dp in its middle.
-                setLayerSize(2, dp(18), dp(18))
-                setLayerGravity(2, Gravity.TOP or Gravity.END)
-                setLayerSize(3, dp(10), dp(10))
-                setLayerGravity(3, Gravity.TOP or Gravity.END)
-                setLayerInsetRelative(3, 0, dp(4), dp(4), 0)
-            }
         }
     }
 
     /**
      * 3.0.1: an "on" button's circle. In the dark look the soft accent (your accent's own deep tone, as
      * before 3.0: warm, and plainly apart from the grey of "off"); in the light look the full accent,
-     * as the soft one there was hardly told from off. The tick says "on" in both.
+     * as the soft one there was hardly told from off.
      */
     private fun onFill() = color(if (Palette.isNight(a)) Looks.accent.container else Looks.accent.primary)
 

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 3.0.5: the bookmarks drawing of an empty screen, the soft tone (EmptyArt tints it at runtime). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="120dp"
+    android:height="120dp"
+    android:viewportWidth="120"
+    android:viewportHeight="120">
+    <path
+        android:fillColor="@android:color/white"
+        android:pathData="M45,12 H75 A12,12 0 0 1 87,24 V101 A5,5 0 0 1 79,105 L60,91 L41,105 A5,5 0 0 1 33,101 V24 A12,12 0 0 1 45,12 Z" />
+    <path
+        android:fillColor="@android:color/white"
+        android:pathData="M104,25 Q105.62,32.38 113,34 Q105.62,35.62 104,43 Q102.38,35.62 95,34 Q102.38,32.38 104,25 Z" />
+    <path
+        android:fillColor="@android:color/white"
+        android:pathData="M15,69 Q16.26,74.74 22,76 Q16.26,77.26 15,83 Q13.74,77.26 8,76 Q13.74,74.74 15,69 Z" />
+    <path
+        android:fillColor="@android:color/white"
+        android:pathData="M100,66 A3,3 0 1 1 106,66 A3,3 0 1 1 100,66 Z" />
+</vector>

@@ -140,6 +140,7 @@
                 android:layout_gravity="center"
                 android:background="@drawable/bg_hud"
                 android:drawablePadding="10dp"
+                android:fontFeatureSettings="tnum"
                 android:gravity="center"
                 android:paddingStart="20dp"
                 android:paddingTop="14dp"
@@ -381,6 +382,7 @@
                 android:layout_marginStart="8dp"
                 android:layout_marginEnd="4dp"
                 android:fontFamily="sans-serif-medium"
+                android:fontFeatureSettings="tnum"
                 android:textColor="@color/text_secondary"
                 android:textSize="@dimen/text_caption" />
 
@@ -423,19 +425,17 @@
         android:focusable="true"
         android:visibility="gone">
 
-        <!-- Where Android drew the logo while the app started: the middle of the whole screen,
-             which is lower than the middle of this view by half the navigation bar minus half the
-             status bar. -->
+        <!-- Kept in the middle of the whole screen, as on the start screen (StartScreen.keepCentred). -->
         <ImageView
             android:id="@+id/startup_logo"
             android:layout_width="96dp"
             android:layout_height="96dp"
             android:layout_gravity="center"
-            android:layout_marginTop="12dp"
             android:importantForAccessibility="no"
             android:src="@drawable/ic_logo" />
 
         <LinearLayout
+            android:id="@+id/startup_steps"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_gravity="center"
@@ -449,11 +449,13 @@
                 android:layout_width="32dp"
                 android:layout_height="32dp" />
 
+            <!-- 3.0.5: what's loading (MainActivity.showStartupStep). -->
             <TextView
+                android:id="@+id/startup_text"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="12dp"
-                android:text="Starting the ad blocker…"
+                android:text="Starting the browser…"
                 android:textColor="@color/text_secondary"
                 android:textSize="@dimen/text_body_secondary" />
         </LinearLayout>

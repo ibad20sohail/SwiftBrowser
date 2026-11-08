@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The New tab quick settings tile (2.6). Plain white: System UI tints it. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="960"
+    android:viewportHeight="960">
+    <!-- 3.0.5: Material Symbols Rounded "add" at grade -25, softer on dark screens (drawable/ic_tile_new_tab.xml is the normal one). -->
+    <group android:translateY="960">
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M445,-445.5H245q-14.87,0 -24.94,-10.09 -10.06,-10.09 -10.06,-25t10.06,-24.91q10.07,-10 24.94,-10h200v-200q0,-14.88 10.09,-24.94t25,-10.06q14.91,0 24.91,10.06t10,24.94v200h200q14.88,0 24.94,10.09t10.06,25q0,14.91 -10.06,24.91t-24.94,10H515v200q0,14.87 -10.09,24.94 -10.09,10.06 -25,10.06T455,-220.56q-10,-10.07 -10,-24.94v-200Z" />
+    </group>
+</vector>

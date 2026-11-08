@@ -179,6 +179,12 @@ class SwiftApp : Application() {
         lateinit var db: Db
             private set
 
+        /**
+         * 3.0.5: the browser screen has been built in this run of the app. Saved state without it means
+         * Android closed Swift in the background and it's starting again: a real start, not a rebuild.
+         */
+        var browserBuilt = false
+
         /** Set when the theme changes; the browser screen reloads the page once it is recreated. */
         var reloadAfterThemeChange = false
 

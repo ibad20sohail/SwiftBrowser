@@ -705,6 +705,8 @@ object Docs {
             .put("progress", doc.progress.toDouble()).put("web", doc.web != null).put("where", where(ctx, doc))
             .put("copy", copy).put("accentLight", Helper.accentColor(false)).put("accentDark", Helper.accentColor(true))
             .put("colorsLight", Helper.pageColors(false)).put("colorsDark", Helper.pageColors(true))
+            // 3.0.5: the viewer's bars and messages take Swift's font, or the phone's if it couldn't be read.
+            .put("swiftFont", com.swiftbrowser.ui.AppFont.active)
             // 3.0: what the details panel says it is; incognito ones keep nothing (e-book pages);
             // a PDF without its small picture yet gets one drawn by the viewer (DocThumbs).
             .put("label", doc.kind.label).put("incognito", doc.incognito)
@@ -1167,7 +1169,7 @@ object Docs {
             }, null)
         } catch (e: Exception) {
             L.w("Printing failed", e)
-            com.swiftbrowser.ui.Messages.show(a, "This phone can't print")
+            com.swiftbrowser.ui.Messages.show(a, "Your phone can't print")
         }
     }
 
@@ -1206,7 +1208,7 @@ object Docs {
     fun pinShortcut(a: Activity, doc: Doc) {
         val ok = ShortcutManagerCompat.isRequestPinShortcutSupported(a) &&
             ShortcutManagerCompat.requestPinShortcut(a, shortcutFor(a, doc, "doc-" + doc.id), null)
-        com.swiftbrowser.ui.Messages.show(a, if (ok) "Added to the home screen" else "This phone's home screen doesn't accept shortcuts")
+        com.swiftbrowser.ui.Messages.show(a, if (ok) "Added to the home screen" else "Your phone's home screen doesn't accept shortcuts")
     }
 
     /** The last documents read, among the shortcuts of Swift's icon (hold it on the home screen). */
@@ -1295,7 +1297,7 @@ object Docs {
             }
             a.startActivity(chooser)
         } catch (e: Exception) {
-            com.swiftbrowser.ui.Messages.show(a, "No app on this phone can open this file")
+            com.swiftbrowser.ui.Messages.show(a, "No app on your phone can open this file")
         }
     }
 

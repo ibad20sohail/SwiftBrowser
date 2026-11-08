@@ -1,529 +1,265 @@
 # Swift
 
 A lightweight Android browser with uBlock Origin built in. It is made for watching videos on
-ad-heavy sites on an old phone (Moto E4, Android 7.1.2).
+ad-heavy sites on older phones, and runs on Android 7 and newer.
 
 ## Download
 
 **[Download Swift 3.0.4 (APK)](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v3.0.4/Swift-3.0.4.apk)**
 for Android 7 and newer (32-bit ARM, about 172 MB). It installs over an earlier Swift and keeps
-tabs and settings. From 1.4 on, Swift can also update itself: Settings → About Swift → Check for
-updates.
+tabs and settings. Swift can also update itself: Settings → About Swift → Check for updates.
 
 Older versions: [all releases](https://github.com/ibad20sohail/SwiftBrowser/releases). The APKs
 are attached to the releases because GitHub doesn't accept files over 100 MB in the repository.
 
-## Features
+## What Swift does
 
-Swift 2.0 redid every screen in one consistent look: the same rounded sheets, rows, buttons and
-short animations everywhere, a theme that can turn dark at night, plain words instead of technical
-ones, and a short welcome on the first start.
+### Browsing
 
-- **Colours** (2.3, Settings → Look & screen → Colours, with a live preview of light and dark):
-  12 accent colours (blue, indigo, purple, pink, red, orange, amber, green, teal, cyan, brown,
-  graphite) or **your own** (made with a colour maker, 2.5, and kept exactly as made), and the main colour of each mode: white,
-  warm paper, cool grey or your own for light mode; grey, pure black, navy, warm dark or your own
-  for dark mode. **Ready-made** mixes (Classic, Paper & teal, AMOLED, Midnight, Sunset, Forest,
-  Rose) set all three at once. Bars, cards, sheets, dialogs and Swift's logo follow it; a colour
-  too dark (or too light) for easy reading is adjusted. Colours are part of backups.
-- **Logo** (2.6): a white comet (its tail curving in to a point, with two streaks), no letters; in
-  the accent colour inside the app, and on a dark circle as the app icon (2.7).
-- **Night light** (2.3, Settings → Look & screen): a warm layer over Swift, pages and videos too,
-  from 7 pm to 7 am or always, in three strengths. Taps go through it.
-
-- **New in 3.0.4**:
-  - **Tabs**: pin a tab (it comes first, can't be swiped away, and stays open when you close all
-    tabs); mute a tab playing sound from its card, its row or the ≡ menu (the whole tab, frames and
-    Web Audio too); show the tabs as a compact list instead of picture cards; and, on a tab in a
-    group, a strip of the group's tabs by the address bar to switch between them.
-  - **Player**: repeat a part between two points (A-B, with marks on the seek bar); frame by frame
-    for a paused video; Night sound, a compressor for watching at low volume (loud parts quieter,
-    quiet voices louder), also in Settings → Video & downloads.
-  - **Files**: folder sizes in the lists (and sorting by size sorts folders too); two folders side
-    by side with the phone sideways, with Copy and Move going straight into the other side's folder
-    ("Copy to the right"); and **network folders** (Tools): a computer's or a home storage's shared
-    folders over Wi-Fi with SMB 2 and 3, read-only, with videos and music played straight from the
-    share and files copied to the phone (smbj and smbj-rpc; a remembered password is
-    keystore-encrypted). The storage bar shows how much pictures, videos, music and documents
-    take; Camera, Download, Pictures, Movies, Music and Documents have folder icons of their own.
-    In a folder the title bar stays put and the search box scrolls away, with the path pinned
-    under the title bar.
-  - **Look**: Swift's own font, Google Sans Flex (three fixed weights; a switch in Look & screen
-    goes back to the phone's font), every text on one type scale, and one icon style: Google's
-    Material Symbols Rounded, outlined, filled when something is on. Colours can come from your
-    home page's picture or the phone's wallpaper (Colours → From your picture), as Material You
-    does on newer Androids. Bolder headings, buttons that change shape a little when pressed,
-    spring motion, a background for the home page (a gradient, your accent colour or your own
-    picture), grouped rounded rows and big titles that shrink as you scroll in Settings, History,
-    Downloads and Bookmarks, one set of four corner sizes, a tick in switches, a new loading
-    spinner, and rows that fade at their ends when there's more.
-  - **Address bar**: a website's own colour (its theme-color) colours the bar (Look & screen →
-    Website colours in the address bar), and a floating style (Address bar style → Floating):
-    a rounded bar with the page showing around it at the bottom.
-  - **Player and reader**: thicker seek bars with a slim handle (wavy while music plays), music in
-    the colours of its album cover, a play button that turns into pause, and a sepia page in reader
-    view (Aa → Page colour). The home-screen widget follows Swift's light or dark look and accent.
-- **New in 3.0.3**:
-  - **Player**: previous and next beside play (the 10-second jumps stay on a double tap, and taps in a
-    row add up: +10, +20, +30 s). Sound and subtitles, the ⋮ menu, speed, sleep, turning and the
-    playlist open in a panel beside the video (under it when upright), without dimming it, so the
-    video stays in view. Subtitle timing for every subtitle, the video's own too, and sound timing,
-    in steps of 0.1 s; each video keeps its timing and the tracks chosen. An equalizer with the
-    phone's presets and bass boost, pinch to fill the screen, an Up next card before the next video,
-    and subtitles you can drag up or down.
-  - **Continue in Files**: videos and music from the phone left half-way show in Files (after
-    Favourites); the home page's Continue keeps web videos, articles and documents read from a link.
-    The home page shows the shortcuts first again.
-  - **Files**: video pictures show how much was watched, with a tick on finished ones; hold a file
-    and slide to select many; the search box stays at the top while the title bar and the path
-    scroll away.
-  - **Tabs**: double-tap the tab button for the tab you were on before; tab pictures stay inside
-    their rounded cards; a tab whose picture would be blank (a playing video) shows its site's icon.
-    Long pages get a fast scroll handle at the right edge.
-  - **Look and feel**: messages in the chosen colours (they were charcoal in both modes), switches
-    that slide, buttons that spring and tick, names on hold for icon buttons, picture editor icons
-    only, and no flash of the phone's bars as Settings or Files open in full screen.
-  - **Downloads**: a progress ring round the menu button, pictures of finished videos, and time left
-    for website videos.
-- **New in 3.0.2**:
-  - **A new player**, after VLC's: the times over a seek bar as wide as the screen; back and on
-    10 seconds beside play (with a playlist on a narrow screen, previous and next instead); over a
-    video a light ring for play, and shades top and bottom so the controls read over any picture.
-    A tap in the middle shows or hides the controls at once; a double tap on a side jumps, and says
-    so on that side. A speed, sleep timer or subtitle timing that is on shows as a chip under the
-    title (tap to change it, hold to turn it off). Sound and subtitles are one sheet and one button.
-  - **Tabs stay loaded while you use Swift**: opening Settings, Files or the player no longer
-    unloads the other tabs. They are unloaded a minute after you leave Swift, and Android's memory
-    warnings count while Swift is on screen only when memory is really low. Right now says when
-    tabs were last unloaded, and why.
-  - **DASH videos** (.mpd, used by many video sites): found on pages, played in Swift's player, and
-    downloaded as one MP4 (the best H.264 up to 1080p with its AAC sound, in the phone's language
-    when there is a choice). Live, copy-protected and multi-part streams say why they can't be
-    saved. A stream's progress weighs its sound by its size, so it no longer jumps to half way.
-  - **Home page order** (Settings → Home & news): Continue now comes first, then the shortcuts and
-    the news; any order can be chosen, and nothing is left out.
-  - **Licence**: Swift's own code is under the GNU GPL, version 3 or later (see [LICENSE](LICENSE)).
-- **New in 3.0.1**:
-  - **Incognito leaves nothing behind**: site settings changed in an incognito tab last until the
-    incognito tabs close; they are no longer saved or put in backups.
-  - **Keep loaded**: hold a tab in the tab grid and choose Keep loaded; Swift never unloads it to
-    save memory (Android itself still can, if the phone runs out). A lower number of tabs kept
-    loaded applies at once, and the idle check sleeps while Swift is out of sight.
-  - **Right now** (Settings → Speed & memory): free memory, Swift's own, tabs loaded and recent
-    page engine crashes, measured when you look. **Security status** (Privacy & security): what is
-    on, and what Swift has checked (uBlock Origin loaded, the VPN's server answering).
-  - **Videos**: website videos play in Swift's player again, and downloads Swift starts no longer
-    close it (both stopped the app since 3.0); Videos on this page has a play button; a desktop
-    tab's videos and downloads go as desktop; downloading the same address again shows the one you
-    have first; detected video addresses are checked.
-  - **Player**: a subtitle language to show first (Settings → Files & media), the subtitle timing
-    kept for each video, and a note when a video is more than the phone's chip is made for.
-  - **Backups** carry a format number (a newer Swift's backup is refused, not half read) and a
-    restore says exactly what it added.
-  - **Truthful site settings**: clearing a site's data says it happens in every profile, and a
-    site's own Balanced or High level says it only changes pop-ups and redirects there.
-- **New in 3.0** (a full check of the app: bugs, safety and privacy fixes across every screen):
-  - **Pop-ups and tabs**: links that open a new tab load once in the engine's own window (before,
-    a hidden second copy kept running and using memory, and sign-in pop-ups couldn't report back);
-    a tab used for a long time stays loaded when you switch away; links from other apps reuse a
-    tab already showing them, and Back returns to that app.
-  - **Ad blocking from the first page**: after a restart, restored pages wait for uBlock Origin
-    (with Load now after 8 s); a page that loaded before it was ready offers a reload, and the menu
-    says "Reload to block" instead of "! blocked".
-  - **Safety**: the address bar can't be faked by pages posing as a search engine and shows the
-    real end of long addresses; lookalike Unicode names show as punycode; QR codes show where they
-    lead first; "Open in app" links can't hand Swift's files to other apps; a page can't trap you
-    in endless messages (Block dialogs from this page); sites ask before using cross-site cookies;
-    Safer browsing (Settings → Privacy & security: no JavaScript JIT or WebAssembly) and "Tell
-    sites a newer Firefox version" for the engine that no longer gets updates.
-  - **Privacy**: incognito pages, the Private folder and saved passwords stay out of screenshots
-    and recent apps (incognito can allow them); no search suggestions in incognito; incognito
-    downloads, saved pages and their notifications stay private; logs and problem reports name no
-    addresses or files (a preview, sites left out unless you choose); backups never carry the
-    Private folder's PIN or file list.
-  - **Files**: Compress can't empty the file it packs; moves delete only what was copied; a copy
-    cut short never looks complete; the Cleaner always keeps one copy of duplicates; a shorter
-    recycle bin time asks first; moved photos stay in the Gallery; booby-trapped archives can't
-    hang Files; Wi-Fi transfer goes on in the background and locks out code guessing.
-  - **Private folder**: a PIN stays in charge (adding a screen lock no longer opens or replaces
-    it); Forgot PIN starts a 24-hour wait; wrong PINs wait longer each time.
-  - **Documents**: password-protected PDFs open again (the password box, Go to page and Details
-    work on the document screen), scanned PDFs (JPEG 2000, JBIG2) show their pages, Word files
-    that are really RTF or HTML open, big sheets show their first rows, and documents can't load
-    anything from the web.
-  - **Downloads and torrents**: "Remove from list" keeps the files; HLS videos with separate sound
-    download with sound; converting to MP4 never loses the only copy; downloads open in Swift's
-    player; torrents don't announce themselves on the local network, can use encrypted
-    connections only, and look up a magnet's files only after a tap.
-  - **Player**: website videos load through the engine (newer certificates, the page's cookies);
-    Urdu, Arabic and other subtitles are read in the right encoding (or choose one); the volume
-    boost shows a badge, resets for each file and stays gentler with headphones.
-  - **VPN**: if it was on, it comes back by itself after an update or restart, with pages waiting.
-  - **Google account on each profile**: the profiles list, the profile button and the home page
-    show the Google account signed in to each profile, with its name and photo (read from
-    Google's own pages, never in incognito).
-  - **Settings**: search matches whole words, history shows everything (more as you scroll),
-    Clear browsing data remembers its time range and asks before clearing all time, update
-    downloads are checked to be signed by Swift, and About lists every open-source part.
-- **New in 2.9.2**:
-  - **Torrents** (libtorrent): magnet links on pages, .torrent files and "Open with Swift" open a panel
-    with the torrent's files (junk such as samples, .txt and .exe unticked, a warning for Windows
-    programs and 10-bit videos, a free space check). They download in Downloads with progress,
-    speed, peers and time left, go on after a restart, and stop sharing once complete. They pause
-    while Swift's VPN is on (Proton's free servers refuse torrents), wait for Wi-Fi (at first),
-    pause on low battery and when storage runs out. Settings → Video & downloads → Torrents: how
-    many at once, speed limits, Wi-Fi only, only while charging, at night only, extra trackers.
-  - **Downloads**: filters (All, Videos, Torrents, Files), a card for a copied magnet link, Pause all
-    and Play in the notifications, and the phone stays awake while something downloads.
-  - **Player**: Dolby (AC-3, E-AC-3, TrueHD) and DTS sound through FFmpeg; a clear message for 10-bit
-    HEVC videos; volume boost up to 200%; subtitle colour and background; screenshots; subtitles
-    from a Subs folder next to the video.
-  - **Files**: Free up space also lists what torrents leave behind.
-- **New in 2.9.1**:
-  - **Files**: the search box and the folder path scroll away with the list (more room for files);
-    they come back at the top of the list, and stay put in an empty or short folder.
-  - **Picture viewer**: the bottom buttons are icons only; holding one shows its name.
-- **New in 2.9**:
-  - **Media player** (Files, "Open with Swift"): Android's Media3 player with swipe gestures
-    (brightness, volume, seeking), double-tap skips, hold for 2×, lock, speed, picture size, turning,
-    subtitles (a same-name .srt/.vtt/.ass, or pick one; size and timing), sound and subtitle tracks,
-    the folder as a playlist, repeat, shuffle, sleep timer, going on where you stopped (also in the
-    home page's Continue), and music in the background with notification and lock-screen controls.
-  - **Picture viewer**: crop and turn (save a copy or replace), details (camera, settings, place),
-    thumbnail strip, slideshow, moving GIFs, sharp zoom, set as wallpaper or contact photo; Swift can
-    open pictures from other apps.
-  - **Files**: a recycle bin (30 days, Undo, restore), Free up space (large files, duplicates, app
-    files, empty folders, Swift's leftovers), a Private folder behind the screen lock (or a PIN),
-    Wi-Fi transfer (a page on your computer, with a code), Recent documents on the start page, and
-    animations. Settings → Files & media (also from Files' ⋮).
-  - **Documents** are found in Files now: the Documents screen, its icon and menu button are gone
-    (documents still open in the full-screen viewer).
-  - **Swift player for website videos** (Settings → Video & downloads, off at first): a button on a
-    playing video opens it in Swift's player.
-  - **Sort downloads into folders** (off at first): Videos, Music, Pictures, Documents, Apps.
-  - **Fixes**: panels no longer close when you scroll back up; deleted files leave Continue,
-    Downloads and the recent lists.
-- **New in 2.8**:
-  - **Documents on a screen of their own**, not in a tab: full screen over whatever opened them
-    (Documents, Files, Downloads, a site, another app's "Open with"), with a Back arrow; Back closes
-    the document's panels first, then returns where you were.
-  - **Documents look as they were made**: Word as pages (white paper, its fonts, colours, tables and
-    pictures; Reading view is a switch), PDFs and Excel in their own colours, in dark mode too; only
-    the viewer's bars follow your colours. Old Word files (.doc, before 2007) now show as their pages
-    (fonts, colours, tables, pictures) and old PowerPoint files (.ppt) as their slides, laid out, with
-    speaker notes, read on the phone (Apache POI 5.0 for Word, Swift's own reader for PowerPoint).
-  - **Pictures, videos and music from Files** open in Swift's own viewer: zoom and swipe through a
-    folder's pictures, play videos and songs (the next song follows).
-  - **Documents screen**: Recently opened as page previews, list or grid, hold to select several
-    (share, star, delete), Details, smaller filter chips, blank previews replaced by the file's mark.
-  - **Files**: a start page with storage bars, categories, recent files and favourite folders; grid
-    view with thumbnails; checkboxes when selecting; Back goes up one folder at a time.
-  - **Smaller headers** with room above the search box (Documents, Files, History, Bookmarks,
-    Downloads), and Swift's logo is round inside the app too, like its icon.
-  - **Clear browsing data**: choose dates (from a day to a day), see how much each item takes for
-    that time (MB, or how many), the total on the Clear button, and delete the downloaded files too.
-  - **Settings rearranged**: Clear browsing data, When you quit and Backup are in **Storage & data**;
-    **Privacy & security** keeps secure connections, secure DNS, cookie banners, passwords and site
-    settings. "Downloads kept inside Swift" is gone.
-- **New in 2.7**:
-  - **Files**, a file manager (≡ menu, its own icon, Swift's icon and the widget): phone storage, the
-    SD card, Downloads; copy, move, rename, delete, new folder, share, properties; archives (ZIP, 7z,
-    RAR, TAR, GZ, BZ2, XZ) open like folders, extract all or some, and ZIP or 7z can be made, with a
-    password for ZIP. RAR5 can't be opened, and RAR can't be made (closed format).
-  - **Round, dark app icon** (and the Documents and Files icons, and Swift's shortcuts).
-  - **Start screen in your colours**: Swift draws it itself (Android's own could only be white),
-    builds the browser behind it, and the logo glides into the home page's.
-  - **Home page**: smaller shortcuts, five to a row (up to 15); hold one and the others make room as
-    you move it. The profile in use shows under the logo; tap it to change profile.
-  - **Documents and Files as their own apps** in the app list (Settings → Look & screen can hide
-    them), and on Swift's icon: New tab, Incognito, Files, Documents and the last document read.
-  - **Pages always drawn with the graphics chip** (the CPU drawing option is gone: on the Moto E4 the
-    chip turned out faster on heavy sites).
-  - **Background tabs held back**: their scripts get much less of the shared engine process (timers
-    at most every 10 s), and tabs not opened for 30 minutes let go of their page, whatever the
-    number of tabs kept loaded.
-  - **Stuck and crashed pages**: a page whose script stops responding offers Stop; a crashed page
-    loads again by itself once.
-  - **Search shortcuts removed** ("yt cats" no longer searches YouTube; typing searches with your
-    search engine, as before 2.6).
-  - **Logs**: a file a day, the last 3 days kept, written as things happen; engine crashes with
-    their notes and where they crashed, freezes of Swift's screen, memory every minute, Android's
-    memory warnings, page loads, videos that fail or stall, and the engine's own warnings and
-    errors. Site names only, never addresses; nothing of the engine's while incognito is open.
-    Settings → About → Send a problem report attaches them.
-- **New in 2.6**:
-  - **Clear browsing data by time** (Settings → Storage & data since 2.8, or Clear data in the ≡ menu): the
-    last hour, 24 hours, 7 days, 4 weeks or all time, and what: history, cookies and site data,
-    saved pictures and files, the downloads list, the documents list, where you left off, site
-    settings, saved passwords. Cookies for a time are cleared for the sites visited then (the
-    engine can't clear them by time). **Quit** in the ≡ menu closes Swift and clears what you chose
-    in Settings → When you quit (open tabs too, if you like).
-  - **Saved passwords**: after you sign in, Swift offers to keep the password (Save, Not now, Never
-    for this site) and fills it in next time. They are encrypted with a key that stays in Android's
-    keystore, each profile has its own, they aren't in backups, and incognito tabs never save one.
-    Settings → Saved passwords shows them after your screen lock: copy, show or delete (with Undo).
-  - **Translate** (≡ → Translate): Firefox's translation engine on the phone itself; each language
-    downloads once (about 20 MB). Pages in another language can offer it; downloaded languages can
-    be deleted in Settings → Browsing & tabs.
-  - **Selected text**: Search, Share and Listen next to Copy. The bar no longer stays on screen
-    over other pages.
-  - **Address bar**: completes the address as you type ("you" → youtube.com, from your history and
-    bookmarks), and your own search engine. (Search shortcuts, "yt cats", were removed in 2.7.)
-  - **Bookmarks**: folders, search, and **Import** from Chrome or Firefox (their bookmarks file).
-  - **Dark page** per site (Site settings): turns a site without a dark mode dark; pictures and
-    videos stay as they are. Off by default.
-  - **Home screen widget** (search, incognito, scan a QR code) and a **New tab** quick settings tile.
-  - **Data used** per day on mobile data and Wi-Fi (Settings → Speed & memory).
-  - **QR code** of the page in the ≡ menu, to open it on another phone or share as a picture.
-  - Incognito keeps its documents and downloads in memory only; dialogs from a tab that isn't on
-    screen wait for it and say which site asks; Undo for more removals; faster typing in the
-    address bar, start-up, tab switching and scrolling the news; lighter on the battery.
-- **Firefox engine (GeckoView 143)**: the newest engine that still runs on Android 7.
-- **Documents** (2.4): PDF, Word (.docx), Excel (.xlsx, .xls, .csv, .ods), PowerPoint (.pptx),
-  e-books (.epub) and text files open in Swift's own viewer, offline; nothing is uploaded. Old .doc
-  and .ppt files (and .odt, .odp, .rtf) show their text.
-  - **Documents** in the ≡ menu and on the home page: the documents opened in Swift, then every
-    document on the phone, newest first, with page previews, filters (PDF, Word, Excel,
-    PowerPoint, E-books, Text) and search. Without storage access, **Browse files** uses Android's
-    own file picker.
-  - **Open with Swift** from other apps (WhatsApp, Gmail, file managers), and downloaded documents
-    open in the viewer. A link to a document on a website offers Open, Download, and for Office
-    files **Exact view** (Microsoft's free online viewer, which gets the link).
-  - The viewer: find in the document, text size or zoom, **Listen** (read aloud), dark pages in
-    dark mode, Share and Open with another app. PDFs load only the parts on screen, so big ones
-    open quickly. Where you stopped is remembered; unfinished documents are in **Continue**.
-- **Documents, better** (2.5):
-  - **Reading mode**: Swift's toolbar and the viewer's bar go away while reading (scroll down, or
-    tap the page); scrolling up or a tap brings them back. A page counter ("Page 3 of 20") and a
-    handle on the right edge to scroll through long documents quickly.
-  - **PDFs**: go to a page (tap the counter), the PDF's own contents, page previews, double tap or
-    two fingers to zoom, with the text drawn again sharp at every size. **Fill & sign**: fill in
-    forms, highlight, draw (a signature) or add text, and save a copy to Downloads.
-  - **E-books** turn page by page (tap the sides or swipe), with a choice of font, line spacing,
-    or scrolling instead, and how many pages are left in the chapter.
-  - **PowerPoint**: a full-screen slideshow (swipe or tap the sides) and the speaker notes.
-  - **Excel**: cell colours, bold and italic, merged cells, frozen rows and columns, the sheet's
-    own column widths, and find in the whole sheet. Big workbooks open faster: only the sheet on
-    screen is read.
-  - **Save as PDF** and **Print** for Word, Excel, PowerPoint and text files (PDFs print as
-    they are). **ZIP files** list what they hold; documents in them open in their own tab.
-  - **Listen** carries on through all the pages and chapters; in PDFs the part being read is marked.
-  - Documents on websites open **without a copy** in Downloads; **Save a copy** keeps one.
-  - **Documents screen**: star documents (they stay at the top), sort by date, name or size, look
-    through one folder, files on the memory card are marked "SD card", rename and delete (with
-    Undo), and **Add to home screen**. The last two documents are on Swift's icon (hold it).
-  - Each document keeps its own text size; password-protected Office files say so.
-- **Free VPN for Swift only** (2.1, Settings → VPN, or VPN in the menu): change the country sites
-  see you in, with free setup files from Proton VPN (WireGuard, one file per server; the how-to is
-  in Settings). Only Swift's own traffic goes through it; other apps keep their connection.
-  - Add a location by downloading its `.conf` file in Swift ("Add to VPN"), by tapping it in
-    Downloads, or from a file or pasted text. Its key is kept encrypted with a key in Android's
-    keystore, the downloaded copy is deleted, and VPN files are never in backups.
-  - Tap a location to connect or switch to it; Swift waits for the server to answer before it says
-    "Connected" and shows the address and city sites see.
-  - **Pause pages if the VPN drops** (on by default): while the VPN should be on but isn't, pages
-    wait ("Waiting for the VPN") instead of loading over your own connection, and load by
-    themselves when it reconnects. Reconnect or Turn off from the menu, the "VPN off" mark in the
-    address bar or Settings.
-  - **Connect when Swift starts**, if it was on when you left.
-  - **Renew reminders** (2.2): each location shows when Proton's free file stops working (a year after
-    it was made); two weeks before, Swift reminds you to tap Extend on Proton's page. Hold a location
-    for "I extended it".
-  - **Switch to another location** (on by default): when a server doesn't answer, or connects but
-    passes nothing (an expired or revoked file), Swift moves to the next location by itself (the
-    same country first, the fastest from the last test) and says where it went. **Test the
-    locations** tries them all and shows which answer and how fast. The VPN sheet groups locations
-    by country.
-- **Ad blocking with four levels** (Off / Balanced / High / Extreme), set for all sites or per site.
-  From High up (2.2) it also blocks known fake login (phishing) sites, showing uBlock Origin's
-  "page blocked" screen with the list that caught it and a way to go on anyway.
-  - Uses a bundled **uBlock Origin**, with the app switching its filter lists and rules.
-  - Has its own **pop-up and redirect blocker**, which stops the "tap anywhere opens an ad" trick.
-  - **Blocked this week** (2.3, Settings → Ad blocking): how many ads and trackers were blocked on
-    each of the last 7 days (counts only, never which sites).
-- **Profiles**: each profile has its own Google login, cookies, history, bookmarks and tabs.
-- **Incognito tabs**: no history, and cookies and site data go away when the last one closes,
-  and so do site settings changed in them (3.0.1: they used to be saved like any other).
-- **Tabs** in a grid with page previews, like Chrome (two columns upright, three on a turned
-  phone). The open tab shrinks into its card when the grid opens and grows back when you pick one:
-  - Hold a tab and drag it to move it. Hold it over another tab for a moment and let go to
-    **group** them. A group is one card; tap it to see its tabs, rename it, pick a colour, add a
-    tab, ungroup or close it. Links opened from a grouped tab join its group, and the tab button
-    takes the group's colour.
-  - **Search** your tabs by title or address.
-  - Tabs not opened for 14 days (a setting) wait under **Inactive tabs**, with Close all.
-  - A closed tab (or group) can be brought back with Undo, and **Recent tabs** in the menu keeps
-    the last 50 closed tabs with their back history. **Close all tabs** in the menu can be undone
-    (2.3); closing all incognito tabs still asks first, as their data goes for good.
-  - Swipe sideways on the toolbar to go to the next or previous tab. Hold the tab button for New
-    tab, New incognito tab, Close this tab and Recent tabs.
-  - How many tabs stay loaded is a setting (1 to 10, 2 by default); the others show their last
-    picture straight away and reload their page when opened.
-- **Menu** (≡) that slides up from the bottom: the page with its site settings, copy and
-  Settings buttons, the page's main actions as a row of icons, then pages of buttons (2 rows of 4,
-  swipe sideways or tap the dots). **Arrange it yourself** (2.3): hold any button a moment and it
-  lifts; drag it to another place, or to the edge to go to the next page, and let go: it stays
-  there. Drop it on the strip at the top to hide it (with Undo). Hidden buttons wait under
-  **Hidden** on the last page: tap one to put it back. Settings → Look & screen → Reset the menu
-  starts over (with Undo). The switches (Lite mode, dark mode, desktop site, full screen) are
-  buttons there too and keep the menu open. Among the others: **Tap to hide** (tap a leftover ad or
-  banner and hide it on that site for good, with uBlock Origin's element picker), the **Sleep
-  timer**, **Scan QR** and **Text size**. Swipe it down, tap outside it or press back to close it.
-- **Continue** (2.3) on the home page: long videos and reader view articles you left half-way,
-  newest first, with a picture (the video's, YouTube's own, or the article's first) and how far you
-  got. An article opens in reader view where you stopped. Hold a card to remove it. Only pages in
-  the profile's history show; Settings → Home & news turns it off.
-- **App icon shortcuts** (2.3): hold Swift's icon on the home screen for New tab, Incognito tab or
-  Scan QR code.
-- **Swift VPN tile** (2.3): add it to Android's quick settings to turn Swift's VPN on or off from
-  the notification shade. **Hold the VPN mark** in the address bar to switch country in one tap.
-- **Reader view**: a clean, light version of article pages (Mozilla's Readability), with text size
-  buttons, in light or dark. It remembers where you stopped reading each article. **Listen** reads
-  the article aloud with the phone's text-to-speech, from the paragraph on screen, marking the
-  paragraph being read, with pause, previous and next paragraph and speed (0.75x to 2x). It goes on
-  with Swift in the background or the screen off, with pause and stop in a notification. Serif or
-  sans-serif text and the line spacing are set in Settings → Browsing.
-- **Battery saver** (2.3, on by default, Settings → Speed & memory): below 20% battery (or 15 or
-  30, as chosen), or while Android's battery saver is on, Swift uses Lite mode, keeps only the open
-  tab loaded and loads pages without pictures on mobile data. Everything is back when you charge;
-  if it changes while Swift is in the background, Swift says so when you come back.
-- **Lite mode**, one switch for all sites (menu or Settings): no animations, shadows or blur, so
-  heavy sites scroll smoothly on the phone. It stays on until it is turned off; a site that looks
-  broken with it can be left out (Site settings).
-- **Show sites as designed** (Settings → Speed & memory): for newer phones, turns off Swift's
-  changes for slow phones (no glass blur, fewer animations, lighter YouTube and TheFlixer). It is
-  on by itself on phones with 4 GB of memory or more and a fast graphics chip.
-- **Full screen** (menu or Settings): browsing without the phone's status and navigation bars; a
-  swipe in from the top or bottom edge shows them for a moment. Menus and dialogs keep them hidden.
-- **Save offline**: saves a page as a PDF in Downloads, to read without internet in Swift's own
-  PDF viewer.
-- **Add to Home screen**: a shortcut to the page on the phone's home screen.
-- **Swipe from the edges**: from the left edge of a page to go back, from the right to go forward.
-- **Home page** for new tabs: a search box (with voice search) that slides into the address bar
-  when tapped, up to 12 shortcuts, and the **news**: English headlines from Google News for your
-  country (from the phone, or chosen), with topic chips, pull down to refresh, more stories while
-  scrolling, and news sites you add yourself (their pictures show on the right). **Stories with
-  big pictures** (2.2) turns them into cards with the picture across the top, as in Chrome (Google
-  News' headlines often have no picture; sites you add usually do). Hold a story to
-  open it in a new or incognito tab, share it or hide that site. Light on the phone: fetched at most
-  once an hour, pictures only as they come on screen and not on mobile data with Data saver; it can
-  be turned off (Settings → Home & news). shortcuts: add your own with the + tile (it gets the site's icon); hold
-  a shortcut and drag it to another place, or hold it and let go to open it in a new or incognito
-  tab, rename it, change its address, move it to the start or remove it. Free places are filled
-  with the most visited sites.
-- **Address bar buttons** (2.2, Settings → Look & screen): up to 4 buttons on either side of the
-  address, arranged by dragging: profile, home (the home page over the open tab; Back returns to
-  the page), tabs, menu (always there), new tab, reload, share, bookmark, VPN and Scan QR.
-- **Scan QR codes** (2.2): next to the microphone while typing an address, or as a button. Web
-  addresses open; other text can be searched, copied or shared; Wi-Fi codes show the password.
-- **Address bar at the top or the bottom** (Settings → Look & screen). While reading it shows just
-  the site's name and icon (tap it for the site's settings); an open red lock warns about sites that
-  aren't secure. While you type, it takes the whole toolbar and suggests, in groups, what you typed,
-  search suggestions, your **open tabs** (switch to them), bookmarks and history, with ↖ to keep
-  typing from a suggestion; it also offers a link you just copied. Hold the address for Paste and
-  go, Copy, Share and Edit.
-- **Address bar swipes** (2.1, Settings → Look & screen): swipe up on the address bar to hide it,
-  and down from the top edge of the screen to bring it back (mirrored for a bar at the bottom).
-  Scrolling also brings it back. Swipe up, swipe down, both or off.
-- **Long press** on a link, picture or video: a compact sheet with what it is (the site's name;
-  tap for the whole address; a small preview of a picture), the main actions as big buttons (new,
-  background or incognito tab, share; for pictures open, save, share, copy) and the rest as rows.
-- **Toolbar that hides while scrolling**: it slides away and back with your finger, as in Chrome,
-  and finishes with a short slide when you let go (or, with that setting off, it goes and comes
-  back in one go after a deliberate scroll). Pull down at the top of a page to reload.
-- **Site settings**: the settings button next to the site's name in the menu sets, for that site,
-  desktop mode (remembered), sound that starts by itself, location (ask, allow or block), the
-  ad-blocking level, Lite mode, its own **text size** (2.3, also Text size in the menu), **open
-  articles in reader view** (2.3; Swift also offers "Always" after you use reader view twice on a
-  site), and clears its cookies and data. Settings → Privacy lists the sites. Changed from an
-  incognito tab, they last until incognito closes; Lite mode, Dark page and ad blocking then
-  count for the site's normal tabs too, as one engine part serves every tab.
-- **Secure DNS** (2.2, on with Cloudflare; or Quad9, Google, off): the names of the sites you visit
-  are looked up encrypted, so the network can't read them. Wi-Fi sign-in pages still work.
-- **Secure connections first**: every site's secure (https) version when it has one; a site
-  without one still opens and Swift says it isn't secure. Firefox also answers known cookie
-  banners with "Reject".
-- **Back online**: a page that couldn't load for lack of connection loads again by itself when the
-  connection comes back.
-- **Search engine**: Google, DuckDuckGo, Bing or Startpage, with suggestions from the same engine
+- **Firefox engine** (GeckoView 143), the newest that still runs on Android 7.
+- **Address bar** at the top or the bottom of the screen. While reading it shows the site's name
+  and icon (tap it for the site's settings), in the website's own colour when it has one; an open
+  red lock warns about sites that aren't secure. While you type it completes addresses and suggests,
+  in groups, search suggestions, your open tabs, bookmarks and history, and offers a link you just
+  copied. Hold the address for Paste and go, Copy, Share and Edit.
+- **More room for the page**: the bar slides away and back with your finger as you scroll, a swipe
+  on it can hide it, and full screen hides the phone's own bars too.
+- **Address bar buttons**: up to 4 on either side of the address, arranged by dragging: profile,
+  home, tabs, menu, new tab, reload, share, bookmark, VPN and Scan QR.
+- **Search**: Google, DuckDuckGo, Bing, Startpage or a search engine of your own, with suggestions
   and its logo in the address bar.
-- **Data saver**: on mobile data, pages load without images (Settings → Speed & memory); "Show"
-  brings a page's pictures back for that site.
-- **History** grouped by day (Today, Yesterday, then dates), with Delete day, and the search word
-  marked in the results. **Bookmarks** can have their name and address changed. In History,
-  Bookmarks and Downloads, swipe a row away to remove it; every removal (and deleting a downloaded
-  file) can be undone for a few seconds, with a line showing the time left.
-- **Back up and restore**: settings, profiles, bookmarks, history, open tabs and groups, and site
-  settings in one file in the download folder, to restore on this or another phone. Passwords and
-  cookies aren't in it. A backup is also made by itself once a week (the last two are kept).
-- **Video**:
-  - Full-screen videos use the whole screen and follow the phone's auto-rotate. Turning them to
-    landscape automatically, and swipe gestures for brightness (left side) and volume (right
-    side), can be switched on in Settings → Video.
-  - Sites get H.264 video, which the phone's video hardware plays, instead of AV1.
-  - **Keep playing in the background** (a switch): a song or video goes on when you switch tabs,
-    open another app or turn the screen off, even on sites that pause themselves when you leave
-    them (YouTube). One tab plays at a time.
-  - **Media notification** with the picture, previous/next (or skip 10 seconds), play/pause, the
-    sleep timer and close, also on the lock screen. Headset and Bluetooth buttons work, and
-    playing pauses when headphones are unplugged.
-  - **Sleep timer**: stops playing after 15 to 90 minutes or at the end of the video, fading the
-    sound out over a few seconds, and stops the next one a site starts by itself. The time left
-    shows in the notification. The screen stays on only while a video is really playing.
-  - Playback speed can be set from 0.5x to 3x.
-  - In full screen, double-tap the left or right side to skip 10 seconds (keep tapping to skip
-    more), and hold a finger down for double speed.
-  - **Continue watching**: Swift remembers where long videos were left off and offers to continue
-    from there (a "Continue from" button), even after a reload or reopening the tab.
-  - Videos a page plays can be downloaded, including HLS (`.m3u8`) streams, choosing the quality
-    with its approximate size. These are saved as MP4 when possible.
-- **Downloads** with pause/resume and notifications, saved to a folder of your choice: Download/Swift,
-  Download, Movies, Swift's folder on the SD card, or any folder on the phone. Big downloads can
-  wait for Wi-Fi. Downloads cut off by closing Swift go on by themselves, failed ones are tried
-  again when the connection comes back, and a tab that only led to a download closes.
-- **Storage** (Settings): what Swift keeps on the phone, part by part, counted the way Android
-  counts it (the app with its compiled code, its data, and its own folder on the phone storage, where
-  downloads go without storage permission), the sites that stored data (clear each one), and
-  clearing sites you haven't visited for 30 days. Update files are deleted by themselves once
-  installed. The page cache is capped at
-  20 MB and uBlock Origin keeps its compiled lists once instead of twice. When the phone is low on
-  space, Swift empties its caches by itself (at most once a day).
-- **Settings** in the app's own look: the most used switches as tiles, nine topics that show
-  what is set, settings for experts folded under **Advanced**, and a search box that also
-  understands everyday words ("battery", "ads", "music").
-- **Updates** show their download progress, and "What's new" after an update.
-- **Light animations** for the app's own parts (never the page), short enough to keep a slow phone
-  smooth, and a light vibration on long presses and tab dragging (can be turned off).
-- **Hide cookie pop-ups**: one switch (Settings → Ad blocking) for uBlock Origin's cookie-notice
-  lists.
-- **Light, dark, or dark at night** (7 pm to 7 am), with a calm palette in both, and an **accent
-  colour** of your choice. Sites that support dark mode follow it; so do error pages and reader
-  view.
-- **Text size** for all sites, and **zoom** even on sites that turn it off.
-- **Tuned for a 2 GB phone**: uBlock Origin runs in its own process, filter lists update only
-  while the app is in the background, the web cache is capped, and Firefox's own Safe Browsing
-  lists are off (uBlock Origin covers them). Silent videos don't start by themselves (YouTube
-  feed previews), and the app's own toolbar is redrawn as little as possible while a page scrolls.
-  All tabs share one engine process for pages, decoded images are capped at 48 MB, and when the
-  phone runs low on memory, or a minute after Swift goes to the background, only the open (or
-  playing) tab stays loaded.
-- **Problem reports**: engine crashes and Android closing Swift (usually for lack of memory) are
-  noted (not when the phone was restarted or Swift updated), and Settings → Send a problem report
-  shares them with the app's log (nothing is sent by itself).
-- **Lighter pages**: frosted-glass effects (CSS `backdrop-filter`) are off, sites that offer a
-  version without decorative animations get it, and YouTube's and TheFlixer's large blur effects
-  are left out. Each of these makes scrolling several times more work on a slow phone.
-- **Start-up screen**: the logo while the app starts, then the open page's last picture while it
-  waits for the ad blocker to load its filters.
-- **Drawing method**: on Adreno 3xx graphics chips, where Firefox's GPU drawing is slow on
-  text-heavy pages, pages are drawn with the CPU by default (videos still go through the GPU).
-  Settings → Performance switches it and can show a drawing-speed meter for comparing.
+- **Home page**: a search box (with voice search and QR codes) that slides into the address bar,
+  up to 15 shortcuts you can arrange, what you left half-way, and the news, in the order you choose
+  and over a soft gradient or a picture of your own. Colours can be taken from that picture.
+- **News** on the home page: headlines from Google News for your country as cards with their
+  pictures, topics, more stories as you scroll, and news sites you add yourself. Hold a story to
+  open it in a new or incognito tab, share it or hide that site. It's fetched at most once an hour,
+  pictures load only as they come on screen, and it can be turned off.
+- **Continue**: long videos, articles and documents you left half-way, newest first, with how far
+  you got. Hold a card to remove it.
+- **Menu (≡)** that slides up from the bottom: the page and its site settings, the main actions,
+  then pages of buttons you arrange yourself: hold one to move it or hide it. Among them: Tap to
+  hide, Sleep timer, Scan QR, Text size, Translate, Find, Desktop site, Save offline, the page's QR
+  code and Quit.
+- **Long press** on a link, picture or video: what it is, the main actions as big buttons (new,
+  background or incognito tab, share; for pictures open, save, share, copy) and the rest as rows.
+- **Selected text**: Search, Share and Listen next to Copy.
+- **Reader view**: a clean version of an article, with your choice of font, line spacing and page
+  colour (light, dark or sepia). It remembers where you stopped, and **Listen** reads the article
+  aloud, marking the paragraph, also with the screen off.
+- **Translate**: pages are translated on the phone itself, and nothing is sent anywhere. Each
+  language downloads once (about 20 MB).
+- **Site settings** for each site: desktop mode, sound that starts by itself, location, ad-blocking
+  level, Lite mode, dark page, text size, always open in reader view, and clearing its cookies and
+  data.
+- **History** by day, with search and Delete day. **Bookmarks** with folders, search and import from
+  Chrome or Firefox. Removing things can be undone for a few seconds.
+- **Save offline** (a page as a PDF), **Add to Home screen**, **Scan QR codes**, **pull down to
+  refresh**, **swipe from the edges** to go back and forward, **zoom** even on sites that turn it
+  off, a text size for all sites or each one, and pages that load again by themselves when the
+  connection comes back.
+- On your home screen: app icon shortcuts (New tab, Incognito tab, Files), a search widget in your
+  colours, and quick settings tiles for New tab and Swift's VPN.
+
+### Tabs
+
+- A **grid with page previews**, or a compact list. The open tab shrinks into its card and grows
+  back when you pick one.
+- **Groups**: drag a tab onto another to group them. Name them, give them a colour, and switch
+  between a group's tabs from a strip by the address bar.
+- **Pin** a tab (it comes first and stays when you close all), **mute** a tab playing sound, and
+  **keep a tab loaded** so it's never unloaded to save memory.
+- **Search** your tabs. Tabs not opened for a while wait under **Inactive tabs**.
+- **Undo** a closed tab or group, or Close all tabs. **Recent tabs** keeps the last 50 closed tabs
+  with their back history.
+- Swipe sideways on the address bar to change tab. Double-tap the tab button for the tab you were
+  on before; hold it for New tab, New incognito tab, Close this tab and Recent tabs.
+- **How many tabs stay ready to open instantly** is your choice (1 to 10). The others show their last
+  picture straight away and load again when opened.
+- **Profiles**: each has its own Google login, cookies, history, bookmarks and tabs, and shows
+  the Google account signed in to it.
+- **Incognito tabs**: no history, and cookies, site data and site settings changed in them go away
+  when the last one closes. They stay out of screenshots and recent apps unless you allow it.
+
+### Ad blocking
+
+- **uBlock Origin** is built in, with four levels (Off, Balanced, High, Extreme) for all sites or
+  each site. From High up it also blocks known fake login (phishing) sites.
+- Swift's own **pop-up and redirect blocker** stops the "tap anywhere opens an ad" trick.
+- **Tap to hide**: tap a leftover ad or banner to hide it on that site for good.
+- **Cookie pop-ups** answered with "Reject" on the sites Swift knows and hidden on most others.
+- **Blocked this week**: how many ads and trackers were blocked on each of the last 7 days (counts
+  only, never which sites).
+- From the first page: after a restart, pages wait for the ad blocker while the start-up screen
+  says what's loading, with Load now after 8 seconds.
+
+### Videos and music
+
+**Videos on websites**
+
+- Keep playing in the background: in other tabs, other apps and with the screen off, even on sites
+  that pause themselves when you leave them. One tab plays at a time.
+- Notification and lock-screen controls with the picture, play and pause, skip, sleep timer and
+  close. Headset and Bluetooth buttons work, and playing pauses when headphones are unplugged.
+- In full screen: double-tap a side to skip (keep tapping to skip more), hold for double speed,
+  swipe for brightness and volume, and turn sideways by itself.
+- **Continue watching** where you left off, even after a reload.
+- **Sleep timer**: stops after 15 to 90 minutes or at the end of the video, fading the sound out.
+- Playback speed from 0.5x to 3x. Sites get H.264 video, which the phone's hardware can play.
+- A button on a playing video can open it in **Swift's player**, which is smoother and has gestures
+  and subtitles. HLS and DASH streams work there too.
+
+**Swift's player**, for videos and music on the phone and from other apps
+
+- Swipe for brightness, volume and seeking; double-tap to skip (taps in a row add up); hold for 2×;
+  pinch to fill the screen; lock; turning; picture size; speed.
+- Previous and next, the folder as a playlist, repeat, shuffle, an Up next card, A-B repeat, and
+  frame by frame while paused.
+- **Sound and subtitles**: audio tracks, subtitle files found next to the video or picked yourself,
+  size, colour and timing, for every subtitle and for the sound, kept for each video. Urdu, Arabic
+  and other subtitles are read in the right encoding.
+- Dolby and DTS sound, a volume boost up to 200%, an equalizer with the phone's presets and bass
+  boost, and Night sound (loud parts quieter, quiet voices louder).
+- Music keeps playing with the screen off, in the colours of its album cover. It goes on where you
+  stopped, and panels open beside the video so it stays in view.
+
+**Pictures**: zoom and swipe through a folder, crop and turn, details (camera, settings, place),
+a thumbnail strip, slideshow, moving GIFs, and set as wallpaper or contact photo.
+
+### Downloads and torrents
+
+- **Downloads** with pause and resume, progress on the menu button and in notifications, and a
+  folder of your choice. Big ones can wait for Wi-Fi. Downloads cut off by closing Swift go on by
+  themselves, and failed ones try again when the connection comes back.
+- **Sort downloads into folders** by kind: Videos, Music, Pictures, Documents and Apps.
+- **Save videos from pages**, including HLS and DASH streams, choosing the quality with its size,
+  as one MP4 when possible.
+- **Torrents**: magnet links, .torrent files and "Open with Swift", with a panel of the files (junk
+  unticked, a warning for Windows programs and 10-bit videos, a free space check). Speed limits, how
+  many at once, Wi-Fi only, only while charging, at night only, extra sources, and protected
+  connections. They pause on low battery and while Swift's VPN is on.
+
+### Files
+
+A file manager for the phone's storage and SD card, also with its own icon.
+
+- A start page with how full each storage is and what fills it, categories, Continue, recent files
+  and favourite folders. Grid or list, with pictures of photos and videos and how much of a video
+  was watched.
+- Copy, move, rename, delete, new folder, share, details, and folder sizes. Hold a file and slide
+  to select many. **Two folders side by side** with the phone sideways.
+- **Archives** (ZIP, 7z, RAR, TAR, GZ, BZ2, XZ) open like folders. Extract all or some, and make
+  ZIP or 7z, with a password for ZIP. RAR5 can't be opened, and RAR can't be made.
+- **Recycle bin**: deleted files can be brought back, for as long as you choose.
+- **Free up space**: large files, duplicates, app files, empty folders and what Swift and torrents
+  leave behind.
+- **Private folder** behind your screen lock or a PIN, kept out of other apps, the Gallery and
+  backups.
+- **Wi-Fi transfer**: the phone's files on a computer's browser, with a code.
+- **Network folders**: a computer's or a home storage's shared folders over Wi-Fi (SMB 2 and 3),
+  read-only, with videos and music played straight from the share.
+
+### Documents
+
+PDF, Word, Excel, PowerPoint, e-books and text files open in Swift's own viewer, offline; nothing
+is uploaded. They look as they were made, in full screen, from Files, Downloads, a site or another
+app's "Open with".
+
+- **PDFs**: load only what's on screen, go to a page, contents, page previews, sharp zoom, password
+  protection, scanned pages, and **Fill & sign** (fill forms, highlight, draw, add text, save a copy).
+- **Word** as pages with their fonts, colours, tables and pictures, or as a simple reading view.
+  Old .doc files and .ppt slides too.
+- **Excel**: colours, merged cells, frozen rows and columns, and find in the whole sheet.
+- **PowerPoint**: a full-screen slideshow with the speaker notes.
+- **E-books** page by page or scrolling, with your choice of font and line spacing.
+- **Listen** reads the document aloud through all its pages. Reading mode hides the bars, a handle
+  scrolls long documents quickly, Save as PDF, Print, and each document remembers where you stopped.
+
+### Privacy and security
+
+- **Secure connections**: each site's protected version when it has one.
+- **Private site lookups**: your internet provider can't see which sites you visit (Cloudflare,
+  Quad9 or Google).
+- **Security status**: what is on, and what Swift has actually checked.
+- **Safer browsing**: closes a common way older browsers are attacked, as the engine no longer
+  gets security fixes.
+- **Saved passwords**, kept on the phone only and locked by Android, each profile with its own,
+  never in backups, and shown only after your screen lock.
+- **Address bar safety**: it can't be faked by pages posing as a search engine, lookalike names
+  show as they really are, and QR codes show where they lead first.
+- **Clear browsing data** by time or by dates, seeing how much each thing takes. **Quit** can
+  clear what you choose when you leave.
+- Logs and problem reports name no addresses or files, and nothing is sent without you seeing it
+  first.
+
+### VPN
+
+A free VPN for Swift only: change the country sites see you in, with free setup files from Proton
+VPN. Only Swift's traffic goes through it; other apps keep their own connection.
+
+- Add a location by downloading its file in Swift, or from a file or pasted text. Its key is
+  locked by Android, and VPN files are never in backups.
+- **Pause pages if the VPN drops**: pages wait instead of loading without it, and load by themselves
+  when it reconnects.
+- **Switch to another location** by itself when one stops working. **Test the locations** shows
+  which answer and how fast.
+- It comes back by itself after an update or a restart, and can turn on every time Swift starts.
+- Reminders before a free file stops working, and a quick settings tile; hold the VPN mark in the
+  address bar to switch country.
+
+### Look
+
+- **Google Sans Flex** for all of Swift's own text, and one icon style, Google's Material Symbols
+  Rounded: outlined, filled when something is on.
+- **Light, dark, or dark at night** (7 pm to 7 am). Sites that support dark mode follow it, and a
+  dark page can be turned on for those that don't.
+- **Colours**: 12 accent colours or your own, the main colour of each mode, ready-made mixes, and
+  colours taken from your home page's picture or your wallpaper.
+- **Night light**: a warm layer over Swift, pages and videos too.
+- **Start-up screen** in your colours, with the logo and, when something has to load, what's
+  loading, step by step.
+- Short, light animations and a light vibration on long presses (which can be turned off).
+
+### Speed on older phones
+
+- **Lite mode**: all sites without animations, shadows or frosted glass, for the smoothest
+  scrolling.
+- **Lighter pages** by default: no frosted glass, fewer decorative animations, and lighter YouTube
+  and TheFlixer. **Show sites as designed** turns this off, and is on by itself on phones with 4 GB
+  of memory or more.
+- **Battery saver**: below a level you choose, or with your phone's battery saver, Swift uses Lite
+  mode, keeps only the open tab loaded and loads no pictures on mobile data.
+- **Data saver**: on mobile data, pages load without pictures. **Data used** shows each day.
+- **Memory**: one engine process for all tabs, decoded pictures capped at 48 MB, and when memory
+  runs low, or a minute after Swift goes to the background, only the open or playing tab and those
+  you keep loaded stay. **Right now** shows free memory, Swift's own, loaded tabs and recent crashes.
+- The web cache is sized by the engine from the free space, and Swift empties it by itself when
+  the phone is low on space.
+- Pages that stop responding offer Stop, and a crashed page loads again by itself once.
+
+### Settings and backup
+
+- **Settings** in plain words, in twelve topics that show what is set in each, with a search box
+  that understands everyday words ("battery", "ads", "music").
+- **Back up and restore** settings, profiles, bookmarks, history, open tabs and groups, and site
+  settings in one file, also by itself every week. Passwords, cookies, the VPN and the Private
+  folder are never in it.
+- **Storage**: what Swift keeps on the phone, part by part, the sites that stored data (clear each
+  one) and clearing sites you haven't visited for 30 days.
+- **Updates**: Swift checks and installs its own updates, signed by Swift, and shows what's new.
+- **Problem reports**: crashes and freezes with Swift's log of the last 3 days, shown to you before
+  they are sent.
+
+## Requirements
+
+- Android 7 or newer on 32-bit ARM phones (`phone` build), or x86_64 for the Android emulator
+  (`emu` build).
 
 ## Build
 
-Requirements:
+To build it you need:
 
-- JDK 17+
+- JDK 17 or newer
 - Android SDK with platform 36
 - A signing key in `keystore/` (not in git, see below)
 
@@ -553,22 +289,26 @@ signed with the same key.
 | `app/src/main/java/com/swiftbrowser/engine` | Gecko runtime and extension setup |
 | `.../tabs` | Tabs, sessions and the GeckoView delegates (navigation, pop-up policy, crashes, permissions) |
 | `.../adblock` | Ad-block levels, the uBlock Origin bridge and the pop-up/redirect policy |
-| `.../media` | Bridge to the helper extension: video detection, playback speed, tap tracking |
+| `.../media` | Swift's player, the bridge to the helper extension (video detection, speed), sound and subtitles |
 | `.../download` | Download manager, HLS and DASH downloader, TS→MP4 remuxer, notification service |
+| `.../torrent` | Torrents (libtorrent) |
+| `.../files` | The file manager, archives, recycle bin, Private folder, Wi-Fi transfer, network folders |
+| `.../docs` | Opening documents, the viewer's file channel, page previews, old Word and PowerPoint files |
 | `.../vpn` | The VPN: WireGuard tunnel for Swift only, locations, encrypted setup files |
+| `.../news` | The home page's news |
+| `.../core` | Settings storage, the database, backups, logs and shared logic |
 | `.../ui` | Activities, home page, tab grid, settings, bottom sheets and dialogs |
 | `app/src/main/assets/extensions/ublock` | uBlock Origin 1.75.0, patched by `tools/update_ublock.py` |
 | `app/src/main/assets/extensions/helper` | Small built-in extension used by the app |
 | `.../helper/docs` | The document viewer, with pdf.js, docx-preview, SheetJS, pptx-preview, epub.js and JSZip (`lib/LICENSES.txt`) |
-| `.../docs` (Kotlin) | Opening documents, the viewer's file channel, page previews |
 | `tools/` | uBlock Origin update and patch script |
-| `app/src/test` | Tests of the plain logic (3.0), run on the PC: `gradle :app:testEmuDebugUnitTest` |
+| `app/src/test` | Tests of the plain logic, run on the PC: `gradle :app:testEmuDebugUnitTest` |
 
-To update uBlock Origin, run `python tools/update_ublock.py --version X.Y.Z`. Since 3.0 it stops
-unless the download matches the hash addons.mozilla.org publishes (`--skip-amo-check` to override).
-If `tools/ublock-patch/swift-bridge.js` changes, also bump `UBO_BRIDGE_REV` in `Engine.kt`.
+To update uBlock Origin, run `python tools/update_ublock.py --version X.Y.Z`. It stops unless the
+download matches the hash addons.mozilla.org publishes (`--skip-amo-check` to override). If
+`tools/ublock-patch/swift-bridge.js` changes, also bump `UBO_BRIDGE_REV` in `Engine.kt`.
 
-## Licenses
+## Licences
 
 Swift's own code is free software: you can share and change it under the **GNU General Public
 License, version 3 or (at your option) any later version** (the `LICENSE` file). It has to be: it
@@ -585,7 +325,9 @@ The app lists every part with its licence and home page under About Swift → Op
   the Classpath Exception.
 - Apache 2.0: AndroidX and Media3, Material Components, Kotlin and kotlinx, the WireGuard tunnel
   library, ZXing and ZXing Android Embedded, Apache POI, Commons Compress/Codec/Collections/Math,
-  Zip4j, Guava, SnakeYAML, SparseBitSet, pdf.js, docx-preview, SheetJS, Readability.
+  Zip4j, Guava, SnakeYAML, SparseBitSet, pdf.js, docx-preview, SheetJS, Readability, smbj.
 - MIT: libtorrent4j, JSZip, SLF4J. ISC: pptx-preview. BSD 2-Clause: epub.js. XZ for Java is
   public domain; Junrar follows the UnRAR licence.
+- Google Sans Flex (Swift's font) is under the SIL Open Font License, and Material Symbols (its
+  icons) under Apache 2.0.
 - Google Play services (brought in by GeckoView) is under the Android SDK licence.

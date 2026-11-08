@@ -82,15 +82,19 @@ object ErrorPage {
         val pl = com.swiftbrowser.media.Helper.pageColors(false)
         val pd = com.swiftbrowser.media.Helper.pageColors(true)
         fun c(o: org.json.JSONObject, k: String, d: String) = o.optString(k, d).ifBlank { d }
+        // 3.0.5: Swift's own font (when it is on), carried inside the page: see fontFaces().
+        val faces = fontFaces()
+        val fonts = if (faces.isEmpty()) "Roboto,sans-serif" else "'Swift Sans',Roboto,sans-serif"
         val html = """
             <!DOCTYPE html><html><head><meta charset="utf-8">
             <meta name="viewport" content="width=device-width,initial-scale=1">
             <title>${TextUtils.htmlEncode(title)}</title>
             <style>
+            /*faces*/
             :root{color-scheme:light dark;--a:${light.first};--on:${light.second};--c:${light.third};--bg:${c(pl, "bg", "#fff")};--fg:${c(pl, "text", "#1a1c21")};--sub:${c(pl, "muted", "#5c6370")};--chip:${c(pl, "surface", "#eff2f7")}}
             @media (prefers-color-scheme:dark){:root{--a:${dark.first};--on:${dark.second};--c:${dark.third};--bg:${c(pd, "bg", "#15171c")};--fg:${c(pd, "text", "#e6e8ec")};--sub:${c(pd, "muted", "#a3a9b4")};--chip:${c(pd, "surface", "#2a2d35")}}}
             html,body{background:var(--bg);color:var(--fg)}
-            body{font-family:Roboto,sans-serif;margin:0;padding:12vh 28px 40px;max-width:520px;margin:0 auto;box-sizing:border-box}
+            body{font-family:$fonts;margin:0;padding:12vh 28px 40px;max-width:520px;margin:0 auto;box-sizing:border-box}
             .icon{width:72px;height:72px;border-radius:50%;background:var(--c);display:flex;align-items:center;justify-content:center;margin-bottom:24px}
             .icon svg{width:36px;height:36px;fill:var(--a)}
             h1{font-size:22px;line-height:1.3;margin:0 0 10px;font-weight:500}
@@ -108,8 +112,32 @@ object ErrorPage {
             $waiting
             <div class="buttons">$buttons</div>
             </body></html>
-        """.trimIndent()
+        """.trimIndent().replaceFirst("/*faces*/", faces)
         return "data:text/html;charset=utf-8;base64," + Base64.encodeToString(html.toByteArray(), Base64.NO_WRAP)
+    }
+
+    /**
+     * 3.0.5: Swift's font on its error pages, as CSS for inside the page, or "" if it couldn't be read.
+     * These pages are data: addresses, which can't load the helper's font files (reader view and the
+     * document viewer can, being the helper's own): each carries its letters as data: fonts. So only
+     * a small cut made for the page is used (assets/error_page: ASCII and a little punctuation, in
+     * the two weights it shows, about 11 KB each), read when a page is made.
+     */
+    private fun fontFaces(): String {
+        val app: Context = SwiftApp.instance ?: return ""
+        if (!AppFont.active) return ""
+        return try {
+            fontFace(app, 400, "regular") + fontFace(app, 500, "medium")
+        } catch (e: java.io.IOException) {
+            // The page still shows, in the phone's font.
+            com.swiftbrowser.core.L.w("Couldn't read the error page's font", e)
+            ""
+        }
+    }
+
+    private fun fontFace(app: Context, weight: Int, name: String): String {
+        val data = Base64.encodeToString(app.assets.open("error_page/$name.woff2").use { it.readBytes() }, Base64.NO_WRAP)
+        return "@font-face{font-family:'Swift Sans';font-weight:$weight;src:url(data:font/woff2;base64,$data) format('woff2')}\n"
     }
 
     /** The accent (strong, on it, container) as CSS colours, for light and for dark pages. */
@@ -156,7 +184,7 @@ object ErrorPage {
         WebRequestError.ERROR_CONTENT_CRASHED ->
             "This page stopped working" to "Try loading it again."
         WebRequestError.ERROR_UNKNOWN_PROTOCOL ->
-            "Can't open this kind of link" to "Neither Swift nor another app on this phone can open it."
+            "Can't open this kind of link" to "Neither Swift nor another app on your phone can open it."
         WebRequestError.ERROR_HTTPS_ONLY ->
             "This site has no secure version" to "Its pages can only be sent unprotected. To open it anyway, turn off \"Use secure connections\" in Settings → Privacy & security."
         WebRequestError.ERROR_MALFORMED_URI ->

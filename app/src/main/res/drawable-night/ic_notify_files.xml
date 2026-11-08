@@ -1,0 +1,13 @@
+<!-- 2.7: copying, moving and extracting files, in the notification shade (white, no tint). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="960"
+    android:viewportHeight="960">
+    <!-- 3.0.5: Material Symbols Rounded "folder" at grade -25, softer on dark screens (drawable/ic_notify_files.xml is the normal one), filled. -->
+    <group android:translateY="960">
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M165,-170q-30.94,0 -52.97,-22.03Q90,-214.06 90,-245v-470q0,-30.94 22.03,-52.97Q134.06,-790 165,-790h209q15.14,0 28.87,5.74Q416.59,-778.52 427,-768l53,53h315q30.94,0 52.97,22.03Q870,-670.94 870,-640v395q0,30.94 -22.03,52.97Q825.94,-170 795,-170H165Z" />
+    </group>
+</vector>

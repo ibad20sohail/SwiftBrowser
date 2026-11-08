@@ -42,11 +42,11 @@ class SecurityStatusTest {
 
     @Test
     fun secureDnsSaysWhoIsAskedAndThatItFallsBack() {
-        val quad9 = SecurityStatus.lines(inputs(secureDns = "quad9")).first { it.name == "Secure DNS" }
+        val quad9 = SecurityStatus.lines(inputs(secureDns = "quad9")).first { it.name == "Private site lookups" }
         assertEquals(State.ON, quad9.state)
-        assertTrue(quad9.detail.startsWith("Quad9 is asked first"))
-        assertTrue(quad9.detail.contains("network's own DNS"))
-        assertEquals(State.OFF, state(inputs(secureDns = "off"), "Secure DNS"))
+        assertTrue(quad9.detail.startsWith("Quad9 looks up sites for you"))
+        assertTrue(quad9.detail.contains("your internet provider does"))
+        assertEquals(State.OFF, state(inputs(secureDns = "off"), "Private site lookups"))
     }
 
     @Test
@@ -60,7 +60,7 @@ class SecurityStatusTest {
     @Test
     fun theTextExplainsTheWords() {
         val text = SecurityStatus.text(SecurityStatus.lines(inputs()))
-        assertTrue(text.startsWith("Ad blocking: Checked. High: uBlock Origin is loaded"))
+        assertTrue(text.startsWith("Ad blocking: Checked. High: the ad blocker is running"))
         assertTrue(text.endsWith("On: set, but not something Swift can check from here."))
     }
 }

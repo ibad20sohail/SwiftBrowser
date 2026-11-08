@@ -153,7 +153,7 @@ object ChooseDates {
                 val ends = day == s || day == e
                 val between = s != null && e != null && day > s && day < e
                 number.text = n.toString()
-                number.alpha = if (future) 0.35f else 1f
+                number.alpha = if (future) Ui.DISABLED_ALPHA else 1f
                 number.typeface = if (ends || day == today) Ui.MEDIUM else android.graphics.Typeface.DEFAULT
                 number.setTextColor(if (ends) onAccent else if (between) onBand else if (future) secondary else text)
                 number.background = when {
@@ -191,7 +191,7 @@ object ChooseDates {
             }
             val ahead = year * 100 + m < thisMonth
             next.isEnabled = ahead
-            next.alpha = if (ahead) 1f else 0.3f
+            next.alpha = if (ahead) 1f else Ui.DISABLED_ALPHA
             summary.text = when {
                 s == null -> "Tap the first day, then the last"
                 e == null -> "From ${label(s, s)}: tap the last day, or Done for just that day"

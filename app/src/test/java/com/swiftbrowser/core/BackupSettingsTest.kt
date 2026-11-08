@@ -12,7 +12,7 @@ class BackupSettingsTest {
         assertNull(BackupSettings.forBackup("files_private_tries", 3))
         assertNull(BackupSettings.forBackup("files_private_wait_until", 1_700_000_000_000L))
         assertNull(BackupSettings.forBackup("files_private_origins", "{\"a\":\"b\"}"))
-        // Sign-ins, the VPN's locations (private keys), and what only this phone knows.
+        // Sign-ins, the VPN's locations (private keys), and what only the phone knows.
         assertNull(BackupSettings.forBackup("login_never", setOf("bank.example")))
         assertNull(BackupSettings.forBackup("login_offer", true))
         assertNull(BackupSettings.forBackup("vpn_locations", "[]"))

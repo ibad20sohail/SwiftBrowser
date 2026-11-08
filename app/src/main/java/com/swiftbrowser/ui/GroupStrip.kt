@@ -42,7 +42,7 @@ class GroupStrip(context: Context) : FrameLayout(context) {
     private val chips = LinearLayout(context)
     private val add = ImageButton(context)
 
-    /** The chips and +: the strip's whole width, or (3.0.4) its own pill when the bar floats. */
+    /** The chips and +. */
     private val bar = LinearLayout(context)
 
     /** The hairline between the strip and the page. */
@@ -54,12 +54,6 @@ class GroupStrip(context: Context) : FrameLayout(context) {
 
     /** 3.0.4: the bar's colours as MainActivity paints them ([paint]): Swift's, incognito's or a website's. */
     private var colours: BarColours? = null
-    private var floating = false
-    private var atBottom = false
-
-    /** 3.0.4: the strip's own pill when the bar floats, and what is around it at the top of the screen. */
-    private val pill = android.graphics.drawable.GradientDrawable().apply { cornerRadius = 1000f }
-    private val surround = android.graphics.drawable.ColorDrawable()
 
     /** The open tab, and its group's colour (the open chip's outline). */
     private var openTab: Tab? = null
@@ -132,37 +126,11 @@ class GroupStrip(context: Context) : FrameLayout(context) {
 
     /**
      * 3.0.4: the strip in the address bar's colours [c] (also each step while they change): Swift's,
-     * incognito's or a website's. [floating]: the bar is a floating pill, so the strip is one too, on
-     * the page's side of it ([atBottom]: the bar at the bottom), with a soft shadow, or an outline
-     * where a shadow wouldn't show ([outlined]: the dark look, incognito).
+     * incognito's or a website's.
      */
-    fun paint(c: BarColours, floating: Boolean, atBottom: Boolean, outlined: Boolean) {
-        if (colours == null || floating != this.floating || atBottom != this.atBottom) {
-            this.floating = floating
-            this.atBottom = atBottom
-            val m = if (floating) BarShape.stripMargins(atBottom, dp(BarShape.SIDE_DP), dp(BarShape.GAP_DP)) else IntArray(4)
-            val lp = bar.layoutParams as LayoutParams
-            lp.setMargins(m[0], m[1], m[2], m[3])
-            bar.layoutParams = lp
-            bar.background = if (floating) pill else null
-            line.visibility = if (floating) View.GONE else View.VISIBLE
-            // The pill's shadow reaches past its room; a tap beside the pill reaches the page there.
-            clipChildren = !floating
-            isClickable = !floating
-        }
+    fun paint(c: BarColours) {
         colours = c
-        if (floating) {
-            pill.setColor(c.bar)
-            pill.setStroke(dp(1), if (outlined) c.outline else android.graphics.Color.TRANSPARENT)
-            bar.elevation = if (outlined) 0f else Ui.dpf(context, 3f)
-            // At the top the page can't show around it (see MainActivity.paintBar); at the bottom it does.
-            surround.color = c.surround
-            if (background !== (if (atBottom) null else surround)) background = if (atBottom) null else surround
-        } else {
-            bar.elevation = 0f
-            if (background === surround) background = null
-            setBackgroundColor(c.bar)
-        }
+        setBackgroundColor(c.bar)
         line.setBackgroundColor(c.line)
         add.imageTintList = ColorStateList.valueOf(c.icon)
         for (i in 0 until chips.childCount) {

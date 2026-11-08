@@ -144,10 +144,10 @@ object Engine {
      */
     private fun applyPerformancePrefs(prefs: Prefs) {
         val list = listOf<SetGeckoPreference<*>>(
-            // The web cache could otherwise grow to several hundred MB. 20 MB keeps the pieces
-            // sites reuse on every page (scripts, styles, logos) without filling the phone.
-            SetGeckoPreference.setBoolPref("browser.cache.disk.smart_size.enabled", false, BRANCH),
-            SetGeckoPreference.setIntPref("browser.cache.disk.capacity", 20 * 1024, BRANCH),
+            // 3.0.5: no limit of Swift's on the web cache (it was 20 MB): the engine sizes it from
+            // the free space. Said outright, because the old limit is saved in the engine's profile
+            // and would stay otherwise. When the phone is almost full, Swift empties it (Storage).
+            SetGeckoPreference.setBoolPref("browser.cache.disk.smart_size.enabled", true, BRANCH),
             // Keep one previous page ready for an instant Back; each kept page holds its memory.
             SetGeckoPreference.setIntPref("browser.sessionhistory.max_total_viewers", 1, BRANCH),
             // Decoded images held in memory per process: 48 MB is plenty for a 720p screen.
@@ -199,7 +199,7 @@ object Engine {
         val file = File(app.filesDir, "gecko-startup.yaml")
         val text = buildString {
             append("prefs:\n")
-            // Always with the graphics chip (2.7): on the Moto E4 it was the faster one on heavy sites.
+            // Always with the graphics chip (2.7): on older phones it was the faster one on heavy sites.
             append("  $SOFTWARE_RENDERING_PREF: false\n")
             if (!prefs.sitesAsDesigned) {
                 // Frosted glass (backdrop-filter, e.g. YouTube's bottom bar and the badges on every

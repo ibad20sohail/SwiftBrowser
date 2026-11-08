@@ -4,7 +4,7 @@ package com.swiftbrowser.core
  * Which settings a backup carries (3.0): only the user's own choices, each with the kind of value it
  * holds. Before 3.0 a backup took every setting but a few, so the weekly one in Download/Swift (which
  * any app with storage access can read) held the Private folder's PIN check, the files moved into
- * Private, the sites never to save passwords for and what only this phone knows (permissions asked,
+ * Private, the sites never to save passwords for and what only the phone knows (permissions asked,
  * hints seen, counters). A setting not listed here stays on the phone; a new setting that should
  * travel needs a line here.
  *
@@ -27,17 +27,15 @@ object BackupSettings {
         "light_bg" to STRING, "light_bg_custom" to INT, "dark_bg" to STRING, "dark_bg_custom" to INT,
         "night_light" to INT, "night_light_strength" to INT, "text_scale" to FLOAT, "force_zoom" to BOOLEAN,
         "full_screen" to BOOLEAN, "haptics" to BOOLEAN,
-        // 3.0.4: Swift's own font or the phone's.
-        "swift_font" to BOOLEAN,
         // The address bar and the menu
         "toolbar_at_bottom" to BOOLEAN, "hide_toolbar_on_scroll" to BOOLEAN, "toolbar_follows_scroll" to BOOLEAN,
         "bar_swipes" to INT, "toolbar_layout" to STRING, "menu_layout" to STRING, "menu_hidden" to STRING,
-        // 3.0.4: the floating bar, and websites' colours in it.
-        "bar_style" to STRING, "site_colours" to BOOLEAN,
+        // 3.0.4: websites' colours in it.
+        "site_colours" to BOOLEAN,
         // Before 2.2, read once to carry them over.
         "menu_buttons" to STRING, "show_home_button" to BOOLEAN,
         // Home & news
-        "news_enabled" to BOOLEAN, "home_order" to STRING, "home_background" to STRING, "news_cards" to BOOLEAN, "news_country" to STRING, "news_topics" to SET,
+        "news_enabled" to BOOLEAN, "home_order" to STRING, "home_background" to STRING, "news_country" to STRING, "news_topics" to SET,
         "news_feeds" to STRING, "news_hidden" to SET, "home_continue" to BOOLEAN, "hidden_tiles" to SET,
         "news_topic" to STRING,
         // Browsing & tabs

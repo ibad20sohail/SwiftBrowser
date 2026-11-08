@@ -35,8 +35,8 @@ object SecurityStatus {
         val out = ArrayList<Line>()
         out += when {
             i.adLevel == AdLevel.OFF -> Line("Ad blocking", State.OFF, "No site is filtered.")
-            i.uboReady -> Line("Ad blocking", State.CHECKED, "${i.adLevel.label}: uBlock Origin is loaded and filtering pages.")
-            else -> Line("Ad blocking", State.ON, "${i.adLevel.label}: uBlock Origin is still starting.")
+            i.uboReady -> Line("Ad blocking", State.CHECKED, "${i.adLevel.label}: the ad blocker is running and filtering pages.")
+            else -> Line("Ad blocking", State.ON, "${i.adLevel.label}: the ad blocker is still starting.")
         }
         out += when {
             i.adLevel == AdLevel.OFF -> Line("Fake login (phishing) sites", State.OFF, "Not blocked while ad blocking is off.")
@@ -50,30 +50,30 @@ object SecurityStatus {
             else -> "Cloudflare"
         }
         out += if (dns == null) {
-            Line("Secure DNS", State.OFF, "Your network can see which sites you look up.")
+            Line("Private site lookups", State.OFF, "Your internet provider can see which sites you visit.")
         } else {
-            Line("Secure DNS", State.ON, "$dns is asked first; if it doesn't answer, your network's own DNS is used.")
+            Line("Private site lookups", State.ON, "$dns looks up sites for you; if it doesn't answer, your internet provider does.")
         }
         out += if (i.httpsOnly) {
-            Line("Secure connections", State.ON, "Pages load over https; an insecure site asks first.")
+            Line("Secure connections", State.ON, "Pages are sent protected; a site that can't do it asks first.")
         } else {
             Line("Secure connections", State.OFF, "Pages load the way their links say.")
         }
         out += if (i.saferBrowsing) {
-            Line("Safer browsing", State.ON, "JavaScript speed-ups and WebAssembly are off for web pages.")
+            Line("Safer browsing", State.ON, "Websites run without the parts most attacks go through.")
         } else {
-            Line("Safer browsing", State.OFF, "Pages run at full speed.")
+            Line("Safer browsing", State.OFF, "Websites run at full speed.")
         }
         out += when {
-            i.passwords == null -> Line("Saved passwords", State.ON, "Android's keystore couldn't be read just now.")
-            i.passwords > 0 -> Line("Saved passwords", State.ON, "${i.passwords} for this profile, encrypted with Android's keystore.")
-            i.offerPasswords -> Line("Saved passwords", State.ON, "None yet; Swift offers to save them, encrypted with Android's keystore.")
+            i.passwords == null -> Line("Saved passwords", State.ON, "Swift couldn't check them just now.")
+            i.passwords > 0 -> Line("Saved passwords", State.ON, "${i.passwords} for this profile, locked safely by Android.")
+            i.offerPasswords -> Line("Saved passwords", State.ON, "None yet; Swift offers to save them, locked safely by Android.")
             else -> Line("Saved passwords", State.OFF, "Swift doesn't offer to save passwords.")
         }
         out += when (i.vpn) {
-            Vpn.ON -> Line("VPN", State.CHECKED, "On${i.vpnServer?.let { " through $it" } ?: ""}: its server answered.")
+            Vpn.ON -> Line("VPN", State.CHECKED, "On${i.vpnServer?.let { " through $it" } ?: ""}: connected and working.")
             Vpn.CONNECTING -> Line("VPN", State.ON, "Connecting…")
-            Vpn.FAILED -> Line("VPN", State.OFF, "Not connected: it couldn't reach its server.")
+            Vpn.FAILED -> Line("VPN", State.OFF, "Not connected: this location isn't answering.")
             Vpn.OFF -> Line("VPN", State.OFF, "Swift uses your normal connection.")
         }
         out += if (i.locationSites > 0) {

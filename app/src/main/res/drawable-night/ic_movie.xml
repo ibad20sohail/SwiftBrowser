@@ -1,0 +1,13 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:tint="?attr/colorControlNormal"
+    android:viewportWidth="960"
+    android:viewportHeight="960">
+    <!-- 3.0.5: Material Symbols Rounded "movie" at grade -25, softer on dark screens (drawable/ic_movie.xml is the normal one). -->
+    <group android:translateY="960">
+        <path
+            android:fillColor="@android:color/white"
+            android:pathData="M166.98,-791L229,-666.5q7,14 19.5,21.75t27.31,7.75q29.61,0 45.4,-25t2.29,-51.5L285,-791h78.5L426,-666.5q7,14 19.5,21.75t27.31,7.75q29.61,0 45.4,-25t2.29,-51.5L482,-791h78.5L623,-666.5q7,14 19.5,21.75t27.31,7.75q29.61,0 45.4,-25t2.29,-51.5L679,-791h116q30.94,0 52.97,22.03Q870,-746.94 870,-716v472q0,30.94 -22.03,52.97Q825.94,-169 795,-169H165q-30.94,0 -52.97,-22.03Q90,-213.06 90,-244v-472.05q0,-32.45 22.75,-53.7T166.98,-791ZM165,-562v318h630v-318H165Zm0,0v318 -318Z" />
+    </group>
+</vector>

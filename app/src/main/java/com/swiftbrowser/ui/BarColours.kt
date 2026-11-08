@@ -2,15 +2,15 @@ package com.swiftbrowser.ui
 
 /*
  * 3.0.4: the address bar in a website's own colour (the colour a page asks browsers for with
- * <meta name="theme-color">, as Vivaldi and Chrome use it), and the floating bar's shape. Plain maths
- * on ARGB numbers and pixel sizes, without Android's classes, so it is tested on the PC
+ * <meta name="theme-color">, as Vivaldi and Chrome use it). Plain maths
+ * on ARGB numbers, without Android's classes, so it is tested on the PC
  * (BarColoursTest). MainActivity and GroupStrip paint with it.
  */
 
 /**
  * The colours of the address bar and what belongs to it (the address box, text, icons, the line to
  * the page, the accent's bits): Swift's own, incognito's, or worked out from a website's colour
- * ([forSite]). [surround]: what is around the floating bar's pill where the page can't show.
+ * ([forSite]).
  * [site]: from a website's colour (its group colours are then checked for contrast too).
  */
 class BarColours(
@@ -21,12 +21,8 @@ class BarColours(
     val line: Int,
     val accent: Int,
     val danger: Int,
-    val surround: Int,
     val site: Boolean = false,
 ) {
-    /** The floating pill's outline (dark look, incognito): a line a little lighter than the bar. */
-    val outline: Int get() = Contrast.mix(bar, icon, 0.25)
-
     /** The bar is dark (light text on it). */
     val dark: Boolean get() = Contrast.luminance(text) > Contrast.luminance(bar)
 
@@ -37,14 +33,14 @@ class BarColours(
          * accent's bits ([accent], and [danger] for "not secure") in the bar's text colour where
          * they wouldn't stand out.
          */
-        fun forSite(colour: Int, accent: Int, danger: Int, surround: Int): BarColours {
+        fun forSite(colour: Int, accent: Int, danger: Int): BarColours {
             val ink = BarTones.ink(colour)
             val pill = BarTones.pill(colour, ink)
             val icon = BarTones.soft(ink, colour, pill)
             return BarColours(
                 bar = colour, pill = pill, text = ink, icon = icon, line = BarTones.line(colour, icon),
                 accent = BarTones.onBar(accent, colour, ink), danger = BarTones.onBar(danger, pill, ink),
-                surround = surround, site = true,
+                site = true,
             )
         }
 
@@ -53,16 +49,16 @@ class BarColours(
             fun m(x: Int, y: Int) = BarTones.blend(x, y, t.toDouble())
             return BarColours(
                 m(a.bar, b.bar), m(a.pill, b.pill), m(a.text, b.text), m(a.icon, b.icon), m(a.line, b.line),
-                m(a.accent, b.accent), m(a.danger, b.danger), m(a.surround, b.surround), b.site,
+                m(a.accent, b.accent), m(a.danger, b.danger), b.site,
             )
         }
     }
 
     override fun equals(other: Any?): Boolean = other is BarColours && bar == other.bar && pill == other.pill &&
         text == other.text && icon == other.icon && line == other.line && accent == other.accent &&
-        danger == other.danger && surround == other.surround && site == other.site
+        danger == other.danger && site == other.site
 
-    override fun hashCode(): Int = listOf(bar, pill, text, icon, line, accent, danger, surround).hashCode() * 2 + if (site) 1 else 0
+    override fun hashCode(): Int = listOf(bar, pill, text, icon, line, accent, danger).hashCode() * 2 + if (site) 1 else 0
 }
 
 /** Which colours go on a website-coloured bar, so that everything on it stays readable. */
@@ -132,46 +128,6 @@ internal object BarTones {
         if (t >= 1.0) return b
         fun channel(shift: Int) = ((((a ushr shift) and 0xFF) * (1 - t) + ((b ushr shift) and 0xFF) * t) + 0.5).toInt().coerceIn(0, 255)
         return (channel(24) shl 24) or (channel(16) shl 16) or (channel(8) shl 8) or channel(0)
-    }
-}
-
-/**
- * The floating address bar's shape (Settings → Look & screen → Address bar style): a fully rounded
- * pill in the bar's room, a little in from the screen's sides and edge. Sizes in pixels; margins as
- * left, top, right, bottom.
- */
-internal object BarShape {
-    /** The floating bar's room is this much taller (dp) than the full-width bar, so the pill keeps the buttons' size. */
-    const val EXTRA_DP = 6
-
-    /** From the screen's sides (dp). */
-    const val SIDE_DP = 8
-
-    /** From the screen's top or bottom edge (dp). */
-    const val EDGE_DP = 6
-
-    /** Between the pill and the page, or the group strip's pill (dp). */
-    const val GAP_DP = 4
-
-    /** The pill in the bar's room: [edge] from the screen's edge, [gap] from the page, [side] from the sides. */
-    fun pillMargins(atBottom: Boolean, side: Int, edge: Int, gap: Int): IntArray =
-        if (atBottom) intArrayOf(side, gap, side, edge) else intArrayOf(side, edge, side, gap)
-
-    /** The group strip's pill in its room, on the page's side of the bar: [gap] from the page beyond it. */
-    fun stripMargins(atBottom: Boolean, side: Int, gap: Int): IntArray =
-        if (atBottom) intArrayOf(side, gap, side, 0) else intArrayOf(side, 0, side, gap)
-
-    /** How tall a pill with [margins] is in a room [room] tall. */
-    fun pillHeight(room: Int, margins: IntArray): Int = (room - margins[1] - margins[3]).coerceAtLeast(0)
-
-    /**
-     * The loading line along the pill's edge on the page's side, clear of its round ends (where it
-     * would stick out of the pill): margins in the bar's room, the line at the room's page side.
-     */
-    fun progressMargins(atBottom: Boolean, room: Int, margins: IntArray): IntArray {
-        val inset = pillHeight(room, margins) / 2
-        return if (atBottom) intArrayOf(margins[0] + inset, margins[1], margins[2] + inset, 0)
-        else intArrayOf(margins[0] + inset, 0, margins[2] + inset, margins[3])
     }
 }
 

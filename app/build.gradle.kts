@@ -21,13 +21,13 @@ android {
         applicationId = "com.swiftbrowser.app"
         minSdk = 24
         targetSdk = 35
-        versionCode = 26
-        versionName = "3.0.4"
+        versionCode = 27
+        versionName = "3.0.5"
     }
 
     flavorDimensions += "abi"
     productFlavors {
-        // The Moto E4 runs 32-bit ARM apps whether its userspace is 32- or 64-bit.
+        // Older phones run 32-bit ARM apps whether their userspace is 32- or 64-bit.
         create("phone") {
             dimension = "abi"
             ndk { abiFilters += listOf("armeabi-v7a") }

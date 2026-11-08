@@ -61,8 +61,7 @@ import kotlin.math.roundToInt
 /**
  * Settings, in the look of the rest of the app: a short main page (search, the switches changed
  * most as tiles, and the topics with what is set in each), and a page per topic. Every setting is
- * described once below and appears both on its topic's page and in search results. Settings for
- * experts wait under "Advanced" at the end of their topic (2.0).
+ * described once below and appears both on its topic's page and in search results.
  */
 class SettingsActivity : AppCompatActivity() {
 
@@ -71,9 +70,10 @@ class SettingsActivity : AppCompatActivity() {
         NEWS("Home & news", R.drawable.ic_news),
         BROWSING("Browsing & tabs", R.drawable.ic_tab),
         ADBLOCK("Ad blocking", R.drawable.ic_shield),
-        SPEED("Speed & memory", R.drawable.ic_speed),
-        VIDEO("Video & downloads", R.drawable.ic_movie),
-        FILES("Files & media", R.drawable.ic_folder),
+        SPEED("Speed, data & battery", R.drawable.ic_speed),
+        VIDEO("Videos & music", R.drawable.ic_movie),
+        DOWNLOADS("Downloads", R.drawable.ic_download),
+        FILES("Files", R.drawable.ic_folder),
         PRIVACY("Privacy & security", R.drawable.ic_lock),
         VPN("VPN", R.drawable.ic_vpn),
         STORAGE("Storage & data", R.drawable.ic_storage),
@@ -86,7 +86,6 @@ class SettingsActivity : AppCompatActivity() {
         val section: String?,
         val title: String,
         val keywords: String,
-        val advanced: Boolean,
         val build: Section.() -> Unit,
     )
 
@@ -145,7 +144,8 @@ class SettingsActivity : AppCompatActivity() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
         }
-        root.addView(topBar(), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(56)))
+        // 3.0.5: the one title bar of every screen (see topBar: the same title as the lists' and Files' bars).
+        root.addView(topBar(), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(Ui.BAR_HEIGHT)))
         container = FrameLayout(this)
         root.addView(container, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         setContentView(root)
@@ -224,8 +224,9 @@ class SettingsActivity : AppCompatActivity() {
             setOnClickListener { onBackPressedDispatcher.onBackPressed() }
         }, LinearLayout.LayoutParams(dp(48), dp(48)))
         titleView = TextView(this@SettingsActivity).apply {
-            // The same size as the other screens' titles (2.6). 3.0.4: in bold.
-            Ui.size(this, Ui.Type.HEADLINE, keepFont = true)
+            // The same size as the other screens' titles (2.6). 3.0.4: in bold. 3.0.5: the same as
+            // the lists' and Files' bars (Swift.ListTitle, the scale's TITLE).
+            Ui.size(this, Ui.Type.TITLE, keepFont = true)
             setTypeface(Ui.BOLD)
             setTextColor(color(R.color.text_primary))
             setPadding(dp(8), 0, 0, 0)
@@ -245,6 +246,8 @@ class SettingsActivity : AppCompatActivity() {
         val page = ScrollView(this).apply {
             isFillViewport = true
             isVerticalScrollBarEnabled = false
+            // 3.0.5: the glow at its ends in the accent chosen.
+            Palette.glow(this)
             // On a turned phone the page doesn't stretch across the whole screen.
             addView(MaxWidthLayout(this@SettingsActivity).apply { addView(Palette.paint(if (t == null) mainPage() else topicPage(t))) })
         }
@@ -253,19 +256,18 @@ class SettingsActivity : AppCompatActivity() {
         val big = pageTitle
         setBarTitle(0f)
         page.setOnScrollChangeListener { _, _, y, _, _ -> followTitle(big, y) }
+        // 3.0.5: a page still on its way out (two quick taps) goes now, so none can stay behind the new one.
+        while (container.childCount > 1) container.removeViewAt(0)
         val old = container.getChildAt(0)
         container.addView(page)
         // The search box waits for a tap rather than taking the focus (and a blinking cursor).
         container.isFocusableInTouchMode = true
         container.requestFocus()
         if (animate && old != null) {
-            // The new page slides in over the old one, which slides a little and fades.
-            val shift = dp(56).toFloat() * if (forward) 1 else -1
-            page.alpha = 0f
-            page.translationX = shift
-            page.animate().alpha(1f).translationX(0f).setDuration(Motion.NORMAL).setInterpolator(Motion.standard).withLayer().start()
-            old.animate().alpha(0f).translationX(-shift / 3).setDuration(Motion.SHORT).setInterpolator(Motion.exit).withLayer()
-                .withEndAction { container.removeView(old) }.start()
+            // 3.0.5: the same change as anywhere in Swift (Motion): the new page comes in with a fade
+            // from the side it is reached from, over the old one, which fades where it is.
+            Motion.pageIn(page, if (forward) Motion.FORWARD else Motion.BACK)
+            Motion.pageOut(old) { container.removeView(old) }
         } else if (old != null) {
             container.removeView(old)
         }
@@ -273,15 +275,16 @@ class SettingsActivity : AppCompatActivity() {
 
     private fun column() = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
-        setPadding(dp(12), dp(4), dp(12), dp(28))
+        // 3.0.5: the one side margin of every screen.
+        setPadding(dp(Ui.MARGIN), dp(4), dp(Ui.MARGIN), dp(28))
     }
 
     /** 3.0.4: the large title of the page being made (see [largeTitle]), for [show] to follow as it scrolls. */
     private var pageTitle: TextView? = null
 
-    /** 3.0.4: the page's large title, at its top. */
+    /** 3.0.4: the page's large title, at its top. 3.0.5: lined up with the headings and row icons under it (and the lists' titles). */
     private fun largeTitle(col: LinearLayout, text: String) {
-        val big = Ui.text(this, Ui.Type.DISPLAY, text, lines = 2).apply { setPadding(dp(12), dp(8), dp(12), dp(16)) }
+        val big = Ui.text(this, Ui.Type.DISPLAY, text, lines = 2).apply { setPadding(dp(Ui.ROW_INSET), dp(8), dp(Ui.ROW_INSET), dp(12)) }
         col.addView(big)
         pageTitle = big
     }
@@ -315,22 +318,10 @@ class SettingsActivity : AppCompatActivity() {
 
         val search = EditText(this).apply {
             hint = "Search settings"
-            Ui.size(this, Ui.Type.BODY, keepFont = true)
             setSingleLine()
             imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH or android.view.inputmethod.EditorInfo.IME_FLAG_NO_EXTRACT_UI
-            setTextColor(color(R.color.text_primary))
-            setHintTextColor(color(R.color.text_secondary))
-            // 3.0.4: in the card colour, like the rows under it (the softer grey hardly showed on the page).
-            background = ContextCompat.getDrawable(this@SettingsActivity, R.drawable.bg_url)?.mutate()?.also {
-                it.setTint(color(R.color.card_bg))
-            }
-            setPadding(dp(14), 0, dp(14), 0)
-            compoundDrawablePadding = dp(10)
-            val icon = ContextCompat.getDrawable(this@SettingsActivity, R.drawable.ic_search)?.mutate()?.also {
-                it.setTint(color(R.color.text_secondary))
-                it.setBounds(0, 0, dp(20), dp(20))
-            }
-            setCompoundDrawablesRelative(icon, null, null, null)
+            // 3.0.5: the one search box of every screen (3.0.4: in the card colour, like the rows under it).
+            Ui.searchBox(this)
         }
         search.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
@@ -347,8 +338,8 @@ class SettingsActivity : AppCompatActivity() {
             true
         }
         settingsSearch = search
-        col.addView(search, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46)).apply {
-            topMargin = dp(4)
+        col.addView(search, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(Ui.SEARCH_HEIGHT)).apply {
+            topMargin = dp(10)
             bottomMargin = dp(12)
         })
 
@@ -359,7 +350,7 @@ class SettingsActivity : AppCompatActivity() {
         }
         normal.addView(card)
         normal.addView(TextView(this).apply {
-            text = "Swift ${BuildConfig.VERSION_NAME} · Firefox engine · uBlock Origin ${AdBlock.uboVersion}".trimEnd(' ', '·')
+            text = "Swift ${BuildConfig.VERSION_NAME}"
             Ui.size(this, Ui.Type.CAPTION, keepFont = true)
             gravity = Gravity.CENTER
             setTextColor(color(R.color.text_secondary))
@@ -399,36 +390,7 @@ class SettingsActivity : AppCompatActivity() {
         val col = column()
         largeTitle(col, t.title)
         if (t == Topic.ABOUT) col.addView(aboutHeader())
-        addDefs(col, defs.filter { it.topic == t && !it.advanced })
-        // Settings for experts, folded away until asked for.
-        val advanced = defs.filter { it.topic == t && it.advanced }
-        if (advanced.isNotEmpty()) {
-            val box = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                visibility = View.GONE
-            }
-            addDefs(box, advanced)
-            val chevron = ImageView(this).apply {
-                setImageDrawable(Ui.icon(this@SettingsActivity, R.drawable.ic_down, color(R.color.text_secondary)))
-                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-            }
-            val head = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(dp(16), dp(14), dp(16), dp(14))
-                background = Ui.ripple(this@SettingsActivity, null, Ui.R_MEDIUM)
-                contentDescription = "Advanced settings"
-                addView(Ui.text(this@SettingsActivity, Ui.Type.SUBTITLE, "Advanced", color(R.color.text_secondary)), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-                addView(chevron, LinearLayout.LayoutParams(dp(22), dp(22)))
-                setOnClickListener {
-                    val open = box.visibility != View.VISIBLE
-                    chevron.animate().rotation(if (open) 180f else 0f).setDuration(Motion.NORMAL).setInterpolator(Motion.standard).start()
-                    if (open) Motion.fadeIn(box, fromDy = 12) else Motion.fadeOut(box, toDy = 0)
-                }
-            }
-            col.addView(head, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(12) })
-            col.addView(box)
-        }
+        addDefs(col, defs.filter { it.topic == t })
         return col
     }
 
@@ -484,21 +446,26 @@ class SettingsActivity : AppCompatActivity() {
             when {
                 prefs.liteMode || Power.saving -> "Lite mode"
                 prefs.sitesAsDesigned -> "Sites as designed"
-                else -> "Lighter sites for this phone"
+                else -> "Lighter sites"
             },
-            if (prefs.maxLiveTabs == 1 || Power.saving) "1 tab kept loaded" else "${prefs.maxLiveTabs} tabs kept loaded",
+            if (prefs.maxLiveTabs == 1 || Power.saving) "1 tab ready to open" else "${prefs.maxLiveTabs} tabs ready to open",
         ).joinToString(" · ")
         Topic.VIDEO -> listOfNotNull(
             if (prefs.keepPlaying) "Keeps playing in the background" else null,
             if (prefs.continueWatching) "Continue watching" else null,
             if (prefs.videoTaps) "Double-tap to skip" else null,
-        ).joinToString(" · ").ifEmpty { "Players and downloads" }
+        ).joinToString(" · ").ifEmpty { "Videos on websites and Swift's player" }
+        Topic.DOWNLOADS -> listOfNotNull(
+            if (prefs.confirmDownloads) "Asks first" else null,
+            if (prefs.wifiOnlyDownloads) "Big ones wait for Wi-Fi" else null,
+            "Torrents",
+        ).joinToString(" · ")
         Topic.PRIVACY -> listOfNotNull(
             if (prefs.httpsOnly) "Secure connections" else null,
             "Passwords",
             "Site settings",
         ).joinToString(" · ")
-        Topic.FILES -> "File manager and the media player"
+        Topic.FILES -> "Folders, recycle bin, Private"
         Topic.VPN -> VpnUi.label().let { if (com.swiftbrowser.vpn.Vpn.locations().isEmpty()) "Change your country for free (Proton VPN)" else it }
         Topic.STORAGE -> (usage?.let { "Swift uses ${UrlUtils.formatBytes(it.total)} · " } ?: "") + "Clear data · Back up"
         Topic.ABOUT -> "Swift ${BuildConfig.VERSION_NAME} · Updates · Problem report · Licences"
@@ -508,8 +475,8 @@ class SettingsActivity : AppCompatActivity() {
 
     private fun buildDefs(): List<Def> {
         val list = ArrayList<Def>()
-        fun def(t: Topic, section: String?, title: String, keywords: String = "", advanced: Boolean = false, build: Section.() -> Unit) {
-            list += Def(t, section, title, keywords, advanced, build)
+        fun def(t: Topic, section: String?, title: String, keywords: String = "", build: Section.() -> Unit) {
+            list += Def(t, section, title, keywords, build)
         }
 
         // Look & screen
@@ -526,22 +493,11 @@ class SettingsActivity : AppCompatActivity() {
                 else "${if (mode == NightLight.AT_NIGHT) "7 pm to 7 am" else "Always"} · ${NightLight.strengthLabel(prefs.nightLightStrength).lowercase()}"
             }) { nightLightSheet() }
         }
-        // 3.0.4: Google Sans Flex for Swift's own text, or the phone's font.
-        def(Topic.LOOK, null, "Swift's font", "font typeface letters google sans flex roboto text style look") {
-            switch(
-                R.drawable.ic_text_size, "Swift's font",
-                { if (prefs.swiftFont) "Google Sans Flex for Swift's own text; sites keep theirs" else "Off: the phone's own font" },
-                checked = { prefs.swiftFont },
-            ) {
-                prefs.swiftFont = it
-                confirmRestart(if (it) "Swift's text changes to its own font after it restarts." else "Swift's text changes to the phone's font after it restarts.")
-            }
-        }
         def(Topic.LOOK, null, "Text size", "font letters bigger smaller zoom") {
             action(R.drawable.ic_text_size, "Text size", { textSizeText(prefs.textScale) }) { chooseTextSize() }
         }
         def(Topic.LOOK, null, "Full screen", "status bar navigation bar immersive hide bars") {
-            switch(R.drawable.ic_fullscreen, "Full screen", { "Hide the phone's bars at the top and bottom" }, checked = { prefs.fullScreen }) {
+            switch(R.drawable.ic_fullscreen, "Full screen", { "Hides your phone's bars at the top and bottom of the screen" }, checked = { prefs.fullScreen }) {
                 prefs.fullScreen = it
                 SystemBars.apply(this@SettingsActivity)
             }
@@ -557,18 +513,8 @@ class SettingsActivity : AppCompatActivity() {
                 prefs.toolbarAtBottom = it
             }
         }
-        // 3.0.4: a floating, fully rounded bar, and websites' own colours in the bar.
-        def(Topic.LOOK, "Address bar", "Address bar style", "floating pill rounded full width style shape toolbar address bar") {
-            action(R.drawable.ic_bar_style, "Address bar style", {
-                if (prefs.barStyle == Prefs.BAR_FLOATING) "Floating: a rounded bar with a little room around it" else "Full width, across the screen"
-            }) {
-                choose("Address bar style", listOf("Full width", "Floating"), if (prefs.barStyle == Prefs.BAR_FLOATING) 1 else 0) { i ->
-                    prefs.barStyle = if (i == 1) Prefs.BAR_FLOATING else Prefs.BAR_FULL
-                }
-            }
-        }
         def(Topic.LOOK, "Address bar", "Website colours in the address bar", "theme color colour site website brand tint adaptive vivaldi address bar toolbar") {
-            switch(R.drawable.ic_bar_colour, "Website colours in the address bar", { "The bar takes the colour a site asks for" }, checked = { prefs.siteColours }) {
+            switch(R.drawable.ic_bar_colour, "Website colours in the address bar", { "The bar takes on each site's own colour" }, checked = { prefs.siteColours }) {
                 prefs.siteColours = it
             }
         }
@@ -578,17 +524,17 @@ class SettingsActivity : AppCompatActivity() {
         def(Topic.LOOK, "Address bar", "Address bar swipes", "swipe up down hide show address bar toolbar gesture") {
             action(R.drawable.ic_gesture, "Address bar swipes", { barSwipesText(prefs.barSwipes) }) { chooseBarSwipes() }
         }
-        def(Topic.LOOK, "Address bar", "Hide while scrolling", "toolbar address bar url bar top") {
-            switch(R.drawable.ic_toolbar, "Hide while scrolling", { "More room for the page; scroll back a little to bring it back" }, checked = { prefs.hideToolbarOnScroll }) {
+        def(Topic.LOOK, "Address bar", "Hide the bar while scrolling", "toolbar address bar url bar top") {
+            switch(R.drawable.ic_toolbar, "Hide the bar while scrolling", { "More room for the page; scroll back a little to bring it back" }, checked = { prefs.hideToolbarOnScroll }) {
                 prefs.hideToolbarOnScroll = it
             }
         }
-        def(Topic.LOOK, "Address bar", "Bar follows your finger", "toolbar animation smooth chrome follow finger slides", advanced = true) {
+        def(Topic.LOOK, "Address bar", "Bar follows your finger", "toolbar animation smooth chrome follow finger slides") {
             switch(
                 R.drawable.ic_touch, "Bar follows your finger",
                 { if (prefs.toolbarFollowsScroll) "It slides away and back as far as you scroll" else "Off: it hides and comes back in one go" },
                 details = "On, the address bar slides away and back exactly as far as you scroll, and finishes with a short " +
-                    "slide when you let go, as in Chrome. Off, it hides or comes back in one go after a clear scroll.\n\n" +
+                    "slide when you let go. Off, it hides or comes back in one go after a clear scroll.\n\n" +
                     "Turn it off if scrolling feels less smooth with it.",
                 enabled = { prefs.hideToolbarOnScroll },
                 checked = { prefs.toolbarFollowsScroll },
@@ -598,17 +544,17 @@ class SettingsActivity : AppCompatActivity() {
             action(R.drawable.ic_menu, "Arrange the menu", { "Hold any button in the menu to move it, or drag it to the top to hide it" }) { arrangeMenu() }
         }
         def(Topic.LOOK, "Menu", "Reset the menu", "menu buttons default reset order") {
-            action(R.drawable.ic_update, "Reset the menu", { "Every button back where it started" }) { resetMenu() }
+            action(R.drawable.ic_reset, "Reset the menu", { "Every button back where it started" }) { resetMenu() }
         }
-        def(Topic.FILES, "Files", "Files in the app list", "icon launcher home screen app list documents files apps") {
+        def(Topic.FILES, null, "Show Files in the app drawer", "icon launcher home screen app list drawer documents files apps own app") {
             switch(
-                R.drawable.ic_folder, "Files in the app list",
-                { "Its own icon next to Swift's, to open it straight away" },
+                R.drawable.ic_folder, "Show Files in the app drawer",
+                { "Its own app icon next to Swift's, to open it straight away" },
                 checked = { AppIcons.shown(this@SettingsActivity) },
             ) { AppIcons.show(this@SettingsActivity, it) }
         }
         // 2.9: the file manager (FilesSettings).
-        def(Topic.FILES, "Files", "Files opens at", "start page last folder open where") {
+        def(Topic.FILES, null, "Files opens at", "start page last folder open where") {
             action(R.drawable.ic_home, "Files opens at", { if (FilesSettings.startAt == FilesSettings.START_HOME) "Its start page" else "The last folder you were in" }) {
                 val keys = listOf(FilesSettings.START_HOME, FilesSettings.START_LAST)
                 choose("Files opens at", listOf("Its start page", "The last folder you were in"), keys.indexOf(FilesSettings.startAt)) { i ->
@@ -616,30 +562,30 @@ class SettingsActivity : AppCompatActivity() {
                 }
             }
         }
-        def(Topic.FILES, "Files", "Show hidden files", "hidden dot files system") {
-            switch(R.drawable.ic_folder, "Show hidden files", { "Files and folders whose names start with a dot" }, checked = { FilesSettings.showHidden }) {
+        def(Topic.FILES, null, "Show hidden files", "hidden dot files system") {
+            switch(R.drawable.ic_folder, "Show hidden files", { "Also shows files and folders normally kept out of sight" }, checked = { FilesSettings.showHidden }) {
                 FilesSettings.showHidden = it
             }
         }
-        def(Topic.FILES, "Files", "Grid", "grid list view tiles") {
-            switch(R.drawable.ic_grid_view, "Grid", { if (FilesSettings.grid) "Folders show as tiles with pictures" else "Folders show as a list" }, checked = { FilesSettings.grid }) {
+        def(Topic.FILES, null, "Show folders as tiles", "grid list view tiles") {
+            switch(R.drawable.ic_grid_view, "Show folders as tiles", { if (FilesSettings.grid) "Tiles with pictures" else "Off: a simple list" }, checked = { FilesSettings.grid }) {
                 FilesSettings.grid = it
             }
         }
         // 3.0.4: two folders next to each other with the phone sideways (also the button in Files' bar).
-        def(Topic.FILES, "Files", "Two folders side by side", "two folders panes side by side dual split landscape sideways copy move") {
+        def(Topic.FILES, null, "Two folders side by side", "two folders panes side by side dual split landscape sideways copy move") {
             switch(R.drawable.ic_two_panes, "Two folders side by side", {
-                if (FilesSettings.twoPanes) "With the phone sideways, to copy and move between them" else "Off: one folder, also sideways"
+                if (FilesSettings.twoPanes) "With your phone sideways, to copy and move between them" else "Off: one folder at a time"
             }, checked = { FilesSettings.twoPanes }) {
                 FilesSettings.twoPanes = it
             }
         }
-        def(Topic.FILES, "Files", "Sort folders by", "sort order name date size type") {
+        def(Topic.FILES, null, "Sort folders by", "sort order name date size type") {
             action(R.drawable.ic_sort, "Sort folders by", { FilesSettings.sortLabels.getOrNull(FilesSettings.sort) ?: "" }) {
                 choose("Sort folders by", FilesSettings.sortLabels, FilesSettings.sort) { i -> FilesSettings.sort = i }
             }
         }
-        def(Topic.FILES, "Files", "Picture previews", "thumbnails previews pictures videos") {
+        def(Topic.FILES, null, "Picture previews", "thumbnails previews pictures videos") {
             switch(R.drawable.ic_image, "Picture previews", { "Small pictures of photos and videos in the lists" }, checked = { FilesSettings.thumbnails }) {
                 FilesSettings.thumbnails = it
             }
@@ -705,71 +651,6 @@ class SettingsActivity : AppCompatActivity() {
                 }
             }
         }
-        // 2.9: Swift's video and music player (PlayerSettings).
-        def(Topic.FILES, "Media player", "Swipe gestures", "player gestures swipe brightness volume seek vlc") {
-            switch(R.drawable.ic_play, "Swipe gestures", { "Brightness on the left, volume on the right, sideways to move through the video" }, checked = { PlayerSettings.gestures }) {
-                PlayerSettings.gestures = it
-            }
-        }
-        def(Topic.FILES, "Media player", "Go on where you left off", "resume position continue player video music") {
-            switch(R.drawable.ic_history, "Go on where you left off", { "Videos and long recordings start where you stopped" }, checked = { PlayerSettings.resume }) {
-                PlayerSettings.resume = it
-            }
-        }
-        def(Topic.FILES, "Media player", "Keep music playing", "background music notification lock screen") {
-            switch(R.drawable.ic_headphones, "Keep music playing", { "When you leave the player or turn the screen off, with controls in the notification" }, checked = { PlayerSettings.backgroundAudio }) {
-                PlayerSettings.backgroundAudio = it
-            }
-        }
-        def(Topic.FILES, "Media player", "Speed", "player speed default fast slow") {
-            action(R.drawable.ic_speed, "Speed", { "Videos start at " + PlayerSettings.speedLabel(PlayerSettings.defaultSpeed) }) {
-                choose("Speed", PlayerSettings.SPEEDS.map { PlayerSettings.speedLabel(it) }, PlayerSettings.SPEEDS.indexOfFirst { it == PlayerSettings.defaultSpeed }) { i ->
-                    PlayerSettings.defaultSpeed = PlayerSettings.SPEEDS[i]
-                }
-            }
-        }
-        def(Topic.FILES, "Media player", "Turning the screen", "rotation landscape portrait orientation auto") {
-            action(R.drawable.ic_fullscreen, "Turning the screen", { PlayerSettings.rotationLabel(PlayerSettings.rotation) }) {
-                choose("Turning the screen", PlayerSettings.ROTATIONS.map { PlayerSettings.rotationLabel(it) }, PlayerSettings.ROTATIONS.indexOf(PlayerSettings.rotation)) { i ->
-                    PlayerSettings.rotation = PlayerSettings.ROTATIONS[i]
-                }
-            }
-        }
-        def(Topic.FILES, "Media player", "Double-tap skips", "double tap skip seconds forward back") {
-            action(R.drawable.ic_forward, "Double-tap skips", { "${PlayerSettings.doubleTapSeconds} seconds" }) {
-                choose("Double-tap skips", PlayerSettings.DOUBLE_TAP_CHOICES.map { "$it seconds" }, PlayerSettings.DOUBLE_TAP_CHOICES.indexOf(PlayerSettings.doubleTapSeconds)) { i ->
-                    PlayerSettings.doubleTapSeconds = PlayerSettings.DOUBLE_TAP_CHOICES[i]
-                }
-            }
-        }
-        def(Topic.FILES, "Media player", "Subtitle size", "subtitles captions text size") {
-            action(R.drawable.ic_subtitles, "Subtitle size", { "${PlayerSettings.subtitleSize}%" }) {
-                choose("Subtitle size", PlayerSettings.SUBTITLE_SIZES.map { "$it%" }, PlayerSettings.SUBTITLE_SIZES.indexOf(PlayerSettings.subtitleSize)) { i ->
-                    PlayerSettings.subtitleSize = PlayerSettings.SUBTITLE_SIZES[i]
-                }
-            }
-        }
-        // 3.0.1: the subtitles shown first, in the video and in subtitle files beside it.
-        def(Topic.FILES, "Media player", "Subtitle language", "subtitles captions language urdu english arabic hindi") {
-            action(R.drawable.ic_subtitles, "Subtitle language", {
-                val lang = PlayerSettings.subtitleLanguage
-                if (lang.isEmpty()) "Automatic: a file named like the video, else English"
-                else "${PlayerSettings.SUBTITLE_LANGUAGES.first { it.first == lang }.second} first, in the video and in subtitle files"
-            }) {
-                choose(
-                    "Subtitle language", PlayerSettings.SUBTITLE_LANGUAGES.map { it.second },
-                    PlayerSettings.SUBTITLE_LANGUAGES.indexOfFirst { it.first == PlayerSettings.subtitleLanguage },
-                ) { i -> PlayerSettings.subtitleLanguage = PlayerSettings.SUBTITLE_LANGUAGES[i].first }
-            }
-        }
-        def(Topic.FILES, "Media player", "Forget where videos were left", "positions resume forget clear continue") {
-            action(R.drawable.ic_delete, "Forget where videos were left", { "Videos and songs start from the beginning again" }) {
-                Dialogs.confirm(this@SettingsActivity, "Forget every place?", "Videos and songs will start from the beginning, and leave the home page's Continue row.", "Forget") {
-                    PlayerSettings.clearPositions(this@SettingsActivity)
-                    snack("Forgotten")
-                }
-            }
-        }
         def(Topic.LOOK, "Feel", "Light vibration", "haptic vibrate feedback touch") {
             switch(R.drawable.ic_vibration, "Light vibration", { "A short buzz when you hold something or drag a tab" }, checked = { prefs.haptics }) {
                 prefs.haptics = it
@@ -801,16 +682,6 @@ class SettingsActivity : AppCompatActivity() {
         def(Topic.NEWS, null, "Background of the home page", "background wallpaper picture photo image gradient colour color home page") {
             action(R.drawable.ic_image, "Background of the home page", { HomeBackground.label(HomeBackground.current(this@SettingsActivity)) }) { chooseHomeBackground() }
         }
-        def(Topic.NEWS, "News", "Stories with big pictures", "news pictures images cards big chrome compact layout") {
-            switch(
-                R.drawable.ic_image, "Stories with big pictures",
-                { if (prefs.newsCards) "Cards with the picture across the top, as in Chrome" else "Off: compact rows with a small picture" },
-                details = "Each story becomes a card: its picture across the top, then the site and the headline. Pictures come " +
-                    "from the news sites themselves: Google News' headlines often have none, sites you add usually do. " +
-                    "They load only as you scroll to them, and not on mobile data with Data saver.",
-                checked = { prefs.newsCards },
-            ) { prefs.newsCards = it }
-        }
         def(Topic.NEWS, "News", "News country", "country region edition pakistan india uk us") {
             action(R.drawable.ic_globe, "Country", { newsCountryText() }) { chooseNewsCountry() }
         }
@@ -834,7 +705,7 @@ class SettingsActivity : AppCompatActivity() {
             }
         }
         def(Topic.BROWSING, "Translate", "Offer to translate pages", "translate translation language foreign") {
-            switch(R.drawable.ic_translate, "Offer to translate pages", { "Pages in another language offer to be translated, on this phone" }, checked = { Translate.offer }) {
+            switch(R.drawable.ic_translate, "Offer to translate pages", { "Offers to translate pages in other languages; it all happens on your phone" }, checked = { Translate.offer }) {
                 Translate.offer = it
             }
         }
@@ -851,6 +722,23 @@ class SettingsActivity : AppCompatActivity() {
         def(Topic.BROWSING, "Pages", "Swipe from the edges", "back forward gesture") {
             switch(R.drawable.ic_gesture, "Swipe from the edges", { "Swipe in from the left to go back, from the right to go forward" }, checked = { prefs.edgeSwipe }) {
                 prefs.edgeSwipe = it
+            }
+        }
+        def(
+            Topic.BROWSING, "Pages", "Avoid \"browser too old\" messages",
+            "tell newer user agent useragent firefox version browser out of date outdated old update upgrade unsupported not supported sites esr",
+        ) {
+            switch(
+                R.drawable.ic_globe, "Avoid \"browser too old\" messages",
+                { if (prefs.newerFirefoxVersion) "Sites are told Swift is a newer browser, so fewer say it's out of date" else "Off: sites are told Swift's real version" },
+                details = "Swift uses the last browser version made for Android 7. Some sites refuse a version that old, " +
+                    "or keep saying the browser is out of date. With this on, sites are told it's a newer version instead.\n\n" +
+                    "A site may then use something Swift can't do and not work right; turn this off again if one does. " +
+                    "It applies to pages you open from now on.",
+                checked = { prefs.newerFirefoxVersion },
+            ) {
+                prefs.newerFirefoxVersion = it
+                com.swiftbrowser.engine.UserAgent.applyToOpenTabs()
             }
         }
         // 3.0.4: a strip of the open group's tabs by the address bar (GroupStrip).
@@ -875,6 +763,18 @@ class SettingsActivity : AppCompatActivity() {
         def(Topic.ADBLOCK, "How much to block", "Blocking level", "ads off balanced high extreme ublock") {
             custom { levelChooser(refresh) }
         }
+        def(Topic.ADBLOCK, "More", "Reject cookie pop-ups", "cookies consent gdpr say no banner banners") {
+            switch(
+                R.drawable.ic_cookie, "Reject cookie pop-ups",
+                { "Answers \"Reject\" for you on the sites Swift knows" },
+                details = "Swift knows the cookie pop-ups of many big sites and answers them with \"Reject\", so they " +
+                    "neither show nor get your consent. On other sites, \"Hide cookie pop-ups\" hides them.",
+                checked = { prefs.rejectCookieBanners },
+            ) {
+                prefs.rejectCookieBanners = it
+                Engine.applyPrivacyPrefs()
+            }
+        }
         def(Topic.ADBLOCK, "More", "Hide cookie pop-ups", "cookies consent gdpr accept notices banner") {
             switch(
                 R.drawable.ic_cookie, "Hide cookie pop-ups",
@@ -889,15 +789,15 @@ class SettingsActivity : AppCompatActivity() {
         def(Topic.ADBLOCK, "More", "Sites with their own level", "per site exceptions allow") {
             action(R.drawable.ic_shield, "Sites with their own level", { siteLevelsText() }) { showSiteLevels() }
         }
-        def(Topic.ADBLOCK, "For experts", "uBlock Origin settings", "filters lists rules ublock dashboard", advanced = true) {
-            action(R.drawable.ic_ublock, "uBlock Origin settings", { "The ad blocker's own settings: block lists and your own rules" }) {
+        def(Topic.ADBLOCK, "More", "Advanced ad blocking", "filters lists rules ublock origin settings dashboard") {
+            action(R.drawable.ic_ublock, "Advanced ad blocking", { "The ad blocker's own page: what it blocks, and your own rules" }) {
                 AdBlock.extension?.metaData?.optionsPageUrl?.let { openInBrowser(it) }
             }
         }
-        def(Topic.ADBLOCK, "For experts", "Update block lists now", "ublock refresh filter lists", advanced = true) {
-            action(R.drawable.ic_refresh, "Update block lists now", { "They also update by themselves every few days" }) {
+        def(Topic.ADBLOCK, "More", "Update the ad blocking now", "ublock refresh filter lists block") {
+            action(R.drawable.ic_refresh, "Update the ad blocking now", { "It also updates by itself every few days" }) {
                 AdBlock.updateFilterLists()
-                snack("Updating the block lists in the background")
+                snack("Updating the ad blocking in the background")
             }
         }
 
@@ -906,14 +806,20 @@ class SettingsActivity : AppCompatActivity() {
         def(Topic.SPEED, "Right now", "Memory and tabs", "memory ram free used tabs loaded crashes status now speed slow") {
             action(R.drawable.ic_memory, "Memory and tabs", { rightNowSummary() }) { showRightNow() }
         }
+        def(Topic.SPEED, "Right now", "Smoothness meter", "fps frames meter drawing speed") {
+            switch(R.drawable.ic_speed, "Smoothness meter", { "A small meter on pages showing how smoothly they move" }, checked = { prefs.showDrawSpeed }) {
+                prefs.showDrawSpeed = it
+                Engine.setDrawSpeedMeter(it)
+            }
+        }
         def(Topic.SPEED, "How sites look", "Show sites as designed", "blur glass transparency animations new phone quality") {
             switch(
                 R.drawable.ic_glass, "Show sites as designed",
-                { "Blur effects and animations as sites made them (for newer phones)" },
-                details = "To keep scrolling smooth on slow phones, Swift changes some sites a little: no glass blur behind " +
+                { "Every effect and animation, as each site made it (for newer phones)" },
+                details = "To keep scrolling smooth on older phones, Swift changes some sites a little: no frosted glass behind " +
                     "see-through bars and badges, fewer decorative animations, and lighter YouTube and TheFlixer.\n\n" +
                     "Turn this on to see every site exactly as it was designed. It's on by itself on phones with 4 GB of " +
-                    "memory or more; on this phone it's best left off.\n\nTurning it on turns Lite mode off.",
+                    "memory or more; on phones with less, it's best left off.\n\nTurning it on turns Lite mode off.",
                 checked = { prefs.sitesAsDesigned },
             ) {
                 PageActions.setSitesAsDesigned(null, it)
@@ -924,7 +830,7 @@ class SettingsActivity : AppCompatActivity() {
         def(Topic.SPEED, "How sites look", "Lite mode", "smooth scrolling fast animations shadows blur") {
             switch(
                 R.drawable.ic_lite, "Lite mode", { if (Power.saving && !prefs.liteMode) "On for now: saving battery" else "Plainer sites that scroll the smoothest" },
-                details = "The smoothest scrolling on this phone: all sites without animations, shadows or blur. " +
+                details = "The smoothest scrolling on your phone: all sites without animations, shadows or frosted glass. " +
                     "Some sites look plainer. Stays on until you turn it off; also in the ≡ menu.",
                 checked = { prefs.liteMode },
             ) { PageActions.setLite(null, it) }
@@ -946,27 +852,26 @@ class SettingsActivity : AppCompatActivity() {
                 "On mobile data: ${UrlUtils.formatBytes(today)} today · ${UrlUtils.formatBytes(month)} this month"
             }) { showDataUsage() }
         }
-        def(Topic.SPEED, "Data", "Battery saver", "battery low power charge saver percent level") {
+        def(Topic.SPEED, "Battery", "Battery saver", "battery low power charge saver percent level") {
             action(R.drawable.ic_battery, "Battery saver", {
                 when {
                     !prefs.batterySaver -> "Off"
                     Power.saving -> "Saving battery now, until you charge"
-                    else -> "Below ${prefs.batterySaverLevel}% battery: Lite mode, one tab kept loaded"
+                    else -> "Below ${prefs.batterySaverLevel}% battery: Lite mode, one tab ready to open"
                 }
             }) { chooseBatterySaver() }
         }
-        def(Topic.SPEED, "Memory", "Tabs kept loaded", "memory ram live tabs") {
-            action(R.drawable.ic_memory, "Tabs kept loaded", { liveTabsText(prefs.maxLiveTabs) }) { chooseLiveTabs() }
-        }
-        def(Topic.SPEED, "Drawing", "Show drawing speed", "fps frames meter", advanced = true) {
-            switch(R.drawable.ic_speed, "Show drawing speed", { "A meter on pages showing how smoothly they draw" }, checked = { prefs.showDrawSpeed }) {
-                prefs.showDrawSpeed = it
-                Engine.setDrawSpeedMeter(it)
-            }
+        def(Topic.SPEED, "Memory", "Tabs ready to open instantly", "memory ram live tabs kept loaded") {
+            action(R.drawable.ic_memory, "Tabs ready to open instantly", { liveTabsText(prefs.maxLiveTabs) }) { chooseLiveTabs() }
         }
 
-        // Video & downloads
-        def(Topic.VIDEO, "Playing", "Keep playing in the background", "background play music audio screen off notification switch tabs") {
+        // Videos & music: videos on websites, then Swift's player, so the two sets of gestures sit together.
+        def(Topic.VIDEO, null, "Sleep timer", "stop music video sleep night minutes") {
+            action(R.drawable.ic_timer, "Sleep timer", { SleepTimer.label() ?: "Off. Also in the ≡ menu and the playback notification." }) {
+                Sheets.sleepTimer(this@SettingsActivity) { refreshAll() }
+            }
+        }
+        def(Topic.VIDEO, "Videos on websites", "Keep playing in the background", "background play music audio screen off notification switch tabs") {
             switch(
                 R.drawable.ic_headphones, "Keep playing in the background",
                 { if (prefs.keepPlaying) "Music and videos go on in other tabs, other apps and with the screen off" else "Off: they pause when you leave their tab" },
@@ -980,62 +885,118 @@ class SettingsActivity : AppCompatActivity() {
                 PlaybackService.sync(this@SettingsActivity)
             }
         }
-        def(Topic.VIDEO, "Playing", "Sleep timer", "stop music video sleep night minutes") {
-            action(R.drawable.ic_timer, "Sleep timer", { SleepTimer.label() ?: "Off. Also in the ≡ menu and the playback notification." }) {
-                Sheets.sleepTimer(this@SettingsActivity) { refreshAll() }
+        def(Topic.VIDEO, "Videos on websites", "Open videos in Swift's player", "swift player for website videos native vlc smooth lag gestures play in swift player website streaming") {
+            switch(
+                R.drawable.ic_play, "Open videos in Swift's player",
+                { if (prefs.sitePlayer) "A button on playing videos opens them in Swift's player: smoother, with gestures and subtitles" else "Off: videos play in the page" },
+                checked = { prefs.sitePlayer },
+            ) { prefs.sitePlayer = it }
+        }
+        def(Topic.VIDEO, "Videos on websites", "Continue watching", "resume position film movie episode") {
+            switch(R.drawable.ic_resume, "Continue watching", { "Offers to continue long videos where you left off" }, checked = { prefs.continueWatching }) {
+                prefs.continueWatching = it
+            }
+        }
+        def(Topic.VIDEO, "Videos on websites", "Play silent videos by themselves", "autoplay previews muted") {
+            switch(R.drawable.ic_play, "Play silent videos by themselves", { "Like the previews on YouTube's home page. Off: smoother scrolling." }, checked = { prefs.autoplayMuted }) {
+                prefs.autoplayMuted = it
+            }
+        }
+        def(Topic.VIDEO, "Videos on websites", "Double-tap to skip", "seek forward back 10 seconds hold speed 2x") {
+            switch(R.drawable.ic_touch, "Double-tap to skip", { "In full screen: double-tap a side to skip 10 seconds, hold for double speed" }, checked = { prefs.videoTaps }) {
+                prefs.videoTaps = it
+            }
+        }
+        def(Topic.VIDEO, "Videos on websites", "Brightness and volume swipes", "gestures swipe") {
+            switch(R.drawable.ic_gesture, "Brightness and volume swipes", { "In full screen: swipe up or down on the left or right side" }, checked = { prefs.videoGestures }) {
+                prefs.videoGestures = it
+            }
+        }
+        def(Topic.VIDEO, "Videos on websites", "Turn full-screen videos sideways", "landscape orientation rotate") {
+            switch(R.drawable.ic_rotate, "Turn full-screen videos sideways", { "They turn sideways by themselves" }, checked = { prefs.autoLandscape }) {
+                prefs.autoLandscape = it
+            }
+        }
+        // 2.9: Swift's video and music player (PlayerSettings).
+        def(Topic.VIDEO, "Swift's player", "Swipes in the player", "player gestures swipe brightness volume seek vlc") {
+            switch(R.drawable.ic_play, "Swipes in the player", { "Brightness on the left, volume on the right, sideways to move through the video" }, checked = { PlayerSettings.gestures }) {
+                PlayerSettings.gestures = it
+            }
+        }
+        def(Topic.VIDEO, "Swift's player", "Double-tap skips", "double tap skip seconds forward back") {
+            action(R.drawable.ic_forward, "Double-tap skips", { "${PlayerSettings.doubleTapSeconds} seconds" }) {
+                choose("Double-tap skips", PlayerSettings.DOUBLE_TAP_CHOICES.map { "$it seconds" }, PlayerSettings.DOUBLE_TAP_CHOICES.indexOf(PlayerSettings.doubleTapSeconds)) { i ->
+                    PlayerSettings.doubleTapSeconds = PlayerSettings.DOUBLE_TAP_CHOICES[i]
+                }
+            }
+        }
+        def(Topic.VIDEO, "Swift's player", "Turning the screen", "rotation landscape portrait orientation auto") {
+            action(R.drawable.ic_fullscreen, "Turning the screen", { PlayerSettings.rotationLabel(PlayerSettings.rotation) }) {
+                choose("Turning the screen", PlayerSettings.ROTATIONS.map { PlayerSettings.rotationLabel(it) }, PlayerSettings.ROTATIONS.indexOf(PlayerSettings.rotation)) { i ->
+                    PlayerSettings.rotation = PlayerSettings.ROTATIONS[i]
+                }
+            }
+        }
+        def(Topic.VIDEO, "Swift's player", "Keep music playing", "background music notification lock screen") {
+            switch(R.drawable.ic_headphones, "Keep music playing", { "When you leave the player or turn the screen off, with controls in the notification" }, checked = { PlayerSettings.backgroundAudio }) {
+                PlayerSettings.backgroundAudio = it
+            }
+        }
+        def(Topic.VIDEO, "Swift's player", "Go on where you left off", "resume position continue player video music") {
+            switch(R.drawable.ic_history, "Go on where you left off", { "Videos and long recordings start where you stopped" }, checked = { PlayerSettings.resume }) {
+                PlayerSettings.resume = it
+            }
+        }
+        def(Topic.VIDEO, "Swift's player", "Playing speed", "player speed default fast slow") {
+            action(R.drawable.ic_speed, "Playing speed", { "Videos start at " + PlayerSettings.speedLabel(PlayerSettings.defaultSpeed) }) {
+                choose("Playing speed", PlayerSettings.SPEEDS.map { PlayerSettings.speedLabel(it) }, PlayerSettings.SPEEDS.indexOfFirst { it == PlayerSettings.defaultSpeed }) { i ->
+                    PlayerSettings.defaultSpeed = PlayerSettings.SPEEDS[i]
+                }
             }
         }
         // 3.0.4: also in the player's ⋮ menu; changes what plays at once.
-        def(Topic.VIDEO, "Playing", "Night sound", "night sound quiet loud compress compressor dynamic range volume voices explosions") {
-            switch(R.drawable.ic_night_light, "Night sound", {
+        def(Topic.VIDEO, "Swift's player", "Night sound", "night sound quiet loud compress compressor dynamic range volume voices explosions") {
+            switch(R.drawable.ic_night_sound, "Night sound", {
                 if (com.swiftbrowser.media.LocalPlayback.nightSoundOn) "Loud parts quieter, quiet voices louder, for watching at low volume" else "Off: the sound as the film has it"
             }, checked = { com.swiftbrowser.media.LocalPlayback.nightSoundOn }) {
                 com.swiftbrowser.media.LocalPlayback.setNightSound(it)
             }
         }
-        def(Topic.VIDEO, "Playing", "Continue watching", "resume position film movie episode") {
-            switch(R.drawable.ic_resume, "Continue watching", { "Offers to continue long videos where you left off" }, checked = { prefs.continueWatching }) {
-                prefs.continueWatching = it
+        def(Topic.VIDEO, "Swift's player", "Subtitle size", "subtitles captions text size") {
+            action(R.drawable.ic_subtitles, "Subtitle size", { "${PlayerSettings.subtitleSize}%" }) {
+                choose("Subtitle size", PlayerSettings.SUBTITLE_SIZES.map { "$it%" }, PlayerSettings.SUBTITLE_SIZES.indexOf(PlayerSettings.subtitleSize)) { i ->
+                    PlayerSettings.subtitleSize = PlayerSettings.SUBTITLE_SIZES[i]
+                }
             }
         }
-        def(Topic.VIDEO, "Playing", "Double-tap to skip", "seek forward back 10 seconds hold speed 2x") {
-            switch(R.drawable.ic_touch, "Double-tap to skip", { "In full screen: double-tap a side to skip 10 seconds, hold for double speed" }, checked = { prefs.videoTaps }) {
-                prefs.videoTaps = it
+        // 3.0.1: the subtitles shown first, in the video and in subtitle files beside it.
+        def(Topic.VIDEO, "Swift's player", "Subtitle language", "subtitles captions language urdu english arabic hindi") {
+            action(R.drawable.ic_subtitles, "Subtitle language", {
+                val lang = PlayerSettings.subtitleLanguage
+                if (lang.isEmpty()) "Automatic: a subtitle file with the video's name, or English"
+                else "${PlayerSettings.SUBTITLE_LANGUAGES.first { it.first == lang }.second} first, in the video and in subtitle files"
+            }) {
+                choose(
+                    "Subtitle language", PlayerSettings.SUBTITLE_LANGUAGES.map { it.second },
+                    PlayerSettings.SUBTITLE_LANGUAGES.indexOfFirst { it.first == PlayerSettings.subtitleLanguage },
+                ) { i -> PlayerSettings.subtitleLanguage = PlayerSettings.SUBTITLE_LANGUAGES[i].first }
             }
         }
-        def(Topic.VIDEO, "Playing", "Brightness and volume swipes", "gestures swipe") {
-            switch(R.drawable.ic_gesture, "Brightness and volume swipes", { "In full screen: swipe up or down on the left or right half" }, checked = { prefs.videoGestures }) {
-                prefs.videoGestures = it
+        def(Topic.VIDEO, "Swift's player", "Forget where videos were left", "positions resume forget clear continue") {
+            action(R.drawable.ic_delete, "Forget where videos were left", { "Videos and songs start from the beginning again" }) {
+                Dialogs.confirm(this@SettingsActivity, "Forget every place?", "Videos and songs will start from the beginning, and leave the home page's Continue row.", "Forget") {
+                    PlayerSettings.clearPositions(this@SettingsActivity)
+                    snack("Forgotten")
+                }
             }
         }
-        def(Topic.VIDEO, "Playing", "Rotate full-screen videos", "landscape orientation") {
-            switch(R.drawable.ic_rotate, "Rotate full-screen videos", { "Full-screen videos turn sideways by themselves" }, checked = { prefs.autoLandscape }) {
-                prefs.autoLandscape = it
-            }
-        }
-        def(Topic.VIDEO, "Playing", "Swift player for website videos", "player native vlc smooth lag gestures play in swift player website streaming") {
-            switch(
-                R.drawable.ic_play, "Swift player for website videos",
-                { if (prefs.sitePlayer) "A button on playing videos opens them in Swift's player: smoother, with gestures and subtitles" else "Off: videos play in the page" },
-                checked = { prefs.sitePlayer },
-            ) { prefs.sitePlayer = it }
-        }
-        def(Topic.VIDEO, "Playing", "Play silent videos by themselves", "autoplay previews muted") {
-            switch(R.drawable.ic_play, "Play silent videos by themselves", { "Like previews in YouTube's feed. Off scrolls smoother." }, checked = { prefs.autoplayMuted }) {
-                prefs.autoplayMuted = it
-            }
-        }
-        def(Topic.VIDEO, "Downloads", "Save videos as MP4", "hls m3u8 ts convert streams", advanced = true) {
-            switch(R.drawable.ic_movie, "Save videos as MP4", { "Downloaded videos play on any phone or computer" }, checked = { prefs.hlsToMp4 }) {
-                prefs.hlsToMp4 = it
-            }
-        }
-        def(Topic.VIDEO, "Downloads", "Ask before downloading", "confirm download") {
+
+        def(Topic.DOWNLOADS, null, "Ask before downloading", "confirm download") {
             switch(R.drawable.ic_download, "Ask before downloading", { "Sites can't start a download without asking you" }, checked = { prefs.confirmDownloads }) {
                 prefs.confirmDownloads = it
             }
         }
-        def(Topic.VIDEO, "Downloads", "Big downloads wait for Wi-Fi", "mobile data cellular wifi only") {
+        def(Topic.DOWNLOADS, null, "Big downloads wait for Wi-Fi", "mobile data cellular wifi only") {
             switch(
                 R.drawable.ic_wifi, "Big downloads wait for Wi-Fi",
                 { if (prefs.wifiOnlyDownloads) "Files over 50 MB start when you're on Wi-Fi" else "Downloads start on mobile data too" },
@@ -1045,21 +1006,27 @@ class SettingsActivity : AppCompatActivity() {
                 Downloads.onNetworkChanged()
             }
         }
-        def(Topic.VIDEO, "Downloads", "Sort downloads into folders", "sort organise folders type videos music pictures documents apps") {
+        def(Topic.DOWNLOADS, null, "Sort downloads into folders", "sort organise folders type videos music pictures documents apps") {
             switch(
                 R.drawable.ic_folder, "Sort downloads into folders",
                 { if (prefs.sortDownloads) "Videos, Music, Pictures, Documents and Apps in your download folder" else "Off: everything goes into the download folder" },
                 checked = { prefs.sortDownloads },
             ) { prefs.sortDownloads = it }
         }
-        def(Topic.VIDEO, "Downloads", "Download folder", "storage location where save sd card") {
+        // Downloads
+        def(Topic.DOWNLOADS, null, "Save videos as MP4", "hls m3u8 ts convert streams") {
+            switch(R.drawable.ic_movie, "Save videos as MP4", { "Downloaded videos play on any phone or computer" }, checked = { prefs.hlsToMp4 }) {
+                prefs.hlsToMp4 = it
+            }
+        }
+        def(Topic.DOWNLOADS, null, "Download folder", "storage location where save sd card") {
             action(R.drawable.ic_folder, "Download folder", { downloadFolderText() }) {
                 if (Downloads.hasStoragePermission(this@SettingsActivity)) chooseDownloadFolder() else askStorageAccess()
             }
         }
 
         // 2.9.2: torrents (TorrentSettings). They always pause while Swift's VPN is on.
-        def(Topic.VIDEO, "Torrents", "Torrents at once", "torrents at once parallel queue magnet") {
+        def(Topic.DOWNLOADS, "Torrents", "Torrents at once", "torrents at once parallel queue magnet") {
             action(R.drawable.ic_torrent, "Torrents at once", { "${TorrentSettings.atOnce} at a time; the others wait their turn" }) {
                 val choices = TorrentSettings.AT_ONCE_CHOICES
                 choose("Torrents at once", choices.map { if (it == 1) "1 at a time" else "$it at a time" }, choices.indexOf(TorrentSettings.atOnce)) { i ->
@@ -1068,7 +1035,7 @@ class SettingsActivity : AppCompatActivity() {
                 }
             }
         }
-        def(Topic.VIDEO, "Torrents", "Torrent download speed", "torrent download speed limit bandwidth") {
+        def(Topic.DOWNLOADS, "Torrents", "Torrent download speed", "torrent download speed limit bandwidth") {
             action(R.drawable.ic_download, "Download speed", { TorrentSettings.speedLabel(TorrentSettings.downLimitKb) }) {
                 val choices = TorrentSettings.DOWN_CHOICES
                 choose("Torrent download speed", choices.map { TorrentSettings.speedLabel(it) }, choices.indexOf(TorrentSettings.downLimitKb)) { i ->
@@ -1077,7 +1044,7 @@ class SettingsActivity : AppCompatActivity() {
                 }
             }
         }
-        def(Topic.VIDEO, "Torrents", "Torrent upload speed", "torrent upload sharing speed limit seeding") {
+        def(Topic.DOWNLOADS, "Torrents", "Torrent upload speed", "torrent upload sharing speed limit seeding") {
             action(R.drawable.ic_share, "Upload speed", { TorrentSettings.speedLabel(TorrentSettings.upLimitKb) + " (only while downloading: sharing stops when it's done)" }) {
                 val choices = TorrentSettings.UP_CHOICES
                 choose("Torrent upload speed", choices.map { TorrentSettings.speedLabel(it) }, choices.indexOf(TorrentSettings.upLimitKb)) { i ->
@@ -1086,39 +1053,39 @@ class SettingsActivity : AppCompatActivity() {
                 }
             }
         }
-        def(Topic.VIDEO, "Torrents", "Torrents on Wi-Fi only", "torrent wifi mobile data") {
+        def(Topic.DOWNLOADS, "Torrents", "Torrents on Wi-Fi only", "torrent wifi mobile data") {
             switch(R.drawable.ic_wifi, "Wi-Fi only", { if (TorrentSettings.wifiOnly) "On mobile data torrents wait for Wi-Fi" else "Torrents use mobile data too" }, checked = { TorrentSettings.wifiOnly }) {
                 TorrentSettings.wifiOnly = it
                 Torrents.applySettings()
             }
         }
-        def(Topic.VIDEO, "Torrents", "Only while charging", "torrent charging charger battery heat") {
+        def(Topic.DOWNLOADS, "Torrents", "Only while charging", "torrent charging charger battery heat") {
             switch(R.drawable.ic_battery, "Only while charging", { if (TorrentSettings.chargingOnly) "Torrents wait for the charger" else "Off: torrents run on battery too" }, checked = { TorrentSettings.chargingOnly }) {
                 TorrentSettings.chargingOnly = it
                 Torrents.applySettings()
             }
         }
-        def(Topic.VIDEO, "Torrents", "At night only", "torrent night schedule time cheap data") {
+        def(Topic.DOWNLOADS, "Torrents", "At night only", "torrent night schedule time cheap data") {
             switch(R.drawable.ic_history, "At night only", { if (TorrentSettings.nightOnly) "Torrents run from 1 am to 7 am" else "Off: torrents run at any time" }, checked = { TorrentSettings.nightOnly }) {
                 TorrentSettings.nightOnly = it
                 Torrents.applySettings()
             }
         }
-        def(Topic.VIDEO, "Torrents", "Pause on low battery", "torrent battery low pause") {
+        def(Topic.DOWNLOADS, "Torrents", "Pause on low battery", "torrent battery low pause") {
             switch(R.drawable.ic_battery, "Pause on low battery", { "Below 15% unless charging; they go on at 20%" }, checked = { TorrentSettings.batteryPause }) {
                 TorrentSettings.batteryPause = it
                 Torrents.applySettings()
             }
         }
-        def(Topic.VIDEO, "Torrents", "Extra trackers", "torrent trackers public peers faster start") {
-            switch(R.drawable.ic_speed, "Extra trackers", { "Well-known public trackers help torrents with few sharers start sooner (never private ones)" }, checked = { TorrentSettings.extraTrackers }) {
+        def(Topic.DOWNLOADS, "Torrents", "Find more sharers", "torrent extra trackers public peers faster start") {
+            switch(R.drawable.ic_speed, "Find more sharers", { "Helps torrents with few people sharing start sooner (never used for private torrents)" }, checked = { TorrentSettings.extraTrackers }) {
                 TorrentSettings.extraTrackers = it
             }
         }
         // 3.0: torrents' connections encrypted when they can be, or only encrypted ones.
-        def(Topic.VIDEO, "Torrents", "Encryption", "torrent encryption encrypted privacy isp throttle obfuscation") {
-            action(R.drawable.ic_lock, "Encryption", { TorrentSettings.ENCRYPTION_CHOICES[if (TorrentSettings.encryptedOnly) 1 else 0] }) {
-                choose("Torrent encryption", TorrentSettings.ENCRYPTION_CHOICES, if (TorrentSettings.encryptedOnly) 1 else 0) { i ->
+        def(Topic.DOWNLOADS, "Torrents", "Protected connections", "torrent encryption encrypted privacy isp throttle obfuscation") {
+            action(R.drawable.ic_lock, "Protected connections", { TorrentSettings.ENCRYPTION_CHOICES[if (TorrentSettings.encryptedOnly) 1 else 0] }) {
+                choose("Protected connections", TorrentSettings.ENCRYPTION_CHOICES, if (TorrentSettings.encryptedOnly) 1 else 0) { i ->
                     TorrentSettings.encryptedOnly = i == 1
                     Torrents.applySettings()
                 }
@@ -1128,7 +1095,7 @@ class SettingsActivity : AppCompatActivity() {
         // Privacy & security
         // 3.0.1: the protections at a glance, "Checked" only where Swift has seen them working.
         def(Topic.PRIVACY, null, "Security status", "security status protections check overview safe vpn dns phishing passwords") {
-            action(R.drawable.ic_shield, "Security status", { "Ad blocking, secure DNS, the VPN and more at a glance" }) { showSecurityStatus() }
+            action(R.drawable.ic_shield, "Security status", { "Ad blocking, private lookups, the VPN and more, at a glance" }) { showSecurityStatus() }
         }
         def(Topic.PRIVACY, null, "Use secure connections", "secure https only encrypted insecure http") {
             switch(
@@ -1143,20 +1110,8 @@ class SettingsActivity : AppCompatActivity() {
                 Engine.applyPrivacyPrefs()
             }
         }
-        def(Topic.PRIVACY, null, "Secure DNS", "dns doh dns over https cloudflare quad9 google lookup private encrypted") {
-            action(R.drawable.ic_globe, "Secure DNS", { secureDnsText() }) { chooseSecureDns() }
-        }
-        def(Topic.PRIVACY, null, "Reject cookie banners", "cookies consent gdpr reject banner") {
-            switch(
-                R.drawable.ic_cookie, "Reject cookie banners",
-                { "Swift says no to cookie banners on the sites it knows" },
-                details = "Firefox knows the cookie banners of many big sites and answers them with \"Reject\", so they " +
-                    "neither show nor get your consent. On other sites, \"Hide cookie pop-ups\" (Ad blocking) hides them.",
-                checked = { prefs.rejectCookieBanners },
-            ) {
-                prefs.rejectCookieBanners = it
-                Engine.applyPrivacyPrefs()
-            }
+        def(Topic.PRIVACY, null, "Private site lookups", "secure dns doh dns over https cloudflare quad9 google lookup private encrypted provider isp") {
+            action(R.drawable.ic_globe, "Private site lookups", { secureDnsText() }) { chooseSecureDns() }
         }
         // 3.0: Swift's engine gets no more security fixes (the last Firefox for Android 7).
         def(
@@ -1165,35 +1120,17 @@ class SettingsActivity : AppCompatActivity() {
         ) {
             switch(
                 R.drawable.ic_shield, "Safer browsing",
-                { if (prefs.saferBrowsing) "Pages run their scripts more slowly, and some games or video players may not work" else "Off: pages run their scripts at full speed" },
-                details = "Swift is built on Firefox 143, the last version for Android 7, and it doesn't get security fixes any more. " +
-                    "Most attacks on old browsers go through the parts that make pages' scripts run fast.\n\n" +
-                    "With this on, pages run their scripts without them: more slowly, and some games or video players may not " +
-                    "work. It closes a common way old browsers are attacked. The ad blocker keeps its full speed.\n\n" +
+                { if (prefs.saferBrowsing) "Harder for bad sites to attack your phone; some games and video players may not work" else "Off: sites run at full speed" },
+                details = "Swift uses the last browser version made for Android 7, which doesn't get security fixes any more. " +
+                    "Most attacks on older browsers go through the parts that make websites run fast.\n\n" +
+                    "With this on, websites run without those parts: a little slower, and some games or video players may not " +
+                    "work. It closes a common way older browsers are attacked. The ad blocker keeps its full speed.\n\n" +
                     "It starts when Swift starts again.",
                 checked = { prefs.saferBrowsing },
             ) {
                 prefs.saferBrowsing = it
                 Engine.applySaferBrowsing()
-                confirmRestart(if (it) "Pages run their scripts the safer way after Swift restarts." else "Pages run their scripts at full speed again after Swift restarts.")
-            }
-        }
-        def(
-            Topic.PRIVACY, "Security", "Tell sites a newer Firefox version",
-            "user agent useragent firefox version browser out of date outdated old update upgrade unsupported not supported sites esr",
-            advanced = true,
-        ) {
-            switch(
-                R.drawable.ic_globe, "Tell sites a newer Firefox version",
-                { if (prefs.newerFirefoxVersion) "Sites are told Firefox ${com.swiftbrowser.engine.UserAgent.NEWER}, so fewer say Swift is out of date" else "Off: sites are told Firefox 143, as it is" },
-                details = "Swift is built on Firefox 143, the last version for Android 7. Some sites refuse versions that old, " +
-                    "or keep saying the browser is out of date. With this on, sites are told it's Firefox " +
-                    "${com.swiftbrowser.engine.UserAgent.NEWER} instead.\n\nA site may then use something Swift can't do and not " +
-                    "work right; turn this off again if one does. It applies to pages you open from now on.",
-                checked = { prefs.newerFirefoxVersion },
-            ) {
-                prefs.newerFirefoxVersion = it
-                com.swiftbrowser.engine.UserAgent.applyToOpenTabs()
+                confirmRestart(if (it) "Websites run the safer way after Swift restarts." else "Websites run at full speed again after Swift restarts.")
             }
         }
         def(
@@ -1202,7 +1139,7 @@ class SettingsActivity : AppCompatActivity() {
         ) {
             switch(
                 R.drawable.ic_incognito, "Allow screenshots in incognito",
-                { if (prefs.allowIncognitoScreenshots) "Incognito pages can be in screenshots and in Android's recent apps" else "Off: incognito pages stay out of screenshots and Android's recent apps" },
+                { if (prefs.allowIncognitoScreenshots) "Incognito pages can appear in screenshots and in your recent apps" else "Off: incognito pages stay out of screenshots and your recent apps" },
                 checked = { prefs.allowIncognitoScreenshots },
             ) {
                 prefs.allowIncognitoScreenshots = it
@@ -1214,8 +1151,8 @@ class SettingsActivity : AppCompatActivity() {
             switch(
                 R.drawable.ic_password, "Offer to save passwords",
                 { if (prefs.offerPasswords) "Swift asks after you sign in, and fills them in next time" else "Off: passwords aren't saved or filled in" },
-                details = "Passwords are kept on this phone only, locked with a key that never leaves Android's secure " +
-                    "storage. They aren't in backups, and incognito tabs never save one.",
+                details = "Passwords stay on your phone only, locked safely by Android. " +
+                    "They aren't in backups, and incognito tabs never save one.",
                 checked = { prefs.offerPasswords },
             ) {
                 prefs.offerPasswords = it
@@ -1251,7 +1188,7 @@ class SettingsActivity : AppCompatActivity() {
             action(R.drawable.ic_speed, "Test the locations", { vpnTestText() }) { testVpnLocations() }
         }
         def(Topic.VPN, "Locations", "Add a location", "add proton wireguard file conf setup") {
-            action(R.drawable.ic_add, "Add a location", { "A Proton VPN setup file (.conf), one per server" }) { addVpnLocation() }
+            action(R.drawable.ic_add, "Add a location", { "A setup file from Proton VPN, one for each location" }) { addVpnLocation() }
         }
         def(Topic.VPN, "Locations", "How to get free locations", "proton free account download wireguard") {
             action(R.drawable.ic_info, "How to get free locations", { "Free from Proton VPN, in a few minutes" }) { vpnHowTo() }
@@ -1272,7 +1209,7 @@ class SettingsActivity : AppCompatActivity() {
         def(Topic.VPN, "Options", "Switch to another location", "automatic failover switch server not answering backup") {
             switch(
                 R.drawable.ic_swap, "Switch to another location",
-                { "If a server stops answering, Swift moves to another location by itself" },
+                { "If a location stops working, Swift moves to another by itself" },
                 details = "Swift picks the same country first, and the fastest one from your last test. It tells you where " +
                     "it went. Off: the VPN stops and pages wait (if paused) until you pick another location.",
                 checked = { com.swiftbrowser.vpn.Vpn.autoSwitch },
@@ -1281,9 +1218,9 @@ class SettingsActivity : AppCompatActivity() {
         def(Topic.VPN, "Options", "Pause pages if the VPN drops", "kill switch leak block vpn drops") {
             switch(
                 R.drawable.ic_lock, "Pause pages if the VPN drops",
-                { "Sites never see your own connection by accident" },
+                { "Sites never see your real location by accident" },
                 details = "While the VPN is connecting, or if it stops (another VPN app started, or Android stopped it), " +
-                    "pages wait instead of loading over your own connection. They load by themselves once it is connected " +
+                    "pages wait instead of loading without it. They load by themselves once it is connected " +
                     "again; turning the VPN off lets them load normally.\n\nWhen Swift starts again with the VPN on (after " +
                     "an update or a crash), pages always wait until it's back, even with this off.",
                 checked = { com.swiftbrowser.vpn.Vpn.pauseWhenDown },
@@ -1303,8 +1240,8 @@ class SettingsActivity : AppCompatActivity() {
         def(Topic.STORAGE, "Free up space", "Clear the cache", "cache files space pictures") {
             action(R.drawable.ic_delete, "Clear the cache", { usage?.let { "${UrlUtils.formatBytes(it.cache)}: copies of pages' pictures and files" } }) { clearCache() }
         }
-        def(Topic.STORAGE, "Free up space", "Data sites stored", "site storage sites space clear") {
-            action(R.drawable.ic_globe, "Data sites stored", { usage?.let { "${UrlUtils.formatBytes(it.sites)} · see and clear each site" } }) { showSiteStorage() }
+        def(Topic.STORAGE, "Free up space", "Data saved by sites", "site storage sites space clear data sites stored") {
+            action(R.drawable.ic_globe, "Data saved by sites", { usage?.let { "${UrlUtils.formatBytes(it.sites)} · see and clear each site" } }) { showSiteStorage() }
         }
         def(Topic.STORAGE, "Free up space", "Clear sites you don't visit", "old unused sites 30 days") {
             action(R.drawable.ic_history, "Clear sites you don't visit", { "Everything of sites not visited for 30 days" }) { clearUnusedSites() }
@@ -1320,7 +1257,7 @@ class SettingsActivity : AppCompatActivity() {
             ) { prefs.autoBackup = it }
         }
         def(Topic.STORAGE, "Backup", "Restore from a backup", "import restore backup new phone") {
-            action(R.drawable.ic_update, "Restore from a backup", { "Adds a backup's contents to this phone, then restarts Swift" }) {
+            action(R.drawable.ic_restore_backup, "Restore from a backup", { "Adds a backup's contents to your phone, then restarts Swift" }) {
                 chooseBackup()
             }
         }
@@ -1331,7 +1268,7 @@ class SettingsActivity : AppCompatActivity() {
         }
         // 3.0: it sends three days of Swift's log, not only crashes: said so, and shown first.
         def(Topic.ABOUT, null, "Send a problem report", "crash bug report log freeze") {
-            action(R.drawable.ic_report, "Send a problem report", { "Crashes, freezes and Swift's log of the last 3 days. You see it before it's sent." }) {
+            action(R.drawable.ic_report, "Send a problem report", { "Crashes, freezes and a record of what Swift did in the last 3 days. You see it before it's sent." }) {
                 Diagnostics.shareReport(this@SettingsActivity)
             }
         }
@@ -1352,22 +1289,19 @@ class SettingsActivity : AppCompatActivity() {
      */
     private fun card(): LinearLayout = GroupLayout(this)
 
-    private fun label(text: String) = TextView(this).apply {
-        this.text = text
-        // 3.0.4: group headings bolder (Colours, Address bar...).
-        Ui.size(this, Ui.Type.BODY, keepFont = true)
-        setTypeface(Ui.BOLD)
-        setTextColor(color(Looks.accent.primary))
-        setPadding(dp(16), dp(20), dp(16), dp(8))
+    // 3.0.4: group headings bolder (Colours, Address bar...). 3.0.5: the same as every list's headings
+    // (the scale's SECTION), lined up with the icons of the rows under them, with the one section rhythm.
+    private fun label(text: String) = Ui.text(this, Ui.Type.SECTION, text).apply {
+        setPadding(dp(Ui.ROW_INSET), dp(Ui.SECTION_ABOVE), dp(Ui.ROW_INSET), dp(Ui.SECTION_BELOW))
     }
 
-    private fun spacer() = View(this).apply { layoutParams = LinearLayout.LayoutParams(1, dp(14)) }
+    private fun spacer() = View(this).apply { layoutParams = LinearLayout.LayoutParams(1, dp(Ui.GROUP_GAP)) }
 
     /** The logo, the version and what Swift is made of. */
     private fun aboutHeader(): View = LinearLayout(this).apply {
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
-        setPadding(dp(18), dp(16), dp(18), dp(16))
+        setPadding(dp(Ui.ROW_INSET), dp(16), dp(18), dp(16))
         // 3.0.4: rounded like a row alone in its group.
         background = Ui.shape(this@SettingsActivity, color(R.color.card_bg), Ui.R_LARGE)
         layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
@@ -1512,25 +1446,29 @@ class SettingsActivity : AppCompatActivity() {
     private fun setSummary(sub: TextView, text: String?) {
         if (sub.text.toString() != text.orEmpty()) sub.text = text.orEmpty()
         sub.visibility = if (text.isNullOrEmpty()) View.GONE else View.VISIBLE
+        // 3.0.5: the one row rhythm: a row with a summary is at least a two-line row, one without a one-line row.
+        val row = sub.parent?.parent as? View ?: return
+        val min = dp(RowRhythm.minHeight(!text.isNullOrEmpty()))
+        if (row.minimumHeight != min) row.minimumHeight = min
     }
 
     /**
-     * An icon in a grey circle (as in the ≡ menu; in the accent's soft colour for the main page's
-     * topics), a title and a summary of up to three lines.
+     * An icon in a soft holder (3.0.5: the one rounded square of every list; in the accent's soft
+     * colour for the main page's topics), a title and a summary of up to three lines.
      */
     private fun row(icon: Int, title: String, summary: String?, badge: Boolean = false): Pair<LinearLayout, TextView> {
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            minimumHeight = dp(64)
-            setPadding(dp(14), dp(10), dp(12), dp(10))
+            // 3.0.5: 8 dp above and below (10 before), so a one-line row can be Ui.ROW_ONE_LINE tall with its 40 dp holder.
+            setPadding(dp(Ui.ROW_INSET), dp(8), dp(12), dp(8))
         }
         row.addView(ImageView(this).apply {
-            background = Ui.circle(if (badge) Ui.accentContainer(this@SettingsActivity) else color(R.color.surface_alt))
-            setPadding(dp(8), dp(8), dp(8), dp(8))
+            background = Ui.shape(this@SettingsActivity, if (badge) Ui.accentContainer(this@SettingsActivity) else color(R.color.surface_alt), Ui.R_SMALL)
+            setPadding(dp(9), dp(9), dp(9), dp(9))
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
             setRowIcon(this, icon, badge)
-        }, LinearLayout.LayoutParams(dp(38), dp(38)))
+        }, LinearLayout.LayoutParams(dp(Ui.ICON_BOX), dp(Ui.ICON_BOX)))
         val texts = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(14), 0, dp(8), 0)
@@ -1547,9 +1485,9 @@ class SettingsActivity : AppCompatActivity() {
             setTextColor(color(R.color.text_secondary))
             setPadding(0, dp(2), 0, 0)
         }
-        setSummary(sub, summary)
         texts.addView(sub)
         row.addView(texts, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        setSummary(sub, summary)
         return row to sub
     }
 
@@ -1567,7 +1505,7 @@ class SettingsActivity : AppCompatActivity() {
     private fun levelChooser(target: MutableList<() -> Unit>): View {
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(14), dp(14), dp(14), dp(12))
+            setPadding(dp(Ui.ROW_INSET), dp(14), dp(Ui.ROW_INSET), dp(12))
         }
         val segments = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -1657,7 +1595,7 @@ class SettingsActivity : AppCompatActivity() {
                 Power.update()
                 d.dismiss()
                 refreshAll()
-                if (which > 0) snack("Lite mode, one tab kept loaded and no pictures on mobile data below ${levels[which - 1]}%, or with Android's battery saver")
+                if (which > 0) snack("Lite mode, one tab ready to open and no pictures on mobile data below ${levels[which - 1]}%, or with your phone's battery saver")
             }
             .setNegativeButton(android.R.string.cancel, null)
             .showImmersive()
@@ -1951,15 +1889,18 @@ class SettingsActivity : AppCompatActivity() {
                 setPadding(dp(24), 0, dp(12), 0)
                 val badge = ImageView(this@SettingsActivity).apply {
                     setImageDrawable(Ui.icon(this@SettingsActivity, R.drawable.ic_news, color(R.color.text_secondary)))
-                    background = Ui.circle(color(R.color.surface_alt))
+                    // 3.0.5: the one row icon holder.
+                    background = Ui.shape(this@SettingsActivity, color(R.color.surface_alt), Ui.R_SMALL)
                     scaleType = ImageView.ScaleType.CENTER
                 }
-                addView(badge, LinearLayout.LayoutParams(dp(36), dp(36)).apply { marginEnd = dp(16) })
+                addView(badge, LinearLayout.LayoutParams(dp(Ui.ICON_BOX), dp(Ui.ICON_BOX)).apply { marginEnd = dp(16) })
                 com.swiftbrowser.core.Favicons.load(feed) { bmp ->
                     if (bmp != null) {
                         badge.setImageBitmap(bmp)
+                        // 3.0.5: a little dimmer in the dark look.
+                        SoftPictures.apply(badge)
                         badge.scaleType = ImageView.ScaleType.FIT_CENTER
-                        val p = dp(8)
+                        val p = dp(10)
                         badge.setPadding(p, p, p, p)
                     }
                 }
@@ -2047,14 +1988,14 @@ class SettingsActivity : AppCompatActivity() {
     private fun vpnCard(target: MutableList<() -> Unit>): View {
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(18), dp(16), dp(18), dp(16))
+            setPadding(dp(Ui.ROW_INSET), dp(16), dp(Ui.ROW_INSET), dp(16))
         }
         val head = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        val badge = Ui.iconBadge(this, R.drawable.ic_vpn, 44)
-        head.addView(badge, LinearLayout.LayoutParams(dp(44), dp(44)).apply { marginEnd = dp(14) })
+        val badge = Ui.iconBadge(this, R.drawable.ic_vpn)
+        head.addView(badge, LinearLayout.LayoutParams(dp(Ui.ICON_BOX), dp(Ui.ICON_BOX)).apply { marginEnd = dp(14) })
         val title = Ui.text(this, Ui.Type.TITLE, "")
         head.addView(title, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         box.addView(head)
@@ -2126,8 +2067,8 @@ class SettingsActivity : AppCompatActivity() {
                 box.addView(LinearLayout(this).apply {
                     orientation = LinearLayout.HORIZONTAL
                     gravity = Gravity.CENTER_VERTICAL
-                    minimumHeight = dp(64)
-                    setPadding(dp(14), dp(8), dp(4), dp(8))
+                    minimumHeight = dp(Ui.ROW_TWO_LINES)
+                    setPadding(dp(Ui.ROW_INSET), dp(8), dp(4), dp(8))
                     Piece.attach(this, tappable = true)
                     // 2.2: how it did in the last test, and when it needs extending at Proton.
                     val result = VpnUi.testResult(loc)
@@ -2141,7 +2082,7 @@ class SettingsActivity : AppCompatActivity() {
                         text = loc.flag
                         Ui.size(this, Ui.Type.HEADLINE, keepFont = true)
                         gravity = Gravity.CENTER
-                    }, LinearLayout.LayoutParams(dp(38), dp(38)).apply { marginEnd = dp(14) })
+                    }, LinearLayout.LayoutParams(dp(Ui.ICON_BOX), dp(Ui.ICON_BOX)).apply { marginEnd = dp(14) })
                     addView(LinearLayout(this@SettingsActivity).apply {
                         orientation = LinearLayout.VERTICAL
                         addView(Ui.text(this@SettingsActivity, Ui.Type.BODY, loc.countryName))
@@ -2200,7 +2141,7 @@ class SettingsActivity : AppCompatActivity() {
                     VpnUi.turnOn(this, vpnPermission, loc)
                     refreshAll()
                 },
-                Sheets.Action(R.drawable.ic_update, "I extended it", primary = true) {
+                Sheets.Action(R.drawable.ic_extended, "I extended it", primary = true) {
                     VpnUi.markExtended(this, loc)
                     refreshAll()
                 },
@@ -2270,7 +2211,7 @@ class SettingsActivity : AppCompatActivity() {
                     try {
                         vpnFilePicker.launch(arrayOf("*/*"))
                     } catch (_: Exception) {
-                        snack("No app on this phone can pick files")
+                        snack("No app on your phone can pick files")
                     }
                 } else {
                     pasteVpnText()
@@ -2309,7 +2250,7 @@ class SettingsActivity : AppCompatActivity() {
         snack("Added ${loc.flag} ${loc.countryName}")
         true
     } catch (e: IllegalArgumentException) {
-        Messages.show(this, e.message ?: "That isn't a WireGuard setup file", long = true)
+        Messages.show(this, e.message ?: "That isn't a VPN setup file", long = true)
         false
     }
 
@@ -2320,8 +2261,8 @@ class SettingsActivity : AppCompatActivity() {
     private fun offerToDeleteVpnFile(uri: android.net.Uri, name: String?) {
         Dialogs.confirm(
             this, "Delete the setup file?",
-            "Swift keeps its own locked copy. ${name ?: "The file"} holds the location's key in plain text, and other apps " +
-                "on the phone can read it: anyone with it can use your location.",
+            "Swift keeps its own locked copy. ${name ?: "The file"} holds the location's key unprotected, and other apps " +
+                "on your phone can read it: anyone with it can use your location.",
             "Delete", danger = true, cancel = "Keep",
         ) {
             lifecycleScope.launch {
@@ -2377,18 +2318,18 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     private fun secureDnsText(): String = when (prefs.secureDns) {
-        "off" -> "Off: your network can see which sites you look up"
-        "quad9" -> "Quad9: site lookups are encrypted, known bad sites blocked"
-        "google" -> "Google: site lookups are encrypted"
-        else -> "Cloudflare: site lookups are encrypted"
+        "off" -> "Off: your internet provider can see which sites you visit"
+        "quad9" -> "Quad9: hides which sites you visit from your internet provider, and blocks known bad sites"
+        "google" -> "Google: hides which sites you visit from your internet provider"
+        else -> "Cloudflare: hides which sites you visit from your internet provider"
     }
 
     /** DNS over HTTPS (2.2): who looks up sites' addresses, encrypted; your network's own when off. */
     private fun chooseSecureDns() {
         val keys = listOf("cloudflare", "quad9", "google", "off")
-        val labels = arrayOf("Cloudflare (recommended)", "Quad9 (also blocks known bad sites)", "Google", "Off (your network's own)")
+        val labels = arrayOf("Cloudflare (recommended)", "Quad9 (also blocks known bad sites)", "Google", "Off (your internet provider's)")
         MaterialAlertDialogBuilder(this)
-            .setTitle("Secure DNS")
+            .setTitle("Private site lookups")
             .setSingleChoiceItems(labels, keys.indexOf(prefs.secureDns).coerceAtLeast(0)) { d, which ->
                 d.dismiss()
                 prefs.secureDns = keys[which]
@@ -2549,7 +2490,7 @@ class SettingsActivity : AppCompatActivity() {
                 .setTitle("Restore this backup?")
                 .setMessage(
                     "Made on ${s.created}: ${s.profiles} ${if (s.profiles == 1) "profile" else "profiles"}, ${s.bookmarks} ${if (s.bookmarks == 1) "bookmark" else "bookmarks"}, " +
-                        "${s.tabs} ${if (s.tabs == 1) "tab" else "tabs"} and ${s.history} ${if (s.history == 1) "history entry" else "history entries"}.\n\nThey are added to what is on this phone, its settings " +
+                        "${s.tabs} ${if (s.tabs == 1) "tab" else "tabs"} and ${s.history} ${if (s.history == 1) "history entry" else "history entries"}.\n\nThey are added to what is on your phone, its settings " +
                         "replace these, and Swift restarts. Passwords, the VPN and the Private folder are never in backups.",
                 )
                 .setPositiveButton("Restore") { _, _ ->
@@ -2559,7 +2500,7 @@ class SettingsActivity : AppCompatActivity() {
                         if (isFinishing || isDestroyed) {
                             if (restored != null) SwiftApp.restart(this@SettingsActivity)
                         } else if (restored == null) {
-                            Messages.show(this@SettingsActivity, "That backup couldn't be restored. Nothing on this phone was changed.", long = true)
+                            Messages.show(this@SettingsActivity, "That backup couldn't be restored. Nothing on your phone was changed.", long = true)
                         } else {
                             MaterialAlertDialogBuilder(this@SettingsActivity)
                                 .setTitle("Backup restored")
@@ -2644,7 +2585,7 @@ class SettingsActivity : AppCompatActivity() {
                     setBackgroundResource(borderless())
                     contentDescription = "Move $name $what"
                     isEnabled = can
-                    alpha = if (can) 1f else 0.3f
+                    alpha = if (can) 1f else Ui.DISABLED_ALPHA
                     setOnClickListener {
                         order = com.swiftbrowser.core.HomeOrder.move(order, part, by)
                         prefs.homeOrder = com.swiftbrowser.core.HomeOrder.encode(order)
@@ -2741,7 +2682,7 @@ class SettingsActivity : AppCompatActivity() {
                 },
                 lastRun = when (Diagnostics.problem) {
                     Diagnostics.Problem.CLOSED_BY_ANDROID -> "Last time, Android closed Swift while it was on screen, most likely to free memory."
-                    Diagnostics.Problem.ENGINE_CRASH -> "Last time, the page engine stopped while Swift was on screen."
+                    Diagnostics.Problem.ENGINE_CRASH -> "Last time, pages stopped working while Swift was on screen."
                     null -> null
                 },
             )
@@ -2756,10 +2697,10 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     private fun liveTabsText(n: Int) = when (n) {
-        1 -> "1 tab: least memory; others reload when opened"
-        2 -> "2 tabs (best for a 2 GB phone)"
-        in 3..4 -> "$n tabs: faster switching, more memory"
-        else -> "$n tabs: a lot of memory"
+        1 -> "1 tab: uses the least memory; others load again when you open them"
+        2 -> "2 tabs (best for phones with little memory)"
+        in 3..4 -> "$n tabs: quicker to switch, uses more memory"
+        else -> "$n tabs: uses a lot of memory"
     }
 
     /** A single choice from [labels] (2.9); [picked] then the rows refresh. */
@@ -2779,7 +2720,7 @@ class SettingsActivity : AppCompatActivity() {
         val options = (1..Prefs.MAX_LIVE_TABS_LIMIT).toList()
         val labels = options.map { liveTabsText(it) }.toTypedArray()
         MaterialAlertDialogBuilder(this)
-            .setTitle("Tabs kept loaded")
+            .setTitle("Tabs ready to open instantly")
             .setSingleChoiceItems(labels, options.indexOf(prefs.maxLiveTabs)) { d, which ->
                 prefs.maxLiveTabs = options[which]
                 // 3.0.1: a lower number applies now, not at the next tab switch.
@@ -2902,7 +2843,7 @@ class SettingsActivity : AppCompatActivity() {
         if (intent == null) {
             MaterialAlertDialogBuilder(this)
                 .setTitle("No screen lock")
-                .setMessage("Anyone holding this phone could see your passwords. A screen lock (PIN, pattern or password) keeps them for you only.")
+                .setMessage("Anyone holding your phone could see your passwords. A screen lock (PIN, pattern or password) keeps them for you only.")
                 .setPositiveButton("Show anyway") { _, _ -> then() }
                 .setNegativeButton("Set a screen lock") { _, _ ->
                     try {
@@ -2940,7 +2881,7 @@ class SettingsActivity : AppCompatActivity() {
 
     /**
      * 3.0: measured at most once a minute (walking the engine's profile, the cache and the data folder
-     * takes seconds on this phone, and it ran on every visit to Settings), and anew after clearing.
+     * takes seconds on your phone, and it ran on every visit to Settings), and anew after clearing.
      */
     private fun computeStorage(fresh: Boolean = false) {
         lifecycleScope.launch {
@@ -2998,13 +2939,13 @@ class SettingsActivity : AppCompatActivity() {
             total.text = if (u == null) "Calculating…" else "Swift uses ${UrlUtils.formatBytes(u.total)}"
             // Android's App info lists the cache on its own, outside its Total.
             note.text = (if (u == null) "" else "Android's App info shows ${UrlUtils.formatBytes(u.androidTotal)} for Swift, plus the cache on its own line. ") +
-                "The app is mostly the Firefox engine and can't get smaller; the ad-block lists stay so blocking is fast. Old update files are deleted by themselves."
+                "Most of the app is the browser itself and can't get smaller; the ad blocking files stay so blocking is fast. Old update files are deleted by themselves."
             bar.removeAllViews()
             rows.removeAllViews()
             if (u != null) {
                 val parts = listOf(
-                    "The app" to u.app, "Ad-block lists" to u.adBlock, "Data sites stored" to u.sites,
-                    "Cache" to u.cache, "Engine data" to u.engine, "Tabs, history and pictures" to u.swift,
+                    "The app" to u.app, "Ad blocking files" to u.adBlock, "Data saved by sites" to u.sites,
+                    "Cache" to u.cache, "Browser files" to u.engine, "Tabs, history and pictures" to u.swift,
                     "Downloads inside Swift" to u.kept, "Other" to u.other,
                 )
                 parts.forEachIndexed { i, (label, bytes) ->
@@ -3053,7 +2994,7 @@ class SettingsActivity : AppCompatActivity() {
             }
             val labels = sites.map { "${it.site} · ${UrlUtils.formatBytes(it.bytes)}" }.toTypedArray()
             MaterialAlertDialogBuilder(this@SettingsActivity)
-                .setTitle("Data sites stored")
+                .setTitle("Data saved by sites")
                 .setItems(labels) { _, which ->
                     val site = sites[which]
                     Dialogs.confirm(

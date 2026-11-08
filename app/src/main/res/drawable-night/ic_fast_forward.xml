@@ -1,0 +1,13 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:tint="?attr/colorControlNormal"
+    android:viewportWidth="960"
+    android:viewportHeight="960">
+    <!-- 3.0.5: Material Symbols Rounded "fast_forward" at grade -25, softer on dark screens (drawable/ic_fast_forward.xml is the normal one), filled. -->
+    <group android:translateY="960">
+        <path
+            android:fillColor="@android:color/white"
+            android:pathData="M112,-319.5v-321q0,-17 11.25,-27.5t26.25,-10.5q5,0 10.25,1.25T170,-672.5L411,-511q8.5,5.5 12.75,13.75T428,-480q0,9 -4.25,17.25T411,-449L170,-287.5q-5,3.5 -10.25,4.75t-10.25,1.25q-15,0 -26.25,-10.5T112,-319.5Zm390,0v-321q0,-17 11.25,-27.5t26.25,-10.5q5,0 10.25,1.25T560,-672.5L801,-511q8.5,5.5 12.75,13.75T818,-480q0,9 -4.25,17.25T801,-449L560,-287.5q-5,3.5 -10.25,4.75t-10.25,1.25q-15,0 -26.25,-10.5T502,-319.5Z" />
+    </group>
+</vector>

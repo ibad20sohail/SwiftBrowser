@@ -1,0 +1,13 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:tint="?attr/colorControlNormal"
+    android:viewportWidth="960"
+    android:viewportHeight="960">
+    <!-- 3.0.5: Material Symbols Rounded "chevron_right" at grade -25, softer on dark screens (drawable/ic_chevron_right.xml is the normal one). -->
+    <group android:translateY="960">
+        <path
+            android:fillColor="@android:color/white"
+            android:pathData="M506,-480L351,-635q-10.5,-10.5 -10.5,-25.75T351,-687q10.5,-11 26,-11.25t26.5,10.75l181,181q5.5,5.5 8.25,12.25T595.5,-480q0,7.5 -2.75,14.25t-8.25,12.25l-181,181q-11,11 -26.5,10.75T351,-273q-10.5,-11 -10.5,-26.25T351,-325l155,-155Z" />
+    </group>
+</vector>

@@ -341,7 +341,8 @@ object ColoursPanel {
         // A card with text, a button and a switch that's on.
         frame.addView(LinearLayout(a).apply {
             orientation = LinearLayout.VERTICAL
-            background = Ui.shape(a, c(R.color.card_bg), 12)
+            // 3.0.5: the card's corners nest in the frame's (it sits 8 dp in, past the frame's 1 dp outline).
+            background = Ui.shape(a, c(R.color.card_bg), Corners.nested(Ui.R_MEDIUM, 9))
             setPadding(dp(10), dp(8), dp(10), dp(10))
             addView(TextView(a).apply {
                 text = if (night) "Dark" else "Light"

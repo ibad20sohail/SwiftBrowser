@@ -1,6 +1,6 @@
 /*
  * Swift: TheFlixer blurs the next slide of its featured carousel (55 px) and the background of
- * watch pages (100 px). Such large blurs are very slow to draw on a phone like the Moto E4 and make
+ * watch pages (100 px). Such large blurs are very slow to draw on older phones and make
  * the page scroll in jumps, so they are left out.
  */
 .site-movie-bg {

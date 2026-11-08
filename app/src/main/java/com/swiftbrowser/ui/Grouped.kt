@@ -153,8 +153,8 @@ class Piece private constructor(private val fill: GradientDrawable, private val 
 
 /**
  * 3.0.4: a group of rows (Settings), each a piece of its own, one under another 2 dp apart. Their
- * corners and gaps are worked out again whenever it is measured, so a row that shows or hides (the
- * Advanced rows, a row shown only while something is on) leaves its neighbours with the right ones.
+ * corners and gaps are worked out again whenever it is measured, so a row that shows or hides (a
+ * row shown only while something is on) leaves its neighbours with the right ones.
  */
 class GroupLayout(ctx: Context) : LinearLayout(ctx) {
     private val gap = Ui.dp(ctx, 2)
@@ -201,10 +201,22 @@ class GroupLayout(ctx: Context) : LinearLayout(ctx) {
     }
 }
 
+/** 3.0.5: one row rhythm on every list screen: plain maths, tested on the PC. */
+object RowRhythm {
+    /** How tall a row is at least (dp), by whether it shows a second line of text (one that needs more grows). */
+    fun minHeight(twoLines: Boolean): Int = if (twoLines) Ui.ROW_TWO_LINES else Ui.ROW_ONE_LINE
+}
+
 /** 3.0.4: grouped rows in a RecyclerView: each row's piece is made once, its corners and gap set as it is bound. */
 object GroupedRows {
-    /** A new row of a grouped list: its background is a piece from now on (it keeps it when recycled). */
-    fun prepare(v: View): Piece = Piece.attach(v, tappable = true)
+    /**
+     * A new row of a grouped list: its background is a piece from now on (it keeps it when recycled).
+     * 3.0.5: what is inside it starts where the section headings and Settings' rows do (Ui.ROW_INSET).
+     */
+    fun prepare(v: View): Piece {
+        v.setPaddingRelative(Ui.dp(v.context, Ui.ROW_INSET), v.paddingTop, v.paddingEnd, v.paddingBottom)
+        return Piece.attach(v, tappable = true)
+    }
 
     /**
      * The row [v] bound at [position] of [count]: its corners and the gap above it, by [group] (see
@@ -215,7 +227,7 @@ object GroupedRows {
         val ctx = v.context
         val gap = when (RowCorners.gapAt(position, group)) {
             RowCorners.GAP_ROW -> Ui.dp(ctx, 2)
-            RowCorners.GAP_GROUP -> Ui.dp(ctx, Ui.L)
+            RowCorners.GAP_GROUP -> Ui.dp(ctx, Ui.GROUP_GAP)
             else -> 0
         }
         val lp = v.layoutParams as? ViewGroup.MarginLayoutParams ?: return

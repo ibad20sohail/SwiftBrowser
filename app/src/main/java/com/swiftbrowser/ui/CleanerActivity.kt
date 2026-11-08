@@ -5,7 +5,6 @@ import android.content.Intent
 import android.content.res.ColorStateList
 import android.os.Bundle
 import android.text.TextUtils
-import android.text.format.DateUtils
 import android.view.Gravity
 import android.view.MenuItem
 import android.view.View
@@ -79,7 +78,7 @@ class CleanerActivity : ListActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        thumbPx = dp(44)
+        thumbPx = dp(Ui.ICON_BOX)
         toolbar.title = "Free up space"
         toolbar.setNavigationOnClickListener { onBackPressedDispatcher.onBackPressed() }
         toolbar.setOnMenuItemClickListener {
@@ -211,7 +210,7 @@ class CleanerActivity : ListActivity() {
             topMargin = dp(16)
             bottomMargin = dp(10)
         })
-        val count = Ui.text(this, Ui.Type.BODY_SECONDARY, "").apply { gravity = Gravity.CENTER }
+        val count = Ui.steadyFigures(Ui.text(this, Ui.Type.BODY_SECONDARY, "").apply { gravity = Gravity.CENTER })
         col.addView(count)
         col.addView(MaterialButton(this, null, androidx.appcompat.R.attr.borderlessButtonStyle).apply {
             text = "Cancel"
@@ -347,7 +346,7 @@ class CleanerActivity : ListActivity() {
             visibility = View.GONE
             setBackgroundColor(Palette.color(this@CleanerActivity, R.color.sheet_bg))
         }
-        bar.addView(Ui.divider(this))
+        // 3.0.5: no line above it: its own colour against the page's says where it begins.
         val line = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -566,15 +565,10 @@ class CleanerActivity : ListActivity() {
 
     // ------------------------------------------------------------------ the list's rows
 
-    private val calendarYear = java.util.Calendar.getInstance().get(java.util.Calendar.YEAR)
+    // 3.0.5: the same short date as Downloads and Files.
+    private val dates by lazy { ShortDates(this) }
 
-    private fun dateText(t: Long): String? {
-        if (t <= 0) return null
-        if (DateUtils.isToday(t)) return DateUtils.formatDateTime(this, t, DateUtils.FORMAT_SHOW_TIME)
-        val c = java.util.Calendar.getInstance().apply { timeInMillis = t }
-        val year = if (c.get(java.util.Calendar.YEAR) == calendarYear) DateUtils.FORMAT_NO_YEAR else DateUtils.FORMAT_SHOW_YEAR
-        return DateUtils.formatDateTime(this, t, DateUtils.FORMAT_SHOW_DATE or DateUtils.FORMAT_ABBREV_MONTH or year)
-    }
+    private fun dateText(t: Long): String? = dates.text(t)
 
     private fun subtitleOf(f: Cleaner.Found): String {
         val parts = ArrayList<String>(4)
@@ -616,12 +610,13 @@ class CleanerActivity : ListActivity() {
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder = when (viewType) {
             TYPE_ROW -> makeRow()
             TYPE_CARD -> makeCard()
+            // 3.0.5: the headings line up with the icons of the rows under them, with the one section rhythm.
             TYPE_HEADER -> TextHolder(Ui.text(this@CleanerActivity, Ui.Type.SECTION, "").apply {
-                setPadding(dp(20), dp(18), dp(20), dp(6))
+                setPadding(dp(Ui.MARGIN), dp(Ui.SECTION_ABOVE), dp(Ui.MARGIN), dp(Ui.SECTION_BELOW))
                 layoutParams = RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
             })
             else -> TextHolder(Ui.text(this@CleanerActivity, Ui.Type.BODY_SECONDARY, "").apply {
-                setPadding(dp(20), dp(8), dp(20), dp(10))
+                setPadding(dp(Ui.MARGIN), dp(8), dp(Ui.MARGIN), dp(10))
                 layoutParams = RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
             })
         }
@@ -653,14 +648,15 @@ class CleanerActivity : ListActivity() {
         val root = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(16), dp(8), dp(8), dp(8))
-            minimumHeight = dp(64)
+            setPadding(dp(Ui.MARGIN), dp(8), dp(8), dp(8))
+            minimumHeight = dp(Ui.ROW_TWO_LINES)
             setBackgroundResource(RowHolder.selectableBackground(ctx))
             layoutParams = RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         }
         val icon = ImageView(ctx).apply {
             clipToOutline = true
-            background = Ui.ripple(ctx, Ui.shape(ctx, Palette.color(ctx, R.color.surface_alt), Ui.R_SMALL), Ui.R_SMALL)
+            // 3.0.5: the one row icon holder; flat on the page, so in the card colour (the page's a step darker).
+            background = Ui.ripple(ctx, Ui.shape(ctx, Palette.color(ctx, R.color.card_bg), Ui.R_SMALL), Ui.R_SMALL)
             contentDescription = "Open"
         }
         root.addView(icon, LinearLayout.LayoutParams(thumbPx, thumbPx))
@@ -726,18 +722,19 @@ class CleanerActivity : ListActivity() {
     private fun makeCard(): CardHolder {
         val ctx = this
         val outer = FrameLayout(ctx).apply {
-            setPadding(dp(16), dp(4), dp(16), dp(4))
+            setPadding(dp(Ui.MARGIN), dp(4), dp(Ui.MARGIN), dp(4))
             layoutParams = RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         }
         val card = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(16), dp(14), dp(12), dp(14))
-            background = Ui.ripple(ctx, Ui.shape(ctx, Palette.color(ctx, R.color.card_bg), Ui.R_MEDIUM, Palette.color(ctx, R.color.outline)), Ui.R_MEDIUM)
+            setPadding(dp(Ui.ROW_INSET), dp(14), dp(12), dp(14))
+            // 3.0.5: a plain filled card, no outline (the page behind it is a step darker).
+            background = Ui.ripple(ctx, Ui.shape(ctx, Palette.color(ctx, R.color.card_bg), Ui.R_MEDIUM), Ui.R_MEDIUM)
             Ui.pressable(this, 0.98f)
         }
-        val icon = Ui.iconBadge(ctx, R.drawable.ic_folder, 40)
-        card.addView(icon, LinearLayout.LayoutParams(dp(40), dp(40)).apply { marginEnd = dp(14) })
+        val icon = Ui.iconBadge(ctx, R.drawable.ic_folder)
+        card.addView(icon, LinearLayout.LayoutParams(dp(Ui.ICON_BOX), dp(Ui.ICON_BOX)).apply { marginEnd = dp(14) })
         val title = Ui.text(ctx, Ui.Type.SUBTITLE, "", lines = 1)
         val detail = Ui.text(ctx, Ui.Type.CAPTION, "", lines = 1)
         card.addView(LinearLayout(ctx).apply {

@@ -46,7 +46,7 @@ object PictureInfo {
         val fileTime = src.file?.lastModified() ?: 0L
         val make = exif?.getAttribute(ExifInterface.TAG_MAKE)?.trim()?.takeIf { it.isNotEmpty() }
         val model = exif?.getAttribute(ExifInterface.TAG_MODEL)?.trim()?.takeIf { it.isNotEmpty() }
-        // "motorola" and "moto e(4)" read as one name; a model that names its maker isn't repeated.
+        // A maker and its model read as one name; a model that already names its maker isn't repeated.
         val camera = when {
             model == null -> make
             make == null || model.startsWith(make, ignoreCase = true) -> model
@@ -155,7 +155,7 @@ object PictureInfo {
         try {
             a.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("geo:$point?q=$point")))
         } catch (_: Exception) {
-            Messages.show(a, "No maps app on this phone can show the place")
+            Messages.show(a, "No maps app on your phone can show the place")
         }
     }
 }

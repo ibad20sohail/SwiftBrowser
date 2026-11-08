@@ -75,6 +75,11 @@ object FileJobs {
     class Job internal constructor(val kind: Kind, val title: String, internal val work: (Work) -> Unit) {
         val id = ids.incrementAndGet()
 
+        /** 3.0.5: the notification doesn't name the files (going into or out of Private). */
+        @Volatile
+        var hideNames = false
+            internal set
+
         @Volatile
         var cancelled = false
             private set
@@ -188,10 +193,11 @@ object FileJobs {
     internal fun removeService(l: () -> Unit) = service.remove(l)
 
     /** Queues a job; [work] runs on the job thread. */
-    fun start(ctx: Context, kind: Kind, title: String, onDone: ((Job) -> Unit)? = null, work: (Work) -> Unit): Job {
+    fun start(ctx: Context, kind: Kind, title: String, onDone: ((Job) -> Unit)? = null, hideNames: Boolean = false, work: (Work) -> Unit): Job {
         val c = ctx.applicationContext
         app = c
         val job = Job(kind, title, work)
+        job.hideNames = hideNames
         job.onDone = onDone
         jobs += job
         L.d("File job queued: ${kind.name.lowercase()}")
@@ -217,7 +223,8 @@ object FileJobs {
             } catch (e: FileProblem) {
                 job.failed = true
                 job.message = e.message
-                L.w("File job stopped: ${e.message}")
+                // 3.0.5: its kind only: the message can name a file or a network folder's address.
+                L.w("File job stopped (${job.kind.name.lowercase()})")
             } catch (e: OutOfMemoryError) {
                 job.failed = true
                 job.message = "This is too big for the phone's memory."
@@ -225,7 +232,7 @@ object FileJobs {
             } catch (e: Throwable) {
                 job.failed = true
                 job.message = w.failureText(e)
-                L.w("File job failed (${job.kind.name.lowercase()}, ${job.current})", e)
+                L.w("File job failed (${job.kind.name.lowercase()}, ${e.javaClass.simpleName})")
             } finally {
                 w.finish()
                 runCatching { Parts.compactIfBig(ctx) }

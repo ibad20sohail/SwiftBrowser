@@ -110,11 +110,6 @@ class Prefs(ctx: Context) {
         get() = sp.getString(TOOLBAR_LAYOUT, null)
         set(v) = sp.edit { if (v == null) remove(TOOLBAR_LAYOUT) else putString(TOOLBAR_LAYOUT, v) }
 
-    /** 2.2: news stories as cards with a big picture (as in Chrome) instead of compact rows. */
-    var newsCards: Boolean
-        get() = sp.getBoolean(NEWS_CARDS, false)
-        set(v) = sp.edit { putBoolean(NEWS_CARDS, v) }
-
     /** 2.2: secure DNS (DNS over HTTPS): "off", "cloudflare", "quad9" or "google". */
     var secureDns: String
         get() = sp.getString(SECURE_DNS, "cloudflare") ?: "cloudflare"
@@ -172,7 +167,7 @@ class Prefs(ctx: Context) {
 
     /**
      * Let silent videos start by themselves, such as the previews that play in YouTube's feed while
-     * scrolling. Off by default: decoding them makes scrolling choppy on this phone.
+     * scrolling. Off by default: decoding them makes scrolling choppy on older phones.
      */
     var autoplayMuted: Boolean
         get() = sp.getBoolean(AUTOPLAY_MUTED, false)
@@ -218,11 +213,6 @@ class Prefs(ctx: Context) {
     var toolbarAtBottom: Boolean
         get() = sp.getBoolean(TOOLBAR_BOTTOM, false)
         set(v) = sp.edit { putBoolean(TOOLBAR_BOTTOM, v) }
-
-    /** 3.0.4: the address bar's style: [BAR_FULL] (across the screen, as before) or [BAR_FLOATING] (a rounded pill). */
-    var barStyle: String
-        get() = sp.getString(BAR_STYLE, BAR_FULL) ?: BAR_FULL
-        set(v) = sp.edit { putString(BAR_STYLE, v) }
 
     /** 3.0.4: the address bar takes the colour a website asks for (its theme-color), as in Vivaldi. */
     var siteColours: Boolean
@@ -362,11 +352,6 @@ class Prefs(ctx: Context) {
         get() = sp.getBoolean(FULL_SCREEN, false)
         set(v) = sp.edit { putBoolean(FULL_SCREEN, v) }
 
-    /** 3.0.4: Swift's own font (Google Sans Flex) for its text; off = the phone's font. Read at start. */
-    var swiftFont: Boolean
-        get() = sp.getBoolean(SWIFT_FONT, true)
-        set(v) = sp.edit { putBoolean(SWIFT_FONT, v) }
-
     /**
      * Tabs not opened for this many days move to "Inactive tabs" at the end of the tab grid
      * (0 = never).
@@ -375,7 +360,7 @@ class Prefs(ctx: Context) {
         get() = sp.getInt(INACTIVE_DAYS, 14)
         set(v) = sp.edit { putInt(INACTIVE_DAYS, v) }
 
-    /** Set at start-up: this phone has plenty of memory and a graphics chip that draws fast. */
+    /** Set at start-up: the phone has plenty of memory and a graphics chip that draws fast. */
     var autoSitesAsDesigned = false
 
     /**
@@ -487,7 +472,6 @@ class Prefs(ctx: Context) {
         const val MENU_HIDDEN = "menu_hidden"
         const val TOOLBAR_LAYOUT = "toolbar_layout"
         const val SECURE_DNS = "secure_dns"
-        const val NEWS_CARDS = "news_cards"
         const val NEWS_ENABLED = "news_enabled"
         const val HOME_CONTINUE = "home_continue"
         const val HOME_ORDER = "home_order"
@@ -542,15 +526,11 @@ class Prefs(ctx: Context) {
         const val READER_SPACING = "reader_spacing"
         const val READER_THEME = "reader_theme"
         val READER_THEMES = listOf("auto", "light", "sepia", "dark")
-        const val BAR_STYLE = "bar_style"
-        const val BAR_FULL = "full"
-        const val BAR_FLOATING = "floating"
         const val SITE_COLOURS = "site_colours"
         const val EDGE_SWIPE = "edge_swipe"
         const val LITE_SITES = "lite_sites"
         const val LITE_MODE = "lite_mode"
         const val FULL_SCREEN = "full_screen"
-        const val SWIFT_FONT = "swift_font"
         const val LAST_UPDATE_CHECK = "last_update_check"
         const val UPDATE_FILES = "update_files"
         const val INACTIVE_DAYS = "inactive_days"

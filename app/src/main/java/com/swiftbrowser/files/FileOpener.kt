@@ -129,7 +129,7 @@ object FileOpener {
             )
             a.startActivity(chooser)
         } catch (e: Exception) {
-            Messages.show(a, "No app on this phone can open this file")
+            Messages.show(a, "No app on your phone can open this file")
         }
     }
 
@@ -145,7 +145,7 @@ object FileOpener {
         try {
             a.startActivity(intent)
         } catch (e: Exception) {
-            Messages.show(a, "This phone can't install apps from files")
+            Messages.show(a, "Your phone can't install apps from files")
         }
     }
 
@@ -175,7 +175,7 @@ object FileOpener {
         try {
             a.startActivity(Intent.createChooser(intent, if (uris.size == 1) "Share ${list[0].name}" else "Share ${uris.size} files"))
         } catch (_: Exception) {
-            Messages.show(a, "No app on this phone can take these files")
+            Messages.show(a, "No app on your phone can take these files")
         }
     }
 }

@@ -82,9 +82,10 @@ enum class Accent(
     val seedColor: Int get() = if (this == CUSTOM) SwiftApp.prefs.accentCustom else seed
 
     /**
-     * The hand-picked accent closest in hue: the theme of Android's own parts (a text cursor), which
-     * can't take any colour while the app runs. 3.0: a grey, white or black has no hue to go by (it
-     * came out red, with a red cursor and text handles): blue, the default, then.
+     * The hand-picked accent closest in hue: the theme of Android's own parts, which can't take any
+     * colour while the app runs (3.0.5: radios, check boxes, text cursors and handles and lists' glow
+     * are given the exact accent one by one: ExactAccent). 3.0: a grey, white or black has no hue to
+     * go by (it came out red, with a red cursor and text handles): blue, the default, then.
      */
     val nearestPreset: Accent
         get() = when {
@@ -291,6 +292,46 @@ object Ui {
     const val R_MEDIUM = 16
     const val R_LARGE = 24
 
+    /**
+     * 3.0.5: how much something unavailable (a button with nothing to do, a day that can't be
+     * chosen) is dimmed: one value everywhere (it was 0.3 to 0.5 from place to place), the one
+     * Material gives disabled content. Not for what is merely off (shuffle, an equalizer that is off).
+     */
+    const val DISABLED_ALPHA = 0.38f
+
+    // 3.0.5: one look on every screen, in one place (res/values/dimens.xml has the same numbers for
+    // the layout files): one side margin, one icon holder, one title bar, one search box, one rhythm
+    // for rows and sections. Pages of rows and cards have the settings' colour behind them
+    // (R.color.settings_bg), with the cards in R.color.card_bg (ListActivity, Settings, tab grid).
+
+    /** How far everything full-width keeps from the screen's sides (dp): rows, cards, search boxes. */
+    const val MARGIN = 16
+
+    /** How far in from a card's or grouped row's edge its first icon or text starts (dp). */
+    const val ROW_INSET = 12
+
+    /**
+     * [MARGIN] + [ROW_INSET] from the screen's edge (dp): where a page's section headings and large
+     * title start, lined up with the first icon or text inside the rows and cards under them.
+     */
+    const val CONTENT_X = MARGIN + ROW_INSET
+
+    /** The holder of a row's or tile's icon (dp): a rounded square with [R_SMALL] corners (see [iconBadge]). */
+    const val ICON_BOX = 40
+
+    /** Title bars (Settings, the lists, Files) and search boxes (dp). */
+    const val BAR_HEIGHT = 52
+    const val SEARCH_HEIGHT = 44
+
+    /** Rows at least this tall (dp): one line of text, or two (a row whose text needs more grows). */
+    const val ROW_ONE_LINE = 56
+    const val ROW_TWO_LINES = 64
+
+    /** 24 dp above a section heading and 8 dp between it and its rows; groups without a heading are 16 dp apart (dp). */
+    const val SECTION_ABOVE = 24
+    const val SECTION_BELOW = 8
+    const val GROUP_GAP = 16
+
     /** The widest content gets on a turned phone or a tablet (dp); it is centred beyond that. */
     const val MAX_CONTENT_WIDTH = 560
 
@@ -307,7 +348,7 @@ object Ui {
     fun textSecondary(ctx: Context) = color(ctx, R.color.text_secondary)
     fun danger(ctx: Context) = color(ctx, R.color.danger)
 
-    /** 3.0.4: Swift's own font (AppFont) when it's on, the phone's otherwise. */
+    /** 3.0.4: Swift's own font (AppFont), or the phone's if it couldn't be read. */
     val MEDIUM: Typeface get() = AppFont.medium ?: Typeface.create("sans-serif-medium", Typeface.NORMAL)
 
     /** 3.0.4: headings in bold, as Android 16's own apps have them (bolder headlines). */
@@ -321,7 +362,8 @@ object Ui {
      * and section headings bolder and a little bigger, for a clearer order on every screen; and every
      * text in the app on this one scale (about 100 sizes had been set by hand, 10 to 34 sp): DISPLAY
      * for big numbers and big titles, HEADING for the parts of a page, SMALL for badges and the
-     * smallest labels. The layout files use the same sizes (res/values/dimens.xml, text_*).
+     * smallest labels. The layout files use the same sizes (res/values/dimens.xml, text_*). 3.0.5:
+     * each size draws with the cut of the font made for it ([typeface], see AppFont).
      */
     enum class Type(val sp: Float, val weight: Weight, val secondary: Boolean) {
         /**
@@ -341,8 +383,17 @@ object Ui {
         SECTION(14f, Weight.BOLD, false),
     }
 
-    fun typeface(weight: Weight): Typeface = when (weight) {
-        Weight.REGULAR -> AppFont.regular ?: Typeface.DEFAULT
+    /**
+     * 3.0.5: [type]'s weight in the cut of Swift's font made for its size (small text more open, big
+     * titles tighter, see AppFont), or in the phone's own font.
+     */
+    fun typeface(type: Type): Typeface = AppFont.cut(type.sp, type.weight) ?: phoneFont(type.weight)
+
+    /** 3.0.5: the medium weight at [type]'s size, for text in a Type's size that wants medium by hand. */
+    fun medium(type: Type): Typeface = AppFont.cut(type.sp, Weight.MEDIUM) ?: MEDIUM
+
+    private fun phoneFont(weight: Weight): Typeface = when (weight) {
+        Weight.REGULAR -> Typeface.DEFAULT
         Weight.MEDIUM -> MEDIUM
         Weight.BOLD -> BOLD
     }
@@ -350,9 +401,22 @@ object Ui {
     /** 3.0.4: only the size and weight of [type], for text that keeps a colour (or a font) of its own. */
     fun size(tv: TextView, type: Type, keepFont: Boolean = false): TextView = tv.apply {
         setTextSize(TypedValue.COMPLEX_UNIT_SP, type.sp)
-        if (!keepFont) typeface = typeface(type.weight)
+        if (!keepFont) {
+            typeface = typeface(type)
+        } else if (typeface == null || typeface === Typeface.DEFAULT) {
+            // 3.0.5: no font of its own to keep (yet): small text still gets the cut for its size.
+            AppFont.plainCut(type.sp)?.let { typeface = it }
+        }
         noHyphens(this)
     }
+
+    /**
+     * 3.0.5: figures all of a width (Google Sans Flex's own are not: a "1" is much narrower than a
+     * "0"), for numbers that change while they are watched, so they don't wobble as they count. Only
+     * on those (a time, a percentage), not on words: letters are unchanged, but figures read better
+     * in their own widths in a sentence. Harmless on the phone's font, whose figures don't vary.
+     */
+    fun steadyFigures(tv: TextView): TextView = tv.apply { fontFeatureSettings = "tnum" }
 
     /**
      * 3.0.4: no words split at the end of a line ("Proton VP-N"): Android 7 hyphenates labels by
@@ -364,7 +428,7 @@ object Ui {
 
     fun style(tv: TextView, type: Type, color: Int? = null): TextView = tv.apply {
         setTextSize(TypedValue.COMPLEX_UNIT_SP, type.sp)
-        typeface = typeface(type.weight)
+        typeface = typeface(type)
         setTextColor(color ?: if (type == Type.SECTION) accent(context) else if (type.secondary) textSecondary(context) else text(context))
         if (type == Type.BODY || type == Type.BODY_SECONDARY) setLineSpacing(0f, 1.15f)
         noHyphens(this)
@@ -486,11 +550,15 @@ object Ui {
     fun icon(ctx: Context, res: Int, tint: Int): Drawable? =
         ContextCompat.getDrawable(ctx, res)?.mutate()?.also { it.setTint(tint) }
 
-    /** An icon in a soft round badge (settings rows, empty screens, sheets). */
-    fun iconBadge(ctx: Context, res: Int, sizeDp: Int = 40, tint: Int = onAccentContainer(ctx), fill: Int = accentContainer(ctx)): ImageView =
+    /**
+     * An icon in a soft holder. 3.0.5: for rows and tiles a rounded square of [ICON_BOX] (one holder
+     * on every screen, the same shape as the pictures in Files and Downloads); the big badges of
+     * empty screens and the welcome stay round.
+     */
+    fun iconBadge(ctx: Context, res: Int, sizeDp: Int = ICON_BOX, tint: Int = onAccentContainer(ctx), fill: Int = accentContainer(ctx)): ImageView =
         ImageView(ctx).apply {
             setImageDrawable(icon(ctx, res, tint))
-            background = circle(fill)
+            background = if (sizeDp >= 56) circle(fill) else shape(ctx, fill, R_SMALL)
             val size = dp(ctx, sizeDp)
             // Big badges (empty screens, the welcome) get a big icon, drawn at its size.
             if (sizeDp >= 56) {
@@ -509,11 +577,37 @@ object Ui {
      * clear there's more (Android's own fading edge, which only shows where there's something to
      * scroll to). The row is drawn into a layer of its own, so the fading is worked out only when the
      * row itself changes, not on every frame of the page scrolling past it (a slow graphics chip).
+     * 3.0.5: the fade stops at the row's own padding, so side padding goes on the row's child (a row
+     * with padding and clipToPadding off showed a sliver of the next chip past the fade).
      */
     fun fadeEdges(row: android.widget.HorizontalScrollView, lengthDp: Int = 28) {
         row.isHorizontalFadingEdgeEnabled = true
         row.setFadingEdgeLength(dp(row.context, lengthDp))
         row.setLayerType(View.LAYER_TYPE_HARDWARE, null)
+    }
+
+    /**
+     * 3.0.5: one line of text too long for its box fades out softly at its end, instead of being cut
+     * off mid-letter (the address bar), over whatever is behind it: Android's own fading edge for
+     * text, which only works on the text's own pixels, so a website's colour behind it stays as it is.
+     * Only while the text doesn't fit: most addresses do, and then nothing extra is drawn at all.
+     * While it fades, the text is drawn into a layer of its own, as [fadeEdges] does, so the fading is
+     * worked out when the text changes and not on every frame of the page moving under it.
+     * [on] false (while typing): none of it. Asked again and again costs nothing while nothing changes.
+     */
+    fun fadeTextEnd(tv: TextView, on: Boolean, lengthDp: Int = 24) {
+        val fade = on && textOverflows(tv)
+        if (fade == tv.isHorizontalFadingEdgeEnabled) return
+        tv.isHorizontalFadingEdgeEnabled = fade
+        if (fade) tv.setFadingEdgeLength(dp(tv.context, lengthDp))
+        tv.setLayerType(if (fade) View.LAYER_TYPE_HARDWARE else View.LAYER_TYPE_NONE, null)
+    }
+
+    /** 3.0.5: whether [tv]'s one line, running left to right (right-to-left text ends at the other side), is wider than its box. */
+    private fun textOverflows(tv: TextView): Boolean {
+        val layout = tv.layout ?: return false
+        val room = tv.width - tv.totalPaddingLeft - tv.totalPaddingRight
+        return room > 0 && tv.text.isNotEmpty() && layout.getParagraphDirection(0) == android.text.Layout.DIR_LEFT_TO_RIGHT && layout.getLineWidth(0) > room
     }
 
     fun divider(ctx: Context, insetStartDp: Int = 0): View = View(ctx).apply {
@@ -649,12 +743,39 @@ object Ui {
         }
     }
 
-    /** A centred "nothing here" screen: an icon in a soft circle, a title and a hint. */
-    fun emptyState(ctx: Context, iconRes: Int, title: String, hint: String?): LinearLayout = LinearLayout(ctx).apply {
+    /**
+     * 3.0.5: one search box everywhere (the home page's big one and the address bar are their own
+     * things): [SEARCH_HEIGHT] tall (its caller's layout says so), body text, the search icon and
+     * grey hint, and the fill the rows and cards around it have: [fill] (the card colour unless the
+     * screen says otherwise; incognito's tab search keeps its own colours through [ink] and [soft]).
+     */
+    fun searchBox(box: android.widget.EditText, fill: Int = color(box.context, R.color.card_bg), ink: Int = text(box.context), soft: Int = textSecondary(box.context)) {
+        val ctx = box.context
+        size(box, Type.BODY, keepFont = true)
+        box.setTextColor(ink)
+        box.setHintTextColor(soft)
+        // Set on the view: a field whose default look was already painted keeps a tint of its own (the
+        // accent-coloured underline, see Palette), which would colour this shape instead.
+        box.background = ContextCompat.getDrawable(ctx, R.drawable.bg_url)?.mutate()
+        box.backgroundTintList = android.content.res.ColorStateList.valueOf(fill)
+        box.setPaddingRelative(dp(ctx, 14), 0, dp(ctx, 14), 0)
+        box.compoundDrawablePadding = dp(ctx, 10)
+        val icon = ContextCompat.getDrawable(ctx, R.drawable.ic_search)?.mutate()?.also {
+            it.setTint(soft)
+            it.setBounds(0, 0, dp(ctx, 20), dp(ctx, 20))
+        }
+        box.setCompoundDrawablesRelative(icon, null, null, null)
+    }
+
+    /**
+     * A centred "nothing here" screen: an icon in a soft circle (3.0.5: or, with [art], a small
+     * drawing of its own), a title and a hint.
+     */
+    fun emptyState(ctx: Context, iconRes: Int, title: String, hint: String?, art: EmptyArt? = null): LinearLayout = LinearLayout(ctx).apply {
         orientation = LinearLayout.VERTICAL
         gravity = Gravity.CENTER_HORIZONTAL
         setPadding(dp(ctx, 40), dp(ctx, 48), dp(ctx, 40), dp(ctx, 48))
-        addView(iconBadge(ctx, iconRes, 88, tint = accent(ctx)))
+        addView(art?.view(ctx) ?: iconBadge(ctx, iconRes, 88, tint = accent(ctx)))
         addView(text(ctx, Type.TITLE, title).apply {
             gravity = Gravity.CENTER
             setPadding(0, dp(ctx, 24), 0, 0)
@@ -695,6 +816,55 @@ object Motion {
     val exit = PathInterpolator(0.3f, 0f, 1f, 1f)
     /** A small spring past the end and back (letting go of a pressed button, a count changing). */
     val overshoot = android.view.animation.OvershootInterpolator(2f)
+
+    // 3.0.5: one motion for going forward and back, wherever it happens: new screens (their window
+    // animations are res/anim's swift_open_enter, swift_close_exit and swift_hold, which say the same:
+    // 8% of a phone's width is this distance), Settings' topics, Files' folders and network folders.
+    // (Settings slid 56 dp in 220 ms, folders 28 dp in 220 ms and 24 dp in 150 ms, new screens 8% in 160 ms.)
+
+    /** 3.0.5: how far new content comes from (dp). */
+    const val PAGE_SLIDE_DP = 28
+
+    /** 3.0.5: how long it takes. */
+    const val PAGE_MS = 180L
+
+    /** 3.0.5: how long what it replaces takes to fade away, sooner, so the two don't show through each other for long. */
+    const val PAGE_OUT_MS = 100L
+
+    /** 3.0.5: the side new content comes from: going forward from the right, going back from the left. */
+    const val FORWARD = 1
+    const val BACK = -1
+
+    /** 3.0.5: how it eases (the window animations' @android:anim/decelerate_interpolator). */
+    val page = android.view.animation.DecelerateInterpolator()
+
+    /**
+     * 3.0.5: [v], the new content, comes in with a fade from the side it is reached from: [FORWARD]
+     * from the right, [BACK] from the left, the mirror of going forward. Drawn through one layer
+     * while it moves (cheap on a slow graphics chip); with Android's animations off it is just there.
+     */
+    fun pageIn(v: View, direction: Int) {
+        v.animate().cancel()
+        v.translationY = 0f
+        if (!enabled(v.context)) {
+            v.alpha = 1f
+            v.translationX = 0f
+            return
+        }
+        v.alpha = 0f
+        v.translationX = Ui.dpf(v.context, PAGE_SLIDE_DP.toFloat()) * direction
+        v.animate().alpha(1f).translationX(0f).setStartDelay(0).setDuration(PAGE_MS).setInterpolator(page).layerIfFits(v).start()
+    }
+
+    /** 3.0.5: what the new content replaces fades away where it is (it holds still, as the screen under a new one does); then [then], which takes it away. */
+    fun pageOut(v: View, then: () -> Unit) {
+        v.animate().cancel()
+        if (!enabled(v.context)) {
+            then()
+            return
+        }
+        v.animate().alpha(0f).setStartDelay(0).setDuration(PAGE_OUT_MS).setInterpolator(exit).layerIfFits(v).withEndAction { then() }.start()
+    }
 
     /** 3.0.4: whether Android's animations are on (Developer options can turn them off). */
     fun enabled(ctx: Context): Boolean =

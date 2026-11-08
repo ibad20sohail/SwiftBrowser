@@ -3,9 +3,11 @@ package com.swiftbrowser.core
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.BitmapShader
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Rect
+import android.graphics.Shader
 import android.os.Handler
 import android.os.Looper
 import android.util.Base64
@@ -34,8 +36,14 @@ object Favicons {
     /** Icons kept in memory when Swift goes out of sight: the last ones used (about what one screen shows). */
     private const val KEEP_ON_TRIM = 24
 
+    /** 3.0.5: an icon's corners, as a share of its width: 6 dp at the home tile's 26 dp, the same proportion at every size. */
+    private const val CORNER = 6f / 26f
+
     private lateinit var dir: File
     private val exec = Background.single("favicons")
+
+    /** 3.0.5: fetching icons has its own thread: dozens of slow sites (the news) kept icons on disk waiting. */
+    private val fetcher = Background.single("favicons-net")
     private val main = Handler(Looper.getMainLooper())
     private val cache = LruCache<String, Bitmap>(96)
     private val absent = HashSet<String>()
@@ -107,7 +115,7 @@ object Favicons {
         }
         exec.execute {
             val f = file(key)
-            val bmp = if (f.exists()) BitmapFactory.decodeFile(f.path) else null
+            val bmp = if (f.exists()) BitmapFactory.decodeFile(f.path)?.let { rounded(it) } else null
             main.post {
                 if (bmp != null) cache.put(key, bmp) else absent.add(key)
                 onLoaded(bmp)
@@ -127,7 +135,7 @@ object Favicons {
         val addresses = candidates.map { it.hashCode() }.toSet()
         if (missed[key]?.covers(addresses) == true) return
         if (!fetching.add(key)) return
-        exec.execute {
+        fetcher.execute {
             var bmp: Bitmap? = null
             var miss: Miss? = null
             try {
@@ -145,7 +153,13 @@ object Favicons {
                 }
                 val b = bmp
                 if (b != null) {
-                    FileOutputStream(f).use { b.compress(Bitmap.CompressFormat.PNG, 100, it) }
+                    // Whole or not at all: the other thread may be reading it.
+                    val part = File(f.path + ".part")
+                    FileOutputStream(part).use { b.compress(Bitmap.CompressFormat.PNG, 100, it) }
+                    if (!part.renameTo(f)) {
+                        f.delete()
+                        part.renameTo(f)
+                    }
                     marked.delete()
                 } else {
                     // The site answered, with nothing usable. A network error or time-out (an
@@ -156,7 +170,7 @@ object Favicons {
             } catch (e: Exception) {
                 L.d("No icon for $key: ${e.message}")
             } finally {
-                val result = bmp
+                val result = bmp?.let { rounded(it) }
                 val none = miss
                 main.post {
                     fetching.remove(key)
@@ -220,6 +234,21 @@ object Favicons {
         val top = (SIZE - h) / 2
         Canvas(out).drawBitmap(src, null, Rect(left, top, left + w, top + h), Paint(Paint.FILTER_BITMAP_FLAG))
         if (src !== out) src.recycle()
+        return out
+    }
+
+    /**
+     * 3.0.5: [src] with rounded corners (it is let go): an icon with a solid background (Wikipedia,
+     * Startpage) showed sharp corners inside the rounded tiles and holders. Done once, as an icon goes
+     * into memory, not where it is drawn, so no screen pays for it and every size is in proportion.
+     * The file on disk stays square: it is only ever read through here.
+     */
+    private fun rounded(src: Bitmap): Bitmap {
+        val out = Bitmap.createBitmap(src.width, src.height, Bitmap.Config.ARGB_8888)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { shader = BitmapShader(src, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP) }
+        val r = src.width * CORNER
+        Canvas(out).drawRoundRect(0f, 0f, src.width.toFloat(), src.height.toFloat(), r, r, paint)
+        src.recycle()
         return out
     }
 

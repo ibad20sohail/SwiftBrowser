@@ -223,7 +223,11 @@ class WifiTransferActivity : ListActivity() {
             setOnClickListener { onClick() }
         }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(18) })
         Palette.paint(state)
-        empty.addView(ScrollView(this).apply { addView(state) }, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
+        empty.addView(ScrollView(this).apply {
+            // 3.0.5: its glow in the accent chosen.
+            Palette.glow(this)
+            addView(state)
+        }, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
         empty.visibility = View.VISIBLE
         statusText = null
         activityText = null
@@ -244,7 +248,8 @@ class WifiTransferActivity : ListActivity() {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
             setPadding(dp(20), dp(24), dp(20), dp(24))
-            background = Ui.shape(this@WifiTransferActivity, Palette.color(this@WifiTransferActivity, R.color.card_bg), Ui.R_LARGE, Palette.color(this@WifiTransferActivity, R.color.outline))
+            // 3.0.5: a plain filled card, no outline (the page behind it is a step darker).
+            background = Ui.shape(this@WifiTransferActivity, Palette.color(this@WifiTransferActivity, R.color.card_bg), Ui.R_LARGE)
         }
         card.addView(Ui.iconBadge(this, R.drawable.ic_files_transfer, 56))
         card.addView(centered(Ui.text(this, Ui.Type.BODY_SECONDARY, "On your computer, open"), 16))
@@ -263,7 +268,7 @@ class WifiTransferActivity : ListActivity() {
         col.addView(card)
 
         val status = Ui.text(this, Ui.Type.SUBTITLE, "").apply { setPadding(dp(8), dp(20), dp(8), 0) }
-        val activity = Ui.text(this, Ui.Type.BODY_SECONDARY, "").apply { setPadding(dp(8), dp(4), dp(8), 0) }
+        val activity = Ui.steadyFigures(Ui.text(this, Ui.Type.BODY_SECONDARY, "").apply { setPadding(dp(8), dp(4), dp(8), 0) })
         col.addView(status)
         col.addView(activity)
         statusText = status
@@ -306,6 +311,8 @@ class WifiTransferActivity : ListActivity() {
         Palette.paint(col)
         empty.addView(ScrollView(this).apply {
             isVerticalScrollBarEnabled = false
+            // 3.0.5: its glow in the accent chosen.
+            Palette.glow(this)
             addView(col)
         }, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         empty.visibility = View.VISIBLE

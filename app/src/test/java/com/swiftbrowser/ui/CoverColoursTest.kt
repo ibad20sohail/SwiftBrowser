@@ -51,6 +51,20 @@ class CoverColoursTest {
     }
 
     @Test
+    fun theChipsTakeACoverToneAndRead() {
+        for (seed in seeds) {
+            for (night in listOf(false, true)) {
+                val s = CoverColours.scheme(seed, night, if (night) textDark else textLight, if (night) greyDark else greyLight)
+                val what = "%08X %s".format(seed, if (night) "dark" else "light")
+                assertTrue(what, Contrast.ratio(s.onTrack, s.track) >= Contrast.TEXT)
+                // A chip stands apart from the screen behind it, and its tone has the cover's hue.
+                assertTrue(what, Contrast.ratio(s.track, s.background) >= 1.15)
+                assertTrue(what, hueGap(hue(s.track), hue(seed)) < 20.0)
+            }
+        }
+    }
+
+    @Test
     fun theBackgroundIsSoft() {
         for (seed in seeds) {
             val light = CoverColours.scheme(seed, false, textLight, greyLight)

@@ -140,11 +140,11 @@ object FileOps {
         while (i < a.length && j < b.length) {
             val ca = a[i]
             val cb = b[j]
-            if (ca.isDigit() && cb.isDigit()) {
+            if (ca in '0'..'9' && cb in '0'..'9') {
                 val si = i
                 val sj = j
-                while (i < a.length && a[i].isDigit()) i++
-                while (j < b.length && b[j].isDigit()) j++
+                while (i < a.length && a[i] in '0'..'9') i++
+                while (j < b.length && b[j] in '0'..'9') j++
                 val na = a.substring(si, i).trimStart('0')
                 val nb = b.substring(sj, j).trimStart('0')
                 if (na.length != nb.length) return na.length - nb.length

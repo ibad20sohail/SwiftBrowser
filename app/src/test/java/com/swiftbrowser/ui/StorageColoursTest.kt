@@ -22,7 +22,7 @@ class StorageColoursTest {
 
     // The cards: white, warm paper and cool grey; dark grey, pure black, navy and warm dark.
     private val lightCards = listOf(0xFFFFFFFF, 0xFFFCF8F0, 0xFFF4F6F9).map { it.toInt() }
-    private val darkCards = listOf(0xFF1F2228, 0xFF0B0B0B, 0xFF181E2C, 0xFF24221F).map { it.toInt() }
+    private val darkCards = listOf(0xFF15171C, 0xFF000000, 0xFF0D1322, 0xFF1B1815).map { Contrast.above(it.toInt(), DarkSteps.CARD) }
 
     private fun distance(a: Int, b: Int): Double {
         val x = StorageColours.oklab(a)

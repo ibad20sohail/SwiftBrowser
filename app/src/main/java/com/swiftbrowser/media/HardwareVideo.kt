@@ -20,8 +20,8 @@ object HardwareVideo {
 
     /** What the viewer is told, or null when nothing needs saying. */
     fun message(fit: Fit, width: Int, height: Int): String? = when (fit) {
-        Fit.SOFTWARE_ONLY -> "This phone's chip can't decode this kind of video, so it plays in software and may stutter. Another version of it may play smoothly."
-        Fit.TOO_MUCH -> "This video ($width × $height) is more than this phone's chip is made for, so it may stutter. A smaller version would play smoothly."
+        Fit.SOFTWARE_ONLY -> "Your phone can't play this kind of video on its own chip, so it may stutter. Another version of it may play smoothly."
+        Fit.TOO_MUCH -> "This video ($width × $height) is more than your phone is made for, so it may stutter. A smaller version would play smoothly."
         Fit.CHIP, Fit.UNKNOWN -> null
     }
 

@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- The soft round badge behind a list row's icon (2.0). -->
-<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="oval">
+<!-- The soft badge behind a list row's icon (2.0). 3.0.5: a rounded square with Ui.R_SMALL corners,
+     the one icon holder of every list (Ui.iconBadge), as the pictures in Files and Downloads. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
     <solid android:color="@color/surface_alt" />
+    <corners android:radius="12dp" />
 </shape>

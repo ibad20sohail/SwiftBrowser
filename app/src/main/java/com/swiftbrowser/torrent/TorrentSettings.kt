@@ -69,7 +69,7 @@ object TorrentSettings {
         get() = sp.getBoolean(ENCRYPTED_ONLY, false)
         set(v) = sp.edit { putBoolean(ENCRYPTED_ONLY, v) }
 
-    val ENCRYPTION_CHOICES = listOf("Prefer encrypted connections", "Encrypted only (fewer people to download from)")
+    val ENCRYPTION_CHOICES = listOf("Use them when possible", "Only use them (fewer people to download from)")
 
     /** Torrents only run while the phone charges (it stays cool, the battery full). */
     var chargingOnly: Boolean

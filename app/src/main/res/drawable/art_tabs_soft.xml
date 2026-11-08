@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 3.0.5: the tabs drawing of an empty screen, the soft tone (EmptyArt tints it at runtime). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="120dp"
+    android:height="120dp"
+    android:viewportWidth="120"
+    android:viewportHeight="120">
+    <path
+        android:fillColor="@android:color/white"
+        android:pathData="M34,28 V25 A8,8 0 0 1 42,17 H78 A8,8 0 0 1 86,25 V28 Z" />
+    <path
+        android:fillColor="@android:color/white"
+        android:pathData="M25,44 V39 A8,8 0 0 1 33,31 H87 A8,8 0 0 1 95,39 V44 Z" />
+    <path
+        android:fillColor="@android:color/white"
+        android:pathData="M28,47 H92 A12,12 0 0 1 104,59 V95 A12,12 0 0 1 92,107 H28 A12,12 0 0 1 16,95 V59 A12,12 0 0 1 28,47 Z" />
+</vector>

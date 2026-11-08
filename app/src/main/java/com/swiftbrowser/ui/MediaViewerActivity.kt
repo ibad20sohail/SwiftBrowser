@@ -119,7 +119,7 @@ class MediaViewerActivity : AppCompatActivity(), Messages.DarkScreen {
 
     /**
      * Pictures decoded at the screen's size, by their key. 2.9: by size, not by number (2.8 kept
-     * 3): a sixteenth of what Swift may use, 8 to 24 MB. With Swift's 512 MB on a Moto E4 that is
+     * 3): a sixteenth of what Swift may use, 8 to 24 MB. With 512 MB for Swift (older phones) that is
      * 24 MB, six to twelve photos, so swiping back and forth doesn't decode them again.
      */
     private val bitmaps = object : LruCache<String, Bitmap>((Runtime.getRuntime().maxMemory() / 16).coerceIn(8L shl 20, 24L shl 20).toInt()) {
@@ -253,6 +253,8 @@ class MediaViewerActivity : AppCompatActivity(), Messages.DarkScreen {
             layoutManager = lm
             setHasFixedSize(true)
             itemAnimator = null
+            // 3.0.5: the glow at the first and last picture in the accent chosen.
+            Palette.glow(this)
             adapter = pagerAdapter
         }
         val snap = PagerSnapHelper()
@@ -503,6 +505,8 @@ class MediaViewerActivity : AppCompatActivity(), Messages.DarkScreen {
         count = TextView(this).apply {
             setTextColor(0xCCFFFFFF.toInt())
             Ui.size(this, Ui.Type.CAPTION, keepFont = true)
+            // 3.0.5: "3 of 17" changes as pictures are swiped.
+            Ui.steadyFigures(this)
             isSingleLine = true
         }
         val size = Ui.dp(this, 48)
@@ -629,7 +633,7 @@ class MediaViewerActivity : AppCompatActivity(), Messages.DarkScreen {
     /**
      * 2.9: the small pictures are the Files screen's (FileThumbs): made two at a time off the main
      * thread at 44 dp (about 8 KB each), kept in its memory cache (a 24th of Swift's memory, 4 to
-     * 12 MB: 12 MB on a Moto E4), and shared with Files, so a folder seen there is ready here.
+     * 12 MB: 12 MB with 512 MB for Swift), and shared with Files, so a folder seen there is ready here.
      */
     private inner class StripAdapter : RecyclerView.Adapter<StripHolder>() {
         override fun getItemCount() = pics.size
@@ -715,7 +719,7 @@ class MediaViewerActivity : AppCompatActivity(), Messages.DarkScreen {
             val send = Intent(Intent.ACTION_SEND).setType(mimeOf(p)).putExtra(Intent.EXTRA_STREAM, uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             startActivity(Intent.createChooser(send, "Share ${p.name}"))
         } catch (_: Exception) {
-            say("No app on this phone can share it")
+            say("No app on your phone can share it")
         }
     }
 
@@ -728,7 +732,7 @@ class MediaViewerActivity : AppCompatActivity(), Messages.DarkScreen {
         try {
             startActivity(Intent.createChooser(intent, "Set as"))
         } catch (_: Exception) {
-            say("No app on this phone can use it as a wallpaper or a contact's photo")
+            say("No app on your phone can use it as a wallpaper or a contact's photo")
         }
     }
 
@@ -739,7 +743,7 @@ class MediaViewerActivity : AppCompatActivity(), Messages.DarkScreen {
         try {
             startActivity(Intent.createChooser(intent, "Open with").putExtra(Intent.EXTRA_EXCLUDE_COMPONENTS, arrayOf(ComponentName(this, MediaViewerActivity::class.java))))
         } catch (_: Exception) {
-            say("No app on this phone can open it")
+            say("No app on your phone can open it")
         }
     }
 
@@ -832,7 +836,7 @@ class MediaViewerActivity : AppCompatActivity(), Messages.DarkScreen {
                 } catch (e: PictureEdit.Problem) {
                     e.message
                 } catch (e: OutOfMemoryError) {
-                    "This phone ran out of memory for this picture"
+                    "Your phone ran out of memory for this picture"
                 } catch (e: Exception) {
                     L.w("Couldn't turn a picture", e)
                     "Swift couldn't turn the picture"
@@ -944,7 +948,7 @@ class MediaViewerActivity : AppCompatActivity(), Messages.DarkScreen {
             } catch (e: PictureEdit.Problem) {
                 e.message
             } catch (e: OutOfMemoryError) {
-                "This phone ran out of memory for this picture. Close some tabs and try again."
+                "Your phone ran out of memory for this picture. Close some tabs and try again."
             } catch (e: Exception) {
                 L.w("Couldn't save an edited picture", e)
                 "Swift couldn't save the picture"
@@ -961,13 +965,13 @@ class MediaViewerActivity : AppCompatActivity(), Messages.DarkScreen {
     }
 
     private fun edited(p: Pic, s: PictureEdit.Saved, replace: Boolean, asPng: Boolean = false) {
-        // A picture too big to edit at full size on this phone was saved smaller: said, not hidden.
+        // A picture too big to edit at full size on the phone was saved smaller: said, not hidden.
         val smaller = when (s.sample) {
             1 -> ""
-            2 -> " It is half the size (${s.width} × ${s.height}): the full picture is too big for this phone to edit."
-            4 -> " It is a quarter of the size (${s.width} × ${s.height}): the full picture is too big for this phone to edit."
-            else -> " It is ${s.width} × ${s.height}, smaller than the original: the full picture is too big for this phone to edit."
-        } + if (asPng) " It's a PNG: this phone can't save a WebP picture without losing some quality." else ""
+            2 -> " It is half the size (${s.width} × ${s.height}): the full picture is too big for your phone to edit."
+            4 -> " It is a quarter of the size (${s.width} × ${s.height}): the full picture is too big for your phone to edit."
+            else -> " It is ${s.width} × ${s.height}, smaller than the original: the full picture is too big for your phone to edit."
+        } + if (asPng) " It's a PNG: your phone can't save a WebP picture without losing some quality." else ""
         val long = smaller.isNotEmpty()
         when {
             replace -> {

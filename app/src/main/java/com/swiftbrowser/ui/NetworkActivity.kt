@@ -64,7 +64,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.lang.ref.WeakReference
-import java.util.Calendar
 
 /**
  * 3.0.4: Network folders (Files → Tools), as in MiXplorer: the shared folders of a computer or a home
@@ -138,7 +137,8 @@ class NetworkActivity : ListActivity() {
     private var pendingCopy: List<NetClient.Entry>? = null
 
     private val folderFill by lazy { Ui.shape(this, Ui.accentContainer(this), Ui.R_SMALL) }
-    private val fileFill by lazy { Ui.shape(this, Palette.color(this, R.color.surface_alt), Ui.R_SMALL) }
+    // 3.0.5: flat on the page: the card colour, which shows on the settings' colour behind it.
+    private val fileFill by lazy { Ui.shape(this, Palette.color(this, R.color.card_bg), Ui.R_SMALL) }
     private val onContainerTint by lazy { ColorStateList.valueOf(Ui.onAccentContainer(this)) }
     private val secondaryTint by lazy { ColorStateList.valueOf(Ui.textSecondary(this)) }
     private val accentTint by lazy { ColorStateList.valueOf(Ui.accent(this)) }
@@ -155,7 +155,7 @@ class NetworkActivity : ListActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        thumbPx = dp(44)
+        thumbPx = dp(Ui.ICON_BOX)
         toolbar.title = "Network folders"
         toolbar.setNavigationOnClickListener { if (selected.isNotEmpty()) clearSelection() else onBackPressedDispatcher.onBackPressed() }
         toolbar.setOnMenuItemClickListener {
@@ -231,7 +231,8 @@ class NetworkActivity : ListActivity() {
         crumbs = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(8), 0, dp(12), 0)
+            // 3.0.5: the first icon (24 dp in a 36 dp button) starts at the one side margin, like the rows below.
+            setPadding(dp(Ui.MARGIN - 6), 0, dp(12), 0)
         }
         pathScroll = HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
@@ -246,7 +247,7 @@ class NetworkActivity : ListActivity() {
             visibility = View.GONE
             setBackgroundColor(Palette.color(this@NetworkActivity, R.color.sheet_bg))
         }
-        bottom.addView(Ui.divider(this))
+        // 3.0.5: no line above it: its own colour against the page's says where it begins.
         jobStrip = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(16), dp(10), dp(16), dp(10))
@@ -257,6 +258,7 @@ class NetworkActivity : ListActivity() {
         jobText = Ui.text(this, Ui.Type.LABEL, "").apply {
             isSingleLine = true
             ellipsize = TextUtils.TruncateAt.MIDDLE
+            Ui.steadyFigures(this)
         }
         jobBar = horizontalBar()
         jobStrip.addView(jobText)
@@ -515,13 +517,8 @@ class NetworkActivity : ListActivity() {
         renderEmpty(items.isEmpty())
     }
 
-    /** The list comes in a little from the side it was reached from (one layer, a short move: light on the phone). */
-    private fun slideList(direction: Int) {
-        list.animate().cancel()
-        list.alpha = 0f
-        list.translationX = Ui.dpf(this, 24f) * direction
-        list.animate().alpha(1f).translationX(0f).setDuration(Motion.SHORT).setInterpolator(Motion.enter).withLayer().start()
-    }
+    /** The list comes in a little from the side it was reached from (one layer, a short move: light on the phone), 3.0.5: as anywhere in Swift. */
+    private fun slideList(direction: Int) = Motion.pageIn(list, direction)
 
     private fun renderEmpty(isEmpty: Boolean) {
         val s = server
@@ -539,7 +536,7 @@ class NetworkActivity : ListActivity() {
             else -> showEmpty(
                 isEmpty, "This folder is empty",
                 if (!FilesSettings.showHidden && entries.orEmpty().any { it.hidden }) "Hidden files aren't shown (⋮ → Show hidden files)." else null,
-                R.drawable.ic_folder,
+                R.drawable.ic_folder, EmptyArt.FOLDER,
             )
         }
     }
@@ -559,6 +556,8 @@ class NetworkActivity : ListActivity() {
         Palette.paint(state)
         empty.addView(android.widget.ScrollView(this).apply {
             isVerticalScrollBarEnabled = false
+            // 3.0.5: its glow in the accent chosen.
+            Palette.glow(this)
             addView(state)
         }, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
         if (empty.visibility != View.VISIBLE) Motion.fadeIn(empty, fromDy = 12)
@@ -811,7 +810,7 @@ class NetworkActivity : ListActivity() {
             ellipsize = TextUtils.TruncateAt.MIDDLE
         }
         val bar = horizontalBar()
-        val detail = Ui.text(this, Ui.Type.CAPTION, FileJobs.detail(job))
+        val detail = Ui.steadyFigures(Ui.text(this, Ui.Type.CAPTION, FileJobs.detail(job)))
         box.addView(name)
         box.addView(bar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(6)).apply {
             topMargin = dp(12)
@@ -1255,16 +1254,10 @@ class NetworkActivity : ListActivity() {
         Sheets.actions(this, e.name, subtitleOf(e), actions, iconRes = if (e.isDir) R.drawable.ic_folder else FileKind.of(e.name).icon)
     }
 
-    private val calendar: Calendar = Calendar.getInstance()
-    private val thisYear = calendar.get(Calendar.YEAR)
+    // 3.0.5: the same short date as Downloads and Files.
+    private val dates by lazy { ShortDates(this) }
 
-    private fun dateText(t: Long): String? {
-        if (t <= 0) return null
-        if (DateUtils.isToday(t)) return DateUtils.formatDateTime(this, t, DateUtils.FORMAT_SHOW_TIME)
-        calendar.timeInMillis = t
-        val year = if (calendar.get(Calendar.YEAR) == thisYear) DateUtils.FORMAT_NO_YEAR else DateUtils.FORMAT_SHOW_YEAR
-        return DateUtils.formatDateTime(this, t, DateUtils.FORMAT_SHOW_DATE or DateUtils.FORMAT_ABBREV_MONTH or year)
-    }
+    private fun dateText(t: Long): String? = dates.text(t)
 
     private fun subtitleOf(e: NetClient.Entry): String =
         listOfNotNull(if (e.isDir) "Folder" else UrlUtils.formatBytes(e.size.coerceAtLeast(0)), dateText(e.time)).joinToString(" · ")
@@ -1308,8 +1301,8 @@ class NetworkActivity : ListActivity() {
         val root = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(16), dp(8), dp(8), dp(8))
-            minimumHeight = dp(64)
+            setPadding(dp(Ui.MARGIN), dp(8), dp(8), dp(8))
+            minimumHeight = dp(Ui.ROW_TWO_LINES)
             setBackgroundResource(RowHolder.selectableBackground(ctx))
             layoutParams = RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         }

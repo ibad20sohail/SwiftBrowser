@@ -48,17 +48,26 @@ class ContinueRow(
     private var generation = 0
     private var shown: List<String> = emptyList()
 
+    /** The heading above the row (the browser's only). */
+    private val heading: TextView? = if (part == Part.BROWSER) TextView(context) else null
+
     init {
         orientation = VERTICAL
         visibility = GONE
         // 3.0.3: Files' start page names its parts with headings of its own.
-        if (part == Part.BROWSER) addView(TextView(context).apply {
-            text = "Continue"
+        heading?.let {
+            it.text = "Continue"
             // 3.0.4: as bold as the home page's other headings (the scale's HEADING).
-            Ui.size(this, Ui.Type.HEADING)
-            setTextColor(Ui.text(context))
-            setPadding(dp(24), 0, 0, dp(10))
-        })
+            Ui.size(it, Ui.Type.HEADING)
+            it.setTextColor(Ui.text(context))
+            // 3.0.5: its word 24 dp in as before, set in by a margin and a little padding so a soft
+            // backing can go behind just the word.
+            it.setPadding(dp(8), 0, dp(8), 0)
+            addView(it, LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                marginStart = dp(16)
+                bottomMargin = dp(10)
+            })
+        }
         addView(HorizontalScrollView(context).apply {
             isHorizontalScrollBarEnabled = false
             overScrollMode = OVER_SCROLL_NEVER
@@ -67,6 +76,13 @@ class ContinueRow(
             // 3.0.4: the cards fade out at the edge where more of them wait.
             Ui.fadeEdges(this)
         }, LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+    }
+
+    /** 3.0.5: the home page's picture is behind the row: a soft backing behind its heading (HomeView.setOnPicture). */
+    fun setOnPicture(on: Boolean) {
+        val h = heading ?: return
+        h.background = if (on) Ui.shape(context, HomeBackground.backing(context, Ui.text(context)), Ui.R_SMALL) else null
+        h.setPadding(dp(8), if (on) dp(3) else 0, if (on) dp(12) else dp(8), if (on) dp(3) else 0)
     }
 
     /** Loads the row again (the home page came up, or one was removed). */
@@ -142,7 +158,9 @@ class ContinueRow(
     private fun card(item: Unfinished.Item): View = LinearLayout(context).apply {
         tag = item
         orientation = VERTICAL
-        background = Ui.shape(context, Ui.color(context, R.color.tile_bg), Ui.R_MEDIUM)
+        // 3.0.5: on Files' page (a step darker) in the card colour like its other cards; on the home
+        // page tile_bg, a step off the page, as the shortcuts and news cards (and clear over a picture).
+        background = Ui.shape(context, Ui.color(context, if (part == Part.FILES) R.color.card_bg else R.color.tile_bg), Ui.R_MEDIUM)
         clipToOutline = true
         // 3.0.3: a video or song on the phone (Files' row) has no site: its folder says where it is.
         val local = item.localPath?.let { File(it) }
@@ -165,6 +183,8 @@ class ContinueRow(
             }
             val picture = ImageView(context).apply {
                 scaleType = ImageView.ScaleType.CENTER
+                // 3.0.5: a little dimmer in the dark look (not Files' row: its videos' own previews).
+                if (part == Part.BROWSER) SoftPictures.apply(this)
                 if (doc != null) {
                     setImageDrawable(com.swiftbrowser.docs.DocIcon(doc.kind, dp(56)))
                 } else {
@@ -215,6 +235,8 @@ class ContinueRow(
                 val kind = if (item.video) R.drawable.ic_movie else if (local != null) R.drawable.ic_music_note else R.drawable.ic_reader
                 val icon = ImageView(context).apply {
                     setImageDrawable(Ui.icon(context, kind, Ui.accent(context)))
+                    // 3.0.5: the site's icon when it comes, a little dimmer in the dark look.
+                    if (local == null) SoftPictures.apply(this)
                 }
                 addView(icon, LayoutParams(dp(16), dp(16)))
                 val doc = item.doc

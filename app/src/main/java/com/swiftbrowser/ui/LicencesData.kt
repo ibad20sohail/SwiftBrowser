@@ -370,8 +370,10 @@ internal object LicencesData {
             licence = "SIL Open Font License 1.1",
             licenceUrl = "https://openfontlicense.org/open-font-license-official-text/",
             home = "https://github.com/googlefonts/googlesans-flex",
-            note = "Swift's own font (3.0.4): three fixed weights of it (regular, medium and bold) with the " +
-                "Latin and Vietnamese letters, punctuation and common symbols. Copyright 2025 The Google Sans " +
+            note = "Swift's own font: six fixed cuts of it (regular, medium and bold for everyday text, a small " +
+                "regular and medium, and a display bold for big titles), also used on Swift's own pages (reader " +
+                "view, document viewer, error pages), with the Latin and Vietnamese letters, punctuation and " +
+                "common symbols. Copyright 2025 The Google Sans " +
                 "Flex Project Authors. “Google”, “Google Sans” and “Google Sans Flex” are " +
                 "trademarks of Google LLC; Swift isn't affiliated with or endorsed by Google.",
         ),

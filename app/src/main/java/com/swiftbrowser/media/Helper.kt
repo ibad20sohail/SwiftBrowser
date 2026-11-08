@@ -337,7 +337,9 @@ object Helper {
                     // 3.0.4: and its page colour (auto, light, sepia or dark).
                     .put("readerTheme", prefs.readerTheme)
                     .put("accentLight", accentHex(night = false)).put("accentDark", accentHex(night = true))
-                    .put("pageLight", pageColors(false)).put("pageDark", pageColors(true)),
+                    .put("pageLight", pageColors(false)).put("pageDark", pageColors(true))
+                    // 3.0.5: Swift's own pages use Swift's font, or the phone's if it couldn't be read.
+                    .put("swiftFont", com.swiftbrowser.ui.AppFont.active),
             )
         } catch (e: Exception) {
             L.w("Couldn't send the look", e)

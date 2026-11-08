@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 3.0.5: the folder drawing of an empty screen, the soft tone (EmptyArt tints it at runtime). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="120dp"
+    android:height="120dp"
+    android:viewportWidth="120"
+    android:viewportHeight="120">
+    <path
+        android:fillColor="@android:color/white"
+        android:pathData="M14,52 A10,10 0 0 1 24,42 H45 A9,9 0 0 1 51.4,44.6 L58,51 H96 A10,10 0 0 1 106,61 V94 A12,12 0 0 1 94,106 H26 A12,12 0 0 1 14,94 Z" />
+    <path
+        android:fillColor="@android:color/white"
+        android:pathData="M32,16 Q33.44,22.56 40,24 Q33.44,25.44 32,32 Q30.56,25.44 24,24 Q30.56,22.56 32,16 Z" />
+    <path
+        android:fillColor="@android:color/white"
+        android:pathData="M44,32 A3,3 0 1 1 50,32 A3,3 0 1 1 44,32 Z" />
+</vector>

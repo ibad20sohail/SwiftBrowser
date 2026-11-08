@@ -219,7 +219,7 @@ object PageActions {
                 .build()
             val ok = ShortcutManagerCompat.isRequestPinShortcutSupported(a) &&
                 ShortcutManagerCompat.requestPinShortcut(a, info, null)
-            a.snack(if (ok) "Added to the home screen" else "This phone's home screen doesn't accept shortcuts")
+            a.snack(if (ok) "Added to the home screen" else "Your phone's home screen doesn't accept shortcuts")
         }
     }
 

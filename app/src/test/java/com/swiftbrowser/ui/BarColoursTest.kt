@@ -1,13 +1,12 @@
 package com.swiftbrowser.ui
 
-import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** 3.0.4: websites' colours in the address bar (CssColour, BarTones, BarColours) and the floating bar's shape (BarShape). */
+/** 3.0.4: websites' colours in the address bar (CssColour, BarTones, BarColours). */
 class BarColoursTest {
     private val white = 0xFFFFFFFF.toInt()
     private val black = 0xFF000000.toInt()
@@ -121,7 +120,7 @@ class BarColoursTest {
         val accent = 0xFF1B66E4.toInt()
         val danger = 0xFFC5221F.toInt()
         for (c in sweep) {
-            val b = BarColours.forSite(c, accent, danger, white)
+            val b = BarColours.forSite(c, accent, danger)
             assertEquals(c, b.bar)
             assertTrue(b.text == BarTones.DARK_INK || b.text == BarTones.LIGHT_INK)
             // The site's name on the address box: 4.5:1.
@@ -166,34 +165,14 @@ class BarColoursTest {
         assertEquals(white, BarTones.blend(black, white, 1.0))
         assertEquals(0xFF808080.toInt(), BarTones.blend(black, white, 0.5))
         assertEquals(0x80000000.toInt(), BarTones.blend(0, black, 0.5))
-        val a = BarColours.forSite(0xFF336699.toInt(), 0xFF1B66E4.toInt(), 0xFFC5221F.toInt(), white)
-        val b = BarColours(white, 0xFFEFF2F7.toInt(), 0xFF1A1C21.toInt(), 0xFF5C6370.toInt(), 0xFFE6E9EF.toInt(), 0xFF1B66E4.toInt(), 0xFFC5221F.toInt(), white)
+        val a = BarColours.forSite(0xFF336699.toInt(), 0xFF1B66E4.toInt(), 0xFFC5221F.toInt())
+        val b = BarColours(white, 0xFFEFF2F7.toInt(), 0xFF1A1C21.toInt(), 0xFF5C6370.toInt(), 0xFFE6E9EF.toInt(), 0xFF1B66E4.toInt(), 0xFFC5221F.toInt())
         val start = BarColours.between(a, b, 0f)
         assertEquals(a.bar, start.bar)
         assertEquals(a.pill, start.pill)
         assertEquals(a.text, start.text)
         assertEquals(b, BarColours.between(a, b, 1f))
         // Half way from a black bar to a white one: grey.
-        assertEquals(0xFF808080.toInt(), BarColours.between(BarColours(black, black, black, black, black, black, black, black), b, 0.5f).bar)
-    }
-
-    @Test
-    fun theFloatingPillsPlace() {
-        // At the top: 6 from the screen's edge, 4 from the page, 8 from the sides.
-        assertArrayEquals(intArrayOf(8, 6, 8, 4), BarShape.pillMargins(atBottom = false, side = 8, edge = 6, gap = 4))
-        // At the bottom, the other way up.
-        assertArrayEquals(intArrayOf(8, 4, 8, 6), BarShape.pillMargins(atBottom = true, side = 8, edge = 6, gap = 4))
-        assertEquals(52, BarShape.pillHeight(62, intArrayOf(8, 6, 8, 4)))
-        assertEquals(0, BarShape.pillHeight(8, intArrayOf(8, 6, 8, 4)))
-        // The group strip's pill: on the page's side of the bar's, the gap to the page beyond it.
-        assertArrayEquals(intArrayOf(8, 0, 8, 4), BarShape.stripMargins(atBottom = false, side = 8, gap = 4))
-        assertArrayEquals(intArrayOf(8, 4, 8, 0), BarShape.stripMargins(atBottom = true, side = 8, gap = 4))
-    }
-
-    @Test
-    fun theLoadingLineStaysInsideThePill() {
-        // A 52-tall pill: round ends of 26, so the line keeps 26 from each end, along the page's side.
-        assertArrayEquals(intArrayOf(34, 0, 34, 4), BarShape.progressMargins(atBottom = false, room = 62, margins = intArrayOf(8, 6, 8, 4)))
-        assertArrayEquals(intArrayOf(34, 4, 34, 0), BarShape.progressMargins(atBottom = true, room = 62, margins = intArrayOf(8, 4, 8, 6)))
+        assertEquals(0xFF808080.toInt(), BarColours.between(BarColours(black, black, black, black, black, black, black), b, 0.5f).bar)
     }
 }

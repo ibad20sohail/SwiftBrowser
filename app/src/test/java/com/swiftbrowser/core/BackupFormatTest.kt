@@ -36,14 +36,14 @@ class BackupFormatTest {
     @Test
     fun aRestoreThatAddsNothingNewSaysSo() {
         assertEquals(
-            "Nothing in it was new for this phone. 40 settings restored.",
+            "Nothing in it was new for your phone. 40 settings restored.",
             Backup.restoredText(Backup.Restored(profiles = 0, bookmarks = 0, history = 0, tabs = 0, siteLevels = 0, settings = 40)),
         )
     }
 
     @Test
     fun settingsThatCouldNotGoInAreNotHidden() {
-        // Before 3.0.1 this case said "Nothing on this phone was changed" although the data was in.
+        // Before 3.0.1 this case said "Nothing on your phone was changed" although the data was in.
         assertEquals(
             "Added 5 bookmarks. Its settings couldn't be put in, so yours stay as they were.",
             Backup.restoredText(Backup.Restored(profiles = 0, bookmarks = 5, history = 0, tabs = 0, siteLevels = 0, settings = -1)),

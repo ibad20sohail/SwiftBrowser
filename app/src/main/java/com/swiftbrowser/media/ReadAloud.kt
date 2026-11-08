@@ -149,7 +149,7 @@ object ReadAloud : TextToSpeech.OnInitListener {
     override fun onInit(status: Int) {
         ready = status == TextToSpeech.SUCCESS
         if (!ready) {
-            failed = "This phone has no text-to-speech voice. Install one (for example Google Text-to-speech) and try again."
+            failed = "Your phone has no text-to-speech voice. Install one (for example Google Text-to-speech) and try again."
             speaking = false
             parts = emptyList()
             runCatching { tts?.shutdown() }

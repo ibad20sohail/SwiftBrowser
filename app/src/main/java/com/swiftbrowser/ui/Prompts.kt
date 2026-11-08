@@ -309,7 +309,7 @@ class Prompts : PromptDelegate {
                     override fun areAllItemsEnabled() = false
                     override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
                         val v = super.getView(position, convertView, parent)
-                        (v as? TextView)?.alpha = if (rows[position].enabled) 1f else 0.5f
+                        (v as? TextView)?.alpha = if (rows[position].enabled) 1f else Ui.DISABLED_ALPHA
                         return v
                     }
                 }
@@ -468,7 +468,7 @@ class Prompts : PromptDelegate {
             builder(ctx, if (update) "Update your password for $site?" else "Save your password for $site?")
                 .setMessage(
                     (entry.username?.ifBlank { null } ?: "(no user name)") +
-                        "\n\nSwift keeps it on this phone, locked by Android, and fills it in next time.",
+                        "\n\nSwift keeps it on your phone, locked by Android, and fills it in next time.",
                 )
                 .setPositiveButton(if (update) "Update" else "Save") { _, _ -> result.complete(request.confirm(option)) }
                 .setNegativeButton("Not now") { _, _ -> result.complete(request.dismiss()) }

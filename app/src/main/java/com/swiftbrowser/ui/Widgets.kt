@@ -34,18 +34,6 @@ class SlimSwitch(context: Context) : View(context) {
     private var position = 0f
     private var animator: ValueAnimator? = null
 
-    // 3.0.4: the tick in the thumb while on (Material 3's switches have it), drawn at the screen's
-    // size; its path is made again only when the thumb moves.
-    private val tickPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE
-        strokeCap = Paint.Cap.ROUND
-        strokeJoin = Paint.Join.ROUND
-        color = trackOn
-    }
-    private val tick = android.graphics.Path()
-    private var tickAt = Float.NaN
-    private var tickSize = Float.NaN
-
     var isChecked = false
         private set
 
@@ -99,48 +87,11 @@ class SlimSwitch(context: Context) : View(context) {
         }
         paint.style = Paint.Style.FILL
         paint.color = ColorUtils.blendARGB(thumbOff, thumbOn, position)
-        // 3.0.4: on, the thumb is 16 dp (14 before), room for its tick; the switch keeps its size.
-        val r = (SwitchTick.THUMB_OFF + (SwitchTick.THUMB_ON - SwitchTick.THUMB_OFF) * position) * density
+        // The thumb: 10 dp off, 14 dp on.
+        val r = (5f + 2f * position) * density
         val cx = left + h / 2 + (w - h) * position
-        val cy = top + h / 2
-        canvas.drawCircle(cx, cy, r, paint)
-        // The tick fades and grows in over the second half of the slide, in the accent on the light thumb.
-        val k = SwitchTick.amount(position)
-        if (k <= 0f) return
-        val size = SwitchTick.BOX * density * (0.6f + 0.4f * k)
-        if (cx != tickAt || size != tickSize) {
-            tickAt = cx
-            tickSize = size
-            val p = SwitchTick.POINTS
-            tick.rewind()
-            tick.moveTo(cx + p[0] * size, cy + p[1] * size)
-            tick.lineTo(cx + p[2] * size, cy + p[3] * size)
-            tick.lineTo(cx + p[4] * size, cy + p[5] * size)
-        }
-        tickPaint.strokeWidth = SwitchTick.STROKE * density * (0.6f + 0.4f * k)
-        tickPaint.alpha = (255 * k).toInt()
-        canvas.drawPath(tick, tickPaint)
+        canvas.drawCircle(cx, top + h / 2, r, paint)
     }
-}
-
-/**
- * 3.0.4: the switch thumb's tick, as Material Symbols Rounded's "check" (its line's middle: from the
- * left end down to the corner and up to the right end), in a box of [BOX] dp round the thumb's middle.
- */
-internal object SwitchTick {
-    /** The thumb's radius off and on (dp). */
-    const val THUMB_OFF = 5f
-    const val THUMB_ON = 8f
-
-    /** The tick's box and line (dp): about half the thumb across, its line thick enough to read so small. */
-    const val BOX = 11f
-    const val STROKE = 1.6f
-
-    /** x, y of its three points, as shares of [BOX] from the thumb's middle (y down). */
-    val POINTS = floatArrayOf(-0.280f, 0.012f, -0.102f, 0.190f, 0.280f, -0.192f)
-
-    /** How much of the tick shows at [position] of the slide (0 off … 1 on): none in its first half. */
-    fun amount(position: Float): Float = ((position - 0.5f) / 0.5f).coerceIn(0f, 1f)
 }
 
 /** Describes a settings row holding a [SlimSwitch] as a switch to screen readers. */

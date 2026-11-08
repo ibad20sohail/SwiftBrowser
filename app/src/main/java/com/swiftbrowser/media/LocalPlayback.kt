@@ -480,7 +480,7 @@ object LocalPlayback {
             e.setTargetGain((boost * MAX_BOOST_MB).toInt())
             e.enabled = true
         } catch (t: Throwable) {
-            L.w("Player: no volume boost on this phone", t)
+            L.w("Player: no volume boost on the phone", t)
         }
     }
 

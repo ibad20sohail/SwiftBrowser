@@ -8,21 +8,22 @@
     android:background="@drawable/bg_tab_card"
     android:foreground="?attr/selectableItemBackground"
     android:gravity="center_vertical"
-    android:minHeight="64dp"
+    android:minHeight="@dimen/row_two_lines"
     android:orientation="horizontal"
-    android:paddingStart="14dp"
+    android:paddingStart="12dp"
     android:paddingTop="10dp"
     android:paddingEnd="10dp"
     android:paddingBottom="10dp">
 
+    <!-- 3.0.5: the one row icon holder, a rounded square (Ui.ICON_BOX, Ui.R_SMALL). -->
     <ImageView
         android:id="@+id/banner_icon"
-        android:layout_width="36dp"
-        android:layout_height="36dp"
-        android:background="@drawable/bg_circle"
+        android:layout_width="40dp"
+        android:layout_height="40dp"
+        android:background="@drawable/bg_icon_badge"
         android:backgroundTint="@color/surface_alt"
         android:importantForAccessibility="no"
-        android:padding="8dp"
+        android:padding="9dp"
         android:src="@drawable/ic_history"
         app:tint="@color/text_primary" />
 
@@ -46,6 +47,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="2dp"
+            android:fontFamily="swift-small"
             android:textColor="@color/text_secondary"
             android:textSize="@dimen/text_caption" />
     </LinearLayout>

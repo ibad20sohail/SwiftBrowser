@@ -28,8 +28,9 @@ data class Story(
 )
 
 /**
- * The home page's news (2.0), in English, from Google News' public feeds for the chosen country and
- * topic, and from news sites the user added (any RSS or Atom feed). Stories are kept on the phone,
+ * The home page's news (2.0), in English, from Google News for the chosen country and topic (3.0.5:
+ * from its page, which has pictures, see NewsPage; its feeds when that can't be read, and with Data
+ * saver on mobile data), and from news sites the user added (any RSS or Atom feed). Stories are kept on the phone,
  * so the home page shows them at once; they are fetched again at most once an hour, only while
  * the home page is open. Nothing is personalised and nothing about browsing is sent anywhere.
  */
@@ -62,6 +63,9 @@ object News {
     private const val REFRESH_MS = 60 * 60 * 1000L
     private const val MAX_STORIES = 60
     private const val MAX_FEED_BYTES = 3_000_000
+
+    /** Google News' page: 3 to 4 MB of text (about 0.6 MB as it comes over the network). */
+    private const val MAX_PAGE_BYTES = 8_000_000
     private const val ACCEPT = "application/rss+xml, application/atom+xml, application/xml, text/xml, text/html;q=0.8, */*;q=0.5"
 
     private val io = com.swiftbrowser.core.Background.single("news")
@@ -92,6 +96,31 @@ object News {
         val tail = "hl=en-$c&gl=$c&ceid=$c:en"
         return if (t.googleSection == null) "https://news.google.com/rss?$tail"
         else "https://news.google.com/rss/headlines/section/topic/${t.googleSection}?$tail"
+    }
+
+    /** 3.0.5: Google News' page for [t], as a phone opens it. */
+    private fun googlePageUrl(t: Topic): String {
+        val c = country()
+        val tail = "hl=en-$c&gl=$c&ceid=$c:en"
+        return if (t.googleSection == null) "https://news.google.com/home?$tail"
+        else "https://news.google.com/headlines/section/topic/${t.googleSection}?$tail"
+    }
+
+    /**
+     * 3.0.5: [t]'s stories from Google News' page, with their pictures; null (the feed instead) when
+     * it can't be read or has too few, and when pictures wouldn't be shown anyway (Data saver).
+     */
+    private fun pageStories(t: Topic): List<Story>? {
+        if (com.swiftbrowser.engine.DataSaver.active) return null
+        val page = Net.get(googlePageUrl(t), MAX_PAGE_BYTES, "text/html") ?: return null
+        val list = NewsPage.stories(page.bytes, MAX_STORIES) { text ->
+            try {
+                android.util.Base64.decode(text, android.util.Base64.DEFAULT)
+            } catch (_: IllegalArgumentException) {
+                null
+            }
+        }
+        return list.takeIf { it.size >= NewsPage.MIN_STORIES }
     }
 
     private fun cacheKey(topic: String) = if (topic == MY_SITES) "mine" else "${country()}-$topic"
@@ -154,7 +183,8 @@ object News {
                     val all = feeds.flatMap { url -> runCatching { fetch(url) }.getOrElse { emptyList() } }
                     all.sortedByDescending { it.time }.distinctBy { it.url }.take(MAX_STORIES).takeIf { it.isNotEmpty() || feeds.isEmpty() }
                 } else {
-                    fetch(googleUrl(t ?: topics[0])).take(MAX_STORIES)
+                    val chosen = t ?: topics[0]
+                    pageStories(chosen) ?: fetch(googleUrl(chosen)).take(MAX_STORIES)
                 }
             } catch (e: Exception) {
                 L.d("News: ${e.message}")

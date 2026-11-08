@@ -212,7 +212,7 @@ class TabSwitcherView @JvmOverloads constructor(
         for (i in 0 until childCount) getChildAt(i).let { v ->
             if (v === zoomView) return@let
             v.alpha = 0f
-            v.animate().alpha(1f).setDuration(ZOOM_MS).start()
+            v.animate().alpha(1f).setDuration(ZOOM_MS).withLayer().start()
         }
         val tab = TabManager.current
         if (page != null && tab != null) post { zoom(tab, page, intoCard = true) }
@@ -231,7 +231,7 @@ class TabSwitcherView @JvmOverloads constructor(
         fading.forEach { it.animate().cancel() }
         if (zoomed) fadeBackground(255, 0)
         fading.forEachIndexed { i, v ->
-            v.animate().alpha(0f).setDuration(if (zoomed) ZOOM_MS else 140).withEndAction(if (i > 0) null else Runnable {
+            v.animate().alpha(0f).setDuration(if (zoomed) ZOOM_MS else 140).withLayer().withEndAction(if (i > 0) null else Runnable {
                 visibility = View.GONE
                 fading.forEach { it.alpha = 1f }
                 alpha = 1f
@@ -503,12 +503,28 @@ class TabSwitcherView @JvmOverloads constructor(
         if (!isEmpty) return
         val incognito = showingIncognito
         val searching = mode == Mode.SEARCH
+        val soft = color(if (incognito) R.color.incognito_url else Looks.accent.container)
+        val ink = color(if (incognito) R.color.incognito_text else Looks.accent.onContainer)
         findViewById<ImageView>(R.id.switcher_empty_icon).apply {
-            setImageResource(if (searching) R.drawable.ic_search else if (incognito) R.drawable.ic_incognito else R.drawable.ic_layers)
-            imageTintList = ColorStateList.valueOf(color(if (incognito) R.color.incognito_text else Looks.accent.onContainer))
-            background = Ui.circle(color(if (incognito) R.color.incognito_url else Looks.accent.container))
-            val p = (16 * resources.displayMetrics.density).toInt()
-            setPadding(p, p, p, p)
+            // 3.0.5: no tabs at all: a small drawing, in the incognito page's own colours there; a search
+            // that found nothing keeps its icon in a circle. Coloured here, not by a tint on the view,
+            // which would wash out the drawing's two tones.
+            if (searching) {
+                setImageDrawable(Ui.icon(context, R.drawable.ic_search, ink))
+                background = Ui.circle(soft)
+                val p = dp(16)
+                setPadding(p, p, p, p)
+            } else {
+                setImageDrawable(EmptyArt.TABS.drawable(context, soft, ink))
+                background = null
+                setPadding(0, 0, 0, 0)
+            }
+            val size = dp(if (searching) 64 else EmptyArt.sizeDp(context))
+            if (layoutParams.width != size) {
+                layoutParams.width = size
+                layoutParams.height = size
+                requestLayout()
+            }
         }
         findViewById<TextView>(R.id.switcher_empty_title).apply {
             text = when {
@@ -619,11 +635,8 @@ class TabSwitcherView @JvmOverloads constructor(
         subAdd.imageTintList = subText
         subMore.imageTintList = subText
         subTitle.setTextColor(text)
-        subSearch.setTextColor(text)
-        subSearch.setHintTextColor(color(if (dark) R.color.incognito_hint else R.color.text_secondary))
-        subSearch.background = ContextCompat.getDrawable(context, R.drawable.bg_url)?.mutate()?.also {
-            it.setTint(color(if (dark) R.color.incognito_url else R.color.surface_alt))
-        }
+        // 3.0.5: the one search box of every screen, in the colour of the cards around it.
+        Ui.searchBox(subSearch, fill = color(if (dark) R.color.incognito_url else R.color.tab_card_bg), ink = text, soft = color(if (dark) R.color.incognito_hint else R.color.text_secondary))
         subAction.setTextColor(color(if (dark) R.color.incognito_text else Looks.accent.primary))
         adapter.notifyDataSetChanged()
     }
@@ -675,6 +688,9 @@ class TabSwitcherView @JvmOverloads constructor(
     private fun color(res: Int) = Palette.color(context, res)
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+
+    /** 3.0.5: tabs' pictures and icons a little dimmer in the dark look; incognito's dark cards count as dark. */
+    private fun softPictures() = showingIncognito || Palette.isNight(context)
 
     // ------------------------------------------------------------------ groups and inactive tabs
 
@@ -1138,14 +1154,26 @@ class TabSwitcherView @JvmOverloads constructor(
          * drawable file stayed the preset one), with the card's own corners.
          */
         private fun ring(radius: Int = CARD_RADIUS) = GradientDrawable().apply {
-            cornerRadius = dp(radius).toFloat()
-            setStroke((2.5f * resources.displayMetrics.density).toInt(), Ui.accent(context))
+            val width = (2.5f * resources.displayMetrics.density).toInt()
+            // 3.0.5: a line is drawn on its shape's edge, half of it outside: its own outer edge follows the card's corner.
+            cornerRadius = dp(radius) - width / 2f
+            setStroke(width, Ui.accent(context))
         }
 
-        private fun cardBackground(dark: Boolean, radius: Int = CARD_RADIUS) = GradientDrawable().apply {
-            cornerRadius = dp(radius).toFloat()
-            setColor(color(if (dark) R.color.incognito_url else R.color.tab_card_bg))
-            setStroke(dp(1), color(if (dark) R.color.incognito_url else R.color.outline))
+        /**
+         * 3.0.5: a card is plain filled, as Settings' rows are: no outline or shadow (the grid's page is
+         * a step darker than the cards); its background is made once per card and only recoloured.
+         */
+        private fun setCard(v: View, dark: Boolean, radius: Int = CARD_RADIUS) {
+            val fill = color(if (dark) R.color.incognito_url else R.color.tab_card_bg)
+            val shape = v.background as? CardShape ?: CardShape().also {
+                it.cornerRadius = dp(radius).toFloat()
+                v.background = it
+            }
+            if (shape.filled != fill) {
+                shape.filled = fill
+                shape.setColor(fill)
+            }
         }
 
         private fun bindTab(h: CardHolder, card: Item.TabCard) {
@@ -1153,14 +1181,17 @@ class TabSwitcherView @JvmOverloads constructor(
             h.tab = tab
             fitHeight(h.thumbBox)
             val dark = showingIncognito
-            // Outlined rather than shadowed: just as clear, and nothing extra to draw.
-            h.itemView.background = cardBackground(dark)
+            // 3.0.5: the page's picture and the site's icon a little dimmer (SoftPictures).
+            SoftPictures.apply(h.thumb, softPictures())
+            SoftPictures.apply(h.icon, softPictures())
+            SoftPictures.apply(h.placeholder, softPictures())
+            setCard(h.itemView, dark)
             h.itemView.scaleX = 1f
             h.itemView.scaleY = 1f
             h.title.setTextColor(color(if (dark) R.color.incognito_text else R.color.text_primary))
             // 3.0.3: a rounded background, not a plain colour: the picture is clipped to it, so its
-            // corners stay inside the card's rounded border and the open tab's ring.
-            h.thumbBox.background = Ui.shape(context, color(if (dark) R.color.incognito_bg else R.color.tab_thumb_bg), 14)
+            // corners stay inside the card's rounded border and the open tab's ring (3.0.5: nesting them).
+            h.thumbBox.background = Ui.shape(context, color(if (dark) R.color.incognito_bg else R.color.tab_thumb_bg), Corners.nested(CARD_RADIUS, CARD_GAP))
             h.selected.visibility = if (card.current) View.VISIBLE else View.GONE
             if (card.current) h.selected.background = ring()
             bindTitle(h, card, icon = true)
@@ -1319,10 +1350,13 @@ class TabSwitcherView @JvmOverloads constructor(
             h.tab = tab
             h.group = null
             val dark = showingIncognito
-            h.itemView.background = cardBackground(dark, ROW_RADIUS)
+            // 3.0.5: as the cards' (SoftPictures).
+            SoftPictures.apply(h.thumb, softPictures())
+            SoftPictures.apply(h.placeholder, softPictures())
+            setCard(h.itemView, dark, ROW_RADIUS)
             h.itemView.scaleX = 1f
             h.itemView.scaleY = 1f
-            h.thumbBox.background = Ui.shape(context, color(if (dark) R.color.incognito_bg else R.color.tab_thumb_bg), 10)
+            h.thumbBox.background = Ui.shape(context, color(if (dark) R.color.incognito_bg else R.color.tab_thumb_bg), Corners.nested(ROW_RADIUS, ROW_GAP))
             h.title.setTextColor(color(if (dark) R.color.incognito_text else R.color.text_primary))
             h.host.setTextColor(color(if (dark) R.color.incognito_hint else R.color.text_secondary))
             // Always the ring, shown for the open tab (and for the row a dragged tab is about to join).
@@ -1388,12 +1422,14 @@ class TabSwitcherView @JvmOverloads constructor(
             h.group = group
             h.tab = null
             val dark = showingIncognito
-            h.itemView.background = cardBackground(dark, ROW_RADIUS)
+            // 3.0.5: the group's mark at full strength, also in a row that showed a tab's picture.
+            SoftPictures.apply(h.placeholder, false)
+            setCard(h.itemView, dark, ROW_RADIUS)
             h.itemView.scaleX = 1f
             h.itemView.scaleY = 1f
             val groupColor = color(TabGroup.colorRes(card.color))
             val surface = color(if (dark) R.color.incognito_url else R.color.tab_card_bg)
-            h.thumbBox.background = Ui.shape(context, Tones.mix(groupColor, surface, 0.82), Ui.R_SMALL)
+            h.thumbBox.background = Ui.shape(context, Tones.mix(groupColor, surface, 0.82), Corners.nested(ROW_RADIUS, ROW_GAP))
             h.thumb.setImageDrawable(null)
             h.placeholder.visibility = View.VISIBLE
             h.placeholder.setImageResource(R.drawable.ic_layers)
@@ -1433,7 +1469,7 @@ class TabSwitcherView @JvmOverloads constructor(
             h.group = group
             fitHeight(h.mosaic)
             val dark = showingIncognito
-            h.itemView.background = cardBackground(dark)
+            setCard(h.itemView, dark)
             h.itemView.scaleX = 1f
             h.itemView.scaleY = 1f
             val groupColor = color(TabGroup.colorRes(card.color))
@@ -1449,7 +1485,7 @@ class TabSwitcherView @JvmOverloads constructor(
             }
             h.close.imageTintList = ColorStateList.valueOf(color(if (dark) R.color.incognito_hint else R.color.text_secondary))
             // 3.0.3: rounded too, so the group's square fill no longer covers the card's border.
-            h.mosaic.background = Ui.shape(context, color(if (dark) R.color.incognito_url else R.color.tab_card_bg), 16)
+            h.mosaic.background = Ui.shape(context, color(if (dark) R.color.incognito_url else R.color.tab_card_bg), Corners.nested(CARD_RADIUS, MOSAIC_MARGIN))
             h.selected.visibility = if (card.current) View.VISIBLE else View.GONE
             if (card.current) h.selected.background = ring()
             h.thumbs.forEach { it.setImageDrawable(null) }
@@ -1463,10 +1499,12 @@ class TabSwitcherView @JvmOverloads constructor(
         private fun bindMosaic(h: GroupHolder, card: Item.GroupCard) {
             val group = card.group
             val dark = showingIncognito
-            val radius = dp(10).toFloat()
+            val radius = dp(Corners.nested(CARD_RADIUS, MOSAIC_GAP)).toFloat()
             h.thumbs.forEachIndexed { i, view ->
                 view.outlineProvider = android.view.ViewOutlineProvider.BACKGROUND
                 view.clipToOutline = true
+                // 3.0.5: as the cards' (SoftPictures).
+                SoftPictures.apply(view, softPictures())
                 val id = card.tabIds.getOrNull(i)
                 val tab = id?.let { tid -> TabManager.tabs.firstOrNull { it.id == tid } }
                 view.background = if (tab == null) null else GradientDrawable().apply {
@@ -1497,7 +1535,7 @@ class TabSwitcherView @JvmOverloads constructor(
         private fun bindBanner(h: BannerHolder, banner: Item.Banner) {
             val days = SwiftApp.prefs.inactiveDays
             val dark = showingIncognito
-            h.itemView.background = cardBackground(dark)
+            setCard(h.itemView, dark)
             // 3.0: in code, so it follows your own colours (a tint in the layout isn't recoloured).
             h.icon.backgroundTintList = ColorStateList.valueOf(color(if (dark) R.color.incognito_bg else R.color.surface_alt))
             if (banner.kind == BANNER_INACTIVE) {
@@ -1514,6 +1552,11 @@ class TabSwitcherView @JvmOverloads constructor(
                 h.itemView.isClickable = false
             }
         }
+    }
+
+    /** 3.0.5: a card's background, made once and only recoloured (setCard). */
+    private class CardShape : GradientDrawable() {
+        var filled = 0
     }
 
     private companion object {
@@ -1550,5 +1593,15 @@ class TabSwitcherView @JvmOverloads constructor(
         /** Corner radii (dp): a card's, and (3.0.4) a row's. */
         const val CARD_RADIUS = Ui.R_MEDIUM
         const val ROW_RADIUS = Ui.R_SMALL
+
+        /**
+         * 3.0.5: how far in from the edge what is inside sits (dp), which its corners follow
+         * (Corners.nested): a card's picture (item_tab_card), a row's (item_tab_row), and a group's
+         * card (item_group_card): its mosaic, and the mosaic's pictures (margin, padding and their own margin).
+         */
+        const val CARD_GAP = 4
+        const val ROW_GAP = 6
+        const val MOSAIC_MARGIN = 2
+        const val MOSAIC_GAP = 7
     }
 }

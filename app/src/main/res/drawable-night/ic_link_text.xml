@@ -1,0 +1,13 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:tint="?attr/colorControlNormal"
+    android:viewportWidth="960"
+    android:viewportHeight="960">
+    <!-- 3.0.5: Material Symbols Rounded "short_text" at grade -25, softer on dark screens (drawable/ic_link_text.xml). -->
+    <group android:translateY="960">
+        <path
+            android:fillColor="@android:color/white"
+            android:pathData="M207.5,-368q-15.5,0 -26.5,-11t-11,-26.5q0,-15.5 11,-26.5t26.5,-11H519q15.5,0 26.5,11t11,26.5q0,15.5 -11,26.5T519,-368H207.5Zm0,-150q-15.5,0 -26.5,-11t-11,-26.5q0,-15.5 11,-26.5t26.5,-11h545q15.5,0 26.5,11t11,26.5q0,15.5 -11,26.5t-26.5,11h-545Z" />
+    </group>
+</vector>

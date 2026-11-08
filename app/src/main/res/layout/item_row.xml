@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- A list row (history, bookmarks, suggestions, 2.0): an icon in a soft round badge (or the
-     site's own icon), a title and a line under it, and an optional button at the end. -->
+<!-- A list row (history, bookmarks, suggestions, 2.0): an icon in a soft badge (or the
+     site's own icon), a title and a line under it, and an optional button at the end.
+     3.0.5: a two-line row's height of Ui.ROW_TWO_LINES; grouped rows' start is GroupedRows.prepare's. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:id="@+id/row"
@@ -8,7 +9,7 @@
     android:layout_height="wrap_content"
     android:background="?attr/selectableItemBackground"
     android:gravity="center_vertical"
-    android:minHeight="64dp"
+    android:minHeight="@dimen/row_two_lines"
     android:orientation="horizontal"
     android:paddingStart="16dp"
     android:paddingEnd="6dp">
@@ -47,6 +48,7 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="2dp"
             android:ellipsize="middle"
+            android:fontFamily="swift-small"
             android:singleLine="true"
             android:textColor="@color/text_secondary"
             android:textSize="@dimen/text_caption" />

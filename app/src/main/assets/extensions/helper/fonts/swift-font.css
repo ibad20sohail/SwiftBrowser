@@ -1,0 +1,26 @@
+/* 3.0.5: Swift's own font (Google Sans Flex, the everyday cuts the app uses; see AppFont) on its own
+   pages: reader view's bar and details and the document viewer's bars and messages. With Swift's
+   font off (swift-font.js) the page takes the phone's font. "block": the first paint waits for the
+   local file instead of jumping from another font; 600 (a few labels on the pages) uses the medium
+   as the app's buttons do. */
+@font-face {
+  font-family: "Swift Sans";
+  font-weight: 400;
+  font-display: block;
+  src: url("regular.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Swift Sans";
+  font-weight: 500 600;
+  font-display: block;
+  src: url("medium.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Swift Sans";
+  font-weight: 700;
+  font-display: block;
+  src: url("bold.woff2") format("woff2");
+}
+
+:root { --ui: "Swift Sans", Roboto, "Noto Sans", sans-serif; }
+:root.phone-font { --ui: Roboto, "Noto Sans", sans-serif; }

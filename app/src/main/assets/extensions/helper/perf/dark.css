@@ -1,7 +1,7 @@
 /*
  * Dark page (2.6): a site the user turned dark in its Site settings, for sites without a dark
  * mode of their own. Its colours are replaced: a dark page, light text, blue links. No filter over
- * the page (turning a whole page negative is far too slow to draw on a phone like the Moto E4), so
+ * the page (turning a whole page negative is far too slow to draw on older phones), so
  * this costs nothing while scrolling. Pictures and videos are left as they are.
  */
 :root {

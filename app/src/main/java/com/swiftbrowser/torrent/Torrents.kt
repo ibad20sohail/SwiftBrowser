@@ -386,7 +386,7 @@ object Torrents {
     private fun start(item: Downloads.Item, hash: String) {
         val s = ensureSession()
         if (s == null) {
-            fail(item, "Torrents can't run on this phone")
+            fail(item, "Torrents can't run on your phone")
             return
         }
         val folder = File(item.extra.optString("dir").ifEmpty { saveDir().path }).apply { mkdirs() }

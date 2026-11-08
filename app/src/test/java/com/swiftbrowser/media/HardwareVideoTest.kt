@@ -20,7 +20,7 @@ class HardwareVideoTest {
     fun onlyAStutterAheadIsSaid() {
         assertNull(HardwareVideo.message(Fit.CHIP, 1280, 720))
         assertNull(HardwareVideo.message(Fit.UNKNOWN, 1280, 720))
-        assertTrue(HardwareVideo.message(Fit.SOFTWARE_ONLY, 1280, 720)!!.contains("in software"))
+        assertTrue(HardwareVideo.message(Fit.SOFTWARE_ONLY, 1280, 720)!!.contains("on its own chip"))
         assertTrue(HardwareVideo.message(Fit.TOO_MUCH, 3840, 2160)!!.contains("3840 × 2160"))
     }
 }

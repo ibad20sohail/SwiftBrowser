@@ -179,7 +179,7 @@ class PictureEditor(
             chip.setTextColor(if (chosen) Ui.onAccent(a) else Color.WHITE)
             chip.background = RippleDrawable(ColorStateList.valueOf(0x40FFFFFF), Ui.shape(a, if (chosen) Ui.accent(a) else 0x26FFFFFF, 18), null)
         }
-        save.alpha = if (crop.changed) 1f else 0.5f
+        save.alpha = if (crop.changed) 1f else Ui.DISABLED_ALPHA
     }
 
     /** While the picture is written: the Save button waits. */
@@ -484,7 +484,7 @@ object PictureEdit {
     /** Rows of the result decoded at a time. */
     private const val BAND = 256
 
-    const val TOO_BIG = "This picture is too big for this phone to change at full size, so Swift won't replace the original with a smaller one. Save a copy instead."
+    const val TOO_BIG = "This picture is too big for your phone to change at full size, so Swift won't replace the original with a smaller one. Save a copy instead."
 
     /** Something the user should read (the rest are Swift's own failures). */
     class Problem(message: String) : Exception(message)
@@ -494,7 +494,7 @@ object PictureEdit {
 
     /**
      * Room for the picture being written: a sixth of what Swift may use, between 16 and 64 MB. On
-     * the Moto E4 (512 MB for Swift) that is 64 MB: a 16-megapixel photo at full size.
+     * older phones (512 MB for Swift) that is 64 MB: a 16-megapixel photo at full size.
      */
     private fun budget(): Long = (Runtime.getRuntime().maxMemory() / 6).coerceIn(16L shl 20, 64L shl 20)
 
@@ -506,12 +506,12 @@ object PictureEdit {
     fun keepsKind(info: Pictures.Info) = info.mime == "image/jpeg" || info.mime == "image/png" ||
         (info.mime == "image/webp" && (!info.lossless || Build.VERSION.SDK_INT >= 29))
 
-    /** 3.0: a lossless WebP picture that this phone can only save without loss as a PNG. */
+    /** 3.0: a lossless WebP picture that older Android versions can only save without loss as a PNG. */
     fun pngForLossless(info: Pictures.Info) = info.mime == "image/webp" && info.lossless && Build.VERSION.SDK_INT < 29
 
     /** Why [info]'s picture can't be turned in place (it is saved as a turned copy instead). */
     fun whyNotInPlace(info: Pictures.Info): String =
-        if (pngForLossless(info)) "This WebP picture has no loss of quality, which this phone can only keep in a PNG. Edit can save a turned PNG copy."
+        if (pngForLossless(info)) "This WebP picture has no loss of quality, which your phone can only keep in a PNG. Edit can save a turned PNG copy."
         else "Swift can turn JPEG, PNG and WebP pictures. Edit can save a turned copy of this one."
 
     private fun kindOut(info: Pictures.Info) = if (keepsKind(info)) info.mime!! else "image/png"
@@ -590,7 +590,7 @@ object PictureEdit {
                 if (!keepsKind(info)) throw Problem(whyNotInPlace(info))
                 save(ctx, src, info, turns, RectF(0f, 0f, 1f, 1f), file, fullSizeOnly = true)
             } catch (e: Problem) {
-                throw if (e.message == TOO_BIG) Problem("This picture is too big for this phone to turn at full size. Edit can save a turned copy.") else e
+                throw if (e.message == TOO_BIG) Problem("This picture is too big for your phone to turn at full size. Edit can save a turned copy.") else e
             }
             else -> throw Problem(whyNotInPlace(info))
         }

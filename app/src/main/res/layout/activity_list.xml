@@ -7,39 +7,32 @@
     android:background="@color/page_bg"
     android:orientation="vertical">
 
-    <!-- 2.8: a little lower (was 60dp), with a smaller title (ListActivity). -->
+    <!-- 2.8: a little lower (was 60dp), with a smaller title (ListActivity). 3.0.5: one title bar on
+         every screen (Settings' too); its colour is the page's (ListActivity). -->
     <com.google.android.material.appbar.MaterialToolbar
         android:id="@+id/list_toolbar"
         android:layout_width="match_parent"
-        android:layout_height="52dp"
+        android:layout_height="@dimen/title_bar"
         android:background="@color/page_bg" />
 
     <com.swiftbrowser.ui.MaxWidthLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content">
 
+        <!-- 3.0.5: its look is Ui.searchBox's, the one search box of every screen. -->
         <EditText
             android:id="@+id/list_search"
             android:layout_width="match_parent"
-            android:layout_height="44dp"
-            android:layout_marginStart="16dp"
+            android:layout_height="@dimen/search_box"
+            android:layout_marginStart="@dimen/side_margin"
             android:layout_marginTop="10dp"
-            android:layout_marginEnd="16dp"
+            android:layout_marginEnd="@dimen/side_margin"
             android:layout_marginBottom="8dp"
-            android:background="@drawable/bg_url"
-            android:drawableStart="@drawable/ic_search"
-            android:drawablePadding="10dp"
-            android:drawableTint="@color/text_secondary"
             android:hint="Search"
             android:imeOptions="actionSearch|flagNoExtractUi"
             android:importantForAutofill="no"
             android:inputType="text"
-            android:paddingStart="14dp"
-            android:paddingEnd="14dp"
             android:singleLine="true"
-            android:textColor="@color/text_primary"
-            android:textColorHint="@color/text_secondary"
-            android:textSize="@dimen/text_body"
             android:visibility="gone" />
     </com.swiftbrowser.ui.MaxWidthLayout>
 

@@ -650,7 +650,8 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         boostBadge = TextView(this).apply {
             setTextColor(Color.WHITE)
             Ui.size(this, Ui.Type.CAPTION, keepFont = true)
-            typeface = Ui.MEDIUM
+            typeface = Ui.medium(Ui.Type.CAPTION)
+            Ui.steadyFigures(this)
             background = Ui.ripple(this@PlayerActivity, Ui.shape(this@PlayerActivity, 0x99000000.toInt(), 12), 12)
             setPadding(dp(10), dp(4), dp(10), dp(5))
             contentDescription = "Volume boost on. Tap to turn it off"
@@ -701,11 +702,13 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
             Ui.size(this, Ui.Type.TITLE, keepFont = true)
             typeface = Ui.MEDIUM
             gravity = Gravity.CENTER
+            Ui.steadyFigures(this)
         }
         hudSub = TextView(this).apply {
             setTextColor(0xCCFFFFFF.toInt())
             Ui.size(this, Ui.Type.LABEL, keepFont = true)
             gravity = Gravity.CENTER
+            Ui.steadyFigures(this)
         }
         hudLevel = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
             max = 1000
@@ -782,11 +785,13 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
     private fun buildControls() {
         elapsed = TextView(this).apply {
             Ui.size(this, Ui.Type.CAPTION, keepFont = true)
+            Ui.steadyFigures(this)
             gravity = Gravity.CENTER_VERTICAL or Gravity.START
             minWidth = dp(48)
         }
         length = TextView(this).apply {
             Ui.size(this, Ui.Type.CAPTION, keepFont = true)
+            Ui.steadyFigures(this)
             gravity = Gravity.CENTER_VERTICAL or Gravity.END
             minWidth = dp(48)
             minHeight = dp(40)
@@ -910,7 +915,7 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
     private fun updateSteps() {
         val has = player?.hasNextMediaItem() == true
         nextButton.isEnabled = has
-        nextButton.alpha = if (has) 1f else 0.4f
+        nextButton.alpha = if (has) 1f else Ui.DISABLED_ALPHA
     }
 
     /**
@@ -981,23 +986,26 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
                 updateChips()
             })
         }
-        if (night) chips.addView(chip(R.drawable.ic_dark, "Night sound", "Night sound on. Hold to turn it off", { morePanel() }) { setNightSound(false) })
+        if (night) chips.addView(chip(R.drawable.ic_night_sound, "Night sound", "Night sound on. Hold to turn it off", { morePanel() }) { setNightSound(false) })
         chips.visibility = if (chips.childCount > 0) View.VISIBLE else View.GONE
     }
 
     private fun chip(icon: Int, text: String, description: String, onTap: () -> Unit, onReset: () -> Unit): TextView = TextView(this).apply {
-        val fg = if (videoMode) Color.WHITE else Palette.color(this@PlayerActivity, R.color.text_primary)
+        // 3.0.5: on the music screen a tone that goes with the cover (they ignored its colours).
+        val fg = if (videoMode) Color.WHITE else coverScheme?.onTrack ?: Palette.color(this@PlayerActivity, R.color.text_primary)
         this.text = text
         setTextColor(fg)
         Ui.size(this, Ui.Type.CAPTION, keepFont = true)
-        typeface = Ui.MEDIUM
+        typeface = Ui.medium(Ui.Type.CAPTION)
+        // 3.0.5: A-B, the sleep timer and the delays count while watched.
+        Ui.steadyFigures(this)
         isSingleLine = true
         // 3.0.4: cut short with "…" only if many chips together are wider than the bar.
         ellipsize = TextUtils.TruncateAt.END
         val mark = Ui.icon(this@PlayerActivity, icon, fg)?.mutate()?.apply { setBounds(0, 0, dp(14), dp(14)) }
         setCompoundDrawablesRelative(mark, null, null, null)
         compoundDrawablePadding = dp(5)
-        val fill = if (videoMode) 0x33FFFFFF else Palette.color(this@PlayerActivity, R.color.surface_alt)
+        val fill = if (videoMode) 0x33FFFFFF else coverScheme?.track ?: Palette.color(this@PlayerActivity, R.color.surface_alt)
         background = Ui.ripple(this@PlayerActivity, Ui.shape(this@PlayerActivity, fill, 14), 14)
         setPadding(dp(10), dp(5), dp(11), dp(6))
         contentDescription = description
@@ -1168,6 +1176,9 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         paintMusicText()
         musicColours(scheme, musicTo)
         updateModes()
+        // 3.0.5: the chips under the title take the new colours too.
+        chipsShown = ""
+        updateChips()
         coverFade.cancel()
         if (!Motion.enabled(this) || !LocalPlayback.screenVisible || !music.isShown || musicTo.contentEquals(musicShown)) {
             musicTo.copyInto(musicShown)
@@ -1301,13 +1312,15 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
             cover.imageTintList = null
             cover.setImageBitmap(art)
         } else {
-            // No picture of its own: a big note in the accent's soft colour.
-            cover.background = Ui.shape(this, Ui.accentContainer(this), Ui.R_LARGE)
-            cover.scaleType = ImageView.ScaleType.FIT_CENTER
-            val pad = (cover.layoutParams?.width ?: dp(240)) / 4
-            cover.setPadding(pad, pad, pad, pad)
-            cover.setImageResource(R.drawable.ic_music_note)
-            cover.imageTintList = ColorStateList.valueOf(Ui.onAccentContainer(this))
+            // 3.0.5: no picture of its own: a calm one in the accent's soft colours, a second tone on the
+            // first and a small note (a single note used to fill the whole picture).
+            val soft = Ui.accentContainer(this)
+            val ink = Ui.onAccentContainer(this)
+            cover.background = Ui.shape(this, soft, Ui.R_LARGE)
+            cover.scaleType = ImageView.ScaleType.FIT_XY
+            cover.setPadding(0, 0, 0, 0)
+            cover.imageTintList = null
+            cover.setImageDrawable(NoCoverArt(Tones.mix(soft, ink, 0.08), Ui.icon(this, R.drawable.ic_music_note, Tones.mix(ink, soft, 0.3))!!))
         }
         updateCoverColours()
     }
@@ -1852,7 +1865,7 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
             Ui.size(this, Ui.Type.BODY, keepFont = true)
             typeface = Ui.MEDIUM
             // Figures all of a width, so the time stays still as it changes.
-            fontFeatureSettings = "tnum"
+            Ui.steadyFigures(this)
             gravity = Gravity.CENTER
             minWidth = dp(92)
         }
@@ -2091,7 +2104,7 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
             actions += Sheets.Action(R.drawable.ic_repeat, "Repeat a part (A-B)") { toggleLoop() }
         }
         if (videoMode && seekable) actions += Sheets.Action(R.drawable.ic_movie, "Frame by frame") { openFrameBar() }
-        // 3.0.3: only when this phone's sound can take an equalizer.
+        // 3.0.3: only when the phone's sound can take an equalizer.
         if (SoundEffects.info() != null) actions += Sheets.Action(R.drawable.ic_tune, "Equalizer", primary = !videoMode) { equalizerPanel() }
         // 3.0.4: night sound's switch comes next, then the rest.
         val after = ArrayList<Sheets.Action>()
@@ -2110,11 +2123,11 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         showPanel { ctx ->
             Sheets.column(ctx).apply {
                 addView(Sheets.header(ctx, e.title, sub))
-                addView(Ui.divider(ctx))
+                // 3.0.5: as in the sheets, no line under the title: space does it.
                 addView(Sheets.actionList(ctx, actions) { a -> picked { a.run() } })
                 // The line under the big buttons, when no row above the switch has drawn it.
                 if (actions.none { !it.primary }) addView(rowsDivider(ctx))
-                addView(switchRow(ctx, R.drawable.ic_dark, "Night sound", LocalPlayback.nightSoundOn) { on -> setNightSound(on) })
+                addView(switchRow(ctx, R.drawable.ic_night_sound, "Night sound", LocalPlayback.nightSoundOn) { on -> setNightSound(on) })
                 addView(Sheets.actionList(ctx, after) { a -> picked { a.run() } })
             }
         }
@@ -2718,7 +2731,7 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
                 for (t in 0 until g.length) {
                     s++
                     val f = g.getTrackFormat(t)
-                    val name = trackName(f, s, "Sound") + if (!g.isTrackSupported(t, true)) " (this phone can't play it)" else ""
+                    val name = trackName(f, s, "Sound") + if (!g.isTrackSupported(t, true)) " (your phone can't play it)" else ""
                     col.addView(choiceRow(ctx, name, g.isTrackSelected(t), R.drawable.ic_volume) {
                         panel.close()
                         p.trackSelectionParameters = p.trackSelectionParameters.buildUpon()
@@ -2771,7 +2784,7 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
                 pickSubtitles.launch(arrayOf("*/*"))
             } catch (_: Exception) {
                 resumeAfterPick = false
-                say("This phone has no app to pick files with")
+                say("Your phone has no app to pick files with")
             }
         })
         // 3.0.3: one timing for the video's own subtitles and subtitle files, and the sound's.
@@ -2834,6 +2847,7 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
             gravity = Gravity.CENTER
             minHeight = dp(40)
             background = Ui.ripple(ctx, null, 20)
+            Ui.steadyFigures(this)
         }
         fun refresh() {
             val label = Delays.label(value())
@@ -3035,7 +3049,7 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
 
     // ------------------------------------------------------------------ tracks and errors
 
-    /** Sound or picture this phone can't decode (DTS sound, some HEVC): said once, with a way out. */
+    /** Sound or picture the phone can't decode (DTS sound, some HEVC): said once, with a way out. */
     private fun checkTracks(tracks: Tracks) {
         val e = LocalPlayback.current ?: return
         if (tracks.isEmpty) return
@@ -3049,7 +3063,7 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         if (video != null && tenBit(video) && !tracks.isTypeSupported(C.TRACK_TYPE_VIDEO, false)) {
             warnedTracks = e
             L.w("Player: 10-bit HEVC (${video.codecs}) beyond the phone's decoders")
-            say("This video is 10-bit HEVC, which this phone's chip can't play. Look for an x264 or 8-bit version.", action = "Open with", long = true) { openWith() }
+            say("This video is 10-bit HEVC, which your phone's chip can't play. Look for an x264 or 8-bit version.", action = "Open with", long = true) { openWith() }
             return
         }
         val noPicture = tracks.containsType(C.TRACK_TYPE_VIDEO) && !tracks.isTypeSupported(C.TRACK_TYPE_VIDEO, true)
@@ -3080,7 +3094,7 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         val codec = format?.let { codecName(it) }
         val what = if (noPicture) "picture" else "sound"
         L.w("Player: no decoder for the $what (${codec ?: "unknown"}, ${format?.codecs})")
-        say("This phone can't play this video's $what" + (codec?.let { " ($it)" } ?: "") + ". Another app may.", action = "Open with", long = true) { openWith() }
+        say("Your phone can't play this video's $what" + (codec?.let { " ($it)" } ?: "") + ". Another app may.", action = "Open with", long = true) { openWith() }
     }
 
     private fun showError(error: PlaybackException) {
@@ -3108,7 +3122,7 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
             PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED,
             PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES,
             PlaybackException.ERROR_CODE_AUDIO_TRACK_INIT_FAILED,
-            -> "This phone can't play this format."
+            -> "Your phone can't play this format."
             else -> if (error.errorCode in 6000..6999) "This video is protected and can't be played here." else "Swift can't play this."
         }
         showProblem(message, openWith = e != null && !e.network, retry = network || error.errorCode in 2000..2999)
@@ -3204,7 +3218,7 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
                     .putExtra(Intent.EXTRA_EXCLUDE_COMPONENTS, arrayOf(ComponentName(this, PlayerActivity::class.java))),
             )
         } catch (_: Exception) {
-            say("No app on this phone can open it")
+            say("No app on your phone can open it")
         }
     }
 
@@ -3221,7 +3235,7 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
                 try {
                     startActivity(Intent.createChooser(send, "Share ${f.name}"))
                 } catch (_: Exception) {
-                    say("No app on this phone can share it")
+                    say("No app on your phone can share it")
                 }
             }
         }
@@ -3338,6 +3352,7 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         val count = TextView(this).apply {
             setTextColor(0xCCFFFFFF.toInt())
             Ui.size(this, Ui.Type.CAPTION, keepFont = true)
+            Ui.steadyFigures(this)
             text = upNextLabel(UP_NEXT_SECONDS)
         }
         val name = TextView(this).apply {

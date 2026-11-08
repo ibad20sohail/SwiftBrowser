@@ -57,7 +57,7 @@ class RightNowTest {
                 "Swift's own memory: not available.\n" +
                 "Tabs: 2 of 7 loaded, 1 kept loaded.\n" +
                 "Battery saver: only the open tab and tabs kept loaded stay loaded.\n" +
-                "1 page engine crash in the last 7 days.",
+                "1 page crash in the last 7 days.",
             text,
         )
         val parts = RightNow.details(
@@ -67,7 +67,7 @@ class RightNowTest {
             ),
         )
         assertTrue(parts.contains("Swift uses 300 MB: pages 200 MB, the app 100 MB."))
-        assertTrue(parts.contains("No page engine crashes in the last 7 days."))
+        assertTrue(parts.contains("No page crashes in the last 7 days."))
         assertTrue(parts.endsWith("Last time, Android closed Swift."))
     }
 }

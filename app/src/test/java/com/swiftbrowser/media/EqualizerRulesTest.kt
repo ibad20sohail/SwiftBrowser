@@ -26,7 +26,7 @@ class EqualizerRulesTest {
     @Test
     fun keptLevelsFitThePhone() {
         assertArrayEquals(intArrayOf(300, 0, -200, 0, 0), EqualizerRules.levels("300,0,-200", 5, -1500, 1500))
-        // Out of this phone's range, or unreadable: held in it, or 0.
+        // Out of the phone's range, or unreadable: held in it, or 0.
         assertArrayEquals(intArrayOf(1500, -1500, 0), EqualizerRules.levels("4000,-9000,x", 3, -1500, 1500))
         assertArrayEquals(intArrayOf(0, 0), EqualizerRules.levels(null, 2, -1500, 1500))
         assertEquals("300,0,-200", EqualizerRules.format(intArrayOf(300, 0, -200)))

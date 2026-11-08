@@ -12,11 +12,17 @@ import android.graphics.drawable.InsetDrawable
 import android.graphics.drawable.LayerDrawable
 import android.view.View
 import android.view.ViewGroup
+import android.widget.AbsListView
 import android.widget.CheckedTextView
+import android.widget.CompoundButton
+import android.widget.EditText
+import android.widget.HorizontalScrollView
 import android.widget.ImageView
 import android.widget.ProgressBar
+import android.widget.ScrollView
 import android.widget.TextView
 import androidx.core.content.ContextCompat
+import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.button.MaterialButton
 import com.swiftbrowser.R
 import com.swiftbrowser.SwiftApp
@@ -86,6 +92,20 @@ object Palette {
     private val lightAccentSwap = HashMap<Int, Int>()
     private val darkAccentSwap = HashMap<Int, Int>()
 
+    /**
+     * 3.0.5: whether Android's own parts (radio buttons, check boxes, text cursors and handles, the
+     * glow at a list's end), which the theme colours with the nearest preset, already show the accent
+     * chosen. Not for an accent without a preset of its own (amber's radios were salmon) or your own colours.
+     */
+    private var lightExact = true
+    private var darkExact = true
+
+    // 3.0.5: tints shared by every radio, check box and underline of one mode (one object each, made once).
+    private var lightChoice: ColorStateList? = null
+    private var darkChoice: ColorStateList? = null
+    private var lightUnderline: ColorStateList? = null
+    private var darkUnderline: ColorStateList? = null
+
     /** Changes when any choice changes: open screens compare it to know they must be redrawn. */
     val signature: String
         get() = SwiftApp.prefs.let { listOf(it.accent, it.accentCustom, it.lightBg, it.lightBgCustom, it.darkBg, it.darkBgCustom).joinToString() }
@@ -145,6 +165,10 @@ object Palette {
         darkSwap.clear()
         lightAccentSwap.clear()
         darkAccentSwap.clear()
+        lightChoice = null
+        darkChoice = null
+        lightUnderline = null
+        darkUnderline = null
         val accent = Accent.of(prefs.accent)
         val lightBg = backgroundRoles(day, false)
         val darkBg = backgroundRoles(night, true)
@@ -175,6 +199,9 @@ object Palette {
                     accentSwap[original] = value
                 }
             }
+            // 3.0.5: what the theme's accent is against the one chosen (see lightExact).
+            val exact = c.getColor(overlay.primaryRes) == (map[R.color.accent] ?: c.getColor(R.color.accent))
+            if (swap === lightSwap) lightExact = exact else darkExact = exact
         }
     }
 
@@ -262,20 +289,27 @@ object Palette {
     }
 
     /**
-     * Dark mode from its main colour (the page behind everything): bars, sheets and cards a little
-     * lighter. 3.0: and the grey text ([secondary]) lightened where it would be hard to read on them.
+     * Dark mode from its main colour (the page behind everything): bars a little lighter, sheets and
+     * cards a clear step above the page, tiles and chips a step above them. 3.0: and the grey text
+     * ([secondary]) lightened where it would be hard to read on them. 3.0.5: the steps are contrast
+     * ([DarkSteps]), not a share of white (cards were 1.07:1 on pure black and 1.12:1 on the grey):
+     * the same on every dark background, ready-made or your own, the stock grey included (its colours
+     * in values-night/colors.xml are these).
      */
     fun darkRoles(s: Int, secondary: Int): Map<Int, Int> {
         val lift = { t: Double -> Tones.mix(s, Color.WHITE, t) }
+        val card = Contrast.above(s, DarkSteps.CARD)
+        val thumb = Contrast.above(s, DarkSteps.THUMB)
+        val surface = Contrast.above(s, DarkSteps.SURFACE)
         return mapOf(
             R.color.page_bg to s, R.color.home_bg to s,
             R.color.settings_bg to Tones.mix(s, Color.BLACK, 0.14), R.color.switcher_bg to Tones.mix(s, Color.BLACK, 0.14),
             R.color.toolbar_bg to lift(0.026),
-            R.color.sheet_bg to lift(0.043), R.color.card_bg to lift(0.043), R.color.tab_card_bg to lift(0.043),
-            R.color.surface_alt to lift(0.09), R.color.home_search_bg to lift(0.09), R.color.tile_bg to lift(0.09), R.color.ptr_bg to lift(0.09),
-            R.color.tab_thumb_bg to lift(0.065), R.color.skeleton to lift(0.065),
-            R.color.divider to lift(0.07), R.color.outline to lift(0.14),
-            R.color.text_secondary to Contrast.readable(secondary, listOf(s, lift(0.09)), Contrast.TEXT, Color.WHITE),
+            R.color.sheet_bg to card, R.color.card_bg to card, R.color.tab_card_bg to card,
+            R.color.surface_alt to surface, R.color.home_search_bg to surface, R.color.tile_bg to surface, R.color.ptr_bg to surface,
+            R.color.tab_thumb_bg to thumb, R.color.skeleton to thumb,
+            R.color.divider to Contrast.above(s, DarkSteps.DIVIDER), R.color.outline to Contrast.above(s, DarkSteps.OUTLINE),
+            R.color.text_secondary to Contrast.readable(secondary, listOf(s, surface), Contrast.TEXT, Color.WHITE),
         )
     }
 
@@ -322,11 +356,54 @@ object Palette {
         val night = isNight(view.context)
         val swap = if (night) darkSwap else lightSwap
         if (swap.isEmpty()) return view
-        paintTree(view, swap, if (night) darkAccentSwap else lightAccentSwap)
+        paintTree(view, swap, if (night) darkAccentSwap else lightAccentSwap, if (night) darkExact else lightExact)
         return view
     }
 
-    private fun paintTree(v: View, swap: Map<Int, Int>, accentSwap: Map<Int, Int>) {
+    /** 3.0.5: whether the theme's accent, which Android's own parts use, is the one chosen in [c]'s mode. */
+    private fun themeHasAccent(c: Context): Boolean {
+        ensure(c)
+        return if (isNight(c)) darkExact else lightExact
+    }
+
+    /**
+     * 3.0.5: the glow at the ends of [v], a list or scroll view that isn't made with [paint], in the
+     * accent chosen.
+     */
+    fun glow(v: View) {
+        if (!themeHasAccent(v.context)) ExactAccent.glow(v, color(v.context, R.color.accent))
+    }
+
+    /** 3.0.5: a field not made with [paint]: its cursor and handles in the accent chosen. */
+    fun cursor(tv: TextView) {
+        if (!themeHasAccent(tv.context)) ExactAccent.text(tv, color(tv.context, R.color.accent))
+    }
+
+    /**
+     * Radio buttons and check boxes: the accent ticked, grey not. 3.0.5: in the accent chosen, for
+     * Material's dialog lists too, whose radio is a compound drawable; only a checked-text's own
+     * check mark was tinted before. One list per mode, made once.
+     */
+    private fun choiceTint(c: Context): ColorStateList {
+        val night = isNight(c)
+        (if (night) darkChoice else lightChoice)?.let { return it }
+        return ColorStateList(
+            arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf()),
+            intArrayOf(color(c, R.color.accent), color(c, R.color.text_secondary)),
+        ).also { if (night) darkChoice = it else lightChoice = it }
+    }
+
+    /** 3.0.5: a text field's underline in the accent chosen while it's focused or held. */
+    private fun underlineTint(c: Context): ColorStateList {
+        val night = isNight(c)
+        (if (night) darkUnderline else lightUnderline)?.let { return it }
+        return ColorStateList(
+            arrayOf(intArrayOf(android.R.attr.state_focused), intArrayOf(android.R.attr.state_pressed), intArrayOf()),
+            intArrayOf(color(c, R.color.accent), color(c, R.color.accent), color(c, R.color.text_secondary)),
+        ).also { if (night) darkUnderline = it else lightUnderline = it }
+    }
+
+    private fun paintTree(v: View, swap: Map<Int, Int>, accentSwap: Map<Int, Int>, exact: Boolean) {
         // Colour swatches and previews show exact colours (the blue swatch is the stock accent).
         if (v.getTag(R.id.palette_keep) == true) return
         v.background?.let { if (repaint(it, swap)) v.invalidate() }
@@ -340,15 +417,28 @@ object Palette {
             is ImageView -> v.imageTintList?.let { t -> accentSwap[t.defaultColor]?.let { v.imageTintList = ColorStateList.valueOf(it) } }
             is MaterialButton -> paintButton(v, accentSwap)
             is CheckedTextView -> {
-                v.checkMarkTintList = ColorStateList(
-                    arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf()),
-                    intArrayOf(color(v.context, R.color.accent), color(v.context, R.color.text_secondary)),
-                )
+                v.checkMarkTintList = choiceTint(v.context)
+                // 3.0.5: Material's dialog lists have their radio or tick as a compound drawable, not a check mark.
+                if (!exact) v.compoundDrawableTintList = choiceTint(v.context)
                 accentSwap[v.currentTextColor]?.let { v.setTextColor(it) }
             }
-            is TextView -> accentSwap[v.currentTextColor]?.let { v.setTextColor(it) }
+            // 3.0.5: check boxes (radio buttons too, should Swift get any) in the accent chosen,
+            // unless they were given their colour already (the torrent sheet's).
+            is CompoundButton -> {
+                if (!exact && v.buttonTintList == null) v.buttonTintList = choiceTint(v.context)
+                accentSwap[v.currentTextColor]?.let { v.setTextColor(it) }
+            }
+            is TextView -> {
+                accentSwap[v.currentTextColor]?.let { v.setTextColor(it) }
+                // 3.0.5: a field's cursor and handles (text that can be selected too) in the accent chosen.
+                if (!exact && (v is EditText || v.isTextSelectable)) {
+                    ExactAccent.text(v, color(v.context, R.color.accent))
+                    if (v is EditText && v.background is InsetDrawable) v.backgroundTintList = underlineTint(v.context)
+                }
+            }
+            is RecyclerView, is ScrollView, is HorizontalScrollView, is AbsListView -> if (!exact) ExactAccent.glow(v, color(v.context, R.color.accent))
         }
-        if (v is ViewGroup) for (i in 0 until v.childCount) paintTree(v.getChildAt(i), swap, accentSwap)
+        if (v is ViewGroup) for (i in 0 until v.childCount) paintTree(v.getChildAt(i), swap, accentSwap, exact)
     }
 
     private fun paintButton(b: MaterialButton, swap: Map<Int, Int>) {
@@ -400,6 +490,28 @@ object Palette {
 }
 
 /**
+ * 3.0.5: how far each surface of the dark look stands above the page, as contrast against it (Contrast.above),
+ * so every dark background has the same steps: cards clearly apart from the page, the rest above them in
+ * order. Tested for every background on the PC (DarkStepsTest).
+ */
+internal object DarkSteps {
+    /** Sheets and cards: 1.2:1 or a little more against the page, and more against settings' darker page. */
+    const val CARD = 1.22
+
+    /** A tab's empty picture and the grey shapes while content loads: just above a card. */
+    const val THUMB = 1.30
+
+    /** Chips, tiles, the address and search boxes, and the switches' tracks: a clear step above a card. */
+    const val SURFACE = 1.40
+
+    /** Lines between rows: as clear as a chip on a card. */
+    const val DIVIDER = 1.42
+
+    /** Outlines: the strongest. */
+    const val OUTLINE = 1.80
+}
+
+/**
  * How readable one colour is on another (3.0), as WCAG measures it, on plain ARGB numbers: no
  * Android classes, so the maths is tested on the PC (PaletteContrastTest).
  */
@@ -428,6 +540,21 @@ internal object Contrast {
         val u = 1 - t
         fun channel(shift: Int) = ((((a shr shift) and 0xFF) * u + ((b shr shift) and 0xFF) * t) + 0.5).toInt().coerceIn(0, 255)
         return (0xFF shl 24) or (channel(16) shl 16) or (channel(8) shl 8) or channel(0)
+    }
+
+    /**
+     * 3.0.5: [base] moved toward white just far enough to stand [target]:1 off it: an even step on
+     * every background (one share of white gives a dark page's cards a much smaller step than a
+     * lighter page's). 8-bit colours step unevenly in the dark, so it can come out a little over.
+     */
+    fun above(base: Int, target: Double): Int {
+        var lo = 0.0
+        var hi = 1.0
+        repeat(24) {
+            val t = (lo + hi) / 2
+            if (ratio(mix(base, 0xFFFFFFFF.toInt(), t), base) >= target) hi = t else lo = t
+        }
+        return mix(base, 0xFFFFFFFF.toInt(), hi)
     }
 
     /**

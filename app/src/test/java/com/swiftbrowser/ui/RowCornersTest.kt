@@ -74,6 +74,14 @@ class RowCornersTest {
     }
 
     @Test
+    fun rowsAreOneOfTwoHeightsAtLeast() {
+        assertEquals(Ui.ROW_ONE_LINE, RowRhythm.minHeight(twoLines = false))
+        assertEquals(Ui.ROW_TWO_LINES, RowRhythm.minHeight(twoLines = true))
+        // A row with a second line is taller, or the second line would be squeezed.
+        assertEquals(true, RowRhythm.minHeight(twoLines = true) > RowRhythm.minHeight(twoLines = false))
+    }
+
+    @Test
     fun theRadiiOfEachKind() {
         val l = 24f
         val s = 8f

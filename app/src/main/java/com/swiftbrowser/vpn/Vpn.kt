@@ -697,7 +697,7 @@ object Vpn {
     private const val KEY_PAUSE = "vpn_pause_when_down"
     private const val KEY_AUTO_SWITCH = "vpn_auto_switch"
 
-    /** Settings that stay on this phone (Backup leaves them out; the files themselves never go). */
+    /** Settings that stay on the phone (Backup leaves them out; the files themselves never go). */
     val PREF_KEYS = setOf(KEY_LOCATIONS, KEY_CURRENT, KEY_WANTED, KEY_AT_START, KEY_EVERY_START, KEY_PAUSE, KEY_REMINDED, KEY_AUTO_SWITCH)
 
     /**

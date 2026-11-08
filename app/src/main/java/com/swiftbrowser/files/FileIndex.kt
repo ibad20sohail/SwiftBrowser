@@ -20,7 +20,7 @@ import java.util.Locale
  */
 object FileIndex {
     enum class Category(val key: String, val label: String, val icon: Int, val nothing: String, val hint: String) {
-        IMAGES("images", "Images", R.drawable.ic_image, "No pictures found", "Photos and pictures you take, download or receive show here."),
+        IMAGES("images", "Pictures", R.drawable.ic_image, "No pictures found", "Photos and pictures you take, download or receive show here."),
         VIDEOS("videos", "Videos", R.drawable.ic_movie, "No videos found", "Videos you record, download or receive show here."),
         MUSIC("music", "Music", R.drawable.ic_headphones, "No music found", "Songs, voice notes and other sound files show here."),
         DOCUMENTS("documents", "Documents", R.drawable.ic_documents, "No documents found", "PDFs, Word, Excel, PowerPoint, e-books and text files show here."),

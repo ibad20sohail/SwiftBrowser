@@ -204,7 +204,7 @@ function addCss(href) {
   document.head.appendChild(l);
 }
 
-/** Small things remembered on this phone (text size per document, the e-book style). */
+/** Small things remembered on the phone (text size per document, the e-book style). */
 function store(key, value) {
   try {
     if (value === undefined) { return localStorage.getItem(key); }
@@ -234,6 +234,8 @@ function locked(buf) {
 async function start(msg) {
   if (info) { return; }
   info = msg;
+  // 3.0.5: the app says whether its own font is in use (see fonts/swift-font.js).
+  applySwiftFont(info.swiftFont !== false);
   document.title = info.name;
   $('#name').textContent = info.name;
   const k = KINDS[info.kind] || KINDS.text;

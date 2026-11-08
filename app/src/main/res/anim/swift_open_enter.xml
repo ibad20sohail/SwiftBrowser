@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- A screen opening: a short slide in from the right with a fade. -->
+<!-- A screen opening: a short slide in from the right with a fade. 3.0.5: Motion's one change of
+     page (its distance is PAGE_SLIDE_DP on a phone, its time PAGE_MS). -->
 <set xmlns:android="http://schemas.android.com/apk/res/android"
-    android:duration="160"
+    android:duration="180"
     android:interpolator="@android:anim/decelerate_interpolator">
     <translate android:fromXDelta="8%" android:toXDelta="0" />
     <alpha android:fromAlpha="0" android:toAlpha="1" />

@@ -299,9 +299,9 @@ open class DocumentActivity : AppCompatActivity() {
                 val action = if (uri.scheme.equals("mailto", ignoreCase = true)) Intent.ACTION_SENDTO else Intent.ACTION_VIEW
                 startActivity(Intent(action, uri))
             } catch (_: ActivityNotFoundException) {
-                Messages.show(this, "No app on this phone can open this link")
+                Messages.show(this, "No app on your phone can open this link")
             } catch (_: SecurityException) {
-                Messages.show(this, "No app on this phone can open this link")
+                Messages.show(this, "No app on your phone can open this link")
             }
             else -> {}
         }
@@ -388,7 +388,7 @@ open class DocumentActivity : AppCompatActivity() {
                     override fun isEnabled(position: Int) = usable(position)
                     override fun areAllItemsEnabled() = false
                     override fun getView(position: Int, convertView: View?, parent: ViewGroup): View =
-                        super.getView(position, convertView, parent).also { it.alpha = if (usable(position)) 1f else 0.5f }
+                        super.getView(position, convertView, parent).also { it.alpha = if (usable(position)) 1f else Ui.DISABLED_ALPHA }
                 }
                 builder(prompt.title)
                     .setSingleChoiceItems(adapter, rows.indexOfFirst { it.first?.selected == true }) { d, which ->
@@ -542,6 +542,8 @@ open class DocumentActivity : AppCompatActivity() {
             imeOptions = EditorInfo.IME_ACTION_SEARCH or EditorInfo.IME_FLAG_NO_EXTRACT_UI
             background = null
             setPadding(Ui.dp(this@DocumentActivity, 16), 0, Ui.dp(this@DocumentActivity, 8), 0)
+            // 3.0.5: the cursor in the accent chosen (this bar isn't recoloured by Palette.paint).
+            Palette.cursor(this)
             addTextChangedListener(object : TextWatcher {
                 override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
                 override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}

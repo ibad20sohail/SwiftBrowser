@@ -47,6 +47,17 @@ object HomeBackground {
         Preset("dusk", "Dusk", intArrayOf(0xFFE3DCFF.toInt(), 0xFFFFDAE6.toInt()), intArrayOf(0xFF282041.toInt(), 0xFF381F2F.toInt())),
     )
 
+    /**
+     * 3.0.5: the colour behind text on the home page's picture: the page's own, see-through, just
+     * enough of it for [text] to read at [min]:1 on any picture (HomeBacking). Soft shapes in it go
+     * behind the shortcuts and the headings; everything else on the page stands on the picture.
+     */
+    fun backing(ctx: Context, text: Int, min: Double = Contrast.TEXT): Int {
+        val page = Palette.color(ctx, R.color.home_bg)
+        val veil = if (Palette.isNight(ctx)) HomeBacking.VEIL_TOP_DARK else HomeBacking.VEIL_TOP_LIGHT
+        return ColorUtils.setAlphaComponent(page, HomeBacking.opacity(page, text, veil, min))
+    }
+
     /** The name of [key], for Settings. */
     fun label(key: String): String = when (key) {
         NONE -> "Swift's colour"
@@ -175,10 +186,17 @@ object HomeBackground {
                         }
                     } ?: 0
                 }.getOrDefault(0)
-                val upright = if (turn != 0) {
-                    Bitmap.createBitmap(raw, 0, 0, raw.width, raw.height, Matrix().apply { postRotate(turn.toFloat()) }, true).also { if (it !== raw) raw.recycle() }
+                // 3.0.5: exactly the screen's size: halving alone left up to twice that each way, kept in memory.
+                val biggest = maxOf(raw.width, raw.height)
+                val fitted = if (biggest > longest) {
+                    Bitmap.createScaledBitmap(raw, raw.width * longest / biggest, raw.height * longest / biggest, true).also { if (it !== raw) raw.recycle() }
                 } else {
                     raw
+                }
+                val upright = if (turn != 0) {
+                    Bitmap.createBitmap(fitted, 0, 0, fitted.width, fitted.height, Matrix().apply { postRotate(turn.toFloat()) }, true).also { if (it !== fitted) fitted.recycle() }
+                } else {
+                    fitted
                 }
                 val target = file(ctx)
                 val tmp = File(target.parentFile, target.name + ".part")
@@ -236,8 +254,8 @@ object HomeBackground {
         private val src = Rect()
         private val veil = GradientDrawable(
             GradientDrawable.Orientation.TOP_BOTTOM,
-            if (night) intArrayOf(ColorUtils.setAlphaComponent(page, 0x73), ColorUtils.setAlphaComponent(page, 0xB0), ColorUtils.setAlphaComponent(page, 0xE6))
-            else intArrayOf(ColorUtils.setAlphaComponent(page, 0x66), ColorUtils.setAlphaComponent(page, 0xA6), ColorUtils.setAlphaComponent(page, 0xE6)),
+            if (night) intArrayOf(ColorUtils.setAlphaComponent(page, HomeBacking.VEIL_TOP_DARK), ColorUtils.setAlphaComponent(page, 0xB0), ColorUtils.setAlphaComponent(page, 0xE6))
+            else intArrayOf(ColorUtils.setAlphaComponent(page, HomeBacking.VEIL_TOP_LIGHT), ColorUtils.setAlphaComponent(page, 0xA6), ColorUtils.setAlphaComponent(page, 0xE6)),
         )
 
         override fun onBoundsChange(bounds: Rect) {
@@ -271,5 +289,28 @@ object HomeBackground {
 
         @Suppress("OVERRIDE_DEPRECATION")
         override fun getOpacity(): Int = PixelFormat.OPAQUE
+    }
+}
+
+/**
+ * 3.0.5: how much of the page colour goes behind text on the home page's picture so it reads on any
+ * picture, bright or dark, wherever it has scrolled to. Plain numbers, tested on the PC
+ * (HomeBackingTest).
+ */
+internal object HomeBacking {
+    /** The veil over the picture at its thinnest, at the top of the screen (HomeBackground.PictureDrawable). */
+    const val VEIL_TOP_LIGHT = 0x66
+    const val VEIL_TOP_DARK = 0x73
+
+    /**
+     * The least opacity (0..255) of [page] that gives [text] [min]:1 over the worst picture there can
+     * be under a veil of [veil] (0..255): black under the light look's dark text, white under the
+     * dark look's light text. The picture's real colours can only make it easier.
+     */
+    fun opacity(page: Int, text: Int, veil: Int, min: Double = Contrast.TEXT): Int {
+        val worst = if (Contrast.luminance(text) > Contrast.luminance(page)) 0xFFFFFFFF.toInt() else 0xFF000000.toInt()
+        val veiled = Contrast.mix(worst, page, veil / 255.0)
+        for (a in 0..255) if (Contrast.ratio(text, Contrast.mix(veiled, page, a / 255.0)) >= min) return a
+        return 255
     }
 }

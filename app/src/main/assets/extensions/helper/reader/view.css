@@ -43,7 +43,7 @@ body {
   gap: 6px;
   padding: 10px 12px;
   border-bottom: 1px solid var(--rule);
-  font: 15px/1 Roboto, "Noto Sans", sans-serif;
+  font: 15px/1 var(--ui);
 }
 
 .spacer { flex: 1; margin-right: -6px; }
@@ -65,16 +65,16 @@ body {
   border-radius: 18px;
   background: var(--button);
   color: var(--text);
-  font: 600 15px Roboto, sans-serif;
+  font: 600 15px var(--ui);
 }
 
 main { max-width: 680px; margin: 0 auto; padding: 18px 20px 64px; }
 
-.site { margin: 0 0 6px; color: var(--muted); font: 14px Roboto, sans-serif; letter-spacing: .02em; }
+.site { margin: 0 0 6px; color: var(--muted); font: 14px var(--ui); letter-spacing: .02em; }
 
-h1 { margin: 0 0 10px; font: 700 1.45em/1.25 Roboto, "Noto Sans", sans-serif; }
+h1 { margin: 0 0 10px; font: 700 1.45em/1.25 var(--ui); }
 
-.byline { margin: 0 0 22px; color: var(--muted); font: 14px Roboto, sans-serif; }
+.byline { margin: 0 0 22px; color: var(--muted); font: 14px var(--ui); }
 
 .byline:empty { display: none; }
 
@@ -84,7 +84,7 @@ article img, article video, article figure, article picture { max-width: 100%; h
 
 article figure { margin: 1.2em 0; }
 
-article figcaption { color: var(--muted); font: 14px/1.4 Roboto, sans-serif; margin-top: 6px; }
+article figcaption { color: var(--muted); font: 14px/1.4 var(--ui); margin-top: 6px; }
 
 article a { color: var(--link); }
 
@@ -98,7 +98,7 @@ article td, article th { border: 1px solid var(--rule); padding: 4px 8px; }
 
 article hr { border: 0; border-top: 1px solid var(--rule); }
 
-.missing { color: var(--muted); font: 16px Roboto, sans-serif; }
+.missing { color: var(--muted); font: 16px var(--ui); }
 
 .listen { padding: 0 12px; }
 
@@ -125,7 +125,7 @@ article hr { border: 0; border-top: 1px solid var(--rule); }
   border-radius: 22px;
   background: var(--button);
   color: var(--text);
-  font: 600 16px Roboto, sans-serif;
+  font: 600 16px var(--ui);
 }
 .player button.wide { flex: 1.6; }
 body.playing main { padding-bottom: 88px; }

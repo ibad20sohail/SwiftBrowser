@@ -1,0 +1,13 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:tint="?attr/colorControlNormal"
+    android:viewportWidth="960"
+    android:viewportHeight="960">
+    <!-- 3.0.5: Material Symbols Rounded "tab" at grade -25, softer on dark screens (drawable/ic_tab.xml is the normal one). -->
+    <group android:translateY="960">
+        <path
+            android:fillColor="@android:color/white"
+            android:pathData="M165,-244h630v-315H556.5q-15.5,0 -26.5,-11t-11,-26.5V-716H165v472Zm0,75q-30.94,0 -52.97,-22.03Q90,-213.06 90,-244v-472q0,-30.94 22.03,-52.97Q134.06,-791 165,-791h630q30.94,0 52.97,22.03Q870,-746.94 870,-716v472q0,30.94 -22.03,52.97Q825.94,-169 795,-169H165Zm0,-75v-472 472Z" />
+    </group>
+</vector>

@@ -1,0 +1,13 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:tint="?attr/colorControlNormal"
+    android:viewportWidth="960"
+    android:viewportHeight="960">
+    <!-- 3.0.5: Material Symbols Rounded "keyboard_arrow_up" at grade -25, softer on dark screens (drawable/ic_up.xml is the normal one). -->
+    <group android:translateY="960">
+        <path
+            android:fillColor="@android:color/white"
+            android:pathData="M480,-530L325,-375q-10.5,10.5 -25.75,10.5T273,-375q-11,-10.5 -11.25,-26t10.75,-26.5l181,-181Q465,-620 480,-620t26.5,11.5l181,181q11,11 10.75,26.5T687,-375q-11,10.5 -26.25,10.5T635,-375L480,-530Z" />
+    </group>
+</vector>

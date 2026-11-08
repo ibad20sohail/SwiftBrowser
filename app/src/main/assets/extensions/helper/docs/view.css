@@ -26,7 +26,7 @@
 
 * { box-sizing: border-box; }
 html, body { margin: 0; background: var(--bg); color: var(--text); }
-body { font: 15px/1.5 sans-serif; -webkit-tap-highlight-color: transparent; }
+body { font: 15px/1.5 var(--ui); -webkit-tap-highlight-color: transparent; }
 button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
 [hidden] { display: none !important; }
 
@@ -41,7 +41,7 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 }
 #badge {
   flex: none; min-width: 34px; height: 22px; padding: 0 6px; border-radius: 6px;
-  font: 600 11px/22px sans-serif; text-align: center; color: #fff; background: var(--kind, #5f6368);
+  font: 600 11px/22px var(--ui); text-align: center; color: #fff; background: var(--kind, #5f6368);
 }
 #name {
   flex: 1; min-width: 0; margin: 0 6px 0 8px;
@@ -70,7 +70,7 @@ body.reading #sheets { transform: translateY(110%); }
   flex: 1; min-width: 0; height: 36px; padding: 0 12px; border-radius: 18px;
   border: 1px solid var(--line); background: var(--bg); color: var(--text); font: inherit;
 }
-#findcount { color: var(--muted); font-size: 13px; padding: 0 4px; }
+#findcount { color: var(--muted); font-size: 13px; padding: 0 4px; font-variant-numeric: tabular-nums; }
 
 #note {
   margin: 12px 12px 0; padding: 12px 14px; border-radius: 14px;
@@ -151,6 +151,7 @@ body.reading #sheets { transform: translateY(110%); }
   position: fixed; left: 50%; bottom: 18px; z-index: 22; transform: translateX(-50%);
   padding: 7px 14px; border-radius: 16px; font-size: 13px; font-weight: 600;
   background: rgba(32, 33, 36, 0.86); color: #fff; transition: opacity 0.25s;
+  font-variant-numeric: tabular-nums;
 }
 #pagepill.fade { opacity: 0; pointer-events: none; }
 #fastscroll { position: fixed; right: 0; top: 0; bottom: 0; width: 34px; z-index: 21; pointer-events: none; }
@@ -181,7 +182,9 @@ body.listening #pagepill { bottom: 76px; }
 
 /* Something wider than the screen (a table, a picture) scrolls inside the document instead of
    widening the page, which pushed the menu off the screen. */
-#doc { padding-bottom: 40px; overflow-x: auto; }
+/* 3.0.5: the document itself keeps the phone's plain font; Swift's own font is for the bars and
+   messages around it (and the few parts of Swift's own inside: the ZIP list, Show more, sheet headings). */
+#doc { padding-bottom: 40px; overflow-x: auto; font-family: sans-serif; }
 .flow { max-width: 760px; margin: 0 auto; padding: 16px 18px; overflow-wrap: break-word; }
 .flow p { margin: 0 0 0.8em; }
 .flow h2.slide-title { font-size: 1.1em; margin: 1.4em 0 0.5em; color: var(--accent); }
@@ -190,6 +193,7 @@ pre.text {
   font: 13px/1.55 monospace; color: var(--text);
 }
 .showmore {
+  font-family: var(--ui);
   display: block; margin: 12px auto 24px; padding: 10px 20px; border-radius: 20px;
   background: var(--surface); color: var(--accent); font-weight: 600; border: 1px solid var(--line);
 }
@@ -274,7 +278,7 @@ table.grid td, table.grid th {
 /* 2.8: the cells look as in Excel (white, its grid lines, the sheet's own colours); the row and
    column headings follow Swift's colours. */
 table.grid td { background: #fff; color: #000; border-color: #d9d9d9; font-family: Calibri, Carlito, sans-serif; }
-table.grid th { position: sticky; z-index: 2; background: var(--bg); color: var(--muted); font-weight: 600; text-align: center; }
+table.grid th { position: sticky; z-index: 2; background: var(--bg); color: var(--muted); font-family: var(--ui); font-weight: 600; text-align: center; }
 table.grid thead th { top: 0; }
 table.grid th.row { left: 0; z-index: 1; min-width: 40px; }
 table.grid thead th.corner { left: 0; z-index: 4; }
@@ -312,7 +316,7 @@ table.grid td.splitc { border-right: 2px solid var(--muted); }
   transition: opacity 0.25s;
 }
 #show .bar.fade { opacity: 0; pointer-events: none; }
-#show .bar span { flex: 1; text-align: center; font-weight: 600; }
+#show .bar span { flex: 1; text-align: center; font-weight: 600; font-variant-numeric: tabular-nums; }
 #show .bar button { color: #fff; padding: 8px 14px; border-radius: 18px; background: rgba(255, 255, 255, 0.14); font-weight: 600; }
 #show .shownotes {
   position: absolute; left: 0; right: 0; bottom: 52px; max-height: 40vh; overflow-y: auto;
@@ -329,18 +333,19 @@ table.grid td.splitc { border-right: 2px solid var(--muted); }
   display: flex; align-items: center; padding: 0 14px; gap: 8px; font-size: 12px; color: var(--muted); background: var(--bg);
 }
 #bookfoot #bookleft { flex: 1; }
+#bookfoot { font-variant-numeric: tabular-nums; }
 #bookbar { position: absolute; left: 0; right: 0; top: 0; height: 2px; background: var(--line); }
 #bookdone { height: 100%; width: 0; background: var(--accent); }
 
 /* ZIP files (2.5) */
-.ziplist { max-width: 760px; margin: 0 auto; padding: 8px 0 24px; }
+.ziplist { max-width: 760px; margin: 0 auto; padding: 8px 0 24px; font-family: var(--ui); }
 .ziplist .folder { padding: 14px 18px 4px; color: var(--muted); font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
 .ziplist button {
   display: flex; align-items: center; gap: 12px; width: 100%; padding: 10px 16px; text-align: left;
 }
 .ziplist button:active { background: var(--line); }
 .ziplist button.off { opacity: 0.55; }
-.ziplist .zbadge { flex: none; width: 40px; height: 26px; border-radius: 6px; font: 600 10px/26px sans-serif; text-align: center; color: #fff; }
+.ziplist .zbadge { flex: none; width: 40px; height: 26px; border-radius: 6px; font: 600 10px/26px var(--ui); text-align: center; color: #fff; }
 .ziplist .zname { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .ziplist .zsize { flex: none; color: var(--muted); font-size: 13px; }
 
@@ -388,5 +393,5 @@ table.grid td.splitc { border-right: 2px solid var(--muted); }
 #panel dl.details dd { margin: 0; overflow-wrap: anywhere; }
 
 /* 3.0: under a very big sheet's first rows. */
-.sheetmore { padding: 12px 16px 24px; color: var(--muted); font-size: 14px; text-align: center; }
+.sheetmore { padding: 12px 16px 24px; color: var(--muted); font-family: var(--ui); font-size: 14px; text-align: center; }
 .sheetmore p { margin: 0 0 4px; }

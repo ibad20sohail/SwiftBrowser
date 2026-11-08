@@ -203,12 +203,12 @@ object TorrentSheet {
             body.addView(warning(a, "It has a Windows program ($names). Programs can't run on a phone, and in a torrent they are often malware, so they are left unticked."))
         }
         if (!TorrentFiles.phonePlays10Bit && (TorrentFiles.looks10Bit(ti.name()) || entries.any { it.video && TorrentFiles.looks10Bit(it.name) })) {
-            body.addView(warning(a, "Its videos look like 10-bit HEVC (the name says so). This phone's chip can't play that kind of video: look for an x264 or 8-bit version instead."))
+            body.addView(warning(a, "Its videos look like 10-bit HEVC (the name says so). Your phone's chip can't play that kind of video: look for an x264 or 8-bit version instead."))
         }
 
         val boxes = ArrayList<Pair<TorrentFiles.Entry, CheckBox>>()
-        val space = Ui.text(a, Ui.Type.BODY_SECONDARY, "").apply { setPadding(Ui.dp(a, 24), Ui.dp(a, 12), Ui.dp(a, 24), 0) }
-        val go = button(a, "") {}
+        val space = Ui.steadyFigures(Ui.text(a, Ui.Type.BODY_SECONDARY, "").apply { setPadding(Ui.dp(a, 24), Ui.dp(a, 12), Ui.dp(a, 24), 0) })
+        val go = button(a, "") {}.also { Ui.steadyFigures(it) }
         var allBox: CheckBox? = null
         var quiet = false
         val free = freeSpace()

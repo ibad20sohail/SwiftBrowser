@@ -29,10 +29,8 @@ object Licences {
             dialog.dismiss()
             open(url)
         }
-        for ((i, c) in LicencesData.components.withIndex()) {
-            if (i > 0) col.addView(Ui.divider(a, 24))
-            col.addView(entry(a, c, go))
-        }
+        // 3.0.5: no lines between them: each is a short block of text with space around it.
+        for (c in LicencesData.components) col.addView(entry(a, c, go))
         dialog = Sheets.sheet(a, col)
         dialog.showImmersive()
     }

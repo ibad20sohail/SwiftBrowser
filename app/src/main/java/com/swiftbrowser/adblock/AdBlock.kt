@@ -19,15 +19,15 @@ enum class AdLevel(val key: String, val label: String, val summary: String) {
     ),
     BALANCED(
         "balanced", "Balanced",
-        "Blocks ads, trackers, malware sites and pop-ups that open without a tap. Rarely breaks sites.",
+        "Blocks ads, trackers, harmful sites and pop-ups that open without a tap. Rarely breaks sites.",
     ),
     HIGH(
         "high", "High",
-        "Also blocks pop-ups and redirects to other sites, mobile ads, ad overlays and fake login (phishing) sites.",
+        "Also blocks pop-ups and jumps to other sites, ads made for phones, ads laid over pages and fake login (phishing) sites.",
     ),
     EXTREME(
         "extreme", "Extreme",
-        "Also hides cookie notices and other annoyances, and blocks all third-party scripts and frames. " +
+        "Also hides cookie notices and other annoyances, and blocks everything a site loads from other companies. " +
             "Strongest, but can stop video players: if a video won't load, set that site to High.",
     );
 
@@ -45,6 +45,9 @@ enum class AdLevel(val key: String, val label: String, val summary: String) {
  * redirect rules ([NavPolicy]).
  */
 object AdBlock {
+    /** 3.0.5: the page view of [wakeUp] closes by then even if the ad blocker never gets ready. */
+    private const val WAKE_LIMIT_MS = 60_000L
+
     private lateinit var prefs: Prefs
     private lateinit var db: Db
     private val overrides = LinkedHashMap<String, AdLevel>()
@@ -198,6 +201,8 @@ object AdBlock {
             }
         }, "swift")
         L.d("uBlock Origin ${ext.metaData.version} attached")
+        // 3.0.5: the start-up screen goes on from "Starting the browser" to the ad blocker.
+        notifyListeners()
     }
 
     private val main = Handler(Looper.getMainLooper())
@@ -210,6 +215,28 @@ object AdBlock {
      * after 8 s, and once one had, later ones didn't wait at all; uBO was ready 26 s after a cold start
      * in a test).
      */
+    /** 3.0.5: the page view that starts the ad blocker ([wakeUp]), while it's open. */
+    private var waker: org.mozilla.geckoview.GeckoSession? = null
+
+    /**
+     * 3.0.5: starts the ad blocker as Swift opens on the home page. The engine starts extensions only
+     * after a page view has been opened and it has gone idle (GeckoView 143), so with the home page
+     * open it waited until the first page was asked for, which then waited 3 seconds and loaded
+     * without blocking. A page view that shows nothing is opened here, and closes when the ad blocker
+     * is ready. (With a site open its own page view starts it; opening one earlier gains nothing.)
+     */
+    fun wakeUp() {
+        if (ready || global == AdLevel.OFF || waker != null) return
+        val session = org.mozilla.geckoview.GeckoSession(org.mozilla.geckoview.GeckoSessionSettings.Builder().build())
+        waker = session
+        session.open(com.swiftbrowser.engine.Engine.runtime)
+        session.setActive(false)
+        whenReady(WAKE_LIMIT_MS) {
+            session.close()
+            waker = null
+        }
+    }
+
     fun whenReady(timeoutMs: Long, action: () -> Unit) {
         if (ready || global == AdLevel.OFF) {
             action()

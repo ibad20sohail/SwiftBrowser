@@ -16,7 +16,7 @@ import kotlin.math.roundToInt
  * Everything here runs on the main thread.
  */
 object SoundEffects {
-    /** What this phone's equalizer offers: its bands (levels in millibels, middles in milliHertz) and presets. */
+    /** What the phone's equalizer offers: its bands (levels in millibels, middles in milliHertz) and presets. */
     class Info(
         val bands: Int,
         val minLevel: Int,
@@ -56,7 +56,7 @@ object SoundEffects {
         val e = own ?: try {
             Equalizer(0, session)
         } catch (t: Throwable) {
-            L.w("Player: no equalizer on this phone", t)
+            L.w("Player: no equalizer on the phone", t)
             return null
         }
         info = try {

@@ -9,7 +9,7 @@ import kotlin.math.hypot
  * them: from the cover's main colour (PictureColours), a soft background (light: tone 95 with a
  * little of the colour; dark: tone 10), and a strong tone of it for the play button and the seek bar.
  * Checked for contrast with Contrast: the controls 3:1 on the background (WCAG's measure for parts
- * you work), the play button's icon and all text 4.5:1. A grey cover, or none, keeps Swift's colours.
+ * you work), the play button's icon, the chips' words (3.0.5) and all text 4.5:1. A grey cover, or none, keeps Swift's colours.
  *
  * Worked out off the main thread ([of]) and kept per song ([remember]), so a song played again, or
  * the screen turned, shows its colours at once. [scheme] is plain maths, tested on the PC
@@ -23,10 +23,12 @@ internal object CoverColours {
         val accent: Int,
         /** The play button's icon. */
         val onAccent: Int,
-        /** The rest of the seek bar. */
+        /** The rest of the seek bar; 3.0.5: and the chips under the title (Night sound, A-B…), a soft tone of the cover. */
         val track: Int,
         val text: Int,
         val secondary: Int,
+        /** 3.0.5: the chips' words and marks. */
+        val onTrack: Int,
     )
 
     /** What the controls need against the background (WCAG 2.1, non-text contrast). */
@@ -63,6 +65,7 @@ internal object CoverColours {
             background, accent, onAccent, track,
             Contrast.readable(text, listOf(background), Contrast.TEXT, toward),
             Contrast.readable(secondary, listOf(background), Contrast.TEXT, toward),
+            Contrast.readable(text, listOf(track), Contrast.TEXT, toward),
         )
     }
 
@@ -74,7 +77,7 @@ internal object CoverColours {
         PictureColours.seeds(cover, 1).firstOrNull()?.let { scheme(it, night, text, secondary) }
 
     /** Kept for a grey cover (no colours of its own), so it isn't looked at again. */
-    val NONE = Scheme(0, 0, 0, 0, 0, 0)
+    val NONE = Scheme(0, 0, 0, 0, 0, 0, 0)
 
     private val kept = object : LinkedHashMap<String, Scheme>(16, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Scheme>?): Boolean = size > 64

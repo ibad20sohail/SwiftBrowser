@@ -309,7 +309,8 @@ class TabDelegates(private val tab: Tab) :
         // 3.0.4: a page that loaded without saying its colour (an error page, a page the helper doesn't
         // run in) doesn't keep the last page's in the address bar. Its word comes before it finishes
         // loading (at DOMContentLoaded), so a moment's wait is plenty.
-        if (tab.siteColourStale) handler.postDelayed(dropStaleColour, 800)
+        // 3.0.5: a load that was stopped left the page that was there, and its colour with it.
+        if (success && tab.siteColourStale) handler.postDelayed(dropStaleColour, 800)
     }
 
     /** 3.0.4: see onPageStop. */

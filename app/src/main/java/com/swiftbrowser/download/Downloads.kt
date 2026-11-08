@@ -462,7 +462,7 @@ object Downloads {
                 write(File(item.filePath))
                 true
             } catch (e: Exception) {
-                L.w("Saving ${item.fileName} failed", e)
+                L.w("Saving a download failed (${e.javaClass.simpleName})")
                 false
             }
             if (ok) {
@@ -631,7 +631,7 @@ object Downloads {
      */
     private fun failed(item: Item, e: Throwable) {
         val p = DownloadRules.explain(e)
-        L.w("Download ${item.id} failed (${p.why.name.lowercase()})", e)
+        L.w("Download ${item.id} failed (${p.why.name.lowercase()}, ${e.javaClass.simpleName})")
         item.status = FAILED
         item.error = p.text
         item.extra.put("why", p.why.name)
@@ -808,7 +808,7 @@ object Downloads {
         }
         when (DownloadRules.convert(bytes, free)) {
             DownloadRules.Convert.TOO_BIG -> {
-                addNote(item, "${keptAs(item)}: it's too big to become one MP4 on this phone")
+                addNote(item, "${keptAs(item)}: it's too big to become one MP4 on your phone")
                 sound?.let { keepApart(item, it) }
                 return
             }

@@ -114,6 +114,8 @@ class SuggestionAdapter(
         if (favicon != null) {
             h.icon.imageTintList = null
             h.icon.setImageBitmap(favicon)
+            // 3.0.5: a little dimmer in the dark look and on incognito's dark list.
+            SoftPictures.apply(h.icon, Palette.isNight(ctx) || incognito)
         } else {
             h.icon.imageTintList = ColorStateList.valueOf(soft)
         }

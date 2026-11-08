@@ -5,6 +5,13 @@
          site's name 16 dp more with four buttons. -->
     <dimen name="toolbar_button_width">44dp</dimen>
 
+    <!-- 3.0.5: the same look on every screen (Ui in Kit.kt has the same numbers for code): the side
+         margin, title bars and search boxes, and how tall a row is at least. -->
+    <dimen name="side_margin">16dp</dimen>
+    <dimen name="title_bar">52dp</dimen>
+    <dimen name="search_box">44dp</dimen>
+    <dimen name="row_two_lines">64dp</dimen>
+
     <!-- 3.0.4: the text sizes of Ui.Type (Kit.kt), so the layout files use the same scale. -->
     <dimen name="text_display">30sp</dimen>
     <dimen name="text_headline">23sp</dimen>

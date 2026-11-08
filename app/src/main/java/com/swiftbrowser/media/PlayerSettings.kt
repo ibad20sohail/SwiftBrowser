@@ -151,10 +151,10 @@ object PlayerSettings {
         set(v) = sp.edit { putBoolean(NIGHT_SOUND, v) }
 
     fun rotationLabel(key: String) = when (key) {
-        ROTATE_SENSOR -> "Turn with the phone"
-        ROTATE_LANDSCAPE -> "Landscape"
-        ROTATE_PORTRAIT -> "Portrait"
-        else -> "Auto (as the video is)"
+        ROTATE_SENSOR -> "Turn with your phone"
+        ROTATE_LANDSCAPE -> "Always sideways"
+        ROTATE_PORTRAIT -> "Always upright"
+        else -> "Automatic (as the video is)"
     }
 
     /** "1×", "1.25×", "0.5×". */

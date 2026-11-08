@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 3.0.5: the downloads drawing of an empty screen, the soft tone (EmptyArt tints it at runtime). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="120dp"
+    android:height="120dp"
+    android:viewportWidth="120"
+    android:viewportHeight="120">
+    <path
+        android:fillColor="@android:color/white"
+        android:pathData="M28,70 H92 A14,14 0 0 1 106,84 V94 A14,14 0 0 1 92,108 H28 A14,14 0 0 1 14,94 V84 A14,14 0 0 1 28,70 Z" />
+    <path
+        android:fillColor="@android:color/white"
+        android:pathData="M26,22 Q27.44,28.56 34,30 Q27.44,31.44 26,38 Q24.56,31.44 18,30 Q24.56,28.56 26,22 Z" />
+    <path
+        android:fillColor="@android:color/white"
+        android:pathData="M92,26 A4,4 0 1 1 100,26 A4,4 0 1 1 92,26 Z" />
+    <path
+        android:fillColor="@android:color/white"
+        android:pathData="M85.5,44 A2.5,2.5 0 1 1 90.5,44 A2.5,2.5 0 1 1 85.5,44 Z" />
+</vector>

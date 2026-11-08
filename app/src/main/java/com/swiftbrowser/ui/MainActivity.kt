@@ -294,28 +294,40 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     /** What waits for the start screen to have gone (2.7), so its glide stays smooth. */
     private val afterStart = ArrayList<() -> Unit>()
 
+    /**
+     * 3.0.5: something asked for Swift while its start screen showed (a link, a shortcut, a
+     * notification). Android restoring a closed Swift also has saved state, which alone would mean
+     * "nothing new to open": this says there is.
+     */
+    private var intentWaits = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         setTheme(R.style.Theme_Swift)
         Looks.apply(this)
         appliedColors = Palette.signature
         super.onCreate(savedInstanceState)
         prefs = SwiftApp.prefs
-        // Rebuilt (a dark mode switch, a change of colours): at once, as before.
-        if (savedInstanceState != null) {
+        // Rebuilt (a dark mode switch, a change of colours): at once, as before. 3.0.5: only in a Swift
+        // that is already running. When Android closed it in the background it comes back with saved
+        // state too, and that is a real start, with the start screen.
+        if (savedInstanceState != null && SwiftApp.browserBuilt) {
             build(savedInstanceState)
             return
         }
         // Android shows no screen of its own while Swift starts (2.7, Theme.Swift.Launch): Swift's
         // start screen is drawn first, in your colours, and the browser is built right after it is
         // on screen.
-        val start = StartScreen(this).also { startScreen = it }
+        val opening = TabManager.tabToOpen()
+        val start = StartScreen(this, loading = opening != null && !opening.showsHome).also { startScreen = it }
         setContentView(start.view)
+        // 3.0.5: with the home page open, nothing would start the ad blocker until a page is asked for.
+        if (opening == null || opening.showsHome) AdBlock.wakeUp()
         // The status bar (until full screen hides it) in the same colour.
         window.statusBarColor = Palette.color(this, R.color.page_bg)
         WindowCompat.getInsetsController(window, window.decorView).isAppearanceLightStatusBars =
             resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK != Configuration.UI_MODE_NIGHT_YES
         applySystemBars()
-        val buildNow = Runnable { if (!isFinishing && !isDestroyed) build(null) }
+        val buildNow = Runnable { if (!isFinishing && !isDestroyed) build(savedInstanceState) }
         afterNextFrame { buildNow.run() }
         // Not drawn while the screen is off, say: built anyway.
         handler.postDelayed(buildNow, 1500)
@@ -345,8 +357,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         setContentView(R.layout.activity_main)
         Palette.paint(findViewById<View>(android.R.id.content))
         bindViews()
-        // 3.0.4: the bar's style first: a floating bar's room is a little taller (toolbarPx).
-        applyBarStyle()
+        toolbarPx = resources.getDimensionPixelSize(R.dimen.toolbar_height)
         applyToolbarPosition()
         setupToolbar()
         setupFindBar()
@@ -389,7 +400,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         // When it had to choose the tab, ensureCurrent told this screen already (2.6: not twice).
         if (had === tab) onTabSelected(tab)
         onTabsChanged()
-        if (savedInstanceState == null) handleIntent(intent)
+        if (savedInstanceState == null || intentWaits) handleIntent(intent)
+        intentWaits = false
         SwiftApp.messageAfterThemeChange?.let { m ->
             SwiftApp.messageAfterThemeChange = null
             root.post { if (!isFinishing) snack(m, long = true) }
@@ -450,13 +462,14 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         Downloads.all().filter { VpnUi.isSetupFile(it) }.mapTo(setupFilesSeen) { it.id }
         Downloads.addListener(setupFileListener)
         built = true
+        SwiftApp.browserBuilt = true
         startScreen?.let { start ->
             // Back on top of the browser just built, until that has been drawn once; then the logo
             // glides into the home page's (or the start screen fades, when a site is open).
             findViewById<android.view.ViewGroup>(android.R.id.content).addView(start.view)
             afterNextFrame {
                 if (isDestroyed) return@afterNextFrame
-                start.finish(home.logoMark.takeIf { home.visibility == View.VISIBLE }) {
+                start.finish(home.logoMark.takeIf { home.visibility == View.VISIBLE }, covered = startup.visibility == View.VISIBLE) {
                     startScreen = null
                     afterStart.forEach { it() }
                     afterStart.clear()
@@ -476,7 +489,12 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         // While the start screen shows, the browser handles it once built.
-        if (built) handleIntent(intent) else setIntent(intent)
+        if (built) {
+            handleIntent(intent)
+        } else {
+            setIntent(intent)
+            intentWaits = true
+        }
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -585,7 +603,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
                 "share" -> {
                     val ok = UrlUtils.isHttp(tab.url)
                     b.isEnabled = ok
-                    b.alpha = if (ok) 1f else 0.4f
+                    b.alpha = if (ok) 1f else Ui.DISABLED_ALPHA
                 }
                 "bookmark" -> {
                     val page = "${tab.profileId} ${tab.url}"
@@ -596,7 +614,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
                     val on = b.tag == true
                     b.setImageResource(if (on) R.drawable.ic_star else R.drawable.ic_star_border)
                     if (on) tint = barAccent()
-                    b.alpha = if (UrlUtils.isHttp(tab.url)) 1f else 0.4f
+                    b.alpha = if (UrlUtils.isHttp(tab.url)) 1f else Ui.DISABLED_ALPHA
                 }
                 "vpn" -> {
                     val on = com.swiftbrowser.vpn.Vpn.state == com.swiftbrowser.vpn.Vpn.State.ON
@@ -766,6 +784,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         shownVpnState = state
         updateVpnBadge()
         updateToolbarExtras()
+        // 3.0.5: the start-up screen says when pages are waiting for the VPN.
+        if (startupFor != null) updateStartupCover()
         if (before == null || before == state) return
         when (state) {
             com.swiftbrowser.vpn.Vpn.State.ON -> {
@@ -847,14 +867,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         Looks.watchClock(true)
         // 3.0.4: the home screen widget catches up with the look ("Dark at night" may have turned meanwhile).
         SearchWidget.refresh(this)
-        // Settings → Look & screen may have moved the address bar, or (3.0.4) changed its style.
-        if ((prefs.barStyle == Prefs.BAR_FLOATING) != floatingBar) {
-            applyBarStyle()
-            applyToolbarPosition()
-            barHeightChanged()
-        } else if (bottomBar != prefs.toolbarAtBottom) {
-            applyToolbarPosition()
-        }
+        // Settings → Look & screen may have moved the address bar.
+        if (bottomBar != prefs.toolbarAtBottom) applyToolbarPosition()
         // 3.0.4: ... or turned websites' colours in it on or off.
         barKey = null
         updateBarColours(animate = false)
@@ -935,6 +949,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             return
         }
         com.swiftbrowser.vpn.Vpn.removeListener(vpnListener)
+        handler.removeCallbacks(startupPageLimit)
+        handler.removeCallbacks(startupPageStopped)
         com.swiftbrowser.core.GoogleAccounts.removeListener(accountListener)
         ptrSpin?.cancel()
         AdBlock.removeListener(adListener)
@@ -1019,6 +1035,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         findCount = findViewById(R.id.find_count)
         startup = findViewById(R.id.startup)
         findViewById<ImageView>(R.id.startup_logo).setImageDrawable(Ui.logo(this))
+        // 3.0.5: exactly where the start screen has them, which this cover takes over from.
+        StartScreen.keepCentred(this, startup, listOf(findViewById<View>(R.id.startup_logo), findViewById<View>(R.id.startup_steps)))
         // Drawn above the pull-to-refresh circle, without a shadow on the page.
         appBar.elevation = dp(8f)
         appBar.outlineProvider = null
@@ -1129,6 +1147,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             val open = TabManager.profileTabs().firstOrNull { TabRules.sameAddress(it.url, url) }
             if (open != null) {
                 if (open !== current) TabManager.select(open)
+                // 3.0.5: with the home page over it the link would seem to do nothing.
+                if (open.homeShown) leaveHome(open)
             } else {
                 TabManager.newTab(url, incognito = false).backTo = Docs.BACK_APP
             }
@@ -1207,6 +1227,10 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         }
         urlMic.setOnClickListener { voiceSearch() }
         urlScan.setOnClickListener { scanQr() }
+        // 3.0.5: the bar's width changes as its buttons come and go: whether the address fades is looked at again.
+        urlEdit.addOnLayoutChangeListener { _, left, _, right, _, oldLeft, _, oldRight, _ ->
+            if (!editing && right - left != oldRight - oldLeft) Ui.fadeTextEnd(urlEdit, on = true)
+        }
     }
 
     /** The address bar was held: letting go doesn't start typing. */
@@ -1305,6 +1329,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             else -> UrlUtils.searchQuery(tab.url) ?: tab.url
         }
         urlBox.visibility = View.VISIBLE
+        // 3.0.5: the whole address plainly while typing: no fading at its end.
+        Ui.fadeTextEnd(urlEdit, on = false)
         completing = true
         urlEdit.setText(text)
         completing = false
@@ -1342,8 +1368,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         urlBox.translationY = dy
         urlBox.animate().translationY(0f).setDuration(240).setInterpolator(DecelerateInterpolator(1.8f)).withEndAction {
             toolbar.clipChildren = true
-            // 3.0.4: a floating bar's shadow reaches past its room (applyBarStyle).
-            (appBar as android.view.ViewGroup).clipChildren = !floatingBar
+            (appBar as android.view.ViewGroup).clipChildren = true
         }.start()
         box.animate().cancel()
         box.animate().alpha(0f).translationY(-dy / 3f).setDuration(160).start()
@@ -1439,7 +1464,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         if (intent.resolveActivity(packageManager) == null) {
             MaterialAlertDialogBuilder(this)
                 .setTitle("Voice search isn't available")
-                .setMessage("Voice search uses Google's speech recognition, which comes with the Google app. Install or enable the Google app on this phone to use it.")
+                .setMessage("Voice search uses Google's speech recognition, which comes with the Google app. Install or enable the Google app on your phone to use it.")
                 .setPositiveButton(android.R.string.ok, null)
                 .showImmersive()
             return
@@ -1568,6 +1593,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         if (text != shownUrlText) {
             shownUrlText = text
             urlEdit.setText(text)
+            // 3.0.5: text too long for the bar fades out at its end (its own check; nothing changes while it fits).
+            Ui.fadeTextEnd(urlEdit, on = true)
         }
         val page = tab != null && !tab.isBlank && query == null && !reader && !saved && !blocked && !document
         // A secure site shows its own icon; only a site that isn't secure gets a warning.
@@ -1783,10 +1810,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         SecureScreen.forIncognito(this, incognito)
     }
 
-    // ------------------------------------------------------------------ 3.0.4: the bar's colours and style
-
-    /** The bar is a floating pill (Settings → Look & screen → Address bar style). */
-    private var floatingBar = false
+    // ------------------------------------------------------------------ 3.0.4: the bar's colours
 
     /** The colours the bar shows now (on their way to new ones while they change). */
     private var barShown: BarColours? = null
@@ -1798,114 +1822,11 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     /** Whether the status bar's icons are dark (on a light colour), as last set. */
     private var statusIconsDark: Boolean? = null
 
-    /** The floating bar's pill: its colour and, where a shadow wouldn't show, its outline (fully round: see BarShape). */
-    private val pillShape = android.graphics.drawable.GradientDrawable().apply { cornerRadius = 1000f }
-
-    /** Around the floating pill, where the page doesn't show: at the top, and over Swift's own pages. */
-    private val barSurround = android.graphics.drawable.ColorDrawable()
-
     /** The address box's and the find box's shapes, tinted in the bar's colours. */
     private val urlShape by lazy { ContextCompat.getDrawable(this, R.drawable.bg_url)!!.mutate() }
     private val findShape by lazy { ContextCompat.getDrawable(this, R.drawable.bg_url)!!.mutate() }
 
-    /** The find bar as a floating pill: the pill, what is around it, and the bar's own padding. */
-    private val findPill = android.graphics.drawable.GradientDrawable().apply { cornerRadius = 1000f }
-    private val findSurround = android.graphics.drawable.ColorDrawable()
-    private var findPadding: IntArray? = null
     private val findButtons by lazy { listOf<ImageView>(findViewById(R.id.find_prev), findViewById(R.id.find_next), findViewById(R.id.find_close)) }
-
-    /**
-     * The address bar's style: across the screen as before, or a fully rounded pill with a little room
-     * around it (BarShape: 8 dp at the sides, 6 dp from the screen's edge). Its room is 6 dp taller when
-     * it floats, so the pill keeps the buttons' size; the engine keeps room for that height (barPx).
-     * At the bottom of the screen the page shows around the pill: the engine draws the page under the
-     * bar there. At the top it can't: the page view is moved down by the bar's height (GeckoView has no
-     * way to keep a top bar's room while drawing under it), so Swift's page colour is around it there.
-     * No blur (too slow on this phone): the pill is opaque, with a soft shadow, or an outline in the
-     * dark look and incognito.
-     */
-    private fun applyBarStyle() {
-        floatingBar = prefs.barStyle == Prefs.BAR_FLOATING
-        toolbarPx = resources.getDimensionPixelSize(R.dimen.toolbar_height) + if (floatingBar) dp(BarShape.EXTRA_DP) else 0
-        val lp = appBar.layoutParams
-        lp.height = toolbarPx
-        appBar.layoutParams = lp
-        // The pill's shadow reaches a little past the bar's room.
-        (appBar as android.view.ViewGroup).clipChildren = !floatingBar
-        if (floatingBar) {
-            toolbar.background = pillShape
-        } else {
-            toolbar.background = android.graphics.drawable.ColorDrawable(barShown?.bar ?: color(R.color.toolbar_bg))
-            toolbar.elevation = 0f
-            appBar.background = null
-        }
-        toolbarDivider.visibility = if (floatingBar) View.INVISIBLE else View.VISIBLE
-        // The loading line is drawn over the pill (it would be under its shadow), without a shadow of its own.
-        progress.outlineProvider = null
-        progress.elevation = if (floatingBar) dp(4f) else 0f
-        styleFindBar()
-        barKey = null
-    }
-
-    /** The floating pill and its loading line where the bar is now (at the top or the bottom of the screen). */
-    private fun placeBarParts() {
-        val m = if (floatingBar) BarShape.pillMargins(bottomBar, dp(BarShape.SIDE_DP), dp(BarShape.EDGE_DP), dp(BarShape.GAP_DP)) else IntArray(4)
-        (toolbar.layoutParams as FrameLayout.LayoutParams).let {
-            it.setMargins(m[0], m[1], m[2], m[3])
-            toolbar.layoutParams = it
-        }
-        // Along the pill's edge on the page's side, clear of its round ends; across the bar otherwise.
-        val p = if (floatingBar) BarShape.progressMargins(bottomBar, toolbarPx, m) else IntArray(4)
-        (progress.layoutParams as FrameLayout.LayoutParams).let {
-            it.setMargins(p[0], p[1], p[2], p[3])
-            progress.layoutParams = it
-        }
-    }
-
-    /** The bar's room changed height (its style): the engine keeps room for the new height, and the bar shows as it did. */
-    private fun barHeightChanged() {
-        if (fullscreenTab != null) return
-        settleAnim?.cancel()
-        settleAnim = null
-        gecko.setDynamicToolbarMaxHeight(barPx)
-        applyToolbarShown(if (toolbarWanted) barPx.toFloat() else 0f)
-    }
-
-    /**
-     * The find bar as the address bar is: across the screen, or a floating pill above the screen's
-     * bottom edge (its own room stays as it was; around the pill is the page's colour).
-     */
-    private fun styleFindBar() {
-        val pad = findPadding ?: intArrayOf(findBar.paddingStart, findBar.paddingTop, findBar.paddingEnd, findBar.paddingBottom).also { findPadding = it }
-        if (!floatingBar) {
-            findBar.background = android.graphics.drawable.ColorDrawable(barShown?.bar ?: color(R.color.toolbar_bg))
-            findBar.setPaddingRelative(pad[0], pad[1], pad[2], pad[3])
-            findBar.outlineProvider = android.view.ViewOutlineProvider.BACKGROUND
-            findBar.elevation = dp(4f)
-            return
-        }
-        val side = dp(BarShape.SIDE_DP)
-        val top = dp(BarShape.GAP_DP)
-        val bottom = dp(BarShape.EDGE_DP)
-        findBar.background = android.graphics.drawable.LayerDrawable(arrayOf(findSurround, android.graphics.drawable.InsetDrawable(findPill, side, top, side, bottom)))
-        findBar.setPaddingRelative(pad[0] + side, top, pad[2] + side, bottom)
-        // Its shadow follows the pill, not the whole bar.
-        findBar.outlineProvider = object : android.view.ViewOutlineProvider() {
-            override fun getOutline(view: View, outline: android.graphics.Outline) {
-                val h = view.height - top - bottom
-                outline.setRoundRect(side, top, view.width - side, view.height - bottom, h / 2f)
-            }
-        }
-    }
-
-    /** Where a shadow wouldn't show (the dark look, incognito), the floating pill has an outline instead. */
-    private fun barOutlined(): Boolean = Palette.isNight(this) || current?.incognito == true
-
-    /** The page shows around a floating bar at the bottom: while a web page is on screen (not Swift's own, nor typing). */
-    private fun barOverPage(): Boolean {
-        val tab = current ?: return false
-        return !tab.showsHome && !tab.crashed && !editing && fullscreenTab == null
-    }
 
     /**
      * The website's colour for the bar now (its theme-color, fit for the bar: BarTones.forBar), or null
@@ -1923,26 +1844,18 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     /** The bar's colours for [tab], with the website's colour [site] (null: Swift's own, or incognito's). */
     private fun barColoursFor(tab: Tab?, site: Int?): BarColours {
         val incognito = tab?.incognito == true
-        val surround = color(
-            when {
-                incognito -> R.color.incognito_bg
-                editing -> R.color.toolbar_bg
-                tab?.showsHome == true -> R.color.home_bg
-                else -> R.color.page_bg
-            },
-        )
         val accent = Ui.accent(this)
         val danger = Ui.danger(this)
-        if (site != null) return BarColours.forSite(site, accent, danger, surround)
+        if (site != null) return BarColours.forSite(site, accent, danger)
         return if (incognito) {
             BarColours(
                 color(R.color.incognito_toolbar), color(R.color.incognito_url), color(R.color.incognito_text),
-                color(R.color.incognito_hint), color(R.color.incognito_url), accent, danger, surround,
+                color(R.color.incognito_hint), color(R.color.incognito_url), accent, danger,
             )
         } else {
             BarColours(
                 color(R.color.toolbar_bg), color(R.color.surface_alt), color(R.color.text_primary),
-                color(R.color.text_secondary), color(R.color.divider), accent, danger, surround,
+                color(R.color.text_secondary), color(R.color.divider), accent, danger,
             )
         }
     }
@@ -1957,12 +1870,12 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         if (!::gecko.isInitialized) return
         val tab = current
         val site = siteColourFor(tab)
-        val key = listOf(site, tab?.incognito == true, editing, tab?.showsHome == true, tab?.crashed == true, fullscreenTab != null, floatingBar, bottomBar)
+        val key = listOf(site, tab?.incognito == true, editing, tab?.showsHome == true, tab?.crashed == true, fullscreenTab != null)
         if (key == barKey) return
         barKey = key
         val target = barColoursFor(tab, site)
         // The status bar's icons dark or light at once (changing them redraws the system's bars).
-        val status = if (floatingBar) target.surround else target.bar
+        val status = target.bar
         val dark = Contrast.ratio(BarTones.BLACK, status) > Contrast.ratio(BarTones.WHITE, status)
         if (dark != statusIconsDark) {
             statusIconsDark = dark
@@ -1986,19 +1899,9 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     /** Paints the bar and what belongs to it in [c]: also each step while its colours change. */
     private fun paintBar(c: BarColours) {
         barShown = c
-        val outlined = barOutlined()
-        if (floatingBar) {
-            pillShape.setColor(c.bar)
-            pillShape.setStroke(dp(1), if (outlined) c.outline else android.graphics.Color.TRANSPARENT)
-            toolbar.elevation = if (outlined) 0f else dp(3f)
-            barSurround.color = c.surround
-            val around = if (bottomBar && barOverPage()) null else barSurround
-            if (appBar.background !== around) appBar.background = around
-        } else {
-            toolbar.setBackgroundColor(c.bar)
-        }
+        toolbar.setBackgroundColor(c.bar)
         toolbarDivider.setBackgroundColor(c.line)
-        window.statusBarColor = if (floatingBar) c.surround else c.bar
+        window.statusBarColor = c.bar
         urlShape.setTint(c.pill)
         urlEdit.setTextColor(c.text)
         urlEdit.setHintTextColor(c.icon)
@@ -2013,21 +1916,14 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         updateToolbarExtras()
         styleTabCount()
         // The find bar in the same colours (2.6).
-        if (floatingBar) {
-            findPill.setColor(c.bar)
-            findPill.setStroke(dp(1), if (outlined) c.outline else android.graphics.Color.TRANSPARENT)
-            findSurround.color = c.surround
-            findBar.elevation = if (outlined) 0f else dp(3f)
-        } else {
-            findBar.setBackgroundColor(c.bar)
-        }
+        findBar.setBackgroundColor(c.bar)
         findShape.setTint(c.pill)
         findEdit.setTextColor(c.text)
         findEdit.setHintTextColor(c.icon)
         androidx.core.widget.TextViewCompat.setCompoundDrawableTintList(findEdit, icons)
         findCount.setTextColor(c.icon)
         for (b in findButtons) b.imageTintList = icons
-        groupStrip?.paint(c, floatingBar, bottomBar, outlined)
+        groupStrip?.paint(c)
     }
 
     // ------------------------------------------------------------------ home page
@@ -2594,6 +2490,10 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     }
 
     override fun onTabUpdated(tab: Tab) {
+        if (tab === startupPage) {
+            handler.removeCallbacks(startupPageStopped)
+            if (!tab.loading && tab.restoreToken == 0) handler.postDelayed(startupPageStopped, START_PAGE_STOPPED_MS)
+        }
         if (tab !== current) {
             // 3.0.4: another tab of the open tab's group has a new title or page: its chip follows.
             if (tab.groupId != null && tab.groupId == current?.groupId) showGroupStrip()
@@ -2725,7 +2625,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
     /**
      * With "Swift player for website videos" on, a playing video gets a small button that opens it
-     * in Swift's own player (smoother on this phone, with gestures and subtitles).
+     * in Swift's own player (smoother on older phones, with gestures and subtitles).
      */
     private fun updateSitePlayerChip() {
         val tab = current
@@ -2859,8 +2759,6 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             (v.layoutParams as FrameLayout.LayoutParams).gravity = edge
             v.layoutParams = v.layoutParams
         }
-        // 3.0.4: a floating bar's pill and its loading line, on this side.
-        placeBarParts()
         // Views that fill the page area leave the toolbar's room at its end of the screen. 3.0.4: the
         // home page, the crash view and the suggestions show without the group strip; the covers
         // over the page leave its room too (placePageCovers).
@@ -3122,8 +3020,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         val tab = current
         val group = tab?.let { TabManager.groupOf(it) }
         if (tab == null || group == null || stripPx == 0 || stripState() != TabRules.Strip.SHOWN) {
-            // 3.0.4: a floating bar has no hairline (the page shows around it).
-            toolbarDivider.visibility = if (floatingBar) View.INVISIBLE else View.VISIBLE
+            toolbarDivider.visibility = View.VISIBLE
             groupStrip?.let { if (it.visibility != View.GONE) it.visibility = View.GONE }
             return
         }
@@ -3173,7 +3070,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         strip.setLineAtTop(bottomBar)
         strip.translationY = appBar.translationY
         // 3.0.4: in the bar's colours and style (a pill of its own when the bar floats).
-        barShown?.let { strip.paint(it, floatingBar, bottomBar, barOutlined()) }
+        barShown?.let { strip.paint(it) }
     }
 
     /** How much of the bar shows (px): the group strip's room counts only while the strip itself shows. */
@@ -3392,7 +3289,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         if (resolved == null) {
             val fallback = intent.getStringExtra("browser_fallback_url")
             if (fallback != null && UrlUtils.isHttp(fallback)) TabManager.load(tab, fallback)
-            else snack("No app on this phone can open this link")
+            else snack("No app on your phone can open this link")
             return
         }
         val app = resolved.loadLabel(packageManager)
@@ -3599,7 +3496,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             actions += Sheets.Action(R.drawable.ic_share, "Share", primary = true) { share(link) }
             actions += Sheets.Action(R.drawable.ic_copy, "Copy link") { copy(link) }
             element.textContent?.trim()?.takeIf { it.isNotEmpty() && it != link }?.let { text ->
-                actions += Sheets.Action(R.drawable.ic_text_size, "Copy link text") { copy(text) }
+                actions += Sheets.Action(R.drawable.ic_link_text, "Copy link text") { copy(text) }
             }
             actions += Sheets.Action(R.drawable.ic_download, "Download link") { downloadUrl(tab, link) }
         }
@@ -3905,7 +3802,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             tab.parentId != null && !tab.pinned && TabManager.tabs.any { it.id == tab.parentId } -> TabManager.close(tab)
             // A document opened from Documents or Downloads returns there; one another app sent
             // closes and Android goes back to that app (2.6).
-            tab.backTo != null -> {
+            tab.backTo != null && !tab.pinned -> {
                 val to = tab.backTo
                 TabManager.close(tab)
                 when (to) {
@@ -3950,9 +3847,10 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     private val adListener: () -> Unit = { handler.post { if (!isDestroyed) onAdBlockerChanged() } }
 
     private fun onAdBlockerChanged() {
+        // 3.0.5: says what's loading now; the screen goes when the page is drawn, not at this moment.
+        updateStartupCover()
         if (!startupDone()) return
         AdBlock.removeListener(adListener)
-        hideStartup()
         if (!AdBlock.ready) return
         // 3.0: a page that loaded before it was ready (Load now, or one opened in the first seconds)
         // says so. uBlock Origin's sign for it ("!") can come a moment later.
@@ -3985,7 +3883,61 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     /** The tab whose page the start-up screen covers; null while it doesn't show. */
     private var startupFor: Tab? = null
 
-    /** What was put on the start-up screen (the page's picture, the note, Load now): taken off when it goes. */
+    /** 3.0.5: the tab whose page this start of Swift waits for until it is drawn (null: none, or it came). */
+    private var startupPage: Tab? = null
+
+    /** 3.0.5: the time limit for the page is running. */
+    private var startupLimitSet = false
+    private val startupPageLimit = Runnable {
+        startupPage = null
+        updateStartupCover()
+    }
+    private val startupText by lazy { findViewById<TextView>(R.id.startup_text) }
+
+    /**
+     * 3.0.5: the page finished loading but was never drawn (a page with nothing on it): the screen
+     * lets go a moment later. Only a moment later: a new tab's first, empty page finishes too, just
+     * before the real one starts.
+     */
+    private val startupPageStopped = Runnable {
+        startupPage?.let { if (!it.loading && it.restoreToken == 0) liftStartupCover(it) }
+    }
+
+    /** 3.0.5: the cover is on its way off ([liftStartupCover]). */
+    private var startupLifting = false
+
+    /**
+     * 3.0.5: the page the start-up screen waited for has been painted (or finished with nothing to
+     * paint). The engine says so a moment before the page reaches the screen, and lifting then showed
+     * an empty page: the cover goes once the screen really has it, which asking for a picture of the
+     * page waits for. One picture, once per start, and it can't hold anything up (the limit).
+     */
+    private fun liftStartupCover(tab: Tab) {
+        if (startupLifting) return
+        startupLifting = true
+        handler.removeCallbacks(startupPageStopped)
+        val lift = Runnable {
+            if (startupPage === tab && !isDestroyed) {
+                startupPage = null
+                updateStartupCover()
+            }
+        }
+        handler.postDelayed(lift, START_PAGE_DRAW_MS)
+        val drawn = {
+            handler.removeCallbacks(lift)
+            lift.run()
+        }
+        if (tab.session?.isOpen == true && gecko.session === tab.session) {
+            gecko.capturePixels().accept({ picture ->
+                picture?.recycle()
+                drawn()
+            }, { _ -> drawn() })
+        } else {
+            drawn()
+        }
+    }
+
+    /** What was put on the start-up screen (Load now): taken off when it goes. */
     private val startupExtras = ArrayList<View>()
     private var startupBottom: LinearLayout? = null
     private var loadNowButton: View? = null
@@ -3997,8 +3949,9 @@ class MainActivity : AppCompatActivity(), BrowserUi {
      * of an empty page. The home page needs neither, so it shows straight away.
      */
     private fun showStartupUntilReady() {
-        if (startupDone()) return
-        AdBlock.addListener(adListener)
+        // 3.0.5: at a real start with a site open, the screen also stays until that page is drawn.
+        if (startScreen != null) startupPage = current?.takeUnless { it.showsHome || pageAlreadyThere(it) }
+        if (!startupDone()) AdBlock.addListener(adListener)
         updateStartupCover()
     }
 
@@ -4006,15 +3959,35 @@ class MainActivity : AppCompatActivity(), BrowserUi {
      * 3.0: the page waits however long the ad blocker takes (8 s at most before, then it loaded
      * unfiltered); the screen covers it meanwhile and, 8 s on, offers to load it now without ad
      * blocking. It follows the open tab: a tab chosen meanwhile whose page waits too is covered, and a
-     * page the user opened, or one that doesn't wait, isn't.
+     * page the user opened, or one that doesn't wait, isn't. 3.0.5: it says what's loading, step by
+     * step, and at a real start it stays until the page is drawn ([startupPage]), so no empty screen
+     * shows between the ad blocker being ready and the page.
      */
     private fun updateStartupCover() {
         val tab = current
-        if (tab == null || tab.showsHome || !TabManager.waitsForAdBlocker(tab) || startupDone()) {
+        val waits = tab != null && TabManager.waitsForAdBlocker(tab) && !startupDone()
+        if (tab == null || tab.showsHome || !(waits || tab === startupPage)) {
             if (startupFor != null) hideStartup()
             return
         }
         if (startupFor !== tab) showStartupCover(tab)
+        showStartupStep(tab, waits)
+    }
+
+    /** 3.0.5: its page is still there from before (Swift's screen was closed, not Swift): nothing to wait for. */
+    private fun pageAlreadyThere(tab: Tab) = tab.session?.isOpen == true && tab.restoreToken == 0 && !tab.loading
+
+    /** 3.0.5: what's loading, on the line under the loader. */
+    private fun showStartupStep(tab: Tab, waits: Boolean) {
+        val step = StartupSteps.now(waits, AdBlock.extension != null, Engine.networkBlocked, com.swiftbrowser.vpn.Vpn.state == com.swiftbrowser.vpn.Vpn.State.CONNECTING)
+        Motion.swapText(startupText, StartupSteps.text(step, if (UrlUtils.isHttp(tab.url)) UrlUtils.siteName(tab.url) else ""))
+        // Only the ad blocker's wait can be skipped.
+        if (!waits && loadNowButton != null) removeLoadNow()
+        // Never stuck: a page that takes this long shows its own progress instead.
+        if (step == StartupSteps.Step.PAGE && !startupLimitSet) {
+            startupLimitSet = true
+            handler.postDelayed(startupPageLimit, START_PAGE_LIMIT_MS)
+        }
     }
 
     private fun showStartupCover(tab: Tab) {
@@ -4031,39 +4004,9 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         // 3.0: a tab chosen later is covered below the toolbar, which is in use (at start the screen
         // carries on from Swift's start screen).
         if (!first) coverBelowToolbar()
-        // The tab's last picture, if there is one, instead of the logo: the page seems to be back
-        // at once, with a small note at the bottom until it really loads.
-        Thumbnails.load(tab) { bmp ->
-            if (bmp != null && startupFor === tab && startup.alpha == 1f) showStartupPicture(bmp)
-        }
         handler.removeCallbacks(showLoadNow)
         val wait = LOAD_NOW_AFTER_MS - (SystemClock.uptimeMillis() - startupShownAt)
         if (wait <= 0) addLoadNow() else handler.postDelayed(showLoadNow, wait)
-    }
-
-    private fun showStartupPicture(bmp: android.graphics.Bitmap) {
-        val box = startup as FrameLayout
-        for (i in 0 until box.childCount) box.getChildAt(i).let { if (it !in startupExtras) it.visibility = View.GONE }
-        val picture = TopCropImageView(this).apply {
-            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-            setImageBitmap(bmp)
-            alpha = 0.85f
-        }
-        // Under the note and Load now.
-        box.addView(picture, 0, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
-        startupExtras += picture
-        startupBottom().addView(TextView(this).apply {
-            text = "Loading… the ad blocker is starting"
-            Ui.size(this, Ui.Type.CAPTION, keepFont = true)
-            setTextColor(color(Looks.accent.onPrimary))
-            val pad = dp(14f).toInt()
-            setPadding(pad, dp(8f).toInt(), pad, dp(8f).toInt())
-            background = android.graphics.drawable.GradientDrawable().apply {
-                cornerRadius = dp(18f)
-                setColor(color(Looks.accent.primary))
-            }
-        }, 0)
-        coverBelowToolbar()
     }
 
     /** Below the toolbar, which stays usable meanwhile. */
@@ -4091,7 +4034,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
     /** 3.0: 8 s on, the waiting page can be loaded at once, without the ad blocker. */
     private fun addLoadNow() {
-        if (startupFor == null || loadNowButton != null) return
+        val tab = startupFor ?: return
+        if (loadNowButton != null || !TabManager.waitsForAdBlocker(tab)) return
         val pad = dp(20f).toInt()
         val b = TextView(this).apply {
             text = "Load now, without blocking ads"
@@ -4136,8 +4080,18 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
     private fun startupDone() = AdBlock.ready || AdBlock.global == AdLevel.OFF
 
+    /** 3.0.5: the wait for the ad blocker is over, so its button goes. */
+    private fun removeLoadNow() {
+        loadNowButton?.let { b -> (b.parent as? android.view.ViewGroup)?.removeView(b) }
+        loadNowButton = null
+    }
+
     private fun hideStartup() {
         handler.removeCallbacks(showLoadNow)
+        handler.removeCallbacks(startupPageLimit)
+        handler.removeCallbacks(startupPageStopped)
+        startupLimitSet = false
+        startupLifting = false
         startupFor = null
         if (startup.visibility != View.VISIBLE) return
         startup.animate().alpha(0f).setDuration(200).withEndAction {
@@ -4155,7 +4109,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
                 if (editing || fullscreenTab != null || switcherOpen || quickMenu.isOpen) return false
                 if (startup.visibility == View.VISIBLE || findBar.visibility == View.VISIBLE) return false
                 if (!toolbarWanted || toolbarShown < barPx || TabManager.swipeOrder(tab).size < 2) return false
-                // 3.0.4: on the bar itself (a floating bar's pill: around it is the page).
+                // 3.0.4: on the bar itself.
                 val at = IntArray(2)
                 toolbar.getLocationOnScreen(at)
                 return rawX >= at[0] && rawX < at[0] + toolbar.width && rawY >= at[1] && rawY < at[1] + toolbar.height
@@ -4301,6 +4255,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
     override fun onPageDrawn(tab: Tab, contentful: Boolean) {
         if (tab === current) tabSwipe.onPageDrawn(tab, contentful)
+        // 3.0.5: the page the start-up screen waited for is really there now.
+        if (contentful && tab === startupPage) liftStartupCover(tab)
     }
 
     // ------------------------------------------------------------------ updates
@@ -4426,7 +4382,10 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     private var handleDragging = false
     private var handleGrabY = 0f
     private var handleScrolledAt = 0L
+    private var handleMovedAt = 0L
+    private var handleFadingIn = false
     private val hideScrollHandle = Runnable {
+        handleFadingIn = false
         if (!handleDragging) scrollHandle.animate().alpha(0f).setDuration(200).withEndAction { if (!handleDragging) scrollHandle.visibility = View.GONE }
     }
 
@@ -4443,16 +4402,26 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             return
         }
         if (!show && scrollHandle.visibility != View.VISIBLE) return
-        val content = scrollHandle.parent as View
-        val track = (content.height - scrollHandle.height - 2 * dp(8)).coerceAtLeast(1)
-        scrollHandle.translationY = dp(8) + track * (tab.pageY / tab.pageScrollMax).coerceIn(0f, 1f)
+        // 3.0.5: at most about 15 times a second: every move has Android redraw Swift's window, which a
+        // slow graphics chip does alongside the page.
+        val now = SystemClock.uptimeMillis()
+        if (now - handleMovedAt >= HANDLE_MOVE_MS || scrollHandle.visibility != View.VISIBLE) {
+            handleMovedAt = now
+            val content = scrollHandle.parent as View
+            val track = (content.height - scrollHandle.height - 2 * dp(8)).coerceAtLeast(1)
+            scrollHandle.translationY = dp(8) + track * (tab.pageY / tab.pageScrollMax).coerceIn(0f, 1f)
+        }
         if (show) {
             if (scrollHandle.visibility != View.VISIBLE) {
                 scrollHandle.alpha = 0f
                 scrollHandle.visibility = View.VISIBLE
             }
-            scrollHandle.animate().cancel()
-            scrollHandle.animate().alpha(1f).setDuration(120).start()
+            // 3.0.5: one fade-in (it was a new animation for every update of the scroll).
+            if (scrollHandle.alpha < 1f && !handleFadingIn) {
+                handleFadingIn = true
+                scrollHandle.animate().cancel()
+                scrollHandle.animate().alpha(1f).setDuration(120).withEndAction { handleFadingIn = false }.start()
+            }
             handler.removeCallbacks(hideScrollHandle)
             handler.postDelayed(hideScrollHandle, 1500)
         }
@@ -4467,6 +4436,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
                 handleDragging = true
                 handleGrabY = ev.rawY - scrollHandle.translationY
                 handler.removeCallbacks(hideScrollHandle)
+                handleFadingIn = false
                 scrollHandle.animate().cancel()
                 scrollHandle.alpha = 1f
                 Haptics.tick(scrollHandle)
@@ -4626,9 +4596,9 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         Diagnostics.clearProblem()
         val (title, text) = when (problem) {
             Diagnostics.Problem.CLOSED_BY_ANDROID -> "Swift was closed while you used it" to
-                "Android closed Swift while it was on screen. On a 2 GB phone that almost always means the phone ran out of memory " +
+                "Android closed Swift while it was on screen. On a phone with little memory that almost always means it ran out of memory " +
                 "(very heavy pages such as Google's AI answers can do that).\n\nTo make it less likely: keep fewer tabs in memory " +
-                "(Settings → Speed & memory), close tabs you don't need, and close other apps.\n\nIf it keeps happening, send a report."
+                "(Settings → Speed, data & battery), close tabs you don't need, and close other apps.\n\nIf it keeps happening, send a report."
             Diagnostics.Problem.ENGINE_CRASH -> "Swift's engine crashed" to
                 "The Firefox engine inside Swift crashed last time. " + (Diagnostics.plainReason(detail)?.let { "$it\n\n" } ?: "\n\n") +
                 (detail?.let { "Details: $it\n\n" } ?: "") + "Sending a report (with the last 3 days' logs) helps find out why."
@@ -4671,6 +4641,18 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
         /** 3.0: how long the start-up screen waits for the ad blocker before it offers Load now. */
         private const val LOAD_NOW_AFTER_MS = 8000L
+
+        /** 3.0.5: how long the start-up screen waits for a page that is loading before it lets go of it. */
+        private const val START_PAGE_LIMIT_MS = 12_000L
+
+        /** 3.0.5: the scroll handle moves at most this often. */
+        private const val HANDLE_MOVE_MS = 66L
+
+        /** 3.0.5: how long after a page finished without being drawn the start-up screen waits (see startupPageStopped). */
+        private const val START_PAGE_STOPPED_MS = 800L
+
+        /** 3.0.5: the longest the start-up screen waits for a painted page to reach the screen (see liftStartupCover). */
+        private const val START_PAGE_DRAW_MS = 1500L
 
         /** "example.com/page": an address without its https:// (made once, 2.6). */
         private val BARE_ADDRESS = Regex("^[a-z0-9-]+(\\.[a-z0-9-]+)*\\.[a-z]{2,}(/\\S*)?$", RegexOption.IGNORE_CASE)

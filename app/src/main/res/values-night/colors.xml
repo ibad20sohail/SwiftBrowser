@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Swift's dark palette: deep slate rather than pure black, with soft contrast for night reading. -->
+<!-- Swift's dark palette: deep slate rather than pure black, with soft contrast for night reading.
+     3.0.5: the surfaces (cards, sheets, tiles, thumbnails, dividers, outlines) are Palette.darkRoles of
+     the page colour: an even step above it on every dark background (kept the same by DarkStepsTest). -->
 <resources>
     <color name="accent">#FF8AB4FF</color>
     <color name="on_accent">#FF0A1F44</color>
@@ -8,12 +10,12 @@
 
     <color name="toolbar_bg">#FF1B1D22</color>
     <color name="page_bg">#FF15171C</color>
-    <color name="surface_alt">#FF2A2D35</color>
-    <color name="sheet_bg">#FF1F2228</color>
+    <color name="surface_alt">#FF313237</color>
+    <color name="sheet_bg">#FF27292D</color>
     <color name="text_primary">#FFE6E8EC</color>
     <color name="text_secondary">#FFA3A9B4</color>
-    <color name="divider">#FF2B2F37</color>
-    <color name="outline">#FF3A3F49</color>
+    <color name="divider">#FF323338</color>
+    <color name="outline">#FF414347</color>
     <color name="scrim">#99000000</color>
     <color name="badge_bg">#FFF28B82</color>
     <color name="shield_on">#FF81C995</color>
@@ -21,19 +23,19 @@
     <color name="overlay_bg">#CC000000</color>
 
     <color name="home_bg">#FF15171C</color>
-    <color name="home_search_bg">#FF2A2D35</color>
+    <color name="home_search_bg">#FF313237</color>
     <color name="home_search_stroke">#00000000</color>
-    <color name="tile_bg">#FF2A2D35</color>
+    <color name="tile_bg">#FF313237</color>
 
     <color name="switcher_bg">#FF121418</color>
-    <color name="tab_card_bg">#FF1F2228</color>
-    <color name="tab_thumb_bg">#FF262931</color>
+    <color name="tab_card_bg">#FF27292D</color>
+    <color name="tab_thumb_bg">#FF2B2D32</color>
     <color name="toggle_selected">#FF233A63</color>
 
     <color name="settings_bg">#FF121418</color>
-    <color name="card_bg">#FF1F2228</color>
+    <color name="card_bg">#FF27292D</color>
 
-    <color name="ptr_bg">#FF2A2D35</color>
+    <color name="ptr_bg">#FF313237</color>
 
     <color name="incognito_bg">#FF1E1B2E</color>
     <color name="incognito_toolbar">#FF1E1B2E</color>
@@ -80,5 +82,5 @@
     <color name="danger_container">#FF5C2B29</color>
     <color name="on_danger_container">#FFFFDAD6</color>
     <!-- 2.2: messages stay dark at night too, a step lighter than the screen so they stand out. -->
-    <color name="skeleton">#FF262931</color>
+    <color name="skeleton">#FF2B2D32</color>
 </resources>

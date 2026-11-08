@@ -4,7 +4,7 @@
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
-    android:layout_height="64dp"
+    android:layout_height="@dimen/row_two_lines"
     android:layout_marginStart="6dp"
     android:layout_marginTop="3dp"
     android:layout_marginEnd="6dp"
@@ -61,6 +61,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="2dp"
                 android:ellipsize="end"
+                android:fontFamily="swift-small"
                 android:singleLine="true"
                 android:textColor="@color/text_secondary"
                 android:textSize="@dimen/text_caption" />

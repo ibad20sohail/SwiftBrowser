@@ -95,9 +95,9 @@ object RightNow {
         s.limitedBy?.let { lines += "$it: only the open tab and tabs kept loaded stay loaded." }
         s.lastUnloaded?.let { lines += it }
         lines += when (s.crashesThisWeek) {
-            0 -> "No page engine crashes in the last 7 days."
-            1 -> "1 page engine crash in the last 7 days."
-            else -> "${s.crashesThisWeek} page engine crashes in the last 7 days."
+            0 -> "No page crashes in the last 7 days."
+            1 -> "1 page crash in the last 7 days."
+            else -> "${s.crashesThisWeek} page crashes in the last 7 days."
         }
         s.lastRun?.let { lines += it }
         return lines.joinToString("\n")

@@ -64,6 +64,9 @@ class HomeView @JvmOverloads constructor(
     /** The shortcuts shown, in order (without the Add button). */
     private var shownTiles: List<TopSites.Tile> = emptyList()
 
+    /** 3.0.5: the note under full shortcuts, while it's shown. */
+    private var fullNote: TextView? = null
+
     // Dragging a shortcut to another place (2.7: the others make way while it is held, as in the menu).
     private var dragged: View? = null
     private var dragStartX = 0f
@@ -211,6 +214,8 @@ class HomeView @JvmOverloads constructor(
                 topMargin = dp(28)
             })
             applyOrder()
+            // 3.0.5: made while the picture was already behind the page.
+            it.setOnPicture(onPicture)
         }
         section.visibility = View.VISIBLE
         section.show()
@@ -328,6 +333,8 @@ class HomeView @JvmOverloads constructor(
         // 3.0.4: a gradient or your own picture behind it, if chosen (never in incognito).
         val behind = HomeBackground.drawable(context, incognito) { picture -> if (!this.incognito) background = picture }
         if (behind != null) background = behind else setBackgroundColor(color(if (incognito) R.color.incognito_bg else R.color.home_bg))
+        // 3.0.5: with a picture behind the page (not a gradient), a soft backing behind its text.
+        setOnPicture(!incognito && HomeBackground.current(context) == HomeBackground.PICTURE)
         logo.visibility = if (incognito) View.GONE else View.VISIBLE
         updateProfile()
         incognitoBox.visibility = if (incognito) View.VISIBLE else View.GONE
@@ -378,6 +385,38 @@ class HomeView @JvmOverloads constructor(
 
     fun scrollToTop() {
         findViewById<View>(R.id.home_scroll).scrollTo(0, 0)
+    }
+
+    /** 3.0.5: the home page's picture is behind the page (never in incognito, nor with a gradient). */
+    private var onPicture = false
+
+    /**
+     * 3.0.5: a soft backing behind what is written straight on the picture: the shortcuts on a soft
+     * panel and the headings on soft pills, in the page's colour and just strong enough for the text
+     * (HomeBackground.backing). The picture still shows through them and around them. One flat
+     * rounded shape each, drawn while the page scrolls with nothing else to work out.
+     */
+    private fun setOnPicture(on: Boolean) {
+        if (on == onPicture) return
+        onPicture = on
+        // The heading only as wide as its word on its pill (as wide as the page without one: no difference then).
+        (tilesTitle.layoutParams as? LinearLayout.LayoutParams)?.let { lp ->
+            lp.width = if (on) ViewGroup.LayoutParams.WRAP_CONTENT else ViewGroup.LayoutParams.MATCH_PARENT
+            lp.gravity = android.view.Gravity.START
+            tilesTitle.layoutParams = lp
+        }
+        tilesTitle.background = if (on) Ui.shape(context, HomeBackground.backing(context, Ui.text(context)), Ui.R_SMALL) else null
+        tilesTitle.setPaddingRelative(dp(8), if (on) dp(3) else 0, if (on) dp(12) else 0, if (on) dp(3) else 0)
+        tilesBox.background = if (on) Ui.shape(context, HomeBackground.backing(context, Ui.text(context)), Ui.R_MEDIUM) else null
+        paintFullNote()
+        continueRow.setOnPicture(on)
+        news?.setOnPicture(on)
+    }
+
+    /** 3.0.5: the note under full shortcuts on the picture: grey text needs a little more. */
+    private fun paintFullNote() {
+        val note = fullNote ?: return
+        note.background = if (onPicture) Ui.shape(context, HomeBackground.backing(context, Ui.textSecondary(context)), Ui.R_XSMALL) else null
     }
 
     /** What the shortcuts shown were worked out for, and when (2.6). */
@@ -434,6 +473,8 @@ class HomeView @JvmOverloads constructor(
                 v.findViewById<ImageView>(R.id.tile_icon).apply {
                     setImageDrawable(Ui.monogram(context, t.label, t.key, 26))
                     visibility = View.VISIBLE
+                    // 3.0.5: a little dimmer in the dark look (it holds the site's icon when it comes).
+                    SoftPictures.apply(this)
                 }
                 v.findViewById<View>(R.id.tile_letter).visibility = View.GONE
                 v.setOnClickListener { listener?.onTileClicked(t.url) }
@@ -454,11 +495,14 @@ class HomeView @JvmOverloads constructor(
             tilesBox.addView(row)
         }
         // 3.0: when they are all taken, the Add button makes way for a word on why (it went without one).
+        fullNote = null
         if (tiles.size >= TopSites.MAX) {
-            tilesBox.addView(Ui.text(context, Ui.Type.CAPTION, "You can have up to ${TopSites.MAX} shortcuts. Hold one to remove it.").apply {
+            fullNote = Ui.text(context, Ui.Type.CAPTION, "You can have up to ${TopSites.MAX} shortcuts. Hold one to remove it.").apply {
                 gravity = android.view.Gravity.CENTER
                 setPadding(dp(8), dp(4), dp(8), 0)
-            })
+            }
+            tilesBox.addView(fullNote)
+            paintFullNote()
         }
         if (animateTiles) {
             animateTiles = false
@@ -618,16 +662,13 @@ class HomeView @JvmOverloads constructor(
     private fun addTile(inflater: LayoutInflater, row: LinearLayout): View {
         val v = Palette.paint(inflater.inflate(R.layout.item_tile, row, false))
         v.findViewById<TextView>(R.id.tile_label).text = "Add"
-        v.findViewById<TextView>(R.id.tile_letter).apply {
-            text = "+"
-            setTextColor(color(R.color.text_secondary))
-            // A sign standing in for an icon, as big as the tiles' icons: not text on the type scale.
-            textSize = 26f
-            background = GradientDrawable().apply {
-                cornerRadius = dp(Ui.R_MEDIUM).toFloat()
-                setStroke(dp(2), color(R.color.outline))
-            }
+        // 3.0.5: a plain tile like the others (the tile's own shape, no outline around it) with a real
+        // add icon in the secondary colour, the size of the other tiles' icons (it was a typed "+").
+        v.findViewById<ImageView>(R.id.tile_icon).apply {
+            setImageDrawable(Ui.icon(context, R.drawable.ic_add, color(R.color.text_secondary)))
+            visibility = View.VISIBLE
         }
+        v.findViewById<View>(R.id.tile_letter).visibility = View.GONE
         v.contentDescription = "Add a shortcut"
         v.setOnClickListener { listener?.onAddTile() }
         Ui.pressable(v, 0.92f)

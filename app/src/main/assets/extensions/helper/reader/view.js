@@ -10,8 +10,9 @@ function applySize() {
   document.documentElement.style.setProperty('--size', size + 'px');
 }
 
-// Font and line spacing, chosen in the app (Settings → Browsing → Reader view text).
-const FONTS = { serif: 'Georgia, "Noto Serif", serif', sans: 'Roboto, "Noto Sans", sans-serif' };
+// Font and line spacing, chosen in the app (Settings → Browsing → Reader view text). 3.0.5: the sans
+// choice is Swift's own font (--ui, from fonts/swift-font.css), or the phone's with it off.
+const FONTS = { serif: 'Georgia, "Noto Serif", serif', sans: 'var(--ui)' };
 const LINES = ['1.45', '1.65', '1.9'];
 
 // 3.0.4: the page's colours, chosen in the app with the font (Auto, Light, Sepia, Dark). Auto is as
@@ -64,6 +65,7 @@ function applyStyle(look) {
   if (look) {
     theme = THEMES[look.readerTheme] ? look.readerTheme : 'auto';
     try { localStorage.setItem('theme', theme); } catch (e) { }
+    applySwiftFont(look.swiftFont !== false);
   }
   applyColours(theme, look);
   root.setProperty('--font', FONTS[look && look.readerFont] || FONTS.serif);

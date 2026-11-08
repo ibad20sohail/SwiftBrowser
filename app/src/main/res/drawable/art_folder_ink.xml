@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 3.0.5: the folder drawing of an empty screen, the deep tone (EmptyArt tints it at runtime). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="120dp"
+    android:height="120dp"
+    android:viewportWidth="120"
+    android:viewportHeight="120">
+    <path
+        android:pathData="M60,51 L60,49.3 L60,47.6 L60,45.91 L60,44.21 M60,39.21 L60,37.51 L60,35.81 L60,34.11 L60,32.42 M60,27.42 L60,25.72 L60.06,24.02 L60.45,22.37 L61.17,20.84 M64.9,17.63 L66.52,17.14 L68.21,17 L69.91,17 L71.6,17 M76.6,17 L78.3,17 L80,17 L81.7,17 L83.4,17 M88.4,17 L90.09,17 L91.79,17 L93.48,17.14 L95.1,17.63 M98.83,20.84 L99.55,22.37 L99.94,24.02 L100,25.72 L100,27.42 M100,32.42 L100,34.11 L100,35.81 L100,37.51 L100,39.21 M100,44.21 L100,45.91 L100,47.6 L100,49.3 L100,51"
+        android:strokeWidth="3.5"
+        android:strokeColor="@android:color/white"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M28,73 L92,73"
+        android:strokeWidth="5"
+        android:strokeColor="@android:color/white"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+</vector>

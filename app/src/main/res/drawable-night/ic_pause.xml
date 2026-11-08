@@ -1,0 +1,13 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:tint="?attr/colorControlNormal"
+    android:viewportWidth="960"
+    android:viewportHeight="960">
+    <!-- 3.0.5: Material Symbols Rounded "pause" at grade -25, softer on dark screens (drawable/ic_pause.xml is the normal one), filled. -->
+    <group android:translateY="960">
+        <path
+            android:fillColor="@android:color/white"
+            android:pathData="M634.5,-208q-30.94,0 -52.97,-22.03Q559.5,-252.06 559.5,-283v-394q0,-30.94 22.03,-52.97Q603.56,-752 634.5,-752h5q30.94,0 52.97,22.03Q714.5,-707.94 714.5,-677v394q0,30.94 -22.03,52.97Q670.44,-208 639.5,-208h-5Zm-314,0q-30.94,0 -52.97,-22.03Q245.5,-252.06 245.5,-283v-394q0,-30.94 22.03,-52.97Q289.56,-752 320.5,-752h5q30.94,0 52.97,22.03Q400.5,-707.94 400.5,-677v394q0,30.94 -22.03,52.97Q356.44,-208 325.5,-208h-5Z" />
+    </group>
+</vector>

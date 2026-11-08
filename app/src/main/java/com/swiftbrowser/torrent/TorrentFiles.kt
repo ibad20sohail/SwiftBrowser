@@ -13,7 +13,7 @@ import java.util.Locale
 /**
  * 2.9.2: what Swift knows about the files inside a torrent: which are junk (left unticked when it is
  * added), which are Windows programs (a warning), which is the film (Play), and whether a video
- * looks like 10-bit HEVC, which this phone's chip can't decode.
+ * looks like 10-bit HEVC, which older phones' chips can't decode.
  */
 object TorrentFiles {
     /** A file of a torrent: [index] in the torrent, [path] inside the download folder. */
@@ -77,7 +77,7 @@ object TorrentFiles {
 
     /**
      * The phone's chip decodes 10-bit HEVC. Android's own decoders (OMX.google, c2.android) don't
-     * count: in software it is far too slow for this phone.
+     * count: in software it is far too slow for older phones.
      */
     val phonePlays10Bit: Boolean by lazy {
         try {

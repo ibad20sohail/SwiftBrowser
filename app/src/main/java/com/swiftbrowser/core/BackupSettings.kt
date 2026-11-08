@@ -35,7 +35,7 @@ object BackupSettings {
         // Before 2.2, read once to carry them over.
         "menu_buttons" to STRING, "show_home_button" to BOOLEAN,
         // Home & news
-        "news_enabled" to BOOLEAN, "home_order" to STRING, "home_background" to STRING, "news_country" to STRING, "news_topics" to SET,
+        "news_enabled" to BOOLEAN, "home_order" to STRING, "home_background" to STRING, "home_picture_clarity" to INT, "news_country" to STRING, "news_topics" to SET,
         "news_feeds" to STRING, "news_hidden" to SET, "home_continue" to BOOLEAN, "hidden_tiles" to SET,
         "news_topic" to STRING,
         // Browsing & tabs
@@ -74,7 +74,7 @@ object BackupSettings {
         "files_category_sort" to INT, "files_thumbnails" to BOOLEAN, "files_recycle_bin" to BOOLEAN,
         "files_bin_days" to INT, "files_wifi_port" to INT,
         // 3.0.4: two folders side by side (where each side was is not a setting).
-        "files_two_panes" to BOOLEAN,
+        "files_two_panes" to BOOLEAN, "upload_from_files" to BOOLEAN,
         // Privacy & security
         "https_only" to BOOLEAN, "reject_cookie_banners" to BOOLEAN, "secure_dns" to STRING,
         "incognito_screenshots" to BOOLEAN, "safer_browsing" to BOOLEAN, "newer_firefox_version" to BOOLEAN,

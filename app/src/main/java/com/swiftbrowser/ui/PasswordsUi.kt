@@ -4,15 +4,13 @@ import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
-import android.text.SpannableStringBuilder
-import android.text.Spanned
-import android.text.style.ForegroundColorSpan
-import android.text.style.RelativeSizeSpan
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.ImageButton
+import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.swiftbrowser.R
@@ -31,6 +29,9 @@ object PasswordsUi {
 
     /** A copied password is taken off the clipboard after this, if it is still there (any app can read it on Android 7). */
     private const val CLIP_MS = 45_000L
+
+    /** Each half of the eye's change of icon. */
+    private const val EYE_MS = Motion.ICON / 2
 
     private fun later(a: Activity, work: () -> Unit) = a.window.decorView.post(work)
 
@@ -83,32 +84,71 @@ object PasswordsUi {
             unreadableDialog(a, unreadable, changed)
             return
         }
-        val grey = Ui.textSecondary(a)
-        val items = logins.map { l ->
-            SpannableStringBuilder(UrlUtils.siteName(l.origin).ifBlank { l.origin }).apply {
-                val start = length
-                append("\n").append(l.username.ifBlank { "(no user name)" })
-                setSpan(ForegroundColorSpan(grey), start, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-                setSpan(RelativeSizeSpan(0.87f), start, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-            }
-        }.toMutableList<CharSequence>()
+        lateinit var dialog: androidx.appcompat.app.AlertDialog
+        val rows = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
+        for (l in logins) {
+            rows.addView(loginRow(a, l) {
+                details(a, l, changed)
+                dialog.dismiss()
+            })
+        }
         // 3.0: the ones that can't be read any more, last, in red.
         if (unreadable.isNotEmpty()) {
             val n = unreadable.size
-            items += SpannableStringBuilder(if (n == 1) "1 sign-in can't be read any more" else "$n sign-ins can't be read any more").apply {
-                setSpan(ForegroundColorSpan(Ui.danger(a)), 0, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-            }
+            rows.addView(Ui.text(a, Ui.Type.BODY, if (n == 1) "1 sign-in can't be read any more" else "$n sign-ins can't be read any more", Ui.danger(a)).apply {
+                minHeight = Ui.dp(a, Ui.ROW_ONE_LINE)
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(Ui.dp(a, 24), Ui.dp(a, 8), Ui.dp(a, 24), Ui.dp(a, 8))
+                background = Ui.ripple(a, null, 0)
+                setOnClickListener {
+                    unreadableDialog(a, unreadable, changed)
+                    dialog.dismiss()
+                }
+            })
         }
-        showSecure(
+        dialog = showSecure(
             a,
             MaterialAlertDialogBuilder(a)
                 .setTitle("Saved passwords (${logins.size})")
-                .setItems(items.toTypedArray()) { _, which ->
-                    if (which < logins.size) details(a, logins[which], changed) else unreadableDialog(a, unreadable, changed)
-                }
+                .setView(ScrollView(a).apply {
+                    isVerticalScrollBarEnabled = false
+                    addView(rows)
+                })
                 .setNegativeButton("Close", null)
                 .create(),
         )
+    }
+
+    /** A saved sign-in: the site's icon in the lists' rounded holder (from what Swift has kept; nothing is fetched), its name and the user name. */
+    private fun loginRow(a: Activity, l: Passwords.Login, onClick: () -> Unit): View = LinearLayout(a).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        minimumHeight = Ui.dp(a, Ui.ROW_TWO_LINES)
+        setPadding(Ui.dp(a, 24), Ui.dp(a, 8), Ui.dp(a, 24), Ui.dp(a, 8))
+        background = Ui.ripple(a, null, 0)
+        val holder = ImageView(a).apply {
+            setBackgroundResource(R.drawable.bg_icon_badge)
+            setImageDrawable(Ui.icon(a, R.drawable.ic_globe, Ui.textSecondary(a)))
+            scaleType = ImageView.ScaleType.CENTER
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }
+        addView(holder, LinearLayout.LayoutParams(Ui.dp(a, Ui.ICON_BOX), Ui.dp(a, Ui.ICON_BOX)).apply { marginEnd = Ui.dp(a, 16) })
+        com.swiftbrowser.core.Favicons.load(l.origin) { bmp ->
+            if (bmp != null) {
+                holder.setImageBitmap(bmp)
+                // A little dimmer in the dark look, as every site's icon.
+                SoftPictures.apply(holder)
+                holder.scaleType = ImageView.ScaleType.FIT_CENTER
+                val p = Ui.dp(a, 10)
+                holder.setPadding(p, p, p, p)
+            }
+        }
+        addView(LinearLayout(a).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(Ui.text(a, Ui.Type.BODY, UrlUtils.siteName(l.origin).ifBlank { l.origin }, lines = 1))
+            addView(Ui.text(a, Ui.Type.CAPTION, l.username.ifBlank { "(no user name)" }, lines = 1))
+        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        setOnClickListener { onClick() }
     }
 
     /**
@@ -150,8 +190,13 @@ object PasswordsUi {
         lateinit var eye: ImageButton
         eye = button(a, R.drawable.ic_visibility, "Show password") {
             shown = !shown
-            value.text = if (shown) l.password else dots
-            eye.setImageResource(if (shown) R.drawable.ic_visibility_off else R.drawable.ic_visibility)
+            Motion.swapText(value, if (shown) l.password else dots)
+            // A plain fade: the turn of Motion.swapIcon reads wrong on an eye.
+            val icon = if (shown) R.drawable.ic_visibility_off else R.drawable.ic_visibility
+            Motion.anim(eye, EYE_MS, Motion.exit).alpha(0f).withEndAction {
+                eye.setImageResource(icon)
+                Motion.anim(eye, EYE_MS, Motion.enter).alpha(1f).start()
+            }.start()
             eye.contentDescription = if (shown) "Hide password" else "Show password"
         }
         val row = field(a, "Password", dots, eye) { copy(a, "Password", l.password, secret = true) }
@@ -188,16 +233,21 @@ object PasswordsUi {
             Dialogs.info(a, "Never saved for", "No sites. When Swift offers to save a password, \"Never for this site\" adds the site here.")
             return
         }
-        MaterialAlertDialogBuilder(a)
-            .setTitle("Never saved for")
-            .setMessage("Tap a site to be offered again.")
-            .setItems(sites.toTypedArray()) { _, which ->
-                Passwords.setNever(sites[which], false)
+        // A sheet: a dialog with a message can't show a list too, so the sites never showed.
+        val col = Sheets.column(a)
+        col.addView(Sheets.header(a, "Never saved for", "Tap a site to be offered again."))
+        lateinit var sheet: com.google.android.material.bottomsheet.BottomSheetDialog
+        for (site in sites) {
+            col.addView(Sheets.row(a, R.drawable.ic_globe, site) {
+                sheet.dismiss()
+                Passwords.setNever(site, false)
                 changed()
-                Messages.show(a, "Swift will offer to save on ${sites[which]}")
-            }
-            .setNegativeButton("Close", null)
-            .showImmersive()
+                Messages.show(a, "Swift will offer to save on $site")
+            })
+        }
+        col.addView(Sheets.wideButton(a, "Close", outlined = true) { sheet.dismiss() })
+        sheet = Sheets.sheet(a, col)
+        sheet.showImmersive()
     }
 
     /**
@@ -253,7 +303,7 @@ object PasswordsUi {
     private fun button(a: Activity, icon: Int, description: String, onClick: () -> Unit) = ImageButton(a).apply {
         setImageResource(icon)
         contentDescription = description
-        setBackgroundResource(RowHolder.selectableBackground(a))
+        background = Ui.rippleBorderless(a)
         layoutParams = LinearLayout.LayoutParams(Ui.dp(a, 48), Ui.dp(a, 48))
         setOnClickListener { onClick() }
     }

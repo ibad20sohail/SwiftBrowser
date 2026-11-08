@@ -21,7 +21,7 @@
         android:layout_marginEnd="14dp"
         android:background="@drawable/bg_icon_badge"
         android:importantForAccessibility="no"
-        android:padding="10dp"
+        android:padding="9dp"
         android:scaleType="fitCenter"
         app:tint="@color/text_secondary" />
 

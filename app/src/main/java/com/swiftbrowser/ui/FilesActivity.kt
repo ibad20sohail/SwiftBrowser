@@ -37,12 +37,15 @@ import android.widget.TextView
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
+import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.button.MaterialButton
+import com.google.android.material.chip.Chip
+import com.google.android.material.chip.ChipGroup
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.swiftbrowser.R
 import com.swiftbrowser.SwiftApp
@@ -128,6 +131,10 @@ import java.util.Locale
  * the bottom work on, and selected files copy or move straight to the other side.
  */
 class FilesActivity : ListActivity() {
+    /** Opened by a website's upload button (from Swift itself only: this screen can be started by other apps too): a tap gives the file to the page. */
+    private val pickRequest: FilePick.Request? by lazy { if (callingActivity?.packageName == packageName) FilePick.requestIn(intent) else null }
+    private val picking get() = pickRequest != null
+
     /** A row: a file or folder on the phone ([file]) or in the archive being looked at ([entry]). */
     private class Row(
         val key: String,
@@ -256,6 +263,9 @@ class FilesActivity : ListActivity() {
         var tiles = false
         var shownRowCount = 0
         var pendingSlide = 0
+
+        /** What the next showing of the list brings back was put back by Undo: its rows come in softly. */
+        var undone = false
         var quietOnce = false
         var loadingText = ""
         var loadingLabel: TextView? = null
@@ -467,11 +477,7 @@ class FilesActivity : ListActivity() {
     private lateinit var actionBar: LinearLayout
     private lateinit var bottom: LinearLayout
 
-    private var progressDialog: AlertDialog? = null
-    private var progressFor: FileJobs.Job? = null
-    private var progressName: TextView? = null
-    private var progressBar: ProgressBar? = null
-    private var progressDetail: TextView? = null
+    private val progress = FileJobDialogs.Progress(this)
     private var questionShown: FileJobs.Question? = null
     private var opening: Messages.Handle? = null
 
@@ -537,7 +543,7 @@ class FilesActivity : ListActivity() {
         // remembered); held upright, one: the side worked on last. The left side has the screen's own
         // list, the right side one made like it (buildChrome).
         val config = resources.configuration
-        twoOffered = TwoPanes.offered(config.orientation == Configuration.ORIENTATION_LANDSCAPE, config.screenWidthDp)
+        twoOffered = !picking && TwoPanes.offered(config.orientation == Configuration.ORIENTATION_LANDSCAPE, config.screenWidthDp)
         twoPanes = twoOffered && FilesSettings.twoPanes
         chosen = panes[TwoPanes.side(savedInstanceState?.getInt(STATE_SIDE, -1) ?: sp.getInt(PREF_SIDE, TwoPanes.LEFT))]
         panes[0].list = list
@@ -594,7 +600,7 @@ class FilesActivity : ListActivity() {
         // when it may be shown (trustedPlace), otherwise the start page.
         val asked = intent.getStringExtra(EXTRA_FOLDER)?.let { trustedPlace(it) ?: PLACE_HOME }
         val place = savedInstanceState?.getString(STATE_PLACE) ?: asked
-            ?: if (FilesSettings.startAt == FilesSettings.START_LAST) sp.getString(PREF_LAST, null) else null
+            ?: if (!picking && FilesSettings.startAt == FilesSettings.START_LAST) sp.getString(PREF_LAST, null) else null
         // 3.0.4: the other side: where it was left (kept while one folder showed), or the same folder.
         val other = otherPane()
         val otherPlace = savedInstanceState?.getString(STATE_OTHER)
@@ -783,12 +789,12 @@ class FilesActivity : ListActivity() {
         })
     }
 
-    /** List ↔ grid: the new layout fades in over a moment. */
-    private fun crossFade() {
+    /** List ↔ grid (or anything else laid out anew: the sort order, two folders): the new layout fades in over a moment. */
+    private fun crossFade(v: View = list, ms: Long = Motion.NORMAL) {
         if (!animationsOn) return
-        list.animate().cancel()
-        list.alpha = 0.15f
-        list.animate().alpha(1f).setDuration(Motion.NORMAL).setInterpolator(Motion.standard).withLayer().start()
+        v.animate().cancel()
+        v.alpha = 0.15f
+        Motion.anim(v, ms, Motion.standard).alpha(1f).withLayer().start()
     }
 
     override fun onStart() {
@@ -887,7 +893,7 @@ class FilesActivity : ListActivity() {
     }
 
     override fun onDestroy() {
-        progressDialog?.dismiss()
+        progress.dismiss()
         opening?.dismiss()
         // 3.0.5: leaving Files lets go of its small pictures (up to 12 MB, kept while browsing before).
         if (isFinishing) FileThumbs.trim()
@@ -962,17 +968,8 @@ class FilesActivity : ListActivity() {
             addView(right.empty, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         }
         for (p in panes) {
-            p.crumbs = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                // 3.0.5: the Home icon (24 dp in a 36 dp button) starts at the one side margin, like the search box above and the rows below.
-                setPadding(Ui.dp(this@FilesActivity, Ui.MARGIN - 6), 0, Ui.dp(this@FilesActivity, 12), 0)
-            }
-            p.pathScroll = HorizontalScrollView(this).apply {
-                isHorizontalScrollBarEnabled = false
-                overScrollMode = View.OVER_SCROLL_NEVER
-                addView(p.crumbs)
-            }
+            p.crumbs = PathRow.crumbs(this)
+            p.pathScroll = PathRow.scroll(this, p.crumbs)
             // 3.0.4: a thin accent line along the top of the side worked on (two sides showing).
             p.mark = View(this).apply {
                 setBackgroundColor(Ui.accent(this@FilesActivity))
@@ -1022,6 +1019,7 @@ class FilesActivity : ListActivity() {
             visibility = View.GONE
             setBackgroundColor(Palette.color(this@FilesActivity, R.color.sheet_bg))
         }
+        bottomBar = BottomBar(bottom)
         // 3.0.5: no line above it: its own colour against the page's says where it begins.
         jobStrip = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -1035,7 +1033,7 @@ class FilesActivity : ListActivity() {
             ellipsize = TextUtils.TruncateAt.MIDDLE
             Ui.steadyFigures(this)
         }
-        jobBar = horizontalBar()
+        jobBar = FileJobDialogs.bar(this)
         jobStrip.addView(jobText)
         jobStrip.addView(jobBar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(this, 6)).apply { topMargin = Ui.dp(this@FilesActivity, 8) })
         bottom.addView(jobStrip)
@@ -1069,35 +1067,9 @@ class FilesActivity : ListActivity() {
         Palette.paint(bottom)
     }
 
-    private fun horizontalBar(): ProgressBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
-        max = 1000
-        progressDrawable = ContextCompat.getDrawable(this@FilesActivity, R.drawable.progress_rounded)
-        progressTintList = ColorStateList.valueOf(Ui.accent(this@FilesActivity))
-        indeterminateTintList = ColorStateList.valueOf(Ui.accent(this@FilesActivity))
-    }
-
     /** A button of the bar at the bottom: an icon over a short word. */
-    private fun barButton(icon: Int, label: String, danger: Boolean = false, lines: Int = 1, onClick: () -> Unit): View = LinearLayout(this).apply {
-        val ctx = this@FilesActivity
-        orientation = LinearLayout.VERTICAL
-        gravity = Gravity.CENTER_HORIZONTAL
-        setPadding(0, Ui.dp(ctx, 8), 0, Ui.dp(ctx, 6))
-        background = Ui.ripple(ctx, null, 12)
-        contentDescription = label
-        isClickable = true
-        isFocusable = true
-        val color = if (danger) Ui.danger(ctx) else Ui.text(ctx)
-        addView(ImageView(ctx).apply {
-            setImageDrawable(Ui.icon(ctx, icon, color))
-            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-        }, LinearLayout.LayoutParams(Ui.dp(ctx, 24), Ui.dp(ctx, 24)))
-        addView(Ui.text(ctx, Ui.Type.CAPTION, label, color, lines = lines).apply {
-            gravity = Gravity.CENTER
-            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-            setPadding(Ui.dp(ctx, 2), Ui.dp(ctx, 4), Ui.dp(ctx, 2), 0)
-        })
-        setOnClickListener { onClick() }
-    }
+    private fun barButton(icon: Int, label: String, danger: Boolean = false, lines: Int = 1, onClick: () -> Unit): View =
+        BottomBar.button(this, icon, label, danger, lines, onClick)
 
     private fun setActions(buttons: List<View>) {
         actionBar.removeAllViews()
@@ -1443,19 +1415,22 @@ class FilesActivity : ListActivity() {
         // 3.0.3: Storage, Categories, Tools, Favourites, Continue, Recent documents, Recent files.
         out += Header("Categories")
         out += CategoryGrid(data?.counts)
-        out += Header("Tools")
-        out += ToolGrid(data?.bin)
+        // Picking a file for a website: only the ways to files (not the tools, Private or the bin).
+        if (!picking) {
+            out += Header("Tools")
+            out += ToolGrid(data?.bin)
+        }
         if (data != null) {
-            out += Header("Favourites")
-            if (data.favourites.isEmpty()) out += Hint("Keep the folders you use most here: tap ⋮ next to a folder, then Add to favourites.")
-            else out.addAll(data.favourites)
+            if (!picking || data.favourites.isNotEmpty()) out += Header("Favourites")
+            if (data.favourites.isNotEmpty()) out.addAll(data.favourites)
+            else if (!picking) out += Hint("Keep the folders you use most here: tap ⋮ next to a folder, then Add to favourites.")
             // 3.0.3: videos and songs left part-way in Swift's player, to carry on (none: no heading either).
-            if (data.continued.isNotEmpty()) {
+            if (!picking && data.continued.isNotEmpty()) {
                 out += Header("Continue")
                 out += ContinueCards(data.continued)
             }
             // 2.9: Files is where documents are found: the ones read lately, to carry on.
-            if (data.docs.isNotEmpty()) {
+            if (!picking && data.docs.isNotEmpty()) {
                 out += Header("Recent documents", "Show all") { openCategory(FileIndex.Category.DOCUMENTS) }
                 out += RecentDocs(data.docs)
             }
@@ -1547,7 +1522,7 @@ class FilesActivity : ListActivity() {
     private fun render(removals: Boolean = false) {
         list.removeCallbacks(showLoading)
         val access = hasAccess()
-        val shown: List<Any> = when {
+        val everything: List<Any> = when {
             !access && index == null -> emptyList()
             else -> searchRows ?: when {
                 index != null -> archiveRows()
@@ -1559,9 +1534,14 @@ class FilesActivity : ListActivity() {
                 else -> rows
             }
         }
+        // Picking: only the files the page takes (and the folders to reach them by).
+        val shown = pickRequest?.let { p -> everything.filter { it !is Row || it.isDir || FilePick.accepts(p, it.name) } } ?: everything
         shownRowCount = if (onStartPage) 0 else shown.count { it is Row }
         applyLayout()
-        adapter.set(shown, removals)
+        // Things put back (Undo) come back as gently as they left.
+        val additions = pane.undone && !loading
+        if (additions) pane.undone = false
+        adapter.set(shown, removals, additions)
         if (shown.isEmpty()) showPageTop()
         // 2.9: a new place comes in from the side it was reached from; the start page's cards, the first time, one after another.
         if (!loading && pendingSlide != 0) {
@@ -1593,11 +1573,11 @@ class FilesActivity : ListActivity() {
             )
             index != null -> showEmpty(shown.isEmpty(), "Nothing in here", null, R.drawable.ic_archive)
             home -> empty.visibility = View.GONE
-            inBin -> showEmpty(shown.isEmpty(), "The recycle bin is empty", "Files you delete in Files stay here for ${FilesSettings.binDays} days, so you can bring them back.", R.drawable.ic_files_bin)
+            inBin -> showEmpty(shown.isEmpty(), "The recycle bin is empty", "Files you delete in Files stay here for ${FilesSettings.binDays} days, so you can bring them back.", R.drawable.ic_files_bin, EmptyArt.BIN)
             inPrivate && dir.path == PrivateFolder.root(this).path -> showEmpty(
                 shown.isEmpty(), "Nothing in Private yet",
                 "Select files or folders anywhere in Files, then tap More → Move to Private. Only you can open them here.\n\n" + PrivateLock.UNINSTALL_TEXT,
-                R.drawable.ic_lock,
+                R.drawable.ic_lock, EmptyArt.PRIVATE,
             )
             cat != null -> showEmpty(shown.isEmpty(), cat.nothing, cat.hint, cat.icon)
             unreadable -> showEmpty(true, "Swift can't open this folder", "Android keeps it private, or it is no longer there.", R.drawable.ic_folder)
@@ -1637,6 +1617,7 @@ class FilesActivity : ListActivity() {
         val state = Ui.emptyState(
             this, R.drawable.ic_folder, "See your files",
             if (Build.VERSION.SDK_INT >= 30) "Allow Swift to manage all files to see and change your folders here." else "Allow Swift to see your files to list your folders, pictures, videos and downloads here.",
+            EmptyArt.FOLDER,
         )
         state.addView(MaterialButton(this).apply {
             text = "Allow access"
@@ -1661,14 +1642,6 @@ class FilesActivity : ListActivity() {
         }
         pathScroll.visibility = View.VISIBLE
         updatePathRow()
-        crumbs.removeAllViews()
-        crumbs.addView(ImageView(this).apply {
-            setImageDrawable(Ui.icon(this@FilesActivity, R.drawable.ic_home, Ui.accent(this@FilesActivity)))
-            scaleType = ImageView.ScaleType.CENTER
-            background = Ui.ripple(this@FilesActivity, null, 12)
-            contentDescription = "Files start page"
-            setOnClickListener { showHome() }
-        }, LinearLayout.LayoutParams(dp(36), dp(36)))
         val parts = ArrayList<Pair<String, () -> Unit>>()
         val cat = category
         val v = Volumes.of(this, dir)
@@ -1706,22 +1679,7 @@ class FilesActivity : ListActivity() {
                 parts += p to { showArchiveFolder(target) }
             }
         }
-        parts.forEachIndexed { i, (label, go) ->
-            crumbs.addView(ImageView(this).apply {
-                setImageDrawable(Ui.icon(this@FilesActivity, R.drawable.ic_chevron_right, Ui.textSecondary(this@FilesActivity)))
-                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-            }, LinearLayout.LayoutParams(Ui.dp(this, 18), Ui.dp(this, 18)))
-            val last = i == parts.size - 1
-            crumbs.addView(Ui.text(this, Ui.Type.LABEL, label, if (last) Ui.text(this) else Ui.accent(this), lines = 1).apply {
-                setPadding(Ui.dp(this@FilesActivity, 8), Ui.dp(this@FilesActivity, 8), Ui.dp(this@FilesActivity, 8), Ui.dp(this@FilesActivity, 8))
-                background = Ui.ripple(this@FilesActivity, null, 12)
-                maxWidth = Ui.dp(this@FilesActivity, 200)
-                ellipsize = TextUtils.TruncateAt.MIDDLE
-                if (!last) setOnClickListener { go() }
-            })
-        }
-        val ps = pathScroll
-        ps.post { ps.fullScroll(View.FOCUS_RIGHT) }
+        PathRow.show(crumbs, pathScroll, R.drawable.ic_home, "Files start page", tooltip = false, onHome = { showHome() }, parts = parts)
     }
 
     /** 3.0.4: the row of paths shows while a side has one; with two sides, always (each keeps its half). */
@@ -1794,10 +1752,10 @@ class FilesActivity : ListActivity() {
         updateMenu()
         if (navClose != selecting) {
             navClose = selecting
-            toolbar.setNavigationIcon(if (selecting) R.drawable.ic_close else R.drawable.ic_back)
+            TitleBar.swapBackIcon(toolbar, if (selecting) R.drawable.ic_close else R.drawable.ic_back)
         }
         if (selecting) {
-            toolbar.title = if (selected.size == 1) "1 selected" else "${number(selected.size)} selected"
+            toolbar.title = TitleBar.steady(if (selected.size == 1) "1 selected" else "${number(selected.size)} selected")
             toolbar.subtitle = null
             toolbar.navigationContentDescription = "Leave selection"
         } else {
@@ -1807,6 +1765,7 @@ class FilesActivity : ListActivity() {
                 toolbar.subtitle = "${idx.format.label} · " + FileJobs.items(idx.entries.count { !it.isDir }).replace("item", "file") + if (idx.encrypted) " · locked" else ""
             } else {
                 toolbar.title = when {
+                    home && picking -> if (pickRequest?.multiple == true) "Choose files" else "Choose a file"
                     home -> "Files"
                     inBin -> "Recycle bin"
                     cat != null -> cat.label
@@ -1832,6 +1791,7 @@ class FilesActivity : ListActivity() {
         val two = twoPanes
         val toward = if (two) otherSideWord() else ""
         val bar = when {
+            selecting && picking -> "pick"
             selecting && idx != null -> "entries:" + (oneFile != null) + ":$toward"
             selecting && inBin -> "bin"
             selecting && private -> "private:$toward"
@@ -1842,6 +1802,7 @@ class FilesActivity : ListActivity() {
         if (bar != barShown) {
             barShown = bar
             when {
+                bar == "pick" -> setActions(listOf(barButton(R.drawable.ic_check, "Choose") { finishPick(selectedFiles()) }))
                 selecting && idx != null -> setActions(listOfNotNull(
                     barButton(R.drawable.ic_unarchive, "Extract") { extractSelected(named = true) },
                     if (two) barButton(R.drawable.ic_unarchive, "Extract to the\u00A0$toward", lines = 2) { extractSelectedTo(toOther = true) } else null,
@@ -1919,6 +1880,7 @@ class FilesActivity : ListActivity() {
         val all = selecting && selected.size >= shownRowCount
         val two = if (!twoOffered) "" else if (twoPanes) ":two" else ":one"
         val key = when {
+            picking -> if (selecting || onStartPage) "pick" else "pick:$grid"
             selecting -> "select:$all"
             onStartPage -> "home$two"
             else -> "place:$grid$two"
@@ -1928,6 +1890,8 @@ class FilesActivity : ListActivity() {
         toolbar.menu.clear()
         val color = Ui.text(this)
         when {
+            // Picking: only list or grid.
+            picking -> if (!selecting && !onStartPage) addMenu(MENU_VIEW, if (grid) "Show as a list" else "Show as a grid", if (grid) R.drawable.ic_view_list else R.drawable.ic_grid_view, color)
             selecting -> addTextAction(MENU_SELECT_ALL, if (all) "Clear selection" else "Select all")
             onStartPage -> {
                 addTwoPanesButton()
@@ -1955,39 +1919,11 @@ class FilesActivity : ListActivity() {
 
     /** The area at the bottom only shows when one of its bars does. */
     private fun updateBottom() {
-        val any = jobStrip.visibility == View.VISIBLE || pasteBar.visibility == View.VISIBLE || actionBar.visibility == View.VISIBLE
         // 2.9: the bar slides up from the bottom edge when it comes, and back down when it goes.
-        if (!animationsOn || !bottom.isLaidOut && !any) {
-            bottomLeaving = false
-            bottom.animate().cancel()
-            bottom.translationY = 0f
-            bottom.visibility = if (any) View.VISIBLE else View.GONE
-            return
-        }
-        if (any) {
-            if (bottom.visibility == View.VISIBLE && !bottomLeaving) return
-            bottomLeaving = false
-            bottom.animate().cancel()
-            if (bottom.visibility != View.VISIBLE) {
-                bottom.visibility = View.VISIBLE
-                bottom.translationY = Ui.dpf(this, 72f)
-            }
-            bottom.animate().translationY(0f).setDuration(Motion.NORMAL).setInterpolator(Motion.enter).start()
-        } else if (bottom.visibility == View.VISIBLE && !bottomLeaving) {
-            bottomLeaving = true
-            bottom.animate().cancel()
-            bottom.animate().translationY(bottom.height.toFloat().coerceAtLeast(Ui.dpf(this, 72f))).setDuration(Motion.SHORT).setInterpolator(Motion.exit).withEndAction {
-                if (bottomLeaving) {
-                    bottomLeaving = false
-                    bottom.visibility = View.GONE
-                    bottom.translationY = 0f
-                }
-            }.start()
-        }
+        bottomBar.show(jobStrip.visibility == View.VISIBLE || pasteBar.visibility == View.VISIBLE || actionBar.visibility == View.VISIBLE, animationsOn)
     }
 
-    /** The bar at the bottom is sliding away (it shows until it is gone). */
-    private var bottomLeaving = false
+    private lateinit var bottomBar: BottomBar
 
     /** A message at the bottom, above the bars there. */
     private fun say(text: CharSequence, action: String? = null, long: Boolean = false, onAction: (() -> Unit)? = null) {
@@ -2008,16 +1944,7 @@ class FilesActivity : ListActivity() {
 
     /** A button at the top in words, in the accent colour. */
     private fun addTextAction(id: Int, label: String) {
-        val v = Ui.text(this, Ui.Type.LABEL, label, Ui.accent(this), lines = 1).apply {
-            gravity = Gravity.CENTER
-            setPadding(dp(14), dp(10), dp(14), dp(10))
-            background = Ui.ripple(this@FilesActivity, null, 18)
-            setOnClickListener { onMenu(id) }
-        }
-        toolbar.menu.add(0, id, id, label).apply {
-            actionView = v
-            setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS)
-        }
+        TitleBar.addTextAction(toolbar, id, label) { onMenu(id) }
     }
 
     private fun onMenu(id: Int) {
@@ -2176,6 +2103,7 @@ class FilesActivity : ListActivity() {
                         touchedSinceShown = false
                     }
                     render()
+                    crossFade()
                 }
             }
             .setNegativeButton(android.R.string.cancel, null)
@@ -2484,10 +2412,18 @@ class FilesActivity : ListActivity() {
 
     // ------------------------------------------------------------------ opening
 
+    /** Gives [files] to the website that asked. */
+    private fun finishPick(files: List<File>) {
+        if (files.isEmpty()) return
+        setResult(RESULT_OK, FilePick.result(files))
+        finish()
+    }
+
     private fun open(r: Row) {
         val f = r.file
         val e = r.entry
         when {
+            picking && f != null -> if (r.isDir) openFolder(f) else finishPick(listOf(f))
             e != null && e.isDir -> {
                 clearQuery()
                 showArchiveFolder(e.path)
@@ -2714,7 +2650,11 @@ class FilesActivity : ListActivity() {
                 RecycleBin.restore(this, b.items) { back, failed ->
                     homeDirty = true
                     // A category and the start page read Android's media index, which learns of them a moment later.
-                    if (!isFinishing) list.postDelayed({ if (!isFinishing) reloadShown() }, if (shownPanes().any { it.home || it.category != null }) 900L else 0L)
+                    if (!isFinishing) list.postDelayed({
+                        if (isFinishing) return@postDelayed
+                        for (p in shownPanes()) p.undone = true
+                        reloadShown()
+                    }, if (shownPanes().any { it.home || it.category != null }) 900L else 0L)
                     when {
                         failed > 0 -> say("$failed couldn't be put back: they're still in the recycle bin", long = true)
                         // 3.0: put back under another name (the old one was taken meanwhile): said.
@@ -2795,10 +2735,17 @@ class FilesActivity : ListActivity() {
         Sheets.sheet(this, col).showImmersive()
     }
 
+    /** [items] leave the list on show at once, closing up (a lot of them at once: the list fades instead). */
+    private fun dropFromBin(items: List<RecycleBin.Item>) {
+        dropRows(items.map { it.file })
+        if (items.size > MAX_ANIMATED) crossFade(ms = Motion.SHORT)
+    }
+
     private fun restoreFromBin(items: List<RecycleBin.Item>) {
         if (items.isEmpty()) return
         withChanges(items.map { it.home } + items.map { it.holder }) {
             clearSelection()
+            dropFromBin(items)
             RecycleBin.restore(this, items) { back, failed ->
                 homeDirty = true
                 if (isFinishing) return@restore
@@ -2824,6 +2771,7 @@ class FilesActivity : ListActivity() {
         Dialogs.confirm(this, title, "${UrlUtils.formatBytes(items.sumOf { it.size })} is freed. Swift can't bring " + (if (items.size == 1) "it" else "them") + " back.", "Delete forever", danger = true) {
             withChanges(items.map { it.holder }) {
                 clearSelection()
+                dropFromBin(items)
                 RecycleBin.erase(this, items) { n ->
                     homeDirty = true
                     if (isFinishing) return@erase
@@ -2844,6 +2792,7 @@ class FilesActivity : ListActivity() {
         ) {
             withChanges(all.map { it.holder }) {
                 clearSelection()
+                dropFromBin(all)
                 RecycleBin.empty(this) { n ->
                     homeDirty = true
                     if (isFinishing) return@empty
@@ -3098,7 +3047,7 @@ class FilesActivity : ListActivity() {
         var output = Archives.Output.ZIP
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(Ui.dp(this@FilesActivity, 20), Ui.dp(this@FilesActivity, 8), Ui.dp(this@FilesActivity, 20), 0)
+            setPadding(Ui.dp(this@FilesActivity, 24), Ui.dp(this@FilesActivity, 8), Ui.dp(this@FilesActivity, 24), 0)
         }
         val nameInput = EditText(this).apply {
             setText(base)
@@ -3106,12 +3055,14 @@ class FilesActivity : ListActivity() {
             setSingleLine()
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
             selectAll()
+            Ui.field(this)
         }
         box.addView(nameInput)
         val password = EditText(this).apply {
             hint = "Password (if you want one)"
             setSingleLine()
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            Ui.field(this)
         }
         val note = Ui.text(this, Ui.Type.CAPTION, "With a password the ZIP is locked with AES-256. 7-Zip, WinRAR and phones open it; Windows' own unzip can't.").apply {
             setPadding(0, Ui.dp(this@FilesActivity, 4), 0, 0)
@@ -3122,7 +3073,7 @@ class FilesActivity : ListActivity() {
             password.visibility = if (zip) View.VISIBLE else View.GONE
             note.text = if (zip) "With a password the ZIP is locked with AES-256. 7-Zip, WinRAR and phones open it; Windows' own unzip can't."
             else "7z makes smaller archives, but takes longer. Swift makes them without a password."
-        }.apply { setPadding(0, Ui.dp(this@FilesActivity, 8), 0, 0) }
+        }.apply { setPadding(0, Ui.dp(this@FilesActivity, 8), 0, Ui.dp(this@FilesActivity, 8)) }
         box.addView(chips)
         box.addView(password)
         box.addView(note)
@@ -3318,11 +3269,7 @@ class FilesActivity : ListActivity() {
     }
 
     private fun jobDone(job: FileJobs.Job) {
-        if (progressFor === job) {
-            progressDialog?.dismiss()
-            progressDialog = null
-            progressFor = null
-        }
+        progress.doneWith(job)
         if (isFinishing) return
         homeDirty = true
         // 3.0.4: each side on show follows what changed (a copy to the other side changes both).
@@ -3370,74 +3317,20 @@ class FilesActivity : ListActivity() {
             jobStrip.visibility = View.GONE
             updateBottom()
         } else {
-            jobStrip.visibility = View.VISIBLE
+            bottomBar.part(jobStrip, animationsOn)
             val more = if (jobs.size > 1) "  (+${jobs.size - 1})" else ""
             jobText.text = job.title + more + "  ·  " + FileJobs.detail(job).ifBlank { "Waiting…" }
-            setBar(jobBar, job)
+            FileJobDialogs.setBar(jobBar, job)
             updateBottom()
         }
-        progressFor?.let { j -> if (j.finished) {
-            progressDialog?.dismiss()
-            progressDialog = null
-            progressFor = null
-        } else updateProgress(j) }
+        progress.changed()
         val asking = FileJobs.asking
         val q = asking?.question
         if (q != null && q !== questionShown && !isFinishing) showQuestion(q)
     }
 
-    private fun setBar(bar: ProgressBar, job: FileJobs.Job) {
-        val indeterminate = job.fraction < 0 || job.counting
-        if (bar.isIndeterminate != indeterminate) bar.isIndeterminate = indeterminate
-        if (!indeterminate) bar.progress = (job.fraction * 1000).toInt()
-    }
-
     /** The job's progress in a window: the file, how far, Hide (it goes on) and Cancel. */
-    private fun showProgress(job: FileJobs.Job) {
-        if (isFinishing || job.finished) return
-        progressDialog?.dismiss()
-        val box = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(Ui.dp(this@FilesActivity, 24), Ui.dp(this@FilesActivity, 8), Ui.dp(this@FilesActivity, 24), 0)
-        }
-        val name = Ui.text(this, Ui.Type.BODY, job.current).apply {
-            isSingleLine = true
-            ellipsize = TextUtils.TruncateAt.MIDDLE
-        }
-        val bar = horizontalBar()
-        val detail = Ui.steadyFigures(Ui.text(this, Ui.Type.CAPTION, FileJobs.detail(job)))
-        box.addView(name)
-        box.addView(bar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(this, 6)).apply {
-            topMargin = Ui.dp(this@FilesActivity, 12)
-            bottomMargin = Ui.dp(this@FilesActivity, 8)
-        })
-        box.addView(detail)
-        progressName = name
-        progressBar = bar
-        progressDetail = detail
-        progressFor = job
-        progressDialog = MaterialAlertDialogBuilder(this)
-            .setTitle(job.title)
-            .setView(box)
-            .setPositiveButton("Hide", null)
-            .setNegativeButton("Cancel") { _, _ -> job.cancel() }
-            .showImmersive()
-            .also { d ->
-                d.setOnDismissListener {
-                    if (progressDialog === d) {
-                        progressDialog = null
-                        progressFor = null
-                    }
-                }
-            }
-        updateProgress(job)
-    }
-
-    private fun updateProgress(job: FileJobs.Job) {
-        progressName?.text = job.current.ifBlank { if (job.counting) "Getting ready…" else "" }
-        progressDetail?.text = FileJobs.detail(job)
-        progressBar?.let { setBar(it, job) }
-    }
+    private fun showProgress(job: FileJobs.Job) = progress.show(job)
 
     /** A job asks: a name already taken, or an archive's password. */
     private fun showQuestion(q: FileJobs.Question) {
@@ -3446,41 +3339,23 @@ class FilesActivity : ListActivity() {
             askPassword(q.name, q.wrong, onCancel = { q.reply(null) }) { pw -> q.reply(pw) }
             return
         }
-        val box = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(Ui.dp(this@FilesActivity, 24), Ui.dp(this@FilesActivity, 4), Ui.dp(this@FilesActivity, 24), 0)
-        }
-        box.addView(Ui.text(this, Ui.Type.BODY_SECONDARY, "There's already ${if (q.isFolder) "a folder" else "a file"} called “${q.name}” in “${q.folder}”."))
-        val all = CheckBox(this).apply {
-            text = "Do the same for the rest"
-            setPadding(Ui.dp(this@FilesActivity, 4), 0, 0, 0)
-        }
-        box.addView(all, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = Ui.dp(this@FilesActivity, 8) })
-        Palette.paint(box)
-        val d = MaterialAlertDialogBuilder(this)
-            .setTitle("“${q.name}” is already there")
-            .setView(box)
-            .setPositiveButton("Replace") { _, _ -> q.reply(FileJobs.Answer(FileJobs.Choice.REPLACE, all.isChecked)) }
-            .setNegativeButton("Keep both") { _, _ -> q.reply(FileJobs.Answer(FileJobs.Choice.KEEP_BOTH, all.isChecked)) }
-            .setNeutralButton("Skip") { _, _ -> q.reply(FileJobs.Answer(FileJobs.Choice.SKIP, all.isChecked)) }
-            .setCancelable(false)
-            .showImmersive()
-        Dialogs.markDanger(d)
+        FileJobDialogs.askNameTaken(this, q)
     }
 
     /** Asks for an archive's password ([wrong]: the last one didn't work). */
     private fun askPassword(archive: String, wrong: Boolean, onCancel: () -> Unit, onOk: (String) -> Unit) {
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(Ui.dp(this@FilesActivity, 20), Ui.dp(this@FilesActivity, 4), Ui.dp(this@FilesActivity, 20), 0)
+            setPadding(Ui.dp(this@FilesActivity, 24), Ui.dp(this@FilesActivity, 4), Ui.dp(this@FilesActivity, 24), 0)
         }
         val input = EditText(this).apply {
             hint = "Password"
             setSingleLine()
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            Ui.field(this)
         }
         box.addView(Ui.text(this, Ui.Type.BODY_SECONDARY, if (wrong) "That password didn't work. Check it and try again." else "“$archive” is locked with a password.").apply {
-            setPadding(Ui.dp(this@FilesActivity, 4), 0, Ui.dp(this@FilesActivity, 4), Ui.dp(this@FilesActivity, 4))
+            setPadding(0, 0, 0, Ui.dp(this@FilesActivity, 8))
         })
         box.addView(input)
         box.addView(CheckBox(this).apply {
@@ -3511,6 +3386,17 @@ class FilesActivity : ListActivity() {
     }
 
     // ------------------------------------------------------------------ the list
+
+    /** [subtitleOf], with a recycle bin row's last day (or two) in the warning colour. */
+    private fun subtitleText(r: Row, owner: Pane): CharSequence {
+        val text = subtitleOf(r, owner)
+        val b = owner.binItems[r.key]?.takeIf { owner.inBin } ?: return text
+        if (b.daysLeft() > 1) return text
+        val going = binText(b)
+        val at = text.indexOf(going)
+        if (at < 0) return text
+        return android.text.SpannableString(text).apply { setSpan(android.text.style.ForegroundColorSpan(Ui.danger(this@FilesActivity)), at, at + going.length, 0) }
+    }
 
     private fun subtitleOf(r: Row, owner: Pane = pane): String {
         // 2.9: in the bin, when it was deleted and how long it stays, then where it was (a second line).
@@ -3567,8 +3453,6 @@ class FilesActivity : ListActivity() {
         var folderIcons: Array<Drawable?>? = null
         lateinit var folderFill: Drawable
         lateinit var fileFill: Drawable
-        lateinit var plain: Drawable
-        lateinit var markedFill: Drawable
     }
 
     private class HeaderHolder(v: View, val title: TextView, val action: TextView) : RecyclerView.ViewHolder(v)
@@ -3608,6 +3492,7 @@ class FilesActivity : ListActivity() {
             clipToPadding = false
             addView(strip)
             layoutParams = RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            Ui.fadeEdges(this)
         }
         return DocsHolder(scroll, strip)
     }
@@ -3633,7 +3518,7 @@ class FilesActivity : ListActivity() {
                 setPadding(dp(4), dp(4), dp(4), dp(6))
                 // 3.0.5: the press's corners around the document's picture (12 dp, 4 dp in), so they nest.
                 background = Ui.ripple(this@FilesActivity, null, Ui.R_MEDIUM)
-                Ui.pressable(this, 0.96f)
+                Ui.pressable(this, Motion.PRESS_CARD)
                 setOnClickListener { openDoc(doc) }
                 setOnLongClickListener { v ->
                     Haptics.hold(v)
@@ -3652,11 +3537,15 @@ class FilesActivity : ListActivity() {
             }
             card.addView(thumb, LinearLayout.LayoutParams(w, dp(132)))
             if (thumbsOn) {
+                // From memory it comes during this call; one read later comes in softly.
+                var binding = true
                 DocThumbs.load(this, doc.uri, doc.kind, w) { bmp ->
                     if (thumb.tag != doc.uri) return@load
                     thumb.scaleType = ImageView.ScaleType.CENTER_CROP
                     thumb.setImageBitmap(bmp)
+                    if (!binding) Motion.fadePicture(thumb)
                 }
+                binding = false
             }
             card.addView(Ui.text(this, Ui.Type.BODY, doc.name, lines = 2).apply {
                 Ui.size(this, Ui.Type.CAPTION, keepFont = true)
@@ -3701,8 +3590,16 @@ class FilesActivity : ListActivity() {
 
     /** The kinds of documents as chips (made again only when they change). */
     private fun bindDocFilter(h: FilterHolder, f: DocFilter) {
-        val key = f.labels.joinToString("|") + "#" + f.chosen
-        if (key == h.shown) return
+        val key = f.labels.joinToString("|")
+        if (key == h.shown) {
+            // The same chips: the one tapped is ticked already (and its colour is fading); only one
+            // chosen some other way needs ticking.
+            ((h.box.getChildAt(0) as? HorizontalScrollView)?.getChildAt(0) as? ChipGroup)?.let { g ->
+                val chip = g.getChildAt(f.chosen) as? Chip
+                if (chip != null && !chip.isChecked) chip.isChecked = true
+            }
+            return
+        }
         h.shown = key
         h.box.removeAllViews()
         val chips = Sheets.chipRow(this, f.labels, f.chosen, sideDp = Ui.MARGIN) { i ->
@@ -3980,15 +3877,30 @@ class FilesActivity : ListActivity() {
     private fun updateMarks() {
         for (p in panes) {
             val on = twoPanes && p === chosen
-            if (on && p.mark.visibility != View.VISIBLE) {
-                p.mark.visibility = View.VISIBLE
-                if (animationsOn) {
-                    p.mark.alpha = 0f
-                    p.mark.animate().alpha(1f).setDuration(Motion.SHORT).start()
+            when {
+                on && p.mark.visibility != View.VISIBLE -> {
+                    p.mark.visibility = View.VISIBLE
+                    if (animationsOn) {
+                        p.mark.alpha = 0f
+                        Motion.anim(p.mark, Motion.SHORT, Motion.enter).alpha(1f).start()
+                    }
                 }
-            } else if (!on && p.mark.visibility != View.GONE) {
-                p.mark.animate().cancel()
-                p.mark.visibility = View.GONE
+                // Chosen again while its line was fading away: it comes back.
+                on && p.mark.alpha != 1f -> Motion.anim(p.mark, Motion.SHORT, Motion.enter).alpha(1f).start()
+                !on && p.mark.visibility != View.GONE ->
+                    if (animationsOn) {
+                        Motion.anim(p.mark, Motion.PAGE_OUT_MS, Motion.exit).alpha(0f).withEndAction {
+                            p.mark.visibility = View.GONE
+                            p.mark.alpha = 1f
+                        }.start()
+                    } else {
+                        p.mark.visibility = View.GONE
+                    }
+            }
+            // The side not worked on stays quieter, its path dimmed.
+            val pathAlpha = if (twoPanes && p !== chosen) 0.6f else 1f
+            if (p.pathScroll.alpha != pathAlpha) {
+                if (animationsOn) Motion.anim(p.pathScroll, Motion.SHORT).alpha(pathAlpha).start() else p.pathScroll.alpha = pathAlpha
             }
         }
     }
@@ -4016,6 +3928,7 @@ class FilesActivity : ListActivity() {
 
     /** Where Files was left (2.9): 3.0.4: the side worked on's, the other side's apart. */
     private fun rememberPlace(key: String) {
+        if (picking) return
         pane.remembered = key
         sp.edit().putString(if (pane === chosen) PREF_LAST else PREF_OTHER, key).apply()
     }
@@ -4097,6 +4010,7 @@ class FilesActivity : ListActivity() {
         remake(chosen)
         if (two) withPane(o) { goTo(otherStart(TwoPanes.places(chosen.side, here, o.pending, two = true)[o.side])) }
         updateChrome()
+        crossFade(listRow)
     }
 
     /** Where the other side comes back to, but not into Private while it is locked (its start page then, with no question). */
@@ -4298,13 +4212,7 @@ class FilesActivity : ListActivity() {
         rv.layoutManager = lm
         rv.adapter = p.adapter
         // 2.9: only removals (and the rows closing up after them) move, briefly; everything else changes in place.
-        rv.itemAnimator = androidx.recyclerview.widget.DefaultItemAnimator().apply {
-            removeDuration = Motion.SHORT
-            moveDuration = Motion.SHORT
-            addDuration = Motion.SHORT
-            changeDuration = 0
-            supportsChangeAnimations = false
-        }
+        rv.itemAnimator = Motion.listAnimator()
         rv.setHasFixedSize(true)
         // A screen of tiles and a few more, so going back and forth between list and grid makes few new ones.
         rv.recycledViewPool.setMaxRecycledViews(TYPE_TILE, gridCols * 6)
@@ -4321,12 +4229,25 @@ class FilesActivity : ListActivity() {
          * Shows [list]. With [removals] (2.9), when it is the list on show less a few things (deleted,
          * moved away), those close up one by one; otherwise (and for many at once) all show anew.
          */
-        fun set(list: List<Any>, removals: Boolean = false) {
+        fun set(list: List<Any>, removals: Boolean = false, additions: Boolean = false) {
             // 3.0.3: a slide's positions belong to the list as it was (3.0.4: a slide is on the side touched).
             if (owner === chosen) endSlide()
             val old = items
             items = list
             val gone = old.size - list.size
+            // The other way round: what Undo put back comes in between the rows that stayed.
+            if (additions && animationsOn && -gone in 1..MAX_ANIMATED) {
+                val added = ArrayList<Int>(-gone)
+                var j = 0
+                for (i in list.indices) {
+                    if (j < old.size && keyOf(old[j]) == keyOf(list[i])) j++ else added += i
+                }
+                if (j == old.size && added.size == -gone) {
+                    for (p in added) notifyItemInserted(p)
+                    if (startPage) notifyItemRangeChanged(0, list.size, PAYLOAD_CORNERS)
+                    return
+                }
+            }
             if (removals && animationsOn && gone in 1..MAX_ANIMATED) {
                 val removed = ArrayList<Int>(gone)
                 var j = 0
@@ -4418,7 +4339,7 @@ class FilesActivity : ListActivity() {
                         if (h.onCard) GroupedRows.place(h.itemView, position, items.size, groupOf)
                     }
                 }
-                is Header -> bindHeader(holder as HeaderHolder, item)
+                is Header -> bindHeader(holder as HeaderHolder, item, position == 0)
                 is StorageCard -> bindStorage(holder as StorageHolder, item)
                 is CategoryGrid -> bindCategories(holder as CategoriesHolder, item)
                 is ToolGrid -> bindTools(holder as ToolsHolder, item)
@@ -4438,6 +4359,7 @@ class FilesActivity : ListActivity() {
             if (holder is FileHolder) {
                 holder.thumb?.cancel()
                 holder.thumb = null
+                Motion.stopPicture(holder.icon)
             }
         }
     }
@@ -4489,7 +4411,8 @@ class FilesActivity : ListActivity() {
         val more = ImageButton(ctx).apply {
             setImageDrawable(Ui.icon(ctx, R.drawable.ic_more, Ui.textSecondary(ctx)))
             contentDescription = "More"
-            setBackgroundResource(RowHolder.selectableBackground(ctx))
+            background = Ui.rippleBorderless(ctx)
+            Ui.pressable(this, Motion.PRESS_ICON, morph = false)
         }
         root.addView(more, LinearLayout.LayoutParams(dp(44), dp(44)))
         // 2.8: a tick box in ⋮'s place while selecting (the same width: the name doesn't move).
@@ -4499,9 +4422,9 @@ class FilesActivity : ListActivity() {
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }
         root.addView(check, LinearLayout.LayoutParams(dp(44), dp(44)))
+        // The start page's rows are never selected: they keep their own piece.
+        if (!onCard) root.background = MarkFill.row(ctx)
         val h = FileHolder(root, false, root, icon, icon, check, title, subtitle, more, null, onCard = onCard)
-        h.plain = root.background
-        h.markedFill = Ui.ripple(ctx, ColorDrawable(Ui.accentContainer(ctx)), 0)
         return wire(h)
     }
 
@@ -4514,7 +4437,7 @@ class FilesActivity : ListActivity() {
         }
         val card = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(TILE_GAP), dp(TILE_GAP), 0, dp(2))
+            setPadding(dp(TILE_GAP), dp(TILE_GAP), dp(TILE_GAP), dp(2))
         }
         root.addView(card, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         val box = SquareBox(ctx)
@@ -4568,13 +4491,12 @@ class FilesActivity : ListActivity() {
             scaleType = ImageView.ScaleType.CENTER
             setPadding(0, 0, 0, 0)
             background = Ui.rippleBorderless(ctx)
+            Ui.pressable(this, Motion.PRESS_ICON, morph = false)
         }
         line.addView(more, LinearLayout.LayoutParams(dp(32), dp(36)))
         card.addView(line, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(2) })
         val h = FileHolder(root, true, card, box, icon, check, title, null, more, play, size)
-        h.plain = Ui.ripple(ctx, null, TILE_RADIUS)
-        h.markedFill = Ui.ripple(ctx, Ui.shape(ctx, Ui.accentContainer(ctx), TILE_RADIUS), TILE_RADIUS)
-        card.background = h.plain
+        card.background = MarkFill.tile(ctx, TILE_RADIUS)
         return wire(h)
     }
 
@@ -4591,17 +4513,25 @@ class FilesActivity : ListActivity() {
         h.card.setOnClickListener {
             paneOf(h)?.let { setChosen(it) }
             val r = rowAt(h) ?: return@setOnClickListener
-            if (selected.isNotEmpty()) toggle(r, h.bindingAdapterPosition) else open(r)
+            when {
+                // Picking several: only files can be chosen.
+                selected.isNotEmpty() && picking && r.isDir -> {}
+                selected.isNotEmpty() -> toggle(r, h.bindingAdapterPosition)
+                else -> open(r)
+            }
         }
         h.card.setOnLongClickListener { v ->
             paneOf(h)?.let { setChosen(it) }
             val r = rowAt(h) ?: return@setOnLongClickListener false
+            // Picking: a hold starts choosing several, on files, where the page takes several.
+            if (picking && (pickRequest?.multiple != true || r.isDir || !canSelect)) return@setOnLongClickListener true
             if (canSelect) {
                 Haptics.hold(v)
                 toggle(r, h.bindingAdapterPosition)
                 // 3.0.3: sliding on from here does the same to the files the finger passes.
-                armSlide(h.bindingAdapterPosition, r.key in selected)
+                if (!picking) armSlide(h.bindingAdapterPosition, r.key in selected)
             } else {
+                Haptics.hold(v)
                 itemSheet(r)
             }
             true
@@ -4620,11 +4550,12 @@ class FilesActivity : ListActivity() {
             // The bin's rows say where things were on a second line.
             val lines = if (owner.inBin) 2 else 1
             if (s.maxLines != lines) s.maxLines = lines
-            s.text = subtitleOf(r, owner)
+            s.text = subtitleText(r, owner)
         }
         if (h.tile) bindSize(owner, h, r)
         h.thumb?.cancel()
         h.thumb = null
+        Motion.stopPicture(h.icon)
         h.icon.tag = r.key
         setIcon(h, r)
         h.play?.visibility = if (r.kind == FileKind.VIDEO) View.VISIBLE else View.GONE
@@ -4634,6 +4565,8 @@ class FilesActivity : ListActivity() {
             val key = r.key
             // An app's icon stays an icon on a tile, not a blown-up square.
             val apkOnTile = h.tile && r.kind == FileKind.APK
+            // From memory it comes during this call; one made later comes in softly.
+            var binding = true
             h.thumb = FileThumbs.load(this, f, r.time, r.kind, if (h.tile) tilePx else thumbPx) { bmp ->
                 if (h.icon.tag != key) return@load
                 h.icon.imageTintList = null
@@ -4641,7 +4574,9 @@ class FilesActivity : ListActivity() {
                 h.icon.setPadding(p, p, p, p)
                 h.icon.scaleType = if (apkOnTile) ImageView.ScaleType.FIT_CENTER else ImageView.ScaleType.CENTER_CROP
                 h.icon.setImageBitmap(bmp)
+                if (!binding) Motion.fadePicture(h.icon)
             }
+            binding = false
         }
         bindSelection(owner, h, r, false)
     }
@@ -4698,17 +4633,10 @@ class FilesActivity : ListActivity() {
     private fun bindSelection(owner: Pane, h: FileHolder, r: Row, toggled: Boolean, fade: Boolean = false) {
         val selecting = owner.selected.isNotEmpty()
         val on = r.key in owner.selected
-        // 2.9: the tick boxes fade in as selecting starts (only the rows on screen are bound, so it is a few).
-        if (fade && selecting && h.check.visibility != View.VISIBLE && animationsOn) {
-            h.check.alpha = 0f
-            h.check.animate().alpha(1f).setDuration(Motion.SHORT).setInterpolator(Motion.enter).start()
-        } else if (h.check.alpha != 1f && !fade) {
-            h.check.animate().cancel()
-            h.check.alpha = 1f
-        }
-        h.check.visibility = if (selecting) View.VISIBLE else View.GONE
-        // A tile keeps ⋮'s room, so the grid's lines don't change height when selecting starts.
-        h.more.visibility = if (!selecting) View.VISIBLE else if (h.tile) View.INVISIBLE else View.GONE
+        // 2.9: the tick boxes fade in as selecting starts and out as it ends (only the rows on screen
+        // are bound, so it is a few). A tile keeps ⋮'s room, so the grid's lines don't change height.
+        val noMore = if (h.tile) View.INVISIBLE else View.GONE
+        Ticks.show(h.check, h.more, selecting, fade && animationsOn, noMore, if (picking) noMore else View.VISIBLE)
         if (selecting) {
             h.check.setImageResource(if (on) R.drawable.ic_check_box else R.drawable.ic_check_box_blank)
             h.check.imageTintList = if (on) accentTint else secondaryTint
@@ -4716,12 +4644,13 @@ class FilesActivity : ListActivity() {
                 // 3.0.3: the bump stops every animation of the box, the fade-in above too, which left the
                 // held file's box invisible: it shows at once, with its pop.
                 h.check.alpha = 1f
-                Motion.bump(h.check, 1.2f)
+                Motion.bump(h.check, 1.12f)
             }
         }
         if (on != h.marked) {
             h.marked = on
-            h.card.background = if (on) h.markedFill else h.plain
+            // Fades over the row's own background, so a press on it isn't cut off.
+            MarkFill.set(h.card, on, animate = (toggled || fade) && animationsOn)
         }
         if (h.tile) {
             val scale = if (on) 0.9f else 1f
@@ -4754,9 +4683,10 @@ class FilesActivity : ListActivity() {
         }
         val title = Ui.text(ctx, Ui.Type.SECTION, "")
         row.addView(title, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        val action = Ui.text(ctx, Ui.Type.BODY, "", Ui.accent(ctx)).apply {
+        val action = Ui.text(ctx, Ui.Type.LABEL, "", Ui.accent(ctx)).apply {
             setPadding(dp(8), dp(4), dp(8), dp(4))
-            setBackgroundResource(RowHolder.selectableBackground(ctx))
+            background = Ui.ripple(ctx, null, Ui.R_SMALL)
+            Ui.pressable(this, Motion.PRESS_BUTTON, morph = false)
         }
         row.addView(action, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
             topMargin = -dp(4)
@@ -4765,7 +4695,10 @@ class FilesActivity : ListActivity() {
         return HeaderHolder(row, title, action)
     }
 
-    private fun bindHeader(h: HeaderHolder, item: Header) {
+    private fun bindHeader(h: HeaderHolder, item: Header, first: Boolean) {
+        // The first one sits close under the search box, which leaves its own space.
+        val top = dp(if (first) 8 else Ui.SECTION_ABOVE)
+        if (h.itemView.paddingTop != top) h.itemView.setPadding(h.itemView.paddingLeft, top, h.itemView.paddingRight, h.itemView.paddingBottom)
         h.title.text = item.text
         h.action.text = item.action.orEmpty()
         h.action.visibility = if (item.action != null) View.VISIBLE else View.GONE
@@ -4787,7 +4720,7 @@ class FilesActivity : ListActivity() {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(Ui.ROW_INSET), dp(14), dp(Ui.ROW_INSET), dp(14))
             background = cardFill()
-            Ui.pressable(this, 0.98f)
+            Ui.pressable(this, Motion.PRESS_CARD)
         }
         val head = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -4862,7 +4795,7 @@ class FilesActivity : ListActivity() {
         }
         h.detail.text = if (known) "${UrlUtils.formatBytes(used)} used · ${UrlUtils.formatBytes(s.free)} free" else "Measuring…"
         h.detail.setTextColor(if (full) Ui.danger(this) else Ui.textSecondary(this))
-        val said = bindLegend(h, split)
+        val said = bindLegend(h, split, known)
         h.card.contentDescription = s.volume.name +
             (if (known) ", ${UrlUtils.formatBytes(used)} used, ${UrlUtils.formatBytes(s.free)} free of ${UrlUtils.formatBytes(s.total)}" else "") +
             (if (said.isNotEmpty()) ". $said" else "")
@@ -4870,11 +4803,14 @@ class FilesActivity : ListActivity() {
 
     /**
      * 3.0.4: the legend under the bar: each part with anything in it (in the bar's order), or nothing
-     * until [split] is known. It fades in the first time it comes. Returns what it says, for TalkBack.
+     * until [split] is known: its room is kept then ([known]: the storage's size is known, so the legend
+     * is on its way), so nothing below moves when it comes. It fades in the first time it comes.
+     * Returns what it says, for TalkBack.
      */
-    private fun bindLegend(h: StorageHolder, split: StorageKinds.Split?): String {
+    private fun bindLegend(h: StorageHolder, split: StorageKinds.Split?, known: Boolean): String {
         if (split == null) {
-            h.legend.visibility = View.GONE
+            if (known) for (line in h.lines) line.visibility = View.VISIBLE
+            h.legend.visibility = if (known) View.INVISIBLE else View.GONE
             return ""
         }
         val sizes = longArrayOf(split.pictures, split.videos, split.music, split.documents, split.other)
@@ -4899,7 +4835,7 @@ class FilesActivity : ListActivity() {
         val perLine = h.cells.size / h.lines.size
         for ((n, line) in h.lines.withIndex()) line.visibility = if (n * perLine < cell) View.VISIBLE else View.GONE
         if (h.legend.visibility != View.VISIBLE) {
-            if (animationsOn && h.legend.isAttachedToWindow) Motion.fadeIn(h.legend, fromDy = 4) else h.legend.visibility = View.VISIBLE
+            if (animationsOn && h.legend.isAttachedToWindow) Motion.fadeIn(h.legend, fromDy = 0) else h.legend.visibility = View.VISIBLE
         }
         return said.toString()
     }
@@ -4923,7 +4859,7 @@ class FilesActivity : ListActivity() {
                     gravity = Gravity.CENTER_VERTICAL
                     setPadding(dp(Ui.ROW_INSET), dp(12), dp(8), dp(12))
                     background = cardFill()
-                    Ui.pressable(this, 0.96f)
+                    Ui.pressable(this, Motion.PRESS_CARD)
                     setOnClickListener { openCategory(c) }
                 }
                 card.addView(Ui.iconBadge(ctx, c.icon), LinearLayout.LayoutParams(dp(Ui.ICON_BOX), dp(Ui.ICON_BOX)).apply { marginEnd = dp(12) })
@@ -4943,41 +4879,35 @@ class FilesActivity : ListActivity() {
         return CategoriesHolder(col, counts)
     }
 
-    /** 2.9: Free up space, Recycle bin, Private and Wi-Fi transfer, as cards like the categories'. */
+    /**
+     * 2.9: Free up space, Recycle bin, Private and Wi-Fi transfer: one group of rows, matching
+     * Favourites and Recent below (as cards two to a line, their names were cut off on a narrow phone).
+     * Its name always shows; the caption at the row's end takes what room is left.
+     */
     private fun makeTools(): ToolsHolder {
         val ctx = this
-        val col = LinearLayout(ctx).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(12), 0, dp(12), 0)
+        val group = GroupLayout(ctx).apply {
+            setPadding(dp(Ui.MARGIN), 0, dp(Ui.MARGIN), 0)
             layoutParams = RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         }
         val captions = HashMap<Tool, Pair<View, TextView>>()
-        for (line in Tool.entries.chunked(2)) {
-            val row = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL }
-            for (t in line) {
-                val card = LinearLayout(ctx).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    gravity = Gravity.CENTER_VERTICAL
-                    setPadding(dp(Ui.ROW_INSET), dp(12), dp(8), dp(12))
-                    background = cardFill()
-                    Ui.pressable(this, 0.96f)
-                    setOnClickListener { onTool(t) }
-                }
-                card.addView(Ui.iconBadge(ctx, t.icon), LinearLayout.LayoutParams(dp(Ui.ICON_BOX), dp(Ui.ICON_BOX)).apply { marginEnd = dp(12) })
-                val caption = Ui.text(ctx, Ui.Type.CAPTION, "", lines = 1)
-                card.addView(LinearLayout(ctx).apply {
-                    orientation = LinearLayout.VERTICAL
-                    addView(Ui.text(ctx, Ui.Type.SUBTITLE, t.label, lines = 1))
-                    addView(caption)
-                }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-                captions[t] = card to caption
-                row.addView(card, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { setMargins(dp(4), dp(4), dp(4), dp(4)) })
+        for (t in Tool.entries) {
+            val row = LinearLayout(ctx).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                minimumHeight = dp(Ui.ROW_ONE_LINE)
+                setPadding(dp(Ui.ROW_INSET), dp(8), dp(12), dp(8))
+                setOnClickListener { onTool(t) }
             }
-            // 3.0.4: a last card on its own keeps the others' width.
-            repeat(2 - line.size) { row.addView(View(ctx), LinearLayout.LayoutParams(0, 1, 1f).apply { setMargins(dp(4), 0, dp(4), 0) }) }
-            col.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            Piece.attach(row, tappable = true)
+            row.addView(Ui.iconBadge(ctx, t.icon), LinearLayout.LayoutParams(dp(Ui.ICON_BOX), dp(Ui.ICON_BOX)).apply { marginEnd = dp(14) })
+            row.addView(Ui.text(ctx, Ui.Type.BODY, t.label, lines = 1), LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            val caption = Ui.text(ctx, Ui.Type.CAPTION, "", lines = 1).apply { gravity = Gravity.END }
+            row.addView(caption, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = dp(12) })
+            captions[t] = row to caption
+            group.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         }
-        return ToolsHolder(col, captions)
+        return ToolsHolder(group, captions)
     }
 
     private fun bindTools(h: ToolsHolder, g: ToolGrid) {
@@ -4999,7 +4929,7 @@ class FilesActivity : ListActivity() {
                 Tool.TRANSFER -> "Files to a computer"
                 Tool.NETWORK -> com.swiftbrowser.files.net.NetServers.count(this).let { n -> if (n == 0) "On your Wi-Fi" else "$n saved" }
             }
-            views.second.text = text
+            Motion.swapText(views.second, text)
             views.first.contentDescription = "${t.label}, $text"
         }
     }
@@ -5022,7 +4952,7 @@ class FilesActivity : ListActivity() {
                 s == null || s.count == 0 -> "None"
                 else -> "${number(s.count)} · ${UrlUtils.formatBytes(s.bytes)}"
             }
-            views.second.text = text
+            Motion.swapText(views.second, text)
             views.first.contentDescription = "${c.label}, $text"
         }
     }
@@ -5134,6 +5064,359 @@ class FilesActivity : ListActivity() {
             val i = intent(ctx, folder)
             if (ctx !is Activity) i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             ctx.startActivity(i)
+        }
+    }
+}
+
+
+// ---------------------------------------------------------------------- what Files, Network folders and Free up space share
+
+/** The bar at the bottom of a list screen: it slides up when it comes and back down when it goes. */
+internal class BottomBar(private val bar: View) {
+    /** It is sliding away (it shows until it is gone). */
+    private var leaving = false
+
+    fun show(any: Boolean, animate: Boolean) {
+        val ctx = bar.context
+        if (!animate || !bar.isLaidOut && !any) {
+            leaving = false
+            bar.animate().cancel()
+            bar.translationY = 0f
+            bar.visibility = if (any) View.VISIBLE else View.GONE
+            return
+        }
+        if (any) {
+            if (bar.visibility == View.VISIBLE && !leaving) return
+            leaving = false
+            bar.animate().cancel()
+            if (bar.visibility != View.VISIBLE) {
+                bar.visibility = View.VISIBLE
+                bar.translationY = Ui.dpf(ctx, 72f)
+            }
+            Motion.anim(bar, Motion.NORMAL, Motion.enter).translationY(0f).start()
+        } else if (bar.visibility == View.VISIBLE && !leaving) {
+            leaving = true
+            bar.animate().cancel()
+            Motion.anim(bar, Motion.SHORT, Motion.exit).translationY(bar.height.toFloat().coerceAtLeast(Ui.dpf(ctx, 72f))).withEndAction {
+                if (leaving) {
+                    leaving = false
+                    bar.visibility = View.GONE
+                    bar.translationY = 0f
+                }
+            }.start()
+        }
+    }
+
+    /** [part] of the bar comes in; while the bar itself is already up, with a short fade. */
+    fun part(part: View, animate: Boolean) {
+        if (part.visibility == View.VISIBLE) return
+        if (animate && bar.visibility == View.VISIBLE && !leaving) {
+            Motion.fadeIn(part, fromDy = 0, duration = Motion.SHORT)
+        } else {
+            part.visibility = View.VISIBLE
+        }
+    }
+
+    companion object {
+        /** A button of the bar: an icon over a short word. */
+        fun button(ctx: Context, icon: Int, label: String, danger: Boolean = false, lines: Int = 1, onClick: () -> Unit): View = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(0, Ui.dp(ctx, 8), 0, Ui.dp(ctx, 6))
+            background = Ui.ripple(ctx, null, Ui.R_SMALL)
+            contentDescription = label
+            isClickable = true
+            isFocusable = true
+            Ui.pressable(this, Motion.PRESS_BUTTON, morph = false)
+            val color = if (danger) Ui.danger(ctx) else Ui.text(ctx)
+            addView(ImageView(ctx).apply {
+                setImageDrawable(Ui.icon(ctx, icon, color))
+                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            }, LinearLayout.LayoutParams(Ui.dp(ctx, 24), Ui.dp(ctx, 24)))
+            addView(Ui.text(ctx, Ui.Type.CAPTION, label, color, lines = lines).apply {
+                gravity = Gravity.CENTER
+                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+                setPadding(Ui.dp(ctx, 2), Ui.dp(ctx, 4), Ui.dp(ctx, 2), 0)
+            })
+            setOnClickListener { onClick() }
+        }
+    }
+}
+
+/** The place, part by part ("⌂ › Phone storage › Download"), each part as tall as the row. */
+internal object PathRow {
+    /** The row of parts. The first button's icon starts at the one side margin, like what is above and below it. */
+    fun crumbs(ctx: Context): LinearLayout = LinearLayout(ctx).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(Ui.dp(ctx, Ui.MARGIN - 8), 0, Ui.dp(ctx, 12), 0)
+    }
+
+    /** The row of parts in a box that scrolls sideways and fades where more of it is hidden. */
+    fun scroll(ctx: Context, crumbs: LinearLayout): HorizontalScrollView = HorizontalScrollView(ctx).apply {
+        isHorizontalScrollBarEnabled = false
+        overScrollMode = View.OVER_SCROLL_NEVER
+        addView(crumbs)
+        Ui.fadeEdges(this)
+    }
+
+    /** Shows [parts] (a name and where it goes; the last one is the place on show) after the [homeIcon] button. */
+    fun show(crumbs: LinearLayout, scroll: HorizontalScrollView, homeIcon: Int, homeLabel: String, tooltip: Boolean, onHome: () -> Unit, parts: List<Pair<String, () -> Unit>>) {
+        val ctx = crumbs.context
+        crumbs.removeAllViews()
+        crumbs.addView(ImageView(ctx).apply {
+            setImageDrawable(Ui.icon(ctx, homeIcon, Ui.accent(ctx)))
+            scaleType = ImageView.ScaleType.CENTER
+            background = Ui.ripple(ctx, null, Ui.R_SMALL)
+            contentDescription = homeLabel
+            if (tooltip) androidx.appcompat.widget.TooltipCompat.setTooltipText(this, homeLabel)
+            setOnClickListener { onHome() }
+        }, LinearLayout.LayoutParams(Ui.dp(ctx, 40), ViewGroup.LayoutParams.MATCH_PARENT))
+        parts.forEachIndexed { i, (label, go) ->
+            crumbs.addView(ImageView(ctx).apply {
+                setImageDrawable(Ui.icon(ctx, R.drawable.ic_chevron_right, Ui.textSecondary(ctx)))
+                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            }, LinearLayout.LayoutParams(Ui.dp(ctx, 18), Ui.dp(ctx, 18)))
+            val last = i == parts.size - 1
+            crumbs.addView(Ui.text(ctx, Ui.Type.LABEL, label, if (last) Ui.text(ctx) else Ui.textSecondary(ctx), lines = 1).apply {
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(Ui.dp(ctx, 8), 0, Ui.dp(ctx, 8), 0)
+                background = Ui.ripple(ctx, null, Ui.R_SMALL)
+                maxWidth = Ui.dp(ctx, 200)
+                ellipsize = TextUtils.TruncateAt.MIDDLE
+                if (!last) setOnClickListener { go() }
+            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        }
+        scroll.post { scroll.fullScroll(View.FOCUS_RIGHT) }
+    }
+}
+
+/**
+ * A row's or tile's background while selecting: its touch ripple over a fill that fades in and out
+ * when it is selected (through the view's activated state, so no layer and nothing else redrawn;
+ * a press in progress carries on). Flat rows stay flat, the fill a rounded shape inside the row.
+ */
+internal object MarkFill {
+    private fun states(fill: Drawable) = android.graphics.drawable.StateListDrawable().apply {
+        setEnterFadeDuration(Motion.ICON.toInt())
+        setExitFadeDuration(Motion.ICON.toInt())
+        addState(intArrayOf(android.R.attr.state_activated), fill)
+        addState(intArrayOf(), ColorDrawable(0))
+    }
+
+    fun row(ctx: Context): Drawable {
+        val side = Ui.dp(ctx, 8)
+        val edge = Ui.dp(ctx, 2)
+        return Ui.ripple(ctx, states(android.graphics.drawable.InsetDrawable(Ui.shape(ctx, Ui.accentContainer(ctx), Ui.R_SMALL), side, edge, side, edge)), 0)
+    }
+
+    fun tile(ctx: Context, radius: Int): Drawable =
+        Ui.ripple(ctx, states(Ui.shape(ctx, Ui.accentContainer(ctx), radius)), radius)
+
+    fun set(v: View, on: Boolean, animate: Boolean) {
+        if (v.isActivated == on) return
+        v.isActivated = on
+        if (!animate) v.background?.jumpToCurrentState()
+    }
+}
+
+/** A row's tick box, in place of its ⋮ while selecting. */
+internal object Ticks {
+    private val GOING = Any()
+
+    /**
+     * [selecting] or not: the tick [check] and ⋮ [more] as they should be; with [fade] the tick comes
+     * or goes softly. [moreWhileSelecting]: a tile keeps ⋮'s room (INVISIBLE), a row gives it up (GONE).
+     */
+    fun show(check: View, more: View, selecting: Boolean, fade: Boolean, moreWhileSelecting: Int, moreOtherwise: Int = View.VISIBLE) {
+        if (selecting) {
+            if (check.tag === GOING) {
+                check.animate().cancel()
+                check.tag = null
+                check.alpha = 1f
+            }
+            if (fade && check.visibility != View.VISIBLE) {
+                check.alpha = 0f
+                Motion.anim(check, Motion.SHORT, Motion.enter).alpha(1f).start()
+            } else if (!fade && check.alpha != 1f) {
+                check.animate().cancel()
+                check.alpha = 1f
+            }
+            check.visibility = View.VISIBLE
+            more.visibility = moreWhileSelecting
+            return
+        }
+        when {
+            // Fading away already: when it has gone, ⋮ takes its place (a row's name doesn't move meanwhile).
+            fade && check.tag === GOING -> {}
+            fade && check.visibility == View.VISIBLE -> {
+                check.tag = GOING
+                Motion.anim(check, Motion.PAGE_OUT_MS, Motion.exit).alpha(0f).withEndAction {
+                    check.tag = null
+                    check.alpha = 1f
+                    check.visibility = View.GONE
+                    more.visibility = moreOtherwise
+                }.start()
+            }
+            else -> {
+                if (check.tag === GOING || check.alpha != 1f) check.animate().cancel()
+                check.tag = null
+                check.alpha = 1f
+                check.visibility = View.GONE
+                more.visibility = moreOtherwise
+            }
+        }
+    }
+}
+
+/** The title bars of Files, Network folders and Free up space. */
+internal object TitleBar {
+    /** A title whose digits don't change width as a number goes up. */
+    fun steady(text: String): CharSequence = android.text.SpannableString(text).apply {
+        setSpan(object : android.text.style.MetricAffectingSpan() {
+            override fun updateMeasureState(p: android.text.TextPaint) { p.fontFeatureSettings = "tnum" }
+            override fun updateDrawState(p: android.text.TextPaint) { p.fontFeatureSettings = "tnum" }
+        }, 0, length, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+    }
+
+    /** The button at the start of the title bar changes (back ↔ close) with a quick turn, keeping the bar's own colour. */
+    fun swapBackIcon(toolbar: androidx.appcompat.widget.Toolbar, res: Int) {
+        val button = (0 until toolbar.childCount).asSequence().map { toolbar.getChildAt(it) }
+            .firstOrNull { it is ImageButton && it.drawable != null && it.drawable === toolbar.navigationIcon } as? ImageButton
+        if (button == null) {
+            toolbar.setNavigationIcon(res)
+            return
+        }
+        button.imageTintList = ColorStateList.valueOf(Ui.text(toolbar.context))
+        Motion.swapIcon(button, res)
+    }
+
+    /** A button of the title bar in words, in the accent colour. */
+    fun addTextAction(toolbar: androidx.appcompat.widget.Toolbar, id: Int, label: String, onClick: () -> Unit): MenuItem {
+        val ctx = toolbar.context
+        val v = Ui.text(ctx, Ui.Type.LABEL, label, Ui.accent(ctx), lines = 1).apply {
+            gravity = Gravity.CENTER
+            setPadding(Ui.dp(ctx, 14), Ui.dp(ctx, 10), Ui.dp(ctx, 14), Ui.dp(ctx, 10))
+            background = Ui.ripple(ctx, null, 18)
+            setOnClickListener { onClick() }
+        }
+        return toolbar.menu.add(0, id, id, label).apply {
+            actionView = v
+            setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS)
+        }
+    }
+}
+
+/** What a file job shows: its bar, its window, and the question about a name that is already taken. */
+internal object FileJobDialogs {
+    /** A rounded bar with room for a thousand steps (a job's fraction, or a walk's). */
+    fun bar(ctx: Context): ProgressBar = ProgressBar(ctx, null, android.R.attr.progressBarStyleHorizontal).apply {
+        max = 1000
+        progressDrawable = ContextCompat.getDrawable(ctx, R.drawable.progress_rounded)
+        progressTintList = ColorStateList.valueOf(Ui.accent(ctx))
+        indeterminateTintList = ColorStateList.valueOf(Ui.accent(ctx))
+    }
+
+    /** [job]'s progress on [bar]: a moving bar with no known end, a smooth slide with one. */
+    fun setBar(bar: ProgressBar, job: FileJobs.Job) {
+        val indeterminate = job.fraction < 0 || job.counting
+        if (bar.isIndeterminate != indeterminate) bar.isIndeterminate = indeterminate
+        if (!indeterminate) Motion.progress(bar, (job.fraction * 1000).toInt())
+    }
+
+    /** A job asks about a name already taken: Replace, Keep both, or Skip, maybe for the rest too. */
+    fun askNameTaken(a: AppCompatActivity, q: FileJobs.Question) {
+        val box = LinearLayout(a).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(Ui.dp(a, 24), Ui.dp(a, 4), Ui.dp(a, 24), 0)
+        }
+        box.addView(Ui.text(a, Ui.Type.BODY_SECONDARY, "There's already ${if (q.isFolder) "a folder" else "a file"} called “${q.name}” in “${q.folder}”."))
+        val all = CheckBox(a).apply {
+            text = "Do the same for the rest"
+            setPadding(Ui.dp(a, 4), 0, 0, 0)
+        }
+        box.addView(all, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = Ui.dp(a, 8) })
+        Palette.paint(box)
+        val d = MaterialAlertDialogBuilder(a)
+            .setTitle("“${q.name}” is already there")
+            .setView(box)
+            .setPositiveButton("Replace") { _, _ -> q.reply(FileJobs.Answer(FileJobs.Choice.REPLACE, all.isChecked)) }
+            .setNegativeButton("Keep both") { _, _ -> q.reply(FileJobs.Answer(FileJobs.Choice.KEEP_BOTH, all.isChecked)) }
+            .setNeutralButton("Skip") { _, _ -> q.reply(FileJobs.Answer(FileJobs.Choice.SKIP, all.isChecked)) }
+            .setCancelable(false)
+            .showImmersive()
+        Dialogs.markDanger(d)
+    }
+
+    /** A job's progress in a window: the file, how far, Hide (it goes on) and Cancel. One screen's, at most one at a time. */
+    class Progress(private val a: AppCompatActivity) {
+        private var dialog: AlertDialog? = null
+        private var job: FileJobs.Job? = null
+        private var name: TextView? = null
+        private var bar: ProgressBar? = null
+        private var detail: TextView? = null
+
+        fun show(j: FileJobs.Job) {
+            if (a.isFinishing || j.finished) return
+            dialog?.dismiss()
+            val box = LinearLayout(a).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(Ui.dp(a, 24), Ui.dp(a, 8), Ui.dp(a, 24), 0)
+            }
+            val nameView = Ui.text(a, Ui.Type.BODY, j.current).apply {
+                isSingleLine = true
+                ellipsize = TextUtils.TruncateAt.MIDDLE
+            }
+            val barView = FileJobDialogs.bar(a)
+            val detailView = Ui.steadyFigures(Ui.text(a, Ui.Type.CAPTION, FileJobs.detail(j)))
+            box.addView(nameView)
+            box.addView(barView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(a, 6)).apply {
+                topMargin = Ui.dp(a, 12)
+                bottomMargin = Ui.dp(a, 8)
+            })
+            box.addView(detailView)
+            name = nameView
+            bar = barView
+            detail = detailView
+            job = j
+            dialog = MaterialAlertDialogBuilder(a)
+                .setTitle(j.title)
+                .setView(box)
+                .setPositiveButton("Hide", null)
+                .setNegativeButton("Cancel") { _, _ -> j.cancel() }
+                .showImmersive()
+                .also { d ->
+                    d.setOnDismissListener {
+                        if (dialog === d) {
+                            dialog = null
+                            job = null
+                        }
+                    }
+                }
+            update(j)
+        }
+
+        /** Something about the jobs changed: the window follows, or closes when its job is done. */
+        fun changed() {
+            val j = job ?: return
+            if (j.finished) dismiss() else update(j)
+        }
+
+        private fun update(j: FileJobs.Job) {
+            name?.text = j.current.ifBlank { if (j.counting) "Getting ready…" else "" }
+            detail?.text = FileJobs.detail(j)
+            bar?.let { setBar(it, j) }
+        }
+
+        /** The window closes if it is [j]'s. */
+        fun doneWith(j: FileJobs.Job) {
+            if (job === j) dismiss()
+        }
+
+        fun dismiss() {
+            dialog?.dismiss()
+            dialog = null
+            job = null
         }
     }
 }

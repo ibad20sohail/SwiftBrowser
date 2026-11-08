@@ -33,6 +33,13 @@ class SuggestionAdapter(
     private var rows: List<Any> = emptyList()
     private var typed = ""
 
+    /** One id for each row: what lets the search engine's late results move the rows below them. */
+    private var ids = LongArray(0)
+
+    init {
+        setHasStableIds(true)
+    }
+
     /** In an incognito tab, the rows take its dark colours (2.6). */
     var incognito = false
 
@@ -52,8 +59,22 @@ class SuggestionAdapter(
             }
         }
         rows = out
+        ids = stableIds(out)
         notifyDataSetChanged()
     }
+
+    /** The same row keeps its id from one list to the next; two alike (the same tab open twice) still get their own. */
+    private fun stableIds(list: List<Any>): LongArray {
+        val taken = HashSet<Long>()
+        return LongArray(list.size) { i ->
+            val row = list[i]
+            var id = if (row is Header) row.title.hashCode().toLong() else (row as Suggestion).let { ((it.url.hashCode().toLong() * 31 + it.title.hashCode()) shl 3) or it.kind.ordinal.toLong() }
+            while (!taken.add(id)) id++
+            id
+        }
+    }
+
+    override fun getItemId(position: Int) = ids[position]
 
     override fun getItemCount() = rows.size
 
@@ -63,7 +84,7 @@ class SuggestionAdapter(
         val ctx = parent.context
         if (viewType == 1) {
             val tv = Ui.text(ctx, Ui.Type.SECTION, "").apply {
-                setPadding(Ui.dp(ctx, 20), Ui.dp(ctx, 14), Ui.dp(ctx, 20), Ui.dp(ctx, 4))
+                setPadding(Ui.dp(ctx, Ui.MARGIN), Ui.dp(ctx, 14), Ui.dp(ctx, Ui.MARGIN), Ui.dp(ctx, 4))
                 layoutParams = RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
                 isFocusable = false
             }
@@ -109,6 +130,8 @@ class SuggestionAdapter(
         h.title.setTextColor(ink)
         h.subtitle.setTextColor(soft)
         h.action.imageTintList = ColorStateList.valueOf(soft)
+        // Incognito's list is dark in both looks: its icon holders with it.
+        h.icon.backgroundTintList = if (incognito) ColorStateList.valueOf(Ui.color(ctx, R.color.incognito_url)) else null
         // Sites show their own icon when Swift has it.
         val favicon = if (s.kind == Suggestion.Kind.BOOKMARK || s.kind == Suggestion.Kind.HISTORY || s.kind == Suggestion.Kind.TAB) Favicons.cached(s.url) else null
         if (favicon != null) {

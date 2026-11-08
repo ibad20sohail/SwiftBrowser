@@ -78,6 +78,9 @@ open class DocumentActivity : AppCompatActivity() {
     private lateinit var findText: EditText
     private lateinit var findCount: TextView
 
+    /** Find is open (its bar may still be fading away). */
+    private var finding = false
+
     private var session: GeckoSession? = null
     private var tab: Tab? = null
     private var docId: String? = null
@@ -104,8 +107,11 @@ open class DocumentActivity : AppCompatActivity() {
     }
 
     private fun buildViews() {
-        root = FrameLayout(this).apply { setBackgroundColor(Palette.color(this@DocumentActivity, R.color.page_bg)) }
+        val pageBehind = Palette.color(this, R.color.settings_bg)
+        root = FrameLayout(this).apply { setBackgroundColor(pageBehind) }
         gecko = GeckoView(this)
+        // The engine's view is white until the page first draws: in the page's own colour instead.
+        gecko.coverUntilFirstPaint(pageBehind)
         root.addView(gecko, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         // Until the viewer page is there (the engine may still be starting).
         // 3.0.4: Swift's loading indicator, in the accent.
@@ -230,6 +236,7 @@ open class DocumentActivity : AppCompatActivity() {
         t.session = s
         Helper.attachSession(t, s)
         s.open(Engine.runtime)
+        gecko.coverUntilFirstPaint(Palette.color(this, R.color.settings_bg))
         gecko.setSession(s)
         session = s
         s.loadUri(url)
@@ -351,6 +358,7 @@ open class DocumentActivity : AppCompatActivity() {
             val input = EditText(this@DocumentActivity).apply {
                 setText(prompt.defaultValue ?: "")
                 setSingleLine()
+                Ui.field(this)
             }
             builder(prompt.title).setMessage(prompt.message).setView(padded(input))
                 .setPositiveButton(android.R.string.ok) { _, _ -> result.complete(prompt.confirm(input.text.toString())) }
@@ -407,6 +415,7 @@ open class DocumentActivity : AppCompatActivity() {
                 setText(prompt.defaultValue ?: "#000000")
                 setSingleLine()
                 inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+                Ui.field(this)
             }
             val adapter = object : ArrayAdapter<String>(this@DocumentActivity, android.R.layout.simple_list_item_1, colors) {
                 override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
@@ -492,7 +501,7 @@ open class DocumentActivity : AppCompatActivity() {
     }
 
     private fun padded(v: View): View = LinearLayout(this).apply {
-        val pad = Ui.dp(this@DocumentActivity, 20)
+        val pad = Ui.dp(this@DocumentActivity, 24)
         setPadding(pad, pad / 2, pad, 0)
         addView(v, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
     }
@@ -501,7 +510,7 @@ open class DocumentActivity : AppCompatActivity() {
 
     private fun back() {
         when {
-            findBar.visibility == View.VISIBLE -> closeFind()
+            finding -> closeFind()
             // A panel, menu or slideshow of the page: the page's own history step closes it.
             canGoBack -> session?.goBack()
             else -> close()
@@ -529,19 +538,15 @@ open class DocumentActivity : AppCompatActivity() {
 
     // ------------------------------------------------------------------ find (Word, text and the rest)
 
+    /** Over the title bar and as tall, with Swift's filled search box: the page's own find bar (PDFs, sheets) looks the same. */
     private fun buildFindBar() {
-        val surface = Palette.color(this, R.color.toolbar_bg)
         val text = Palette.color(this, R.color.text_primary)
         val muted = Palette.color(this, R.color.text_secondary)
         findText = EditText(this).apply {
             hint = "Find in document"
-            setTextColor(text)
-            setHintTextColor(muted)
-            Ui.size(this, Ui.Type.BODY, keepFont = true)
             isSingleLine = true
             imeOptions = EditorInfo.IME_ACTION_SEARCH or EditorInfo.IME_FLAG_NO_EXTRACT_UI
-            background = null
-            setPadding(Ui.dp(this@DocumentActivity, 16), 0, Ui.dp(this@DocumentActivity, 8), 0)
+            Ui.searchBox(this)
             // 3.0.5: the cursor in the accent chosen (this bar isn't recoloured by Palette.paint).
             Palette.cursor(this)
             addTextChangedListener(object : TextWatcher {
@@ -558,11 +563,11 @@ open class DocumentActivity : AppCompatActivity() {
                 }
             }
         }
-        findCount = TextView(this).apply {
+        findCount = Ui.steadyFigures(TextView(this).apply {
             setTextColor(muted)
             Ui.size(this, Ui.Type.CAPTION, keepFont = true)
             setPadding(Ui.dp(this@DocumentActivity, 4), 0, Ui.dp(this@DocumentActivity, 4), 0)
-        }
+        })
         fun button(icon: Int, label: String, click: () -> Unit) = ImageButton(this, null, 0, R.style.Swift_ToolbarButton).apply {
             setImageDrawable(Ui.icon(this@DocumentActivity, icon, text))
             contentDescription = label
@@ -571,27 +576,28 @@ open class DocumentActivity : AppCompatActivity() {
         findBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setBackgroundColor(surface)
-            elevation = Ui.dpf(this@DocumentActivity, 4f)
+            setBackgroundColor(Palette.color(this@DocumentActivity, R.color.settings_bg))
             visibility = View.GONE
             val size = Ui.dp(this@DocumentActivity, 44)
-            addView(findText, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
+            addView(findText, LinearLayout.LayoutParams(0, Ui.dp(this@DocumentActivity, Ui.SEARCH_HEIGHT), 1f).apply { marginStart = Ui.dp(this@DocumentActivity, 8) })
             addView(findCount)
             addView(button(R.drawable.ic_up, "Previous") { find(findText.text.toString(), backwards = true, again = true) }, LinearLayout.LayoutParams(size, size))
             addView(button(R.drawable.ic_down, "Next") { find(findText.text.toString(), backwards = false, again = true) }, LinearLayout.LayoutParams(size, size))
             addView(button(R.drawable.ic_close, "Close") { closeFind() }, LinearLayout.LayoutParams(size, size))
         }
-        root.addView(findBar, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(this, 56), Gravity.TOP))
+        root.addView(findBar, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(this, Ui.BAR_HEIGHT), Gravity.TOP))
     }
 
     private fun openFind() {
-        findBar.visibility = View.VISIBLE
+        finding = true
+        Motion.fadeIn(findBar, fromDy = -8, duration = Motion.SHORT)
         findText.requestFocus()
         (getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager)?.showSoftInput(findText, InputMethodManager.SHOW_IMPLICIT)
     }
 
     private fun closeFind() {
-        findBar.visibility = View.GONE
+        finding = false
+        Motion.fadeOut(findBar, toDy = -8, duration = Motion.PAGE_OUT_MS)
         findText.setText("")
         findCount.text = ""
         session?.finder?.clear()

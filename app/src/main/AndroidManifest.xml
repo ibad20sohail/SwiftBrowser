@@ -158,6 +158,7 @@
              (configChanges), so what plays doesn't restart; the orientation is set while playing. -->
         <activity
             android:name=".ui.PlayerActivity"
+            android:theme="@style/Theme.Swift.Launch"
             android:autoRemoveFromRecents="true"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation"
             android:exported="true"
@@ -322,7 +323,7 @@
             android:exported="false"
             android:screenOrientation="fullSensor"
             android:stateNotNeeded="true"
-            android:theme="@style/zxing_CaptureTheme"
+            android:theme="@style/Swift.Capture"
             android:windowSoftInputMode="stateAlwaysHidden" />
     </application>
 </manifest>

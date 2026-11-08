@@ -60,12 +60,10 @@ class ContinueRow(
             // 3.0.4: as bold as the home page's other headings (the scale's HEADING).
             Ui.size(it, Ui.Type.HEADING)
             it.setTextColor(Ui.text(context))
-            // 3.0.5: its word 24 dp in as before, set in by a margin and a little padding so a soft
-            // backing can go behind just the word.
-            it.setPadding(dp(8), 0, dp(8), 0)
+            it.setPadding(dp(Ui.ROW_INSET), 0, dp(8), 0)
             addView(it, LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                marginStart = dp(16)
-                bottomMargin = dp(10)
+                marginStart = dp(Ui.MARGIN)
+                bottomMargin = dp(Ui.SECTION_BELOW)
             })
         }
         addView(HorizontalScrollView(context).apply {
@@ -78,11 +76,9 @@ class ContinueRow(
         }, LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
     }
 
-    /** 3.0.5: the home page's picture is behind the row: a soft backing behind its heading (HomeView.setOnPicture). */
-    fun setOnPicture(on: Boolean) {
-        val h = heading ?: return
-        h.background = if (on) Ui.shape(context, HomeBackground.backing(context, Ui.text(context)), Ui.R_SMALL) else null
-        h.setPadding(dp(8), if (on) dp(3) else 0, if (on) dp(12) else dp(8), if (on) dp(3) else 0)
+    /** The home page's picture is behind the row: its heading reads on it (HomeBackground.Ink). */
+    fun setInk(ink: HomeBackground.Ink?) {
+        heading?.let { HomeBackground.paint(it, ink, Ui.text(context)) }
     }
 
     /** Loads the row again (the home page came up, or one was removed). */
@@ -109,14 +105,10 @@ class ContinueRow(
         val wasShown = visibility == VISIBLE
         shown = keys
         cards.removeAllViews()
-        cardsNow.forEachIndexed { i, item -> cards.addView(card(item), LayoutParams(dp(CARD_DP), ViewGroup.LayoutParams.WRAP_CONTENT).apply { if (i > 0) marginStart = dp(10) }) }
+        cardsNow.forEachIndexed { i, item -> cards.addView(card(item), LayoutParams(dp(CARD_DP), ViewGroup.LayoutParams.WRAP_CONTENT).apply { if (i > 0) marginStart = dp(Ui.M) }) }
         visibility = if (cardsNow.isEmpty()) GONE else VISIBLE
         // Files' list brings its parts in itself.
-        if (part == Part.BROWSER && !wasShown && cardsNow.isNotEmpty()) {
-            alpha = 0f
-            translationY = dp(8).toFloat()
-            animate().alpha(1f).translationY(0f).setDuration(220).start()
-        }
+        if (part == Part.BROWSER && !wasShown && cardsNow.isNotEmpty()) Motion.fadeIn(this)
     }
 
     /**
@@ -140,14 +132,19 @@ class ContinueRow(
             }
         }
         val card = (0 until cards.childCount).map { cards.getChildAt(it) }.firstOrNull { it.tag === item } ?: return
-        card.animate().alpha(0f).scaleX(0.9f).scaleY(0.9f).setDuration(180).withEndAction {
+        Motion.anim(card, Motion.SMALL, Motion.exit).alpha(0f).scaleX(0.9f).scaleY(0.9f).withEndAction {
+            // The others slide into its place, without a layout on every frame.
+            android.transition.TransitionManager.beginDelayedTransition(cards, android.transition.ChangeBounds().apply {
+                duration = Motion.SMALL
+                interpolator = Motion.standard
+            })
             cards.removeView(card)
             if (cards.childCount > 0) {
                 val first = cards.getChildAt(0)
                 first.layoutParams = (first.layoutParams as LayoutParams).apply { marginStart = 0 }
             }
             shown = emptyList()
-            if (cards.childCount == 0) animate().alpha(0f).setDuration(160).withEndAction { visibility = GONE; alpha = 1f }.start()
+            if (cards.childCount == 0) Motion.anim(this, Motion.SHORT, Motion.exit).alpha(0f).withEndAction { visibility = GONE; alpha = 1f }.start()
         }.start()
     }
 
@@ -161,6 +158,7 @@ class ContinueRow(
         // 3.0.5: on Files' page (a step darker) in the card colour like its other cards; on the home
         // page tile_bg, a step off the page, as the shortcuts and news cards (and clear over a picture).
         background = Ui.shape(context, Ui.color(context, if (part == Part.FILES) R.color.card_bg else R.color.tile_bg), Ui.R_MEDIUM)
+        foreground = Ui.ripple(context, null, Ui.R_MEDIUM)
         clipToOutline = true
         // 3.0.3: a video or song on the phone (Files' row) has no site: its folder says where it is.
         val local = item.localPath?.let { File(it) }
@@ -168,19 +166,12 @@ class ContinueRow(
         val name = item.title.ifBlank { local?.name ?: site }
         addView(FrameLayout(context).apply {
             val doc = item.doc
-            // 3.0.1: until its picture comes (or when it has none), the site's colour softly across the card
-            // and a round play (or page) mark, rather than a dim little icon on plain grey. 3.0.3: the
+            // 3.0.1: until its picture comes (or when it has none), the site's colour, flat and soft, and
+            // a round play (or page) mark, rather than a dim little icon on plain grey. 3.0.3: the
             // accent's for a file on the phone, and a note for a song.
             val tint = if (local != null) Ui.accent(context) else Ui.siteColor(com.swiftbrowser.core.TopSites.key(site))
-            if (doc == null) {
-                val base = Ui.color(context, R.color.surface_alt)
-                background = android.graphics.drawable.GradientDrawable(
-                    android.graphics.drawable.GradientDrawable.Orientation.TL_BR,
-                    intArrayOf(androidx.core.graphics.ColorUtils.blendARGB(base, tint, 0.55f), androidx.core.graphics.ColorUtils.blendARGB(base, tint, 0.18f)),
-                )
-            } else {
-                setBackgroundColor(Ui.color(context, R.color.surface_alt))
-            }
+            val base = Ui.color(context, R.color.surface_alt)
+            setBackgroundColor(if (doc == null) androidx.core.graphics.ColorUtils.blendARGB(base, tint, 0.35f) else base)
             val picture = ImageView(context).apply {
                 scaleType = ImageView.ScaleType.CENTER
                 // 3.0.5: a little dimmer in the dark look (not Files' row: its videos' own previews).
@@ -254,10 +245,11 @@ class ContinueRow(
         contentDescription = "Continue $name, ${item.caption}"
         setOnClickListener { onOpen(item) }
         setOnLongClickListener {
+            Haptics.hold(this)
             onHold(item)
             true
         }
-        Ui.pressable(this, 0.96f)
+        Ui.pressable(this, Motion.PRESS_CARD, morph = false)
     }
 
     /** 3.0.1: the round mark on a card without its picture: play for a video, a page for an article (3.0.3: [glyph]). */

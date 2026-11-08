@@ -60,9 +60,9 @@ body {
 
 .size {
   min-width: 44px;
-  height: 36px;
+  height: 40px;
   border: 0;
-  border-radius: 18px;
+  border-radius: 20px;
   background: var(--button);
   color: var(--text);
   font: 600 15px var(--ui);
@@ -82,11 +82,20 @@ article { overflow-wrap: break-word; }
 
 article img, article video, article figure, article picture { max-width: 100%; height: auto; }
 
+article img { border-radius: 12px; }
+
+html.dark article img { opacity: .9; }
+
 article figure { margin: 1.2em 0; }
 
 article figcaption { color: var(--muted); font: 14px/1.4 var(--ui); margin-top: 6px; }
 
 article a { color: var(--link); }
+
+/* Under the article's own title in size. */
+article h2 { font: 700 1.2em/1.3 var(--ui); }
+
+article h3 { font: 700 1.05em/1.3 var(--ui); }
 
 article pre, article code { font-size: .85em; white-space: pre-wrap; }
 
@@ -113,10 +122,12 @@ article hr { border: 0; border-top: 1px solid var(--rule); }
   padding: 8px;
   border-radius: 28px;
   background: var(--bg);
+  border: 1px solid var(--rule);
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.22);
   animation: swift-in 180ms ease-out;
 }
 .player[hidden] { display: none; }
+.player.leaving { animation: swift-out 150ms ease-in forwards; pointer-events: none; }
 .player button {
   flex: 1;
   min-width: 0;
@@ -128,11 +139,26 @@ article hr { border: 0; border-top: 1px solid var(--rule); }
   font: 600 16px var(--ui);
 }
 .player button.wide { flex: 1.6; }
+.player svg { width: 24px; height: 24px; fill: currentColor; vertical-align: middle; }
+
+/* A press on any button. */
+.size, .player button { transition: transform 100ms ease-out; }
+.size:active, .player button:active { transform: scale(.96); }
 body.playing main { padding-bottom: 88px; }
 
 /* The paragraph being read aloud. */
 .reading { background: var(--reading); border-radius: 6px; box-shadow: 0 0 0 4px var(--reading); }
+#title, #content p, #content h1, #content h2, #content h3, #content h4, #content li, #content blockquote, #content figcaption {
+  transition: background-color 150ms ease-out, box-shadow 150ms ease-out;
+}
 
-/* The article comes in with a short fade. */
-#content, #title { animation: swift-in 220ms ease-out; }
+/* The article comes in with a short fade: its head rises a little, its very tall body only fades (cheaper on a slow phone). */
+#site, #title, #byline { animation: swift-in 220ms ease-out; }
+#content { animation: swift-fade 220ms ease-out; }
 @keyframes swift-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes swift-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes swift-out { to { opacity: 0; transform: translateY(8px); } }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}

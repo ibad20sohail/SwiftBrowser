@@ -161,6 +161,8 @@ abstract class ListActivity : AppCompatActivity() {
         val column = toolbar.parent as LinearLayout
         // 3.0.5: the rows' pieces at the one side margin, lined up with the search box above them.
         list.setPadding(Ui.dp(this, Ui.MARGIN), Ui.dp(this, Ui.XS), Ui.dp(this, Ui.MARGIN), list.paddingBottom)
+        // Rows removed or brought back by Undo fade and the others close up; a row that changes stays put.
+        list.itemAnimator = Motion.listAnimator()
 
         // The large title (and the line under it) scrolls away; the search box (and what a screen adds
         // under it: Downloads' filters) stays, as before. Done as Files' header is (buildChrome).
@@ -168,7 +170,7 @@ abstract class ListActivity : AppCompatActivity() {
         val listBox = list.parent as View
         column.removeView(searchBox)
         column.removeView(listBox)
-        val title = Ui.text(this, Ui.Type.DISPLAY, "", lines = 2)
+        val title = Ui.text(this, Ui.Type.HEADLINE, "", lines = 2)
         val subtitle = Ui.text(this, Ui.Type.BODY_SECONDARY, "", lines = 1).apply { visibility = View.GONE }
         largeTitle = title
         largeSubtitle = subtitle
@@ -221,9 +223,10 @@ abstract class ListActivity : AppCompatActivity() {
         column.addView(coordinator, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         appBar = bar
         page = coordinator
-        // A list that got short while the title was up (a search, a removal): the title comes back down.
+        // A list that got short while the title was up (a search, a removal): the title comes back
+        // down, once rows on their way out have gone (until then they still count as part of the list).
         list.viewTreeObserver.addOnGlobalLayoutListener {
-            if (appBarOffset != 0 && !listOverflows()) showLargeTitle()
+            if (appBarOffset != 0) list.itemAnimator?.isRunning { if (appBarOffset != 0 && !listOverflows()) showLargeTitle() }
         }
     }
 
@@ -496,9 +499,10 @@ class HistoryActivity : ListActivity() {
         }
     }
 
-    private fun render() {
+    /** [animated]: a removal or its Undo, so only those rows move (typing and paging just show the new list). */
+    private fun render(animated: Boolean = false) {
         val shown = rows.filter { r -> r.id !in hiddenIds && hiddenDays.none { r.lastVisit >= it.first && r.lastVisit < it.second } }
-        adapter.items = byDay(shown)
+        if (animated) adapter.submit(byDay(shown)) else adapter.items = byDay(shown)
         // 3.0: too few left to fill the screen (a day deleted, say) while there are more: the next ones.
         if (shown.size < 40 && hasMore) list.post { loadMore() }
         if (query.isBlank()) {
@@ -513,11 +517,11 @@ class HistoryActivity : ListActivity() {
             "h${r.id}", "Removed from history",
             hide = {
                 hiddenIds += r.id
-                render()
+                render(animated = true)
             },
             restore = {
                 hiddenIds -= r.id
-                render()
+                render(animated = true)
             },
             commit = {
                 lifecycleScope.launch(Dispatchers.IO) { SwiftApp.db.deleteHistory(r.id) }
@@ -565,15 +569,7 @@ class HistoryActivity : ListActivity() {
     }
 
     /** The search word in bold and the accent colour. */
-    private fun marked(text: String): CharSequence {
-        if (query.isEmpty()) return text
-        val i = text.indexOf(query, ignoreCase = true)
-        if (i < 0) return text
-        return android.text.SpannableString(text).apply {
-            setSpan(android.text.style.StyleSpan(android.graphics.Typeface.BOLD), i, i + query.length, 0)
-            setSpan(android.text.style.ForegroundColorSpan(Ui.accent(this@HistoryActivity)), i, i + query.length, 0)
-        }
-    }
+    private fun marked(text: String): CharSequence = markedText(text, query, Ui.accent(this))
 
     /** A whole day goes at once, with Undo (no question first). */
     private fun deleteDay(day: Day) {
@@ -583,11 +579,11 @@ class HistoryActivity : ListActivity() {
             "d${day.from}", message,
             hide = {
                 hiddenDays += range
-                render()
+                render(animated = true)
             },
             restore = {
                 hiddenDays -= range
-                render()
+                render(animated = true)
             },
             commit = {
                 lifecycleScope.launch(Dispatchers.IO) { SwiftApp.db.deleteHistoryBetween(Profiles.currentId, day.from, day.to) }
@@ -596,11 +592,33 @@ class HistoryActivity : ListActivity() {
     }
 
     private inner class DayAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
-        var items: List<Any> = emptyList()
+        private var shown: List<Any> = emptyList()
+
+        var items: List<Any>
+            get() = shown
             set(value) {
-                field = value
+                shown = value
                 notifyDataSetChanged()
             }
+
+        /** The list after pages went or came back: only those rows move. */
+        fun submit(newItems: List<Any>) {
+            val old = shown
+            shown = newItems
+            ListChanges.dispatch(list, this, old.size, newItems.size, { o, n -> sameRow(old[o], newItems[n]) })
+        }
+
+        private fun sameRow(a: Any, b: Any) = when {
+            a is Day && b is Day -> a.from == b.from
+            a is HistoryRow && b is HistoryRow -> a.id == b.id
+            else -> false
+        }
+
+        /** The top of a day's heading: less above the list's first, which has the list's own gap too. */
+        private fun placeDay(row: View, position: Int) {
+            val top = Ui.dp(row.context, if (position == 0) Ui.S else Ui.SECTION_ABOVE)
+            row.setPadding(row.paddingLeft, top, row.paddingRight, row.paddingBottom)
+        }
 
         /** 3.0.4: a day's pages go together; its heading ends the group before. */
         private val groupOf: (Int) -> Any? = { i -> if (items[i] is Day) null else 0 }
@@ -628,11 +646,11 @@ class HistoryActivity : ListActivity() {
                 addView(Ui.text(ctx, Ui.Type.SECTION, "").apply { id = R.id.row_title }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
                 addView(Ui.text(ctx, Ui.Type.LABEL, "Delete day", Ui.textSecondary(ctx)).apply {
                     id = R.id.row_action
-                    setPadding(Ui.dp(ctx, 12), Ui.dp(ctx, 8), Ui.dp(ctx, 12), Ui.dp(ctx, 8))
+                    setPadding(Ui.dp(ctx, 12), Ui.dp(ctx, 13), Ui.dp(ctx, 12), Ui.dp(ctx, 13))
                     background = Ui.ripple(ctx, null, 16)
                 }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                    topMargin = -Ui.dp(ctx, 8)
-                    bottomMargin = -Ui.dp(ctx, 8)
+                    topMargin = -Ui.dp(ctx, 13)
+                    bottomMargin = -Ui.dp(ctx, 13)
                 })
             }
             return object : RecyclerView.ViewHolder(row) {}
@@ -641,6 +659,7 @@ class HistoryActivity : ListActivity() {
         override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
             when (val item = items[position]) {
                 is Day -> {
+                    placeDay(holder.itemView, position)
                     holder.itemView.findViewById<TextView>(R.id.row_title).text = item.label
                     // Searching shows matches from many days: deleting a whole day isn't offered then.
                     holder.itemView.findViewById<View>(R.id.row_action).apply {
@@ -662,6 +681,14 @@ class HistoryActivity : ListActivity() {
                         true
                     }
                 }
+            }
+        }
+
+        override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int, payloads: MutableList<Any>) {
+            if (payloads.isNotEmpty() && payloads.all { it == ListChanges.CORNERS }) {
+                if (holder is RowHolder) GroupedRows.place(holder.itemView, position, items.size, groupOf) else placeDay(holder.itemView, position)
+            } else {
+                onBindViewHolder(holder, position)
             }
         }
     }
@@ -709,7 +736,7 @@ class BookmarksActivity : ListActivity() {
                     val r = item.row
                     // Found by searching: which folder it's in.
                     val where = if (query.isNotEmpty() && r.folder.isNotEmpty()) "${r.folder} · " else ""
-                    h.set(R.drawable.ic_star, UrlUtils.readableTitle(r.title, r.url), where + UrlUtils.siteName(r.url))
+                    h.set(R.drawable.ic_star, markedText(UrlUtils.readableTitle(r.title, r.url), query, Ui.accent(this)), where + UrlUtils.siteName(r.url))
                     h.setFavicon(r.url)
                     h.setAction(R.drawable.ic_more, "More") { rowMenu(r) }
                 }
@@ -797,9 +824,11 @@ class BookmarksActivity : ListActivity() {
         list.scrollToPosition(0)
         showLargeTitle()
         render()
+        Motion.pageIn(list, if (name.isEmpty()) Motion.BACK else Motion.FORWARD)
     }
 
-    private fun render() {
+    /** [animated]: a removal or its Undo, so only that row moves. */
+    private fun render(animated: Boolean = false) {
         val visible = rows.filter { it.id !in hiddenIds }
         val items: List<Item> = if (query.isNotEmpty()) {
             visible.filter { it.title.contains(query, ignoreCase = true) || it.url.contains(query, ignoreCase = true) }.map { Item.Mark(it) }
@@ -811,7 +840,7 @@ class BookmarksActivity : ListActivity() {
                 inFolder
             }
         }
-        adapter.items = items
+        if (animated) adapter.submit(list, items, ::sameRow) else adapter.items = items
         back.isEnabled = query.isNotEmpty() || folder.isNotEmpty()
         when {
             query.isNotEmpty() -> showEmpty(items.isEmpty(), "Nothing found", "No bookmark has \"$query\" in its name or address.", R.drawable.ic_search)
@@ -820,16 +849,22 @@ class BookmarksActivity : ListActivity() {
         }
     }
 
+    private fun sameRow(a: Item, b: Item) = when {
+        a is Item.Folder && b is Item.Folder -> a.name == b.name
+        a is Item.Mark && b is Item.Mark -> a.row.id == b.row.id
+        else -> false
+    }
+
     private fun delete(r: BookmarkRow) {
         removeLater(
             "b${r.id}", "Bookmark removed",
             hide = {
                 hiddenIds += r.id
-                render()
+                render(animated = true)
             },
             restore = {
                 hiddenIds -= r.id
-                render()
+                render(animated = true)
             },
             commit = {
                 lifecycleScope.launch(Dispatchers.IO) { SwiftApp.db.deleteBookmark(r.id) }
@@ -851,11 +886,16 @@ class BookmarksActivity : ListActivity() {
             inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_URI
             setText(r.url)
         }
+        Ui.field(name)
+        Ui.field(address)
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
+            // Starts where the title does.
             setPadding(pad, pad / 3, pad, 0)
-            addView(name)
-            addView(address)
+            addView(name, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            addView(address, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                topMargin = Ui.dp(this@BookmarksActivity, Ui.S)
+            })
         }
         val dialog = MaterialAlertDialogBuilder(this)
             .setTitle("Edit bookmark")
@@ -1053,7 +1093,7 @@ object BookmarkFile {
 
 class DownloadsActivity : ListActivity() {
     private val adapter = DownloadAdapter()
-    private val listener: () -> Unit = { refresh() }
+    private val listener: () -> Unit = { refresh(animated = true) }
     private val hiddenIds = HashSet<Long>()
 
     // 3.0.4: the downloads one group of rounded pieces, newest first as before (sections by state would
@@ -1075,7 +1115,6 @@ class DownloadsActivity : ListActivity() {
             }
         })
         list.adapter = adapter
-        list.itemAnimator = null
         buildTop()
         // 2.9.2: a magnet link or .torrent file opened with Swift from another app.
         if (savedInstanceState == null) openTorrent(intent)
@@ -1121,7 +1160,7 @@ class DownloadsActivity : ListActivity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             visibility = View.GONE
-            background = Ui.shape(this@DownloadsActivity, Ui.accentContainer(this@DownloadsActivity), 16)
+            background = Ui.ripple(this@DownloadsActivity, Ui.shape(this@DownloadsActivity, Ui.accentContainer(this@DownloadsActivity), 16), 16)
             setPadding(Ui.dp(this@DownloadsActivity, 16), Ui.dp(this@DownloadsActivity, 10), Ui.dp(this@DownloadsActivity, 4), Ui.dp(this@DownloadsActivity, 10))
             isClickable = true
             setOnClickListener { copiedMagnet?.let { link -> TorrentSheet.magnet(this@DownloadsActivity, link) { added() } } }
@@ -1141,7 +1180,7 @@ class DownloadsActivity : ListActivity() {
                 contentDescription = "Not now"
                 setOnClickListener {
                     dismissedMagnet = copiedMagnet?.let { com.swiftbrowser.torrent.TorrentFiles.magnetHash(it) }
-                    magnetCard.visibility = View.GONE
+                    hideMagnetCard()
                 }
             }, LinearLayout.LayoutParams(Ui.dp(this@DownloadsActivity, 44), Ui.dp(this@DownloadsActivity, 44)))
         }
@@ -1154,6 +1193,7 @@ class DownloadsActivity : ListActivity() {
             refresh()
             list.scrollToPosition(0)
             showLargeTitle()
+            Motion.fadeIn(list, fromDy = 0, duration = Motion.SHORT)
         }.apply { setPadding(0, 0, 0, Ui.dp(this@DownloadsActivity, 4)) }
         top.addView(Palette.paint(chips), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         column.addView(top, column.indexOfChild(box) + 1)
@@ -1170,16 +1210,21 @@ class DownloadsActivity : ListActivity() {
         val hash = text?.takeIf { it.startsWith("magnet:?", ignoreCase = true) }?.let { com.swiftbrowser.torrent.TorrentFiles.magnetHash(it) }
         if (hash == null || hash == dismissedMagnet || Downloads.findTorrent(hash) != null) {
             copiedMagnet = null
-            magnetCard.visibility = View.GONE
+            hideMagnetCard()
             return
         }
         copiedMagnet = text
         magnetText.text = com.swiftbrowser.torrent.TorrentFiles.magnetName(text) ?: "A torrent"
-        magnetCard.visibility = View.VISIBLE
+        if (magnetCard.visibility != View.VISIBLE || magnetCard.alpha < 1f) Motion.fadeIn(magnetCard, fromDy = 0, duration = Motion.SHORT)
+    }
+
+    /** It fades where it is (it sits in the bar above the list: no height to animate). */
+    private fun hideMagnetCard() {
+        if (magnetCard.visibility == View.VISIBLE) Motion.fadeOut(magnetCard, toDy = 0)
     }
 
     private fun added() {
-        magnetCard.visibility = View.GONE
+        hideMagnetCard()
         if (filter != 0 && filter != FILTER_TORRENTS) {
             filter = 0
             refresh()
@@ -1298,18 +1343,35 @@ class DownloadsActivity : ListActivity() {
 
     private var query = ""
 
-    /** What each row showed, so a progress tick redraws only the rows that changed (2.6). */
+    /**
+     * What each row showed, so a progress tick redraws only the rows that changed (2.6): [drawn] what
+     * needs the whole row drawn again (the word searched for is marked in its name), [drawnTicks]
+     * what a running download changes all the time, which only needs its bar and status.
+     */
     private var drawn: List<String> = emptyList()
+    private var drawnTicks: List<String> = emptyList()
 
-    private fun refresh() {
+    /** [animated]: rows came, went or came back on their own or by Undo, so only those rows move. */
+    private fun refresh(animated: Boolean = false) {
         val items = Downloads.all().filter { it.id !in hiddenIds && shown(it) && (query.isEmpty() || it.fileName.contains(query, ignoreCase = true)) }
-        val now = items.map { "${it.status}|${it.done}|${it.total}|${it.fileName}|${it.error}|${it.bytesPerSecond}|${it.peers}" }
+        val now = items.map { "${it.status}|${it.fileName}|$query" }
+        val ticks = items.map { "${it.done}|${it.total}|${it.error}|${it.bytesPerSecond}|${it.peers}" }
         if (items.size == adapter.items.size && items.indices.all { items[it] === adapter.items[it] }) {
-            for (i in now.indices) if (now[i] != drawn.getOrNull(i)) adapter.notifyItemChanged(i)
+            for (i in now.indices) {
+                when {
+                    now[i] != drawn.getOrNull(i) -> adapter.notifyItemChanged(i)
+                    ticks[i] != drawnTicks.getOrNull(i) -> adapter.notifyItemChanged(i, if (items[i].status == Downloads.RUNNING) PAYLOAD_TICK else null)
+                }
+            }
+        } else if (animated) {
+            val rowsBefore = drawn
+            val ticksBefore = drawnTicks
+            adapter.submit(items) { o, n -> rowsBefore[o] == now[n] && ticksBefore[o] == ticks[n] }
         } else {
             adapter.items = items
         }
         drawn = now
+        drawnTicks = ticks
         if (query.isNotEmpty()) {
             showEmpty(items.isEmpty(), "Nothing found", "No download has \"$query\" in its name.", R.drawable.ic_search)
         } else if (filter == FILTER_TORRENTS) {
@@ -1342,11 +1404,11 @@ class DownloadsActivity : ListActivity() {
             },
             hide = {
                 hiddenIds += d.id
-                refresh()
+                refresh(animated = true)
             },
             restore = {
                 hiddenIds -= d.id
-                refresh()
+                refresh(animated = true)
             },
             commit = {
                 Downloads.remove(d.id, deleteFile = deleteFile || running)
@@ -1363,6 +1425,16 @@ class DownloadsActivity : ListActivity() {
         val action: ImageButton = v.findViewById(R.id.dl_action)
         val more: ImageButton = v.findViewById(R.id.dl_more)
 
+        /** Where the status goes: full width under the buttons while a bar shows, else beside them. */
+        val body: ViewGroup = v.findViewById(R.id.dl_body)
+        val text: ViewGroup = v.findViewById(R.id.dl_text)
+
+        /** Which download this row shows now, so a bar moves only for its own. */
+        var boundId = -1L
+
+        /** Pause and play, one icon that morphs from one to the other. */
+        val playPause = PlayPauseIcon(v.context).apply { colour = Ui.accent(v.context) }
+
         // 3.0.3: a finished video's frame in place of its icon (see showFrame), and the icon as it was.
         val iconTint = icon.imageTintList
         val iconBadge: android.graphics.drawable.Drawable? = icon.background
@@ -1375,11 +1447,26 @@ class DownloadsActivity : ListActivity() {
     }
 
     private inner class DownloadAdapter : RecyclerView.Adapter<DownloadHolder>() {
-        var items: List<Downloads.Item> = emptyList()
+        private var shown: List<Downloads.Item> = emptyList()
+
+        var items: List<Downloads.Item>
+            get() = shown
             set(value) {
-                field = value
+                shown = value
                 notifyDataSetChanged()
             }
+
+        /** The list after rows came or went: only those move. [sameContent]: positions in the old list and the new. */
+        fun submit(newItems: List<Downloads.Item>, sameContent: (Int, Int) -> Boolean) {
+            val old = shown
+            shown = newItems
+            ListChanges.dispatch(list, this, old.size, newItems.size, { o, n -> old[o].id == newItems[n].id }, sameContent)
+        }
+
+        /** The bar's colour by state, made once. */
+        private val barRunning by lazy { android.content.res.ColorStateList.valueOf(Ui.accent(this@DownloadsActivity)) }
+        private val barPaused by lazy { android.content.res.ColorStateList.valueOf(Ui.textSecondary(this@DownloadsActivity)) }
+        private val barFailed by lazy { android.content.res.ColorStateList.valueOf(Ui.danger(this@DownloadsActivity)) }
 
         override fun getItemCount() = items.size
 
@@ -1388,10 +1475,56 @@ class DownloadsActivity : ListActivity() {
 
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int) =
             DownloadHolder(Palette.paint(LayoutInflater.from(parent.context).inflate(R.layout.item_download, parent, false))).also {
-                // The bar in the accent chosen (2.6), your own included.
-                it.progress.progressTintList = android.content.res.ColorStateList.valueOf(Ui.accent(parent.context))
                 GroupedRows.prepare(it.itemView)
+                Ui.pressable(it.action, Motion.PRESS_ICON, morph = false)
+                Ui.pressable(it.more, Motion.PRESS_ICON, morph = false)
             }
+
+        override fun onBindViewHolder(h: DownloadHolder, position: Int, payloads: MutableList<Any>) {
+            val d = items[position]
+            if (payloads.isEmpty() || h.boundId != d.id || payloads.any { it != PAYLOAD_TICK && it != ListChanges.CORNERS }) {
+                onBindViewHolder(h, position)
+                return
+            }
+            if (ListChanges.CORNERS in payloads) GroupedRows.place(h.itemView, position, items.size, groupOf)
+            if (PAYLOAD_TICK in payloads) bindProgress(h, d)
+        }
+
+        /** The bar and the status line, all a running download's progress changes. */
+        private fun bindProgress(h: DownloadHolder, d: Downloads.Item) {
+            val pct = d.percent
+            h.progress.isIndeterminate = (d.status == Downloads.RUNNING && pct < 0) || d.status == Downloads.CONVERTING
+            // Moves smoothly to the new value, only for the download it already showed; unknown: empty,
+            // not what the row showed for another download.
+            if (pct >= 0) h.progress.setProgress(pct, h.boundId == d.id && h.progress.progress < pct) else h.progress.setProgress(0, false)
+            h.status.text = statusText(d)
+        }
+
+        /** While a bar shows, the status has the row's full width under the buttons (a long one isn't cut); else beside them. */
+        private fun placeStatus(h: DownloadHolder, barShows: Boolean) {
+            val home = if (barShows) h.body else h.text
+            if (h.status.parent === home) return
+            (h.status.parent as ViewGroup).removeView(h.status)
+            home.addView(h.status)
+            h.status.setPaddingRelative(0, 0, if (barShows) Ui.dp(this@DownloadsActivity, Ui.S) else 0, 0)
+        }
+
+        private fun showPlayPause(h: DownloadHolder, pause: Boolean, animate: Boolean) {
+            if (h.action.drawable === h.playPause) {
+                h.playPause.show(pause, animate && h.action.isShown)
+            } else {
+                // It showed ↻, or nothing yet: there is no shape to morph from.
+                h.action.setTag(R.id.motion_icon, null)
+                h.playPause.show(pause, false)
+                h.action.setImageDrawable(h.playPause)
+            }
+        }
+
+        private fun showRetry(h: DownloadHolder, animate: Boolean) {
+            // Motion.swapIcon only turns from an icon it knows of: from pause or play it is told there was one.
+            if (!animate) h.action.setTag(R.id.motion_icon, null) else if (h.action.drawable === h.playPause) h.action.setTag(R.id.motion_icon, 0)
+            Motion.swapIcon(h.action, R.drawable.ic_refresh)
+        }
 
         override fun onBindViewHolder(h: DownloadHolder, position: Int) {
             val d = items[position]
@@ -1413,18 +1546,24 @@ class DownloadsActivity : ListActivity() {
                 },
             )
             showFrame(h, d, video)
-            h.name.text = d.fileName
-            val pct = d.percent
-            h.progress.visibility = if (d.status == Downloads.DONE) View.GONE else View.VISIBLE
-            h.progress.isIndeterminate = (d.status == Downloads.RUNNING && pct < 0) || d.status == Downloads.CONVERTING
-            // Moves smoothly to the new value instead of jumping.
-            if (pct >= 0) h.progress.setProgress(pct, h.progress.progress < pct)
-            h.status.text = statusText(d)
+            h.name.text = markedText(d.fileName, query, Ui.accent(this@DownloadsActivity))
+            val barShows = d.status != Downloads.DONE
+            h.progress.visibility = if (barShows) View.VISIBLE else View.GONE
+            placeStatus(h, barShows)
+            val tint = when (d.status) {
+                Downloads.PAUSED -> barPaused
+                Downloads.FAILED -> barFailed
+                else -> barRunning
+            }
+            if (h.progress.progressTintList !== tint) h.progress.progressTintList = tint
+            val sameDownload = h.boundId == d.id
+            bindProgress(h, d)
+            h.boundId = d.id
             h.status.setTextColor(if (d.status == Downloads.FAILED) Ui.danger(this@DownloadsActivity) else Ui.textSecondary(this@DownloadsActivity))
             when (d.status) {
                 Downloads.RUNNING, Downloads.QUEUED -> {
                     h.action.visibility = View.VISIBLE
-                    h.action.setImageResource(R.drawable.ic_pause)
+                    showPlayPause(h, pause = true, animate = sameDownload)
                     h.action.contentDescription = "Pause"
                     h.action.setOnClickListener { Downloads.pause(d.id) }
                 }
@@ -1433,7 +1572,7 @@ class DownloadsActivity : ListActivity() {
                     val never = d.status == Downloads.FAILED && d.kind != Downloads.KIND_TORRENT &&
                         (d.extra.optBoolean("local") || problemOf(d).why == com.swiftbrowser.download.DownloadRules.Why.PERMANENT)
                     h.action.visibility = if (never) View.GONE else View.VISIBLE
-                    h.action.setImageResource(if (d.status == Downloads.FAILED) R.drawable.ic_refresh else R.drawable.ic_play)
+                    if (d.status == Downloads.FAILED) showRetry(h, sameDownload) else showPlayPause(h, pause = false, animate = sameDownload)
                     h.action.contentDescription = if (d.status == Downloads.FAILED) "Try again" else "Resume"
                     h.action.setOnClickListener { Downloads.resume(d.id) }
                 }
@@ -1684,6 +1823,9 @@ class DownloadsActivity : ListActivity() {
         private const val FILTER_TORRENTS = 2
         private const val FILTER_FILES = 3
         private const val MAX_TORRENT_FILE = 20 * 1024 * 1024
+
+        /** A row told only that its download moved on: just its bar and status are drawn again. */
+        private const val PAYLOAD_TICK = "tick"
 
         /** The copied magnet link the user said "not now" to (until another is copied). */
         private var dismissedMagnet: String? = null

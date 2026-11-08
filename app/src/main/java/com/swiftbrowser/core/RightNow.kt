@@ -81,6 +81,15 @@ object RightNow {
     fun summary(freeMb: Long, totalMb: Long, loaded: Int, tabs: Int): String =
         "$freeMb MB free of $totalMb MB · $loaded of $tabs ${if (tabs == 1) "tab" else "tabs"} loaded"
 
+    /** A line of the details: what is measured ([label], null for a sentence of its own) and how it stands. */
+    class Row(val label: String?, val value: String)
+
+    /** [details] as rows, each line split at its first colon. */
+    fun rows(s: Snapshot): List<Row> = details(s).split("\n").map { line ->
+        val colon = line.indexOf(": ")
+        if (colon < 0) Row(null, line) else Row(line.substring(0, colon), line.substring(colon + 2))
+    }
+
     /** The details, line by line. */
     fun details(s: Snapshot): String {
         val lines = ArrayList<String>()

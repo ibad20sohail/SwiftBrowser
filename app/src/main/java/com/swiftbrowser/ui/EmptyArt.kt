@@ -19,7 +19,9 @@ enum class EmptyArt(private val soft: Int, private val ink: Int) {
     BOOKMARKS(R.drawable.art_bookmarks_soft, R.drawable.art_bookmarks_ink),
     DOWNLOADS(R.drawable.art_downloads_soft, R.drawable.art_downloads_ink),
     FOLDER(R.drawable.art_folder_soft, R.drawable.art_folder_ink),
-    TABS(R.drawable.art_tabs_soft, R.drawable.art_tabs_ink);
+    TABS(R.drawable.art_tabs_soft, R.drawable.art_tabs_ink),
+    BIN(R.drawable.art_bin_soft, R.drawable.art_bin_ink),
+    PRIVATE(R.drawable.art_private_soft, R.drawable.art_private_ink);
 
     /** The drawing in the two tones given: the accent's soft colour and the colour on it, unless other tones are needed (incognito). */
     fun drawable(ctx: Context, softTone: Int = Ui.accentContainer(ctx), inkTone: Int = Ui.onAccentContainer(ctx)): Drawable =

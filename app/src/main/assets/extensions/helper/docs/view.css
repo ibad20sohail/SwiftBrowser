@@ -1,21 +1,43 @@
 /* Swift's document viewer (2.4, 2.5). Light and dark follow Swift (prefers-color-scheme); the accent
-   comes from the app (--accent, set by view.js). */
+   comes from the app (--accent, set by view.js). The token block is Swift's own scale: corners,
+   text sizes, how long things move and how they ease. */
 :root {
+  --r-xs: 8px;
+  --r-s: 12px;
+  --r-m: 16px;
+  --r-l: 24px;
+  --t-caption: 12.5px;
+  --t-label: 13.5px;
+  --t-body: 15px;
+  --t-heading: 17px;
+  --d-short: 150ms;
+  --d-small: 180ms;
+  --d-fade: 110ms;
+  --ease: cubic-bezier(.2, 0, 0, 1);
+
   --bg: #f2f3f5;
+  --backdrop: #f3f5f9;
   --surface: #ffffff;
+  --surface-alt: #eff2f7;
+  --accent-soft: #dfe7fb;
+  --on-accent-soft: #123a8a;
   --text: #1c1d21;
   --muted: #5f6368;
   --line: #dfe1e5;
   --accent: #1b66e4;
   --on-accent: #ffffff;
   --mark: rgba(255, 200, 0, 0.35);
-  --bar-h: 48px;
+  --bar-h: 52px;
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #121316;
+    --backdrop: #121418;
     --surface: #1d1e22;
+    --surface-alt: #313237;
+    --accent-soft: #24406f;
+    --on-accent-soft: #d9e6ff;
     --text: #e4e4e7;
     --muted: #a0a0a8;
     --line: #2e2f35;
@@ -27,8 +49,13 @@
 * { box-sizing: border-box; }
 html, body { margin: 0; background: var(--bg); color: var(--text); }
 body { font: 15px/1.5 var(--ui); -webkit-tap-highlight-color: transparent; }
-button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; transition: opacity 100ms linear, transform 100ms linear; }
 [hidden] { display: none !important; }
+
+/* Every button answers the finger: a fade, and the pill-shaped ones a small squeeze. */
+button:active:not(:disabled):not(.annotationLayer *) { opacity: .7; }
+.chip:active, .done:active, .showmore:active, #statusactions button:active, #sheets button:active, #editbar button:active,
+#tts button:active, #show .bar button:active, #ask button:active:not(:disabled) { transform: scale(.96); }
 
 /* ------------------------------------------------------------------ the bar */
 
@@ -36,8 +63,8 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
   position: sticky; top: 0; z-index: 20;
   display: flex; align-items: center; gap: 2px;
   height: var(--bar-h); padding: 0 4px 0 12px;
-  background: var(--surface); border-bottom: 1px solid var(--line);
-  transition: transform 0.18s ease-out;
+  background: var(--backdrop);
+  transition: transform var(--d-small) ease-out;
 }
 #badge {
   flex: none; min-width: 34px; height: 22px; padding: 0 6px; border-radius: 6px;
@@ -45,10 +72,10 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 }
 #name {
   flex: 1; min-width: 0; margin: 0 6px 0 8px;
-  font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-weight: 700; font-size: var(--t-heading); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.icon { flex: none; width: 40px; height: 40px; border-radius: 20px; display: grid; place-items: center; }
-.icon svg { width: 22px; height: 22px; fill: currentColor; }
+.icon { flex: none; width: 44px; height: 44px; border-radius: 22px; display: grid; place-items: center; transition: background-color 100ms linear, opacity 100ms linear; }
+.icon svg { width: 24px; height: 24px; fill: currentColor; }
 .icon:active { background: var(--line); }
 /* 2.8: Swift's document screen: the bar starts with Back. */
 body.screen #bar { padding-left: 2px; }
@@ -59,21 +86,29 @@ body.screen #badge { margin-left: 2px; }
 body.reading #bar { transform: translateY(-110%); }
 body.reading #sheets { transform: translateY(110%); }
 
-#sheets { transition: transform 0.18s ease-out; }
+#sheets { transition: transform var(--d-small) ease-out; }
 
+/* Find covers the title bar: one look, here and in Swift's own bar (Word, text and the rest). */
 #findbar {
-  position: sticky; top: var(--bar-h); z-index: 19;
-  display: flex; align-items: center; gap: 2px; padding: 4px 4px 4px 12px;
-  background: var(--surface); border-bottom: 1px solid var(--line);
+  position: fixed; top: 0; left: 0; right: 0; z-index: 21;
+  display: flex; align-items: center; gap: 2px; height: var(--bar-h); padding: 0 4px 0 8px;
+  background: var(--backdrop);
+  animation: find-in var(--d-short) var(--ease);
 }
+#findbar.going { animation: find-out var(--d-fade) ease-in forwards; pointer-events: none; }
+@keyframes find-in { from { opacity: 0; transform: translateY(-8px); } }
+@keyframes find-out { to { opacity: 0; transform: translateY(-8px); } }
+.findbox { flex: 1; min-width: 0; position: relative; display: block; }
+.findbox svg { position: absolute; left: 14px; top: 12px; width: 20px; height: 20px; fill: var(--muted); pointer-events: none; }
 #findtext {
-  flex: 1; min-width: 0; height: 36px; padding: 0 12px; border-radius: 18px;
-  border: 1px solid var(--line); background: var(--bg); color: var(--text); font: inherit;
+  width: 100%; height: 44px; padding: 0 14px 0 44px; border-radius: 21px;
+  border: 0; outline: none; background: var(--surface); color: var(--text); font: inherit; caret-color: var(--accent);
 }
+#findtext::placeholder { color: var(--muted); opacity: 1; }
 #findcount { color: var(--muted); font-size: 13px; padding: 0 4px; font-variant-numeric: tabular-nums; }
 
 #note {
-  margin: 12px 12px 0; padding: 12px 14px; border-radius: 14px;
+  margin: 12px 16px 0; padding: 12px 14px; border-radius: var(--r-m);
   background: var(--surface); color: var(--muted); font-size: 14px;
 }
 #note button { color: var(--accent); font-weight: 600; padding: 6px 0 0; display: block; }
@@ -83,38 +118,44 @@ body.reading #sheets { transform: translateY(110%); }
 #status {
   position: fixed; inset: var(--bar-h) 0 0 0; z-index: 5;
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
-  padding: 24px; text-align: center; color: var(--muted); background: var(--bg);
+  padding: 24px; text-align: center; color: var(--muted); background: var(--backdrop);
+  transition: opacity var(--d-short) linear;
 }
+#status.leaving { opacity: 0; pointer-events: none; }
 #status.problem .spinner { display: none; }
 #status p { margin: 0; max-width: 320px; }
+#status.problem p { color: var(--text); }
+#statustext { font-variant-numeric: tabular-nums; }
+/* What went wrong, under a soft circle with the error icon. */
+.erricon { display: none; width: 88px; height: 88px; border-radius: 50%; place-items: center; background: var(--accent-soft); color: var(--on-accent-soft); }
+.erricon svg { width: 40px; height: 40px; fill: currentColor; }
+#status.problem .erricon { display: grid; }
 #statusactions button {
-  margin: 4px; padding: 10px 18px; border-radius: 20px; background: var(--accent); color: var(--on-accent); font-weight: 600;
+  margin: 4px; padding: 10px 18px; border-radius: var(--r-l); background: var(--accent); color: var(--on-accent); font-weight: 600;
 }
-/* 3.0.4: the loading shape of Swift's own screens (Google's 2025 style): a soft shape in the accent
-   that changes form while it slowly turns, instead of the old ring. */
+/* 3.0.4: the loading shape of Swift's own screens: a soft shape in the accent, turning slowly. Its form
+   stays still (changing it repainted on the main thread while the document was being read): only turns. */
 .spinner {
-  width: 34px; height: 34px; border-radius: 50%; background: var(--accent);
-  animation: morph 2.4s ease-in-out infinite, spin 3.6s linear infinite;
+  width: 34px; height: 34px; border-radius: 38% 62% 55% 45% / 45% 38% 62% 55%; background: var(--accent);
+  animation: spin 3.6s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
-@keyframes morph {
-  0%, 100% { border-radius: 50%; }
-  25% { border-radius: 38% 62% 55% 45% / 45% 38% 62% 55%; }
-  50% { border-radius: 32%; }
-  75% { border-radius: 62% 38% 45% 55% / 55% 62% 38% 45%; }
-}
-@media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 4.8s, 7.2s; } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 7.2s; } }
 
 /* ------------------------------------------------------------------ the more menu and panels */
 
 #menu {
   position: fixed; top: calc(var(--bar-h) - 4px); right: 8px; z-index: 30;
   min-width: 220px; max-width: calc(100vw - 16px); max-height: calc(100vh - 60px); overflow-y: auto;
-  padding: 6px 0; border-radius: 14px;
+  padding: 6px 0; border-radius: var(--r-m);
   background: var(--surface); box-shadow: 0 6px 24px rgba(0, 0, 0, 0.25);
   animation: drop 0.16s ease-out;
 }
-#menu button { display: block; width: 100%; text-align: left; padding: 12px 18px; }
+#menu.going { animation: fade-out var(--d-fade) ease-in forwards; pointer-events: none; }
+#menu > button { display: flex; align-items: center; gap: 16px; width: 100%; text-align: left; padding: 12px 18px; }
+#menu > button .mi { flex: none; width: 24px; height: 24px; color: var(--muted); }
+#menu > button .mi svg { display: block; width: 24px; height: 24px; fill: currentColor; }
+#menu .gap { height: 8px; }
 #menu button:active { background: var(--line); }
 #menu button.sub { color: var(--muted); font-size: 14px; }
 #menu .head { padding: 10px 18px 6px; color: var(--muted); font-size: 13px; font-weight: 600; }
@@ -125,25 +166,34 @@ body.reading #sheets { transform: translateY(110%); }
   body.screen #smaller, body.screen #bigger, body.screen #listen { display: none !important; }
 }
 @keyframes drop { from { opacity: 0; transform: translateY(-6px); } }
+@keyframes fade-out { to { opacity: 0; } }
+@keyframes appear { from { opacity: 0; } }
 
 #panel {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 32;
   max-height: 80vh; overflow-y: auto; padding: 8px 16px 20px;
-  background: var(--surface); border-radius: 18px 18px 0 0; box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.25);
-  animation: rise 0.18s ease-out;
+  background: var(--surface); border-radius: var(--r-l) var(--r-l) 0 0; box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.25);
+  animation: rise var(--d-small) ease-out;
 }
+#panel.going { animation: sink var(--d-short) ease-in forwards; pointer-events: none; }
 @keyframes rise { from { transform: translateY(30px); opacity: 0; } }
-#panel h3 { margin: 10px 0 8px; font-size: 13px; color: var(--muted); font-weight: 600; }
+@keyframes sink { to { transform: translateY(30px); opacity: 0; } }
+/* As a sheet's section heading in Swift. */
+#panel h3 { margin: 10px 0 8px; font-size: 14px; color: var(--accent); font-weight: 700; }
 #panel .row { display: flex; gap: 8px; flex-wrap: wrap; }
-#panel .chip { padding: 9px 14px; border-radius: 18px; border: 1px solid var(--line); }
-#panel .chip.on { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
-#panel .done { display: block; margin: 16px auto 0; padding: 10px 26px; border-radius: 20px; background: var(--accent); color: var(--on-accent); font-weight: 600; }
+#panel .chip { padding: 9px 14px; border-radius: var(--r-l); background: var(--surface-alt); transition: background-color var(--d-short) linear, opacity 100ms linear, transform 100ms linear; }
+#panel .chip.on { background: var(--accent-soft); color: var(--on-accent-soft); }
+#panel .done { display: block; margin: 16px auto 0; padding: 10px 26px; border-radius: var(--r-l); background: var(--accent); color: var(--on-accent); font-weight: 600; }
 
 #toast {
   position: fixed; left: 50%; bottom: 76px; z-index: 40; transform: translateX(-50%);
-  max-width: calc(100vw - 32px); padding: 10px 16px; border-radius: 12px;
-  background: #2b2c31; color: #f1f1f3; font-size: 14px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  max-width: calc(100vw - 32px); padding: 10px 16px; border-radius: var(--r-m);
+  background: var(--surface); color: var(--text); font-size: 14px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  animation: toast-in var(--d-small) var(--ease);
 }
+#toast.going { animation: fade-out 120ms ease-in forwards; pointer-events: none; }
+@keyframes toast-in { from { opacity: 0; transform: translate(-50%, 8px); } }
+@media (prefers-color-scheme: light) { #toast { border: 1px solid var(--line); } }
 
 /* ------------------------------------------------------------------ page counter and fast scrolling */
 
@@ -162,7 +212,7 @@ body.reading #sheets { transform: translateY(110%); }
 }
 #fastthumb::after {
   content: ''; position: absolute; left: 8px; right: 8px; top: 18px; height: 12px;
-  border-top: 2px solid rgba(255, 255, 255, 0.85); border-bottom: 2px solid rgba(255, 255, 255, 0.85);
+  border-top: 2px solid var(--on-accent); border-bottom: 2px solid var(--on-accent); opacity: .85;
 }
 #fastscroll.fade #fastthumb { opacity: 0; pointer-events: none; }
 
@@ -194,12 +244,16 @@ pre.text {
 }
 .showmore {
   font-family: var(--ui);
-  display: block; margin: 12px auto 24px; padding: 10px 20px; border-radius: 20px;
-  background: var(--surface); color: var(--accent); font-weight: 600; border: 1px solid var(--line);
+  display: block; margin: 12px auto 24px; padding: 10px 20px; border-radius: var(--r-l);
+  background: var(--surface); color: var(--accent); font-weight: 600;
 }
 
 /* Word (docx-preview). Fitted to the phone: the text flows to the screen's width. */
-.docx-wrapper { background: transparent !important; padding: 8px 0 !important; }
+/* Paper (Word, PDF, slides, old Office files, a sheet's headings) lies on the page colour behind documents,
+   so its edge shows; a text file or flowing text stays on the page colour itself. */
+.docx-wrapper { background: var(--backdrop) !important; padding: 8px 0 !important; }
+/* All the way down, past a short document's end. */
+html.paper, html.paper body { background: var(--backdrop); }
 .docx-wrapper > section.docx {
   box-shadow: none !important; margin: 0 auto 10px !important; border-radius: 4px;
 }
@@ -212,7 +266,7 @@ body.fit .docx-wrapper img { max-width: 100%; height: auto; }
 .docx-wrapper > section.docx { background: #fff; color: #000; }
 
 /* 2.8: old Word and PowerPoint files as Swift's converter made them (their own colours, styled by it). */
-.oo-wrap { padding: 8px 4px 16px; }
+.oo-wrap { padding: 8px 4px 16px; background: var(--backdrop); }
 
 /* ------------------------------------------------------------------ boxes that scroll by themselves (PDF, sheets) */
 
@@ -220,7 +274,6 @@ body.fit .docx-wrapper img { max-width: 100%; height: auto; }
   position: fixed; left: 0; right: 0; top: var(--bar-h); height: calc(100svh - var(--bar-h));
   overflow: auto; -webkit-overflow-scrolling: touch;
 }
-body.finding .pane { top: calc(var(--bar-h) + 45px); height: calc(100svh - var(--bar-h) - 45px); }
 /* Swift's toolbar is away while reading: the page is the whole screen tall (100lvh), not the
    height laid out with the toolbar (100svh). */
 body.reading .pane { top: 0; height: 100lvh; }
@@ -228,7 +281,7 @@ body.reading .pane { top: 0; height: 100lvh; }
 /* PDF (pdf.js insists its scrolling box is absolutely positioned; the page itself doesn't scroll).
    When the bar hides the box grows upwards (view.js keeps the pages still); pinching is pdf.js's
    own (sharp at every size), not the browser's. */
-#pdfpane { position: absolute; background: var(--bg); touch-action: pan-x pan-y; }
+#pdfpane { position: absolute; background: var(--backdrop); touch-action: pan-x pan-y; }
 
 #pdfpane .pdfViewer .page { margin: 8px auto; border: 0; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18); }
 @media (prefers-color-scheme: dark) {
@@ -240,15 +293,19 @@ body.editing #pdfpane { padding-bottom: 64px; }
 #editbar {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 26;
   display: flex; justify-content: space-between; gap: 2px; padding: 6px 4px; overflow-x: auto;
-  background: var(--surface); border-top: 1px solid var(--line);
+  background: var(--surface);
+  animation: bar-up var(--d-small) var(--ease);
 }
-#editbar button { flex: none; padding: 9px 9px; border-radius: 18px; font-size: 14px; font-weight: 600; }
-#editbar button.on { background: var(--accent); color: var(--on-accent); }
-#editbar button.main { color: var(--accent); }
+@keyframes bar-up { from { transform: translateY(100%); } }
+#editbar button { flex: none; padding: 9px 9px; border-radius: var(--r-l); font-size: 14px; font-weight: 600; transition: background-color var(--d-short) linear, opacity 100ms linear, transform 100ms linear; }
+#editbar button.apart { margin-inline-start: 12px; }
+#editbar button.on { background: var(--accent-soft); color: var(--on-accent-soft); }
+#editbar button.main { background: var(--accent); color: var(--on-accent); }
+body.editing #pagepill { bottom: 66px; }
 
 /* Page previews (2.5) */
 #pages {
-  position: fixed; inset: 0; z-index: 31; overflow-y: auto; background: var(--bg);
+  position: fixed; inset: 0; z-index: 31; overflow-y: auto; background: var(--backdrop);
   padding: calc(var(--bar-h) + 8px) 8px 24px;
   display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 12px 8px; align-content: start;
 }
@@ -259,15 +316,13 @@ body.editing #pdfpane { padding-bottom: 64px; }
 #pageshead {
   position: fixed; top: 0; left: 0; right: 0; z-index: 32; height: var(--bar-h);
   display: flex; align-items: center; padding: 0 4px 0 16px; gap: 8px;
-  background: var(--surface); border-bottom: 1px solid var(--line); font-weight: 600;
+  background: var(--backdrop); font-weight: 600;
 }
 #pageshead span { flex: 1; }
 
 /* Spreadsheets */
 body.sheet .pane { height: calc(100svh - var(--bar-h) - 48px); }
-body.sheet.finding .pane { height: calc(100svh - var(--bar-h) - 93px); }
 body.sheet.onesheet .pane { height: calc(100svh - var(--bar-h)); }
-body.sheet.onesheet.finding .pane { height: calc(100svh - var(--bar-h) - 45px); }
 body.sheet.reading .pane { top: 0; height: 100lvh; }
 table.grid { border-collapse: separate; border-spacing: 0; font-size: 13px; }
 table.grid td, table.grid th {
@@ -278,7 +333,7 @@ table.grid td, table.grid th {
 /* 2.8: the cells look as in Excel (white, its grid lines, the sheet's own colours); the row and
    column headings follow Swift's colours. */
 table.grid td { background: #fff; color: #000; border-color: #d9d9d9; font-family: Calibri, Carlito, sans-serif; }
-table.grid th { position: sticky; z-index: 2; background: var(--bg); color: var(--muted); font-family: var(--ui); font-weight: 600; text-align: center; }
+table.grid th { position: sticky; z-index: 2; background: var(--backdrop); color: var(--muted); font-family: var(--ui); font-weight: 600; text-align: center; }
 table.grid thead th { top: 0; }
 table.grid th.row { left: 0; z-index: 1; min-width: 40px; }
 table.grid thead th.corner { left: 0; z-index: 4; }
@@ -293,23 +348,28 @@ table.grid tr.split td, table.grid tr.split th { border-bottom: 2px solid var(--
 table.grid td.splitc { border-right: 2px solid var(--muted); }
 #sheets {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 10; height: 48px;
-  display: flex; gap: 4px; padding: 6px 8px; overflow-x: auto; white-space: nowrap;
-  background: var(--surface); border-top: 1px solid var(--line);
+  display: flex; gap: 4px; padding: 6px 16px; overflow-x: auto; white-space: nowrap;
+  background: var(--surface);
+  /* Tabs that don't all fit fade out at the edge, where more wait. */
+  mask-image: linear-gradient(to right, transparent, #000 16px, #000 calc(100% - 16px), transparent);
 }
-#sheets button { padding: 0 14px; border-radius: 18px; color: var(--muted); font-weight: 600; flex: none; }
-#sheets button.on { background: var(--accent); color: var(--on-accent); }
+#sheets button { padding: 0 14px; border-radius: var(--r-l); color: var(--muted); font-weight: 600; flex: none; transition: background-color var(--d-short) linear, opacity 100ms linear, transform 100ms linear; }
+#sheets button.on { background: var(--accent-soft); color: var(--on-accent-soft); }
 
 /* Slides (pptx-preview): slides one under another, fitted to the width, with their speaker notes. */
-#slides { padding: 10px 0 24px; }
+#slides { padding: 10px 0 24px; background: var(--backdrop); }
 #slides .pptx-preview-wrapper { background: transparent !important; height: auto !important; overflow: visible !important; }
 #slides .pptx-preview-slide-wrapper { margin: 0 auto 12px !important; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2); }
 .notes { max-width: 760px; margin: -4px auto 18px; padding: 0 14px; font-size: 14px; color: var(--muted); }
 .notes summary { color: var(--accent); font-weight: 600; padding: 4px 0; }
 .notes p { margin: 4px 0; color: var(--text); }
+/* What opens fades in, with no height moving. */
+.notes[open] > :not(summary) { animation: appear var(--d-short) linear; }
 
 /* The slideshow (2.5): one slide at a time on black, swipe or tap the sides. */
 #show { position: fixed; inset: 0; z-index: 50; background: #000; overflow: hidden; touch-action: none; user-select: none; -webkit-user-select: none; }
 #show .stage { position: absolute; left: 50%; top: 50%; transform-origin: 0 0; }
+#show .stage > .turned { animation: appear var(--d-short) linear; }
 #show .bar {
   position: absolute; left: 0; right: 0; bottom: 0; display: flex; align-items: center; gap: 6px;
   padding: 8px 10px; background: linear-gradient(transparent, rgba(0, 0, 0, 0.7)); color: #fff;
@@ -317,7 +377,8 @@ table.grid td.splitc { border-right: 2px solid var(--muted); }
 }
 #show .bar.fade { opacity: 0; pointer-events: none; }
 #show .bar span { flex: 1; text-align: center; font-weight: 600; font-variant-numeric: tabular-nums; }
-#show .bar button { color: #fff; padding: 8px 14px; border-radius: 18px; background: rgba(255, 255, 255, 0.14); font-weight: 600; }
+#show .bar button { color: #fff; padding: 8px 14px; border-radius: var(--r-l); background: rgba(255, 255, 255, 0.14); font-weight: 600; }
+#show .bar button svg { display: block; width: 20px; height: 20px; fill: currentColor; }
 #show .shownotes {
   position: absolute; left: 0; right: 0; bottom: 52px; max-height: 40vh; overflow-y: auto;
   padding: 12px 16px; background: rgba(20, 20, 22, 0.92); color: #eee; font-size: 15px;
@@ -353,6 +414,7 @@ table.grid td.splitc { border-right: 2px solid var(--muted); }
 
 @media print {
   #bar, #findbar, #note, #status, #menu, #tts, #sheets, #pagepill, #fastscroll, #bookfoot, #editbar, #panel, #toast, .notes summary { display: none !important; }
+  .docx-wrapper, .oo-wrap, #slides { background: #fff !important; }
   html, body { background: #fff !important; color: #000 !important; }
   #doc { padding: 0; }
   .pane { position: static !important; overflow: visible !important; }
@@ -365,19 +427,20 @@ table.grid td.splitc { border-right: 2px solid var(--muted); }
 }
 
 /* A question inside the page (2.6): Fill & sign changes not saved yet. */
-#ask { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; padding: 24px; background: rgba(0, 0, 0, 0.45); }
-#ask .card { max-width: 340px; width: 100%; padding: 20px 18px 10px; border-radius: 20px; background: var(--surface); color: var(--text); }
+#ask { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; padding: 24px; background: rgba(0, 0, 0, 0.45); animation: appear var(--d-small) linear; }
+#ask .card { max-width: 340px; width: 100%; padding: 20px 18px 10px; border-radius: var(--r-l); background: var(--surface); color: var(--text); animation: ask-in var(--d-small) var(--ease); }
+@keyframes ask-in { from { transform: scale(.95); } }
 #ask p { margin: 0 4px 14px; }
 #ask .row { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; }
-#ask button { padding: 10px 14px; border-radius: 18px; color: var(--accent); font-weight: 600; }
+#ask button { padding: 10px 14px; border-radius: var(--r-l); color: var(--accent); font-weight: 600; }
 #ask button.main { background: var(--accent); color: var(--on-accent); }
 
 /* 3.0: a box asking for something typed (a PDF's password, Go to page), as the find bar's field. */
 #ask.input input {
-  display: block; width: 100%; height: 44px; margin: 0 0 6px; padding: 0 14px; border-radius: 22px;
-  border: 1px solid var(--line); background: var(--bg); color: var(--text); font: inherit;
+  display: block; width: 100%; height: 44px; margin: 0 0 6px; padding: 0 14px; border-radius: var(--r-s);
+  border: 0; background: var(--surface-alt); color: var(--text); font: inherit; caret-color: var(--accent);
 }
-#ask.input input:focus { outline: none; border-color: var(--accent); }
+#ask.input input:focus { outline: none; }
 #ask.input p.error { margin: 2px 6px 8px; color: #d93025; font-size: 14px; }
 @media (prefers-color-scheme: dark) { #ask.input p.error { color: #f28b82; } }
 #ask.input .row { margin-top: 8px; }

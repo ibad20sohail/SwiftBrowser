@@ -14,6 +14,7 @@ import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.widget.TextView
 import androidx.core.graphics.ColorUtils
 import androidx.exifinterface.media.ExifInterface
 import com.swiftbrowser.R
@@ -46,17 +47,6 @@ object HomeBackground {
         Preset("forest", "Forest", intArrayOf(0xFFDAF1DC.toInt(), 0xFFE8F0D2.toInt()), intArrayOf(0xFF132E1D.toInt(), 0xFF1C2A17.toInt())),
         Preset("dusk", "Dusk", intArrayOf(0xFFE3DCFF.toInt(), 0xFFFFDAE6.toInt()), intArrayOf(0xFF282041.toInt(), 0xFF381F2F.toInt())),
     )
-
-    /**
-     * 3.0.5: the colour behind text on the home page's picture: the page's own, see-through, just
-     * enough of it for [text] to read at [min]:1 on any picture (HomeBacking). Soft shapes in it go
-     * behind the shortcuts and the headings; everything else on the page stands on the picture.
-     */
-    fun backing(ctx: Context, text: Int, min: Double = Contrast.TEXT): Int {
-        val page = Palette.color(ctx, R.color.home_bg)
-        val veil = if (Palette.isNight(ctx)) HomeBacking.VEIL_TOP_DARK else HomeBacking.VEIL_TOP_LIGHT
-        return ColorUtils.setAlphaComponent(page, HomeBacking.opacity(page, text, veil, min))
-    }
 
     /** The name of [key], for Settings. */
     fun label(key: String): String = when (key) {
@@ -103,8 +93,9 @@ object HomeBackground {
             PICTURE -> {
                 val f = file(ctx)
                 val bmp = cached
+                val veil = veilAt(SwiftApp.prefs.homePictureClarity)
                 if (bmp != null && cachedTime == f.lastModified()) {
-                    PictureDrawable(bmp, page, night)
+                    PictureDrawable(bmp, page, night, veil)
                 } else {
                     exec.execute {
                         val read = try {
@@ -116,7 +107,7 @@ object HomeBackground {
                         if (read != null) main.post {
                             cached = read
                             cachedTime = f.lastModified()
-                            later(PictureDrawable(read, page, night))
+                            later(PictureDrawable(read, page, night, veilAt(SwiftApp.prefs.homePictureClarity)))
                         }
                     }
                     null
@@ -134,6 +125,58 @@ object HomeBackground {
             }
         }
     }
+
+    /** How much of the veil is left at this clearness (0..100): all of it at 0, none at 100. */
+    private fun veilAt(clarity: Int) = 1f - clarity.coerceIn(0, 100) / 100f
+
+    /** [picture], from [drawable], at this clearness (0..100), while Settings' slider moves. Anything else is left as it is. */
+    fun showClarity(picture: Drawable?, clarity: Int) {
+        (picture as? PictureDrawable)?.veilStrength = veilAt(clarity)
+    }
+
+    /**
+     * How text standing straight on the home page's picture looks: [color], and with light text a
+     * soft shadow, which carries it over the brighter parts of the picture.
+     */
+    class Ink(val color: Int, val shadow: Boolean)
+
+    /** For [background], from [drawable]: a picture's [Ink]; null for anything else, whose text is as on any page. */
+    fun inkOf(ctx: Context, background: Drawable?): Ink? = (background as? PictureDrawable)?.ink(ctx)
+
+    /** [tv] as [ink] says; without one, in [plain] and with no shadow. */
+    fun paint(tv: TextView, ink: Ink?, plain: Int) {
+        tv.setTextColor(ink?.color ?: plain)
+        if (ink?.shadow == true) tv.setShadowLayer(Ui.dpf(tv.context, 3f), 0f, Ui.dpf(tv.context, 1f), INK_SHADOW) else tv.setShadowLayer(0f, 0f, 0f, 0)
+    }
+
+    /** [picture], from [drawable], also fills this much room past the page's top and bottom: where the address bar is. */
+    fun reach(picture: Drawable?, above: Int, below: Int) {
+        (picture as? PictureDrawable)?.reach(above, below)
+    }
+
+    /** What draws the part of [picture] that is behind the address bar, as the bar's own background; null when it isn't a picture. */
+    fun barPart(picture: Drawable?): Drawable? = (picture as? PictureDrawable)?.barPart
+
+    /** The colour of the address bar's buttons over [picture], whichever reads best on the strip behind them; null when it isn't a picture. */
+    fun barInk(ctx: Context, picture: Drawable?): Int? = (picture as? PictureDrawable)?.barInk(ctx)
+
+    /** About the colour along the top edge of [picture] as it shows, for the status bar above it; null when it isn't a picture. */
+    fun topColour(ctx: Context, picture: Drawable?): Int? = (picture as? PictureDrawable)?.topColour(ctx)
+
+    private val INK_LIGHT = 0xFFFFFFFF.toInt()
+    private val INK_DARK = 0xFF1A1C21.toInt()
+    private val INK_SHADOW = 0x8C000000.toInt()
+
+    // Where on the picture the text stands: most of the screen's width, from the top down to the news.
+    private const val SAMPLE_COLUMNS = 12
+    private const val SAMPLE_ROWS = 18
+    private const val SAMPLE_TOP = 0.03f
+    private const val SAMPLE_BOTTOM = 0.75f
+
+    // The strip behind the address bar, and the top edge for the status bar.
+    private const val BAR_ROWS = 4
+    private const val TOP_ROWS = 2
+    private const val TOP_EDGE = 0.02f
 
     /** A gradient from [two] at the top into the page colour at the bottom. */
     fun gradient(two: IntArray, page: Int): Drawable =
@@ -248,21 +291,157 @@ object HomeBackground {
     /**
      * The picture filling the screen (cut to its shape, centred), under a veil of the page colour: light
      * at the top where the logo and search box are, thicker lower down behind the shortcuts' names.
+     * [strength]: how much of that veil there is, 1 all of it, 0 none (Settings' slider).
+     * 3.0.5: it is cut for the page and the address bar's room together ([reach]), and [barPart] draws
+     * the bar's share, so the picture runs on unbroken behind the see-through bar.
      */
-    private class PictureDrawable(private val bmp: Bitmap, private val page: Int, night: Boolean) : Drawable() {
+    private class PictureDrawable(private val bmp: Bitmap, private val page: Int, private val night: Boolean, strength: Float) : Drawable() {
         private val paint = Paint(Paint.FILTER_BITMAP_FLAG)
         private val src = Rect()
-        private val veil = GradientDrawable(
-            GradientDrawable.Orientation.TOP_BOTTOM,
-            if (night) intArrayOf(ColorUtils.setAlphaComponent(page, HomeBacking.VEIL_TOP_DARK), ColorUtils.setAlphaComponent(page, 0xB0), ColorUtils.setAlphaComponent(page, 0xE6))
-            else intArrayOf(ColorUtils.setAlphaComponent(page, HomeBacking.VEIL_TOP_LIGHT), ColorUtils.setAlphaComponent(page, 0xA6), ColorUtils.setAlphaComponent(page, 0xE6)),
-        )
+        private val veil = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, veilColours(strength))
+
+        /** How far the picture has faded in on the page (a picture read late), 255 once it has. */
+        private var fade = 255
+
+        /** All the picture fills: the page ([getBounds]) and the bar's room past its edges. */
+        private val area = Rect()
+        private var above = 0
+        private var below = 0
+
+        fun reach(above: Int, below: Int) {
+            if (this.above == above && this.below == below) return
+            this.above = above
+            this.below = below
+            barLookedAt = -1f
+            fit()
+            invalidateSelf()
+            barPart.invalidateSelf()
+        }
+
+        /** The bar's share of the picture, in the bar's own place. */
+        val barPart: Drawable = object : Drawable() {
+            override fun draw(canvas: Canvas) {
+                canvas.save()
+                canvas.clipRect(bounds)
+                // The bar stands right above the page, or right below it.
+                canvas.translate(0f, if (above > 0) above.toFloat() else -this@PictureDrawable.bounds.bottom.toFloat())
+                // Always whole: a picture read late fades in on the page, while the bar turns see-through over it.
+                drawAll(canvas, 255)
+                canvas.restore()
+            }
+
+            override fun setAlpha(alpha: Int) = Unit
+
+            override fun setColorFilter(colorFilter: ColorFilter?) = Unit
+
+            @Suppress("OVERRIDE_DEPRECATION")
+            override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
+        }
+
+        var veilStrength = strength
+            set(v) {
+                if (field == v) return
+                field = v
+                veil.colors = veilColours(v)
+                invalidateSelf()
+                barPart.invalidateSelf()
+            }
+
+        private fun veilStops() = if (night) intArrayOf(0x73, 0xB0, 0xE6) else intArrayOf(0x66, 0xA6, 0xE6)
+
+        private fun veilColours(strength: Float): IntArray {
+            val stops = veilStops()
+            return IntArray(stops.size) { ColorUtils.setAlphaComponent(page, (stops[it] * strength).toInt()) }
+        }
+
+        private var inkAt = -1f
+        private var inkLight = false
+
+        /** Light or dark text, as reads best on the picture as it shows now (looked at once for each strength of the veil). */
+        fun ink(ctx: Context): Ink {
+            if (inkAt != veilStrength) {
+                inkLight = lightReadsBetter(ctx)
+                inkAt = veilStrength
+            }
+            // The look's own colour when that is the side it comes down on.
+            return Ink(if (inkLight == night) Ui.text(ctx) else if (inkLight) INK_LIGHT else INK_DARK, inkLight)
+        }
+
+        /** A couple of hundred points of the picture where text stands, each seen through the veil there. */
+        private fun lightReadsBetter(ctx: Context): Boolean {
+            if (bmp.isRecycled) return night
+            var light = 0
+            look(ctx, SAMPLE_TOP, SAMPLE_BOTTOM, SAMPLE_ROWS) { if (Contrast.ratio(INK_LIGHT, it) >= Contrast.ratio(INK_DARK, it)) light++ }
+            return PictureInk.light(light, SAMPLE_COLUMNS * SAMPLE_ROWS)
+        }
+
+        private var barLookedAt = -1f
+        private var barLight = false
+        private var edge = 0
+
+        /** The strip behind the bar and the top edge, looked at once for each strength of the veil. */
+        private fun lookAtBar(ctx: Context) {
+            if (barLookedAt == veilStrength) return
+            barLookedAt = veilStrength
+            barLight = night
+            edge = page
+            if (bmp.isRecycled) return
+            val share = (above + below).toFloat() / ctx.resources.displayMetrics.heightPixels.coerceAtLeast(1)
+            var light = 0
+            val from = if (above > 0) 0f else 1f - share
+            look(ctx, from, from + share, BAR_ROWS) { if (Contrast.ratio(INK_LIGHT, it) >= Contrast.ratio(INK_DARK, it)) light++ }
+            barLight = PictureInk.barLight(light, SAMPLE_COLUMNS * BAR_ROWS)
+            var r = 0
+            var g = 0
+            var b = 0
+            look(ctx, 0f, TOP_EDGE, TOP_ROWS) {
+                r += (it shr 16) and 0xFF
+                g += (it shr 8) and 0xFF
+                b += it and 0xFF
+            }
+            val points = SAMPLE_COLUMNS * TOP_ROWS
+            edge = 0xFF000000.toInt() or ((r / points) shl 16) or ((g / points) shl 8) or (b / points)
+        }
+
+        fun barInk(ctx: Context): Int {
+            lookAtBar(ctx)
+            return if (barLight == night) Ui.text(ctx) else if (barLight) INK_LIGHT else INK_DARK
+        }
+
+        fun topColour(ctx: Context): Int {
+            lookAtBar(ctx)
+            return edge
+        }
+
+        /** Gives [seen] [rows] rows of points of the picture, between the heights [from] and [to] of the screen (0..1), each as it shows through the veil. */
+        private inline fun look(ctx: Context, from: Float, to: Float, rows: Int, seen: (Int) -> Unit) {
+            val dm = ctx.resources.displayMetrics
+            val scale = maxOf(dm.widthPixels.toFloat() / bmp.width, dm.heightPixels.toFloat() / bmp.height)
+            val sw = (dm.widthPixels / scale).toInt().coerceIn(1, bmp.width)
+            val sh = (dm.heightPixels / scale).toInt().coerceIn(1, bmp.height)
+            val left = (bmp.width - sw) / 2
+            val top = (bmp.height - sh) / 2
+            val stops = veilStops()
+            for (c in 0 until SAMPLE_COLUMNS) for (r in 0 until rows) {
+                val y = (from + (to - from) * r / (rows - 1)).coerceIn(0f, 1f)
+                val point = bmp.getPixel(left + (sw - 1) * (2 * c + 1) / (2 * SAMPLE_COLUMNS), top + ((sh - 1) * y).toInt())
+                val veil = if (y < 0.5f) stops[0] + (stops[1] - stops[0]) * y * 2 else stops[1] + (stops[2] - stops[1]) * (y - 0.5f) * 2
+                seen(Contrast.mix(point, page, veil * veilStrength / 255.0))
+            }
+        }
 
         override fun onBoundsChange(bounds: Rect) {
             super.onBoundsChange(bounds)
-            val w = bounds.width().toFloat()
-            val h = bounds.height().toFloat()
-            if (w <= 0f || h <= 0f) return
+            fit()
+            barPart.invalidateSelf()
+        }
+
+        private fun fit() {
+            val b = bounds
+            if (b.width() <= 0 || b.height() <= 0) return
+            area.set(b.left, b.top - above, b.right, b.bottom + below)
+            val w = area.width().toFloat()
+            val h = area.height().toFloat()
             // As much of the picture as has the screen's shape, from its middle.
             val scale = maxOf(w / bmp.width, h / bmp.height)
             val sw = (w / scale).toInt().coerceAtMost(bmp.width)
@@ -270,17 +449,28 @@ object HomeBackground {
             val left = (bmp.width - sw) / 2
             val top = (bmp.height - sh) / 2
             src.set(left, top, left + sw, top + sh)
-            veil.bounds = bounds
+            veil.bounds = area
         }
 
         override fun draw(canvas: Canvas) {
-            canvas.drawColor(page)
-            if (!bmp.isRecycled) canvas.drawBitmap(bmp, src, bounds, paint)
-            veil.draw(canvas)
+            canvas.save()
+            canvas.clipRect(bounds)
+            drawAll(canvas, fade)
+            canvas.restore()
         }
 
-        override fun setAlpha(alpha: Int) {
+        private fun drawAll(canvas: Canvas, alpha: Int) {
             paint.alpha = alpha
+            veil.alpha = alpha
+            // The picture covers everything: the page colour is only needed if it has gone.
+            if (bmp.isRecycled) canvas.drawColor(page) else canvas.drawBitmap(bmp, src, area, paint)
+            if (veilStrength > 0f) veil.draw(canvas)
+        }
+
+        /** The whole thing fades, the veil with the picture (a picture read late fades in, see HomeView). */
+        override fun setAlpha(alpha: Int) {
+            fade = alpha
+            invalidateSelf()
         }
 
         override fun setColorFilter(colorFilter: ColorFilter?) {
@@ -292,25 +482,13 @@ object HomeBackground {
     }
 }
 
-/**
- * 3.0.5: how much of the page colour goes behind text on the home page's picture so it reads on any
- * picture, bright or dark, wherever it has scrolled to. Plain numbers, tested on the PC
- * (HomeBackingTest).
- */
-internal object HomeBacking {
-    /** The veil over the picture at its thinnest, at the top of the screen (HomeBackground.PictureDrawable). */
-    const val VEIL_TOP_LIGHT = 0x66
-    const val VEIL_TOP_DARK = 0x73
+/** Which text a picture takes. Plain rules, tested on the PC (PictureInkTest). */
+internal object PictureInk {
+    /** How much of a picture light text must read better on: about half is enough, as its shadow carries it over the rest. */
+    const val LIGHT_FROM = 0.45f
 
-    /**
-     * The least opacity (0..255) of [page] that gives [text] [min]:1 over the worst picture there can
-     * be under a veil of [veil] (0..255): black under the light look's dark text, white under the
-     * dark look's light text. The picture's real colours can only make it easier.
-     */
-    fun opacity(page: Int, text: Int, veil: Int, min: Double = Contrast.TEXT): Int {
-        val worst = if (Contrast.luminance(text) > Contrast.luminance(page)) 0xFFFFFFFF.toInt() else 0xFF000000.toInt()
-        val veiled = Contrast.mix(worst, page, veil / 255.0)
-        for (a in 0..255) if (Contrast.ratio(text, Contrast.mix(veiled, page, a / 255.0)) >= min) return a
-        return 255
-    }
+    fun light(lightBetter: Int, points: Int): Boolean = points > 0 && lightBetter.toFloat() / points >= LIGHT_FROM
+
+    /** The address bar's buttons have no shadow to carry them: light only where that reads better on at least half the strip. */
+    fun barLight(lightBetter: Int, points: Int): Boolean = points > 0 && lightBetter * 2 >= points
 }

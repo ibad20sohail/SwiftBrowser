@@ -6,7 +6,6 @@ import android.content.res.ColorStateList
 import android.os.Bundle
 import android.text.TextUtils
 import android.view.Gravity
-import android.view.MenuItem
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
@@ -15,16 +14,18 @@ import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.activity.OnBackPressedCallback
-import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.button.MaterialButton
 import com.swiftbrowser.R
 import com.swiftbrowser.core.L
 import com.swiftbrowser.core.UrlUtils
+import com.swiftbrowser.docs.DocIcon
 import com.swiftbrowser.docs.DocThumbs
+import com.swiftbrowser.docs.Docs
 import com.swiftbrowser.files.Cleaner
 import com.swiftbrowser.files.FileJobs
+import com.swiftbrowser.files.FileKind
 import com.swiftbrowser.files.FileOpener
 import com.swiftbrowser.files.FileThumbs
 import com.swiftbrowser.files.FilesSettings
@@ -54,7 +55,7 @@ import java.util.Locale
 class CleanerActivity : ListActivity() {
     private class Hint(val text: String)
     private class Card(val kind: Cleaner.Kind, val count: Int, val bytes: Long)
-    private class GroupHeader(val text: String)
+    private class GroupHeader(val group: Any?, val text: String)
 
     private val access = ChangeAccess(this) { say(it) }
     private val adapter = Adapter()
@@ -66,12 +67,14 @@ class CleanerActivity : ListActivity() {
     private var menuShown = ""
 
     private lateinit var bar: LinearLayout
+    private lateinit var bottomBar: BottomBar
     private lateinit var barText: TextView
     private lateinit var foreverButton: MaterialButton
     private lateinit var deleteButton: MaterialButton
 
     private val secondaryTint by lazy { ColorStateList.valueOf(Ui.textSecondary(this)) }
     private val accentTint by lazy { ColorStateList.valueOf(Ui.accent(this)) }
+    private val onContainerTint by lazy { ColorStateList.valueOf(Ui.onAccentContainer(this)) }
     private var thumbPx = 0
 
     private fun dp(v: Int) = Ui.dp(this, v)
@@ -86,11 +89,11 @@ class CleanerActivity : ListActivity() {
             true
         }
         list.adapter = adapter
-        list.itemAnimator = null
+        list.itemAnimator = Motion.listAnimator()
         buildBar()
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                if (shown != null) showSummary() else finish()
+                if (shown != null) showSummary(Motion.BACK) else finish()
             }
         })
         showSpace()
@@ -147,7 +150,7 @@ class CleanerActivity : ListActivity() {
         progress = Cleaner.Progress()
         val p = progress
         val app = applicationContext
-        bar.visibility = View.GONE
+        bottomBar.show(false, Motion.enabled(this))
         adapter.set(emptyList())
         showScanning()
         val started = System.currentTimeMillis()
@@ -186,7 +189,7 @@ class CleanerActivity : ListActivity() {
             scanBar?.let { b ->
                 val indeterminate = p.fraction < 0
                 if (b.isIndeterminate != indeterminate) b.isIndeterminate = indeterminate
-                if (!indeterminate) b.progress = (p.fraction * 1000).toInt()
+                if (!indeterminate) Motion.progress(b, (p.fraction * 1000).toInt())
             }
             list.postDelayed(this, 250)
         }
@@ -205,7 +208,7 @@ class CleanerActivity : ListActivity() {
             setPadding(0, dp(24), 0, 0)
         }
         col.addView(stage)
-        val b = horizontalBar().apply { isIndeterminate = true }
+        val b = FileJobDialogs.bar(this).apply { isIndeterminate = true }
         col.addView(b, LinearLayout.LayoutParams(dp(220), dp(6)).apply {
             topMargin = dp(16)
             bottomMargin = dp(10)
@@ -230,21 +233,14 @@ class CleanerActivity : ListActivity() {
         updateMenu()
     }
 
-    private fun horizontalBar(): ProgressBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
-        max = 1000
-        progressDrawable = ContextCompat.getDrawable(this@CleanerActivity, R.drawable.progress_rounded)
-        progressTintList = accentTint
-        indeterminateTintList = accentTint
-    }
-
     // ------------------------------------------------------------------ the lists
 
-    private fun showSummary() {
+    private fun showSummary(slide: Int = 0) {
         val r = results ?: return
         shown = null
         toolbar.title = "Free up space"
         toolbar.subtitle = spaceText
-        bar.visibility = View.GONE
+        bottomBar.show(false, Motion.enabled(this))
         empty.visibility = View.GONE
         val items = ArrayList<Any>()
         val cards = Cleaner.Kind.entries.map { k ->
@@ -266,10 +262,11 @@ class CleanerActivity : ListActivity() {
         items.addAll(cards)
         adapter.set(items)
         list.scrollToPosition(0)
+        if (slide != 0) Motion.pageIn(list, slide)
         updateMenu()
     }
 
-    private fun showList(kind: Cleaner.Kind) {
+    private fun showList(kind: Cleaner.Kind, slide: Int = 0, removals: Boolean = false) {
         val r = results ?: return
         // Gone meanwhile (deleted in another app): not shown.
         r.lists[kind].orEmpty().forEach { if (!it.gone && !it.file.exists()) it.gone = true }
@@ -289,14 +286,15 @@ class CleanerActivity : ListActivity() {
         if (kind == Cleaner.Kind.DUPLICATES) {
             for ((_, group) in found.groupBy { it.group }) {
                 if (group.size < 2) continue
-                items += GroupHeader("${group.size} copies · ${UrlUtils.formatBytes(group[0].size)} each")
+                items += GroupHeader(group[0].group, "${group.size} copies · ${UrlUtils.formatBytes(group[0].size)} each")
                 items.addAll(group)
             }
         } else {
             items.addAll(found)
         }
-        adapter.set(items)
+        adapter.set(items, removals)
         list.scrollToPosition(0)
+        if (slide != 0) Motion.pageIn(list, slide)
         updateBar()
         updateMenu()
     }
@@ -334,7 +332,7 @@ class CleanerActivity : ListActivity() {
         deleteButton.text = if (k == Cleaner.Kind.LEFTOVERS) "Clear" else "Delete"
         deleteButton.isEnabled = t.isNotEmpty()
         foreverButton.isEnabled = t.isNotEmpty()
-        bar.visibility = View.VISIBLE
+        bottomBar.show(true, Motion.enabled(this))
         updateMenu()
     }
 
@@ -346,6 +344,7 @@ class CleanerActivity : ListActivity() {
             visibility = View.GONE
             setBackgroundColor(Palette.color(this@CleanerActivity, R.color.sheet_bg))
         }
+        bottomBar = BottomBar(bar)
         // 3.0.5: no line above it: its own colour against the page's says where it begins.
         val line = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -378,17 +377,7 @@ class CleanerActivity : ListActivity() {
         menuShown = key
         toolbar.menu.clear()
         if (k == null) return
-        val label = if (all) "Untick all" else "Tick all"
-        val v = Ui.text(this, Ui.Type.LABEL, label, Ui.accent(this), lines = 1).apply {
-            gravity = Gravity.CENTER
-            setPadding(dp(14), dp(10), dp(14), dp(10))
-            background = Ui.ripple(this@CleanerActivity, null, 18)
-            setOnClickListener { onMenu(MENU_TICK) }
-        }
-        toolbar.menu.add(0, MENU_TICK, MENU_TICK, label).apply {
-            actionView = v
-            setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS)
-        }
+        TitleBar.addTextAction(toolbar, MENU_TICK, if (all) "Untick all" else "Tick all") { onMenu(MENU_TICK) }
     }
 
     private fun onMenu(id: Int) {
@@ -536,7 +525,7 @@ class CleanerActivity : ListActivity() {
     /** The list on show again after a change (the summary when nothing is left in it). */
     private fun refresh() {
         val k = shown
-        if (k == null) showSummary() else if (results?.of(k).isNullOrEmpty()) showSummary() else showList(k)
+        if (k == null) showSummary() else if (results?.of(k).isNullOrEmpty()) showSummary() else showList(k, removals = true)
         showSpace()
     }
 
@@ -583,6 +572,10 @@ class CleanerActivity : ListActivity() {
 
     private class FoundHolder(root: View, val icon: ImageView, val title: TextView, val subtitle: TextView, val check: ImageView) : RecyclerView.ViewHolder(root) {
         var thumb: FileThumbs.Request? = null
+
+        /** The icon's holder and its ripple, for a file and for a folder (a recycled row keeps them). */
+        lateinit var fileHolderBg: android.graphics.drawable.Drawable
+        lateinit var folderHolderBg: android.graphics.drawable.Drawable
     }
 
     private class CardHolder(v: View, val icon: ImageView, val title: TextView, val detail: TextView) : RecyclerView.ViewHolder(v)
@@ -593,9 +586,32 @@ class CleanerActivity : ListActivity() {
         var items: List<Any> = emptyList()
             private set
 
-        fun set(l: List<Any>) {
+        /** Shows [l]. With [removals], when it is the list on show less a few things, those close up (as in Files). */
+        fun set(l: List<Any>, removals: Boolean = false) {
+            val old = items
             items = l
+            val gone = old.size - l.size
+            if (removals && gone in 1..MAX_ANIMATED && Motion.enabled(this@CleanerActivity)) {
+                val removed = ArrayList<Int>(gone)
+                var j = 0
+                for (i in old.indices) {
+                    if (j < l.size && keyOf(old[i]) == keyOf(l[j])) j++ else removed += i
+                }
+                if (j == l.size && removed.size == gone) {
+                    for (p in removed.asReversed()) notifyItemRemoved(p)
+                    // A heading says how many copies are left.
+                    l.forEachIndexed { i, it -> if (it is GroupHeader) notifyItemChanged(i) }
+                    return
+                }
+            }
             notifyDataSetChanged()
+        }
+
+        private fun keyOf(o: Any): Any = when (o) {
+            is Cleaner.Found -> o.file.path
+            is GroupHeader -> "group:" + o.group
+            is Hint -> "hint:" + o.text
+            else -> o
         }
 
         override fun getItemCount() = items.size
@@ -639,6 +655,7 @@ class CleanerActivity : ListActivity() {
             if (holder is FoundHolder) {
                 holder.thumb?.cancel()
                 holder.thumb = null
+                Motion.stopPicture(holder.icon)
             }
         }
     }
@@ -656,7 +673,6 @@ class CleanerActivity : ListActivity() {
         val icon = ImageView(ctx).apply {
             clipToOutline = true
             // 3.0.5: the one row icon holder; flat on the page, so in the card colour (the page's a step darker).
-            background = Ui.ripple(ctx, Ui.shape(ctx, Palette.color(ctx, R.color.card_bg), Ui.R_SMALL), Ui.R_SMALL)
             contentDescription = "Open"
         }
         root.addView(icon, LinearLayout.LayoutParams(thumbPx, thumbPx))
@@ -677,6 +693,8 @@ class CleanerActivity : ListActivity() {
         }
         root.addView(check, LinearLayout.LayoutParams(dp(44), dp(44)))
         val h = FoundHolder(root, icon, title, subtitle, check)
+        h.fileHolderBg = Ui.ripple(ctx, Ui.shape(ctx, Palette.color(ctx, R.color.card_bg), Ui.R_SMALL), Ui.R_SMALL)
+        h.folderHolderBg = Ui.ripple(ctx, Ui.shape(ctx, Ui.accentContainer(ctx), Ui.R_SMALL), Ui.R_SMALL)
         root.setOnClickListener {
             val f = adapter.items.getOrNull(h.bindingAdapterPosition) as? Cleaner.Found ?: return@setOnClickListener
             toggle(f, h.bindingAdapterPosition)
@@ -694,19 +712,32 @@ class CleanerActivity : ListActivity() {
         h.subtitle.text = if (shown == Cleaner.Kind.LEFTOVERS && f.isDir) UrlUtils.formatBytes(f.size) else subtitleOf(f)
         h.thumb?.cancel()
         h.thumb = null
+        Motion.stopPicture(h.icon)
         val kind = f.kind
         h.icon.tag = f.file.path
         h.icon.scaleType = ImageView.ScaleType.CENTER
-        h.icon.setImageResource(if (f.isDir) R.drawable.ic_folder else kind.icon)
-        h.icon.imageTintList = secondaryTint
+        h.icon.background = if (f.isDir) h.folderHolderBg else h.fileHolderBg
+        // The same icons as in Files: a folder on the accent's soft colour, a document with its own mark.
+        val doc = if (!f.isDir && kind == FileKind.DOCUMENT) Docs.kindOf(f.file.name, null) else null
+        if (doc != null) {
+            h.icon.imageTintList = null
+            h.icon.setImageDrawable(DocIcon(doc, dp(30)))
+        } else {
+            h.icon.setImageResource(if (f.isDir) R.drawable.ic_folder else kind.icon)
+            h.icon.imageTintList = if (f.isDir) onContainerTint else secondaryTint
+        }
         if (!f.isDir && FilesSettings.thumbnails && FileThumbs.has(kind)) {
             val key = f.file.path
+            // From memory it comes during this call; one made later comes in softly.
+            var binding = true
             h.thumb = FileThumbs.load(this, f.file, f.time, kind, thumbPx) { bmp ->
                 if (h.icon.tag != key) return@load
                 h.icon.imageTintList = null
                 h.icon.scaleType = ImageView.ScaleType.CENTER_CROP
                 h.icon.setImageBitmap(bmp)
+                if (!binding) Motion.fadePicture(h.icon)
             }
+            binding = false
         }
         bindTick(h, f, false)
     }
@@ -714,7 +745,7 @@ class CleanerActivity : ListActivity() {
     private fun bindTick(h: FoundHolder, f: Cleaner.Found, tapped: Boolean) {
         h.check.setImageResource(if (f.ticked) R.drawable.ic_check_box else R.drawable.ic_check_box_blank)
         h.check.imageTintList = if (f.ticked) accentTint else secondaryTint
-        if (tapped && f.ticked) Motion.bump(h.check, 1.2f)
+        if (tapped && f.ticked) Motion.bump(h.check, 1.12f)
         h.itemView.contentDescription = f.file.name + if (f.ticked) ", ticked" else ", not ticked"
     }
 
@@ -731,7 +762,7 @@ class CleanerActivity : ListActivity() {
             setPadding(dp(Ui.ROW_INSET), dp(14), dp(12), dp(14))
             // 3.0.5: a plain filled card, no outline (the page behind it is a step darker).
             background = Ui.ripple(ctx, Ui.shape(ctx, Palette.color(ctx, R.color.card_bg), Ui.R_MEDIUM), Ui.R_MEDIUM)
-            Ui.pressable(this, 0.98f)
+            Ui.pressable(this, Motion.PRESS_CARD)
         }
         val icon = Ui.iconBadge(ctx, R.drawable.ic_folder)
         card.addView(icon, LinearLayout.LayoutParams(dp(Ui.ICON_BOX), dp(Ui.ICON_BOX)).apply { marginEnd = dp(14) })
@@ -748,7 +779,7 @@ class CleanerActivity : ListActivity() {
         }, LinearLayout.LayoutParams(dp(24), dp(24)))
         outer.addView(card, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         val h = CardHolder(outer, icon, title, detail)
-        card.setOnClickListener { (adapter.items.getOrNull(h.bindingAdapterPosition) as? Card)?.let { showList(it.kind) } }
+        card.setOnClickListener { (adapter.items.getOrNull(h.bindingAdapterPosition) as? Card)?.let { showList(it.kind, Motion.FORWARD) } }
         return h
     }
 
@@ -772,6 +803,9 @@ class CleanerActivity : ListActivity() {
         private const val TYPE_HEADER = 2
         private const val TYPE_HINT = 3
         private const val PAYLOAD_TICK = "tick"
+
+        /** More rows than this removed at once show anew instead of closing up one by one. */
+        private const val MAX_ANIMATED = 30
 
         /** What the last walk found, kept while Swift runs (the screen turned sideways keeps it). */
         private var lastResults: Cleaner.Results? = null

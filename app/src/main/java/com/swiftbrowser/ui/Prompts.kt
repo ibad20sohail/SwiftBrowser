@@ -224,6 +224,7 @@ class Prompts : PromptDelegate {
                 setText(prompt.defaultValue ?: "")
                 setSingleLine()
                 selectAll()
+                Ui.field(this)
             }
             builder(ctx, says(session, prompt.title))
                 .setMessage(prompt.message)
@@ -243,16 +244,20 @@ class Prompts : PromptDelegate {
                 hint = "Username"
                 setSingleLine()
                 setText(prompt.authOptions.username ?: "")
+                Ui.field(this)
             }
             val pass = EditText(ctx).apply {
                 hint = "Password"
                 setSingleLine()
                 inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+                Ui.field(this)
             }
             val box = LinearLayout(ctx).apply {
                 orientation = LinearLayout.VERTICAL
                 if (!onlyPassword) addView(user)
-                addView(pass)
+                addView(pass, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                    if (!onlyPassword) topMargin = Ui.dp(ctx, Ui.S)
+                })
             }
             builder(ctx, prompt.title ?: "Sign in")
                 .setMessage(prompt.message)
@@ -267,17 +272,17 @@ class Prompts : PromptDelegate {
                 .create()
         }
 
-    private class Row(val choice: ChoicePrompt.Choice?, val label: String, val enabled: Boolean)
+    private class Row(val choice: ChoicePrompt.Choice?, val label: String, val enabled: Boolean, val depth: Int)
 
-    private fun flatten(choices: Array<ChoicePrompt.Choice>, out: MutableList<Row>, indent: String, headers: Boolean) {
+    private fun flatten(choices: Array<ChoicePrompt.Choice>, out: MutableList<Row>, depth: Int, headers: Boolean) {
         for (c in choices) {
             if (c.separator) continue
             val children = c.items
             if (children != null) {
-                if (headers) out.add(Row(null, c.label, false))
-                flatten(children, out, "$indent    ", headers)
+                if (headers) out.add(Row(null, c.label, false, depth))
+                flatten(children, out, depth + 1, headers)
             } else {
-                out.add(Row(c, indent + c.label, !c.disabled))
+                out.add(Row(c, c.label, !c.disabled, depth))
             }
         }
     }
@@ -285,10 +290,10 @@ class Prompts : PromptDelegate {
     override fun onChoicePrompt(session: GeckoSession, prompt: ChoicePrompt): GeckoResult<PromptResponse> =
         show(session, prompt) { ctx, result ->
             if (prompt.type == ChoicePrompt.Type.MULTIPLE) {
-                val rows = ArrayList<Row>().also { flatten(prompt.choices, it, "", headers = false) }
+                val rows = ArrayList<Row>().also { flatten(prompt.choices, it, 0, headers = false) }
                 val checked = BooleanArray(rows.size) { rows[it].choice?.selected == true }
                 builder(ctx, prompt.title)
-                    .setMultiChoiceItems(rows.map { it.label }.toTypedArray(), checked) { _, which, isChecked ->
+                    .setMultiChoiceItems(rows.map { "    ".repeat(it.depth) + it.label }.toTypedArray(), checked) { _, which, isChecked ->
                         checked[which] = isChecked
                     }
                     .setPositiveButton(android.R.string.ok) { _, _ ->
@@ -298,23 +303,44 @@ class Prompts : PromptDelegate {
                     .setNegativeButton(android.R.string.cancel, null)
                     .create()
             } else {
-                val rows = ArrayList<Row>().also { flatten(prompt.choices, it, "", headers = true) }
+                val rows = ArrayList<Row>().also { flatten(prompt.choices, it, 0, headers = true) }
+                val b = builder(ctx, prompt.title)
+                // The rows of Swift's own dialogs (made in the dialog's look): a radio for a choice, plain for a menu.
                 val layout = if (prompt.type == ChoicePrompt.Type.SINGLE) {
-                    android.R.layout.simple_list_item_single_choice
+                    com.google.android.material.R.layout.mtrl_alert_select_dialog_singlechoice
                 } else {
-                    android.R.layout.simple_list_item_1
+                    com.swiftbrowser.R.layout.dialog_list_item
                 }
-                val adapter = object : ArrayAdapter<String>(ctx, layout, rows.map { it.label }) {
+                val indent = Ui.dp(ctx, 16)
+                val rowHeight = Ui.dp(ctx, 48)
+                val startPadding = intArrayOf(-1, -1)
+                val adapter = object : ArrayAdapter<String>(b.context, layout, rows.map { it.label }) {
                     override fun isEnabled(position: Int) = rows[position].enabled
                     override fun areAllItemsEnabled() = false
+                    override fun getViewTypeCount() = 2
+                    override fun getItemViewType(position: Int) = if (rows[position].choice == null) 1 else 0
                     override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
-                        val v = super.getView(position, convertView, parent)
-                        (v as? TextView)?.alpha = if (rows[position].enabled) 1f else Ui.DISABLED_ALPHA
+                        val row = rows[position]
+                        val kind = getItemViewType(position)
+                        // A group's name is no choice: a plain row, without a radio.
+                        val v = if (kind == 1) {
+                            convertView ?: android.view.LayoutInflater.from(context).inflate(com.swiftbrowser.R.layout.dialog_list_item, parent, false)
+                        } else {
+                            super.getView(position, convertView, parent)
+                        }
+                        (v as? TextView)?.apply {
+                            if (kind == 1) text = row.label
+                            if (startPadding[kind] < 0) startPadding[kind] = paddingStart
+                            // A group's name on Swift's scale at full strength; its options under it, moved in by padding.
+                            Ui.style(this, if (kind == 1) Ui.Type.SECTION else Ui.Type.BODY)
+                            minHeight = rowHeight
+                            alpha = if (kind == 1 || row.enabled) 1f else Ui.DISABLED_ALPHA
+                            setPaddingRelative(startPadding[kind] + row.depth * indent, paddingTop, paddingEnd, paddingBottom)
+                        }
                         return v
                     }
                 }
                 val checkedIndex = rows.indexOfFirst { it.choice?.selected == true }
-                val b = builder(ctx, prompt.title)
                 val pick = { which: Int ->
                     rows[which].choice?.let { result.complete(prompt.confirm(it)) }
                 }
@@ -341,30 +367,60 @@ class Prompts : PromptDelegate {
             val input = EditText(ctx).apply {
                 setText(prompt.defaultValue ?: "#000000")
                 setSingleLine()
+                Ui.field(this)
             }
-            val adapter = object : ArrayAdapter<String>(ctx, android.R.layout.simple_list_item_1, colors) {
-                override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
-                    val v = super.getView(position, convertView, parent) as TextView
-                    val c = try {
-                        Color.parseColor(colors[position])
-                    } catch (_: Exception) {
-                        Color.GRAY
-                    }
-                    v.setBackgroundColor(c)
-                    v.setTextColor(if (Color.luminance(c) > 0.5f) Color.BLACK else Color.WHITE)
-                    return v
+            var shown: AlertDialog? = null
+            // A grid of swatches, as many to a row as fit a dialog on this screen.
+            val grid = android.widget.GridLayout(ctx).apply {
+                val fit = ((ctx.resources.configuration.screenWidthDp - DIALOG_SIDES_DP) / SWATCH_PLACE_DP).coerceIn(4, 8)
+                // One left over on a row of its own looks like a mistake: a column fewer then.
+                columnCount = if (colors.size % fit == 1) fit - 1 else fit
+                for (hex in colors) {
+                    addView(swatch(ctx, hex) {
+                        result.complete(prompt.confirm(hex))
+                        shown?.dismiss()
+                    })
                 }
             }
+            val body = LinearLayout(ctx).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = android.view.Gravity.CENTER_HORIZONTAL
+                addView(grid, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+                addView(input, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                    topMargin = Ui.dp(ctx, 8)
+                })
+            }
             builder(ctx, prompt.title ?: "Choose a colour")
-                .setAdapter(adapter) { _, which -> result.complete(prompt.confirm(colors[which])) }
-                .setView(padded(ctx, input))
+                .setView(android.widget.ScrollView(ctx).apply { addView(padded(ctx, body)) })
                 .setPositiveButton(android.R.string.ok) { _, _ ->
                     val value = input.text.toString().trim().let { if (it.startsWith("#")) it else "#$it" }
                     result.complete(prompt.confirm(value.lowercase(Locale.ROOT)))
                 }
                 .setNegativeButton(android.R.string.cancel, null)
-                .create()
+                .create().also { shown = it }
         }
+
+    /** A colour to tap in a colour dialog: 40 dp, rounded, outlined so that a colour like the dialog's still shows. */
+    private fun swatch(ctx: Context, hex: String, onPick: () -> Unit): View = View(ctx).apply {
+        val c = try {
+            Color.parseColor(hex)
+        } catch (_: Exception) {
+            Color.GRAY
+        }
+        background = Ui.shape(ctx, c, Ui.R_SMALL, Palette.color(ctx, com.swiftbrowser.R.color.outline))
+        foreground = Ui.ripple(ctx, null, Ui.R_SMALL)
+        contentDescription = hex
+        // The exact colour, whatever the dialog's colours are changed to around it.
+        setTag(com.swiftbrowser.R.id.palette_keep, true)
+        setOnClickListener { onPick() }
+        val size = Ui.dp(ctx, 40)
+        val gap = Ui.dp(ctx, 4)
+        layoutParams = android.widget.GridLayout.LayoutParams().apply {
+            width = size
+            height = size
+            setMargins(gap, gap, gap, gap)
+        }
+    }
 
     override fun onDateTimePrompt(session: GeckoSession, prompt: DateTimePrompt): GeckoResult<PromptResponse> {
         val ctx = context ?: return GeckoResult.fromValue(prompt.dismiss())
@@ -439,7 +495,7 @@ class Prompts : PromptDelegate {
         val ui = TabManager.ui ?: return GeckoResult.fromValue(prompt.dismiss())
         val result = GeckoResult<PromptResponse>()
         val mimes = prompt.mimeTypes?.filter { it.contains('/') }?.toTypedArray() ?: emptyArray()
-        ui.pickFiles(mimes, prompt.type == FilePrompt.Type.MULTIPLE) { uris ->
+        ui.pickFiles(mimes, prompt.type == FilePrompt.Type.MULTIPLE, prompt.capture != FilePrompt.Capture.NONE) { uris ->
             val ctx = ui.activity
             result.complete(
                 when {
@@ -600,8 +656,15 @@ class Prompts : PromptDelegate {
         return result
     }
 
+    /** A dialog's sides and insets on a phone, and a swatch with its gaps (dp): how many fit a row. */
+    private companion object {
+        const val DIALOG_SIDES_DP = 96
+        const val SWATCH_PLACE_DP = 48
+    }
+
     private fun padded(ctx: Context, v: View): View {
-        val pad = (20 * ctx.resources.displayMetrics.density).toInt()
+        // Starts where the dialog's title does.
+        val pad = (24 * ctx.resources.displayMetrics.density).toInt()
         return LinearLayout(ctx).apply {
             setPadding(pad, pad / 2, pad, 0)
             addView(v, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))

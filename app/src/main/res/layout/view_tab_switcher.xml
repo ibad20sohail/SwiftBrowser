@@ -11,7 +11,7 @@
         <LinearLayout
             android:id="@+id/switcher_header"
             android:layout_width="match_parent"
-            android:layout_height="56dp"
+            android:layout_height="@dimen/title_bar"
             android:gravity="center_vertical"
             android:orientation="horizontal"
             android:paddingStart="@dimen/side_margin"
@@ -26,7 +26,7 @@
                 android:fontFamily="sans-serif-medium"
                 android:gravity="center_vertical"
                 android:paddingStart="12dp"
-                android:paddingEnd="16dp"
+                android:paddingEnd="14dp"
                 android:text="New tab"
                 android:textColor="?attr/colorOnPrimaryContainer"
                 android:textSize="@dimen/text_body" />
@@ -39,8 +39,8 @@
             <!-- 3.0.4: the tabs as picture cards or as a compact list. -->
             <ImageButton
                 android:id="@+id/switcher_layout"
-                android:layout_width="44dp"
-                android:layout_height="44dp"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
                 android:background="?attr/selectableItemBackgroundBorderless"
                 android:contentDescription="List of tabs"
                 android:src="@drawable/ic_view_list"
@@ -48,8 +48,8 @@
 
             <ImageButton
                 android:id="@+id/switcher_search"
-                android:layout_width="44dp"
-                android:layout_height="44dp"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
                 android:layout_marginEnd="4dp"
                 android:background="?attr/selectableItemBackgroundBorderless"
                 android:contentDescription="Search your tabs"
@@ -66,7 +66,7 @@
 
                 <FrameLayout
                     android:id="@+id/toggle_normal"
-                    android:layout_width="56dp"
+                    android:layout_width="44dp"
                     android:layout_height="match_parent"
                     android:background="@drawable/bg_toggle_item"
                     android:contentDescription="Tabs">
@@ -85,7 +85,7 @@
 
                 <FrameLayout
                     android:id="@+id/toggle_incognito"
-                    android:layout_width="56dp"
+                    android:layout_width="44dp"
                     android:layout_height="match_parent"
                     android:background="@drawable/bg_toggle_item"
                     android:contentDescription="Incognito tabs">
@@ -106,7 +106,7 @@
         <LinearLayout
             android:id="@+id/switcher_subheader"
             android:layout_width="match_parent"
-            android:layout_height="56dp"
+            android:layout_height="@dimen/title_bar"
             android:gravity="center_vertical"
             android:orientation="horizontal"
             android:paddingStart="4dp"
@@ -138,19 +138,21 @@
                 android:layout_weight="1"
                 android:background="?attr/selectableItemBackground"
                 android:ellipsize="end"
-                android:fontFamily="sans-serif-medium"
+                android:fontFamily="sans-serif"
                 android:gravity="center_vertical"
                 android:paddingStart="4dp"
                 android:paddingEnd="4dp"
                 android:singleLine="true"
                 android:textColor="@color/text_primary"
-                android:textSize="@dimen/text_title" />
+                android:textSize="@dimen/text_title"
+                android:textStyle="bold" />
 
             <EditText
                 android:id="@+id/sub_search"
                 android:layout_width="0dp"
                 android:layout_height="@dimen/search_box"
                 android:layout_marginStart="4dp"
+                android:layout_marginEnd="10dp"
                 android:layout_weight="1"
                 android:background="@drawable/bg_url"
                 android:hint="Search your tabs"
@@ -229,16 +231,18 @@
                     android:id="@+id/switcher_empty_title"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="12dp"
+                    android:layout_marginTop="24dp"
+                    android:fontFamily="sans-serif"
                     android:text="No incognito tabs"
                     android:textColor="@color/incognito_text"
-                    android:textSize="@dimen/text_title" />
+                    android:textSize="@dimen/text_title"
+                    android:textStyle="bold" />
 
                 <TextView
                     android:id="@+id/switcher_empty_text"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="6dp"
+                    android:layout_marginTop="8dp"
                     android:gravity="center"
                     android:text="Incognito tabs keep no history, and their cookies are deleted when you close them."
                     android:textColor="@color/incognito_hint"

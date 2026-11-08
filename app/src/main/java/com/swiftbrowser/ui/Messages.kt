@@ -95,7 +95,7 @@ object Messages {
         }
         val pill = Pill(activity, text, action, icon, duration, onAction, onDismiss)
         current = pill
-        val m = Ui.dp(activity, 12)
+        val m = Ui.dp(activity, Ui.MARGIN)
         host.addView(pill, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM).apply {
             setMargins(m, 0, m, m + bottomOffset)
         })
@@ -187,7 +187,7 @@ object Messages {
                         dismiss()
                     }
                     // 3.0.3: springs when pressed.
-                    Ui.pressable(this, 0.92f)
+                    Ui.pressable(this, Motion.PRESS_BUTTON)
                 }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
                     marginStart = Ui.dp(ctx, 4)
                     topMargin = -reach

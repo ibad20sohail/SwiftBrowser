@@ -43,6 +43,9 @@ class HomeView @JvmOverloads constructor(
 
         /** The profile pill under the logo (2.7): change profile. */
         fun onProfileClicked()
+
+        /** 3.0.5: what the address bar should show changed: the page's picture, or whether the page is at its top. */
+        fun onHomeBarChanged()
     }
 
     var listener: Listener? = null
@@ -65,7 +68,6 @@ class HomeView @JvmOverloads constructor(
     private var shownTiles: List<TopSites.Tile> = emptyList()
 
     /** 3.0.5: the note under full shortcuts, while it's shown. */
-    private var fullNote: TextView? = null
 
     // Dragging a shortcut to another place (2.7: the others make way while it is held, as in the menu).
     private var dragged: View? = null
@@ -82,8 +84,9 @@ class HomeView @JvmOverloads constructor(
     private val touchSlop = android.view.ViewConfiguration.get(context).scaledTouchSlop
     private val hint: TextView
     private val searchIcon: ImageView
+    private val mic: ImageView
     private val tilesBox: LinearLayout
-    private val tilesTitle: View
+    private val tilesTitle: TextView
     private var incognito = false
     private var generation = 0
     private val tileViews = ArrayList<View>()
@@ -104,6 +107,59 @@ class HomeView @JvmOverloads constructor(
     private var pullDistance = 0f
     private var pullSpin: android.animation.ObjectAnimator? = null
 
+    /** The pull has come far enough that letting go refreshes (one buzz as it gets there, as on a page). */
+    private var pullArmed = false
+
+    /** A picture read late fading in over what is behind the page now. */
+    private var pictureFade: android.animation.ValueAnimator? = null
+
+    /** 3.0.5: the page's picture; null when it has a colour or a gradient. */
+    private var picture: android.graphics.drawable.Drawable? = null
+
+    // The address bar's room, which the picture also fills: above the page, or below it with the bar at the bottom.
+    private var barAbove = 0
+    private var barBelow = 0
+
+    /** The page is at its top: only then does the address bar let the picture through. */
+    var atTop = true
+        private set
+
+    /** The address bar stands in this much room above or below the page. */
+    fun setBarReach(above: Int, below: Int) {
+        barAbove = above
+        barBelow = below
+        HomeBackground.reach(picture, above, below)
+        updateBottomFade()
+    }
+
+    /** The part of the picture behind the address bar, drawn as the bar's background; null without a picture. */
+    val barPicture: android.graphics.drawable.Drawable? get() = HomeBackground.barPart(picture)
+
+    /** The colour for the address bar's buttons over the picture; null without one. */
+    fun barInk(): Int? = HomeBackground.barInk(context, picture)
+
+    /** About the colour along the picture's top edge; null without one. */
+    fun pictureTopColour(): Int? = HomeBackground.topColour(context, picture)
+
+    private fun usePicture(behind: android.graphics.drawable.Drawable?) {
+        picture = behind?.takeIf { HomeBackground.barPart(it) != null }
+        HomeBackground.reach(picture, barAbove, barBelow)
+        updateBottomFade()
+    }
+
+    /**
+     * With the see-through bar at the bottom nothing marks where the page ends, so its last few lines
+     * fade out there instead of being cut straight across. Off as soon as the page moves: the bar is
+     * solid then, and scrolling pays nothing for this.
+     */
+    private fun updateBottomFade() {
+        val on = picture != null && barBelow > 0 && atTop
+        if (scroll.isVerticalFadingEdgeEnabled != on) {
+            scroll.isVerticalFadingEdgeEnabled = on
+            scroll.invalidate()
+        }
+    }
+
     private val iconListener: (String) -> Unit = { key ->
         tileViews.filter { (it.tag as? TopSites.Tile)?.let { t -> com.swiftbrowser.core.Favicons.key(t.url) } == key }.forEach { bindIcon(it) }
     }
@@ -117,6 +173,7 @@ class HomeView @JvmOverloads constructor(
         compoundDrawablePadding = dp(8)
         background = Ui.ripple(context, Ui.shape(context, color(R.color.surface_alt), 20), 20)
         setOnClickListener { listener?.onProfileClicked() }
+        Ui.pressable(this, Motion.PRESS_BUTTON)
     }
 
     init {
@@ -128,17 +185,32 @@ class HomeView @JvmOverloads constructor(
         search = findViewById(R.id.home_search)
         hint = findViewById(R.id.home_search_hint)
         searchIcon = findViewById(R.id.home_search_icon)
+        // Swift's own font on every Android (it takes the phone's place by itself only below Android 9).
+        AppFont.cut(Ui.Type.SUBTITLE.sp, Ui.Weight.REGULAR)?.let { hint.typeface = it }
         tilesBox = findViewById(R.id.home_tiles)
         tilesTitle = findViewById(R.id.home_tiles_title)
         scroll = findViewById(R.id.home_scroll)
         scroll.isVerticalScrollBarEnabled = false
         search.setOnClickListener { listener?.onSearchBoxClicked() }
-        Ui.pressable(search, 0.98f)
-        findViewById<View>(R.id.home_mic).setOnClickListener { listener?.onVoiceSearch() }
-        scroll.setOnScrollChangeListener { _, _, _, _, _ -> news?.checkVisible() }
+        Ui.pressable(search, Motion.PRESS_CARD, morph = false)
+        mic = findViewById(R.id.home_mic)
+        mic.setOnClickListener { listener?.onVoiceSearch() }
+        Ui.pressable(mic, Motion.PRESS_ICON, morph = false)
+        scroll.setFadingEdgeLength(dp(BOTTOM_FADE_DP))
+        scroll.setOnScrollChangeListener { _, _, y, _, _ ->
+            news?.checkVisible()
+            val top = y <= dp(AT_TOP_DP)
+            if (top != atTop) {
+                atTop = top
+                updateBottomFade()
+                listener?.onHomeBarChanged()
+            }
+        }
         pullIndicator = ImageView(context).apply {
             setImageDrawable(Ui.icon(context, R.drawable.ic_refresh, Ui.accent(context)))
-            background = Ui.circle(color(R.color.ptr_bg))
+            // The same circle as a page's pull to refresh.
+            setBackgroundResource(R.drawable.bg_ptr)
+            Palette.paint(this)
             elevation = dp(4).toFloat()
             scaleType = ImageView.ScaleType.CENTER
             visibility = View.GONE
@@ -151,7 +223,7 @@ class HomeView @JvmOverloads constructor(
         column.clipToPadding = false
         // From edge to edge (past the column's padding): the cards scroll sideways out of sight.
         column.addView(continueRow, column.indexOfChild(tilesBox) + 1, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-            topMargin = dp(24)
+            topMargin = dp(Ui.SECTION_ABOVE)
             marginStart = -dp(16)
             marginEnd = -dp(16)
         })
@@ -211,11 +283,10 @@ class HomeView @JvmOverloads constructor(
         }).also {
             news = it
             findViewById<LinearLayout>(R.id.home_column).addView(it, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                topMargin = dp(28)
+                topMargin = dp(Ui.SECTION_ABOVE)
             })
             applyOrder()
-            // 3.0.5: made while the picture was already behind the page.
-            it.setOnPicture(onPicture)
+            it.setInk(ink)
         }
         section.visibility = View.VISIBLE
         section.show()
@@ -241,9 +312,13 @@ class HomeView @JvmOverloads constructor(
                 if (dragged == null && scroll.scrollY == 0 && dy > touchSlop && dy > Math.abs(ev.x - pullStartX) * 1.5f) {
                     pulling = true
                     pullDistance = 0f
+                    pullArmed = false
                     pullSpin?.cancel()
+                    pullIndicator.animate().cancel()
                     pullIndicator.visibility = View.VISIBLE
                     pullIndicator.alpha = 0f
+                    pullIndicator.scaleX = 0.6f
+                    pullIndicator.scaleY = 0.6f
                     pullIndicator.translationY = -dp(40).toFloat()
                     return true
                 }
@@ -261,15 +336,19 @@ class HomeView @JvmOverloads constructor(
                 pullDistance = (ev.y - pullStartY - touchSlop).coerceAtLeast(0f) * 0.5f
                 val shown = pullDistance.coerceAtMost(trigger * 1.3f)
                 pullIndicator.translationY = shown - dp(40) + dp(16)
-                pullIndicator.alpha = (shown / trigger).coerceIn(0f, 1f)
-                pullIndicator.rotation = shown * 2.5f
+                pullIndicator.alpha = (shown / trigger).coerceIn(0.2f, 1f)
+                pullIndicator.rotation = shown * 2.2f
+                val scale = 0.6f + 0.4f * (shown / trigger).coerceAtMost(1f)
+                pullIndicator.scaleX = scale
+                pullIndicator.scaleY = scale
                 pullIndicator.imageTintList = ColorStateList.valueOf(if (shown >= trigger) Ui.accent(context) else color(R.color.text_secondary))
+                if (shown >= trigger && !pullArmed) Haptics.tick(pullIndicator)
+                pullArmed = shown >= trigger
             }
             android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> {
                 pulling = false
                 if (pullDistance >= trigger && ev.actionMasked == android.view.MotionEvent.ACTION_UP) {
-                    Haptics.tick(this)
-                    pullIndicator.animate().translationY(dp(24).toFloat()).setDuration(Motion.SHORT).start()
+                    Motion.anim(pullIndicator, Motion.SHORT).translationY(dp(24).toFloat()).scaleX(1f).scaleY(1f).alpha(1f).start()
                     pullSpin = android.animation.ObjectAnimator.ofFloat(pullIndicator, View.ROTATION, pullIndicator.rotation, pullIndicator.rotation + 360f).apply {
                         duration = 700
                         repeatCount = android.animation.ValueAnimator.INFINITE
@@ -286,7 +365,7 @@ class HomeView @JvmOverloads constructor(
     }
 
     private fun hidePull() {
-        pullIndicator.animate().alpha(0f).translationY(-dp(40).toFloat()).setDuration(Motion.NORMAL).withEndAction {
+        Motion.anim(pullIndicator, Motion.SHORT, Motion.exit).scaleX(0.3f).scaleY(0.3f).alpha(0f).withEndAction {
             pullSpin?.cancel()
             pullSpin = null
             pullIndicator.visibility = View.GONE
@@ -300,6 +379,7 @@ class HomeView @JvmOverloads constructor(
 
     override fun onDetachedFromWindow() {
         Favicons.removeListener(iconListener)
+        pictureFade?.cancel()
         super.onDetachedFromWindow()
     }
 
@@ -330,11 +410,19 @@ class HomeView @JvmOverloads constructor(
     fun show(incognito: Boolean) {
         val changed = this.incognito != incognito
         this.incognito = incognito
+        pictureFade?.cancel()
         // 3.0.4: a gradient or your own picture behind it, if chosen (never in incognito).
-        val behind = HomeBackground.drawable(context, incognito) { picture -> if (!this.incognito) background = picture }
+        val behind = HomeBackground.drawable(context, incognito) { late ->
+            if (!this.incognito) {
+                usePicture(late)
+                fadeInPicture(late)
+                applyInk(late)
+                listener?.onHomeBarChanged()
+            }
+        }
+        usePicture(behind)
         if (behind != null) background = behind else setBackgroundColor(color(if (incognito) R.color.incognito_bg else R.color.home_bg))
-        // 3.0.5: with a picture behind the page (not a gradient), a soft backing behind its text.
-        setOnPicture(!incognito && HomeBackground.current(context) == HomeBackground.PICTURE)
+        applyInk(behind)
         logo.visibility = if (incognito) View.GONE else View.VISIBLE
         updateProfile()
         incognitoBox.visibility = if (incognito) View.VISIBLE else View.GONE
@@ -355,11 +443,47 @@ class HomeView @JvmOverloads constructor(
             hint.setTextColor(color(R.color.text_secondary))
             loadTiles()
         }
+        // The box's ripple over its shape, which changes above; a light one on incognito's dark box, also in the light look.
+        if (changed || search.foreground == null) {
+            val ripple = if (incognito) Ui.RIPPLE_ON_DARK else null
+            search.foreground = Ui.ripple(context, null, 27, ripple)
+            mic.background = Ui.rippleBorderless(context, ripple)
+        }
         val engine = SearchEngine.current
         hint.text = engine.hint
         searchIcon.setImageResource(engine.icon)
         searchIcon.imageTintList = if (com.swiftbrowser.core.SearchEngine.isLogo(engine.icon)) null else hint.textColors
+        mic.imageTintList = hint.textColors
         post { updateTopSpace() }
+        listener?.onHomeBarChanged()
+    }
+
+    /**
+     * [picture], read after the page was shown, fades in over what is behind the page now, without
+     * anything being laid out. Only the background is redrawn while it does.
+     */
+    private fun fadeInPicture(picture: android.graphics.drawable.Drawable) {
+        pictureFade?.cancel()
+        val old = background
+        if (old == null || !isShown || !Motion.enabled(context)) {
+            background = picture
+            return
+        }
+        picture.alpha = 0
+        val both = android.graphics.drawable.LayerDrawable(arrayOf(old, picture))
+        background = both
+        pictureFade = android.animation.ValueAnimator.ofInt(0, 255).apply {
+            duration = Motion.PAGE_MS
+            interpolator = Motion.standard
+            addUpdateListener { picture.alpha = it.animatedValue as Int }
+            addListener(object : android.animation.AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: android.animation.Animator) {
+                    picture.alpha = 255
+                    if (background === both) background = picture
+                }
+            })
+            start()
+        }
     }
 
     /**
@@ -385,38 +509,6 @@ class HomeView @JvmOverloads constructor(
 
     fun scrollToTop() {
         findViewById<View>(R.id.home_scroll).scrollTo(0, 0)
-    }
-
-    /** 3.0.5: the home page's picture is behind the page (never in incognito, nor with a gradient). */
-    private var onPicture = false
-
-    /**
-     * 3.0.5: a soft backing behind what is written straight on the picture: the shortcuts on a soft
-     * panel and the headings on soft pills, in the page's colour and just strong enough for the text
-     * (HomeBackground.backing). The picture still shows through them and around them. One flat
-     * rounded shape each, drawn while the page scrolls with nothing else to work out.
-     */
-    private fun setOnPicture(on: Boolean) {
-        if (on == onPicture) return
-        onPicture = on
-        // The heading only as wide as its word on its pill (as wide as the page without one: no difference then).
-        (tilesTitle.layoutParams as? LinearLayout.LayoutParams)?.let { lp ->
-            lp.width = if (on) ViewGroup.LayoutParams.WRAP_CONTENT else ViewGroup.LayoutParams.MATCH_PARENT
-            lp.gravity = android.view.Gravity.START
-            tilesTitle.layoutParams = lp
-        }
-        tilesTitle.background = if (on) Ui.shape(context, HomeBackground.backing(context, Ui.text(context)), Ui.R_SMALL) else null
-        tilesTitle.setPaddingRelative(dp(8), if (on) dp(3) else 0, if (on) dp(12) else 0, if (on) dp(3) else 0)
-        tilesBox.background = if (on) Ui.shape(context, HomeBackground.backing(context, Ui.text(context)), Ui.R_MEDIUM) else null
-        paintFullNote()
-        continueRow.setOnPicture(on)
-        news?.setOnPicture(on)
-    }
-
-    /** 3.0.5: the note under full shortcuts on the picture: grey text needs a little more. */
-    private fun paintFullNote() {
-        val note = fullNote ?: return
-        note.background = if (onPicture) Ui.shape(context, HomeBackground.backing(context, Ui.textSecondary(context)), Ui.R_XSMALL) else null
     }
 
     /** What the shortcuts shown were worked out for, and when (2.6). */
@@ -450,6 +542,9 @@ class HomeView @JvmOverloads constructor(
     private fun bindTiles(tiles: List<TopSites.Tile>) {
         // The same shortcuts as on screen: nothing to build again (2.6).
         if (tiles == shownTiles && tilesBox.childCount > 0 && !animateTiles) return
+        // Where they stand now: after a change only the new one fades in and the others glide over.
+        val before = if (animateTiles && isShown) tilePlaces() else null
+        if (before != null) fadeAwayRemoved(tiles)
         shownTiles = tiles
         tilesBox.removeAllViews()
         tileViews.clear()
@@ -485,7 +580,7 @@ class HomeView @JvmOverloads constructor(
                     true
                 }
                 v.setOnTouchListener { view, ev -> dragTouch(view, ev) }
-                Ui.pressable(v, 0.92f)
+                finishCell(v)
                 v.tag = t
                 tileViews += v
                 bindIcon(v)
@@ -495,30 +590,103 @@ class HomeView @JvmOverloads constructor(
             tilesBox.addView(row)
         }
         // 3.0: when they are all taken, the Add button makes way for a word on why (it went without one).
-        fullNote = null
         if (tiles.size >= TopSites.MAX) {
-            fullNote = Ui.text(context, Ui.Type.CAPTION, "You can have up to ${TopSites.MAX} shortcuts. Hold one to remove it.").apply {
+            val fullNote = Ui.text(context, Ui.Type.CAPTION, "You can have up to ${TopSites.MAX} shortcuts. Hold one to remove it.").apply {
                 gravity = android.view.Gravity.CENTER
                 setPadding(dp(8), dp(4), dp(8), 0)
             }
             tilesBox.addView(fullNote)
-            paintFullNote()
         }
+        paintTilesInk()
         if (animateTiles) {
             animateTiles = false
-            var i = 0
-            for (r in 0 until tilesBox.childCount) {
-                val row = tilesBox.getChildAt(r) as? LinearLayout ?: continue
-                for (c in 0 until row.childCount) {
-                    val v = row.getChildAt(c)
-                    if (v is Space) continue
-                    v.alpha = 0f
-                    v.scaleX = 0.9f
-                    v.scaleY = 0.9f
-                    v.animate().alpha(1f).scaleX(1f).scaleY(1f).setStartDelay(i++ * 12L).setDuration(170).start()
+            if (before != null) settleTiles(before)
+        }
+    }
+
+    /** How the text straight on the page's picture looks now; null without a picture (HomeBackground.Ink). */
+    private var ink: HomeBackground.Ink? = null
+
+    private fun applyInk(behind: android.graphics.drawable.Drawable?) {
+        ink = HomeBackground.inkOf(context, behind)
+        HomeBackground.paint(findViewById<TextView>(R.id.home_logo_text), ink, Ui.text(context))
+        HomeBackground.paint(tilesTitle, ink, Ui.text(context))
+        paintTilesInk()
+        continueRow.setInk(ink)
+        news?.setInk(ink)
+    }
+
+    /** The shortcuts' names, and the note when they are all taken. */
+    private fun paintTilesInk() {
+        for (r in 0 until tilesBox.childCount) {
+            when (val line = tilesBox.getChildAt(r)) {
+                is TextView -> HomeBackground.paint(line, ink, Ui.textSecondary(context))
+                is ViewGroup -> for (c in 0 until line.childCount) {
+                    line.getChildAt(c).findViewById<TextView>(R.id.tile_label)?.let { HomeBackground.paint(it, ink, Ui.text(context)) }
                 }
             }
         }
+    }
+
+    /** What every cell has: its name in Swift's font, the ripple on its 48 dp box and the press of the whole cell. */
+    private fun finishCell(v: View) {
+        AppFont.cut(Ui.Type.SMALL.sp, Ui.Weight.REGULAR)?.let { v.findViewById<TextView>(R.id.tile_label).typeface = it }
+        v.findViewById<View>(R.id.tile_box).foreground = Ui.ripple(context, null, Ui.R_SMALL)
+        Ui.pressable(v, Motion.PRESS_ICON, morph = false)
+    }
+
+    /** The cells on the page now: the shortcuts and the Add button. */
+    private fun tileCells(): List<View> = (0 until tilesBox.childCount)
+        .mapNotNull { tilesBox.getChildAt(it) as? LinearLayout }
+        .flatMap { row -> (0 until row.childCount).map { row.getChildAt(it) } }
+        .filter { it !is Space }
+
+    private fun cellKey(v: View) = (v.tag as? TopSites.Tile)?.key ?: ADD_CELL
+
+    /** Each cell's place in the shortcuts box, as laid out now. */
+    private fun tilePlaces(): Map<String, android.graphics.Point> = tileCells().associate { v ->
+        val row = v.parent as View
+        cellKey(v) to android.graphics.Point(row.left + v.left, row.top + v.top)
+    }
+
+    /** Shortcuts no longer among [kept] fade where they stand, in the box's overlay, while the page is rebuilt under them. */
+    private fun fadeAwayRemoved(kept: List<TopSites.Tile>) {
+        val keys = kept.mapTo(HashSet()) { it.key }
+        for (v in tileViews.filter { cellKey(it) !in keys }) {
+            tilesBox.overlay.add(v)
+            Motion.anim(v, Motion.PAGE_OUT_MS, Motion.exit).alpha(0f).withEndAction { tilesBox.overlay.remove(v) }.start()
+        }
+    }
+
+    /**
+     * After a shortcut was added, moved or removed: a new cell fades in and the others glide from
+     * where they stood ([before]). Laid out once first, so nothing is measured while they move.
+     */
+    private fun settleTiles(before: Map<String, android.graphics.Point>) {
+        tilesBox.clipChildren = false
+        for (r in 0 until tilesBox.childCount) (tilesBox.getChildAt(r) as? ViewGroup)?.clipChildren = false
+        val observer = tilesBox.viewTreeObserver
+        observer.addOnPreDrawListener(object : android.view.ViewTreeObserver.OnPreDrawListener {
+            override fun onPreDraw(): Boolean {
+                (if (observer.isAlive) observer else tilesBox.viewTreeObserver).removeOnPreDrawListener(this)
+                for (v in tileCells()) {
+                    val old = before[cellKey(v)]
+                    if (old == null) {
+                        v.alpha = 0f
+                        Motion.anim(v, Motion.SHORT, Motion.enter).alpha(1f).start()
+                        continue
+                    }
+                    val row = v.parent as View
+                    val dx = (old.x - row.left - v.left).toFloat()
+                    val dy = (old.y - row.top - v.top).toFloat()
+                    if (dx == 0f && dy == 0f) continue
+                    v.translationX = dx
+                    v.translationY = dy
+                    Motion.anim(v, Motion.SHORT).translationX(0f).translationY(0f).start()
+                }
+                return true
+            }
+        })
     }
 
     private fun startDrag(v: View) {
@@ -539,7 +707,7 @@ class HomeView @JvmOverloads constructor(
         v.stateListAnimator = null
         v.isPressed = false
         v.jumpDrawablesToCurrentState()
-        v.animate().scaleX(1.12f).scaleY(1.12f).setDuration(120).start()
+        Motion.anim(v, Motion.PRESS_DOWN).scaleX(1.12f).scaleY(1.12f).start()
         v.elevation = dp(6).toFloat()
         // Shortcuts move between rows, and the held one is drawn above the other rows.
         for (r in 0 until tilesBox.childCount) (tilesBox.getChildAt(r) as? ViewGroup)?.clipChildren = false
@@ -600,9 +768,8 @@ class HomeView @JvmOverloads constructor(
                 dragFrom > to && i in to until dragFrom -> i + 1
                 else -> i
             }
-            t.animate().translationX((slots[place].left - slots[i].left).toFloat())
-                .translationY((slots[place].top - slots[i].top).toFloat())
-                .setDuration(Motion.SHORT).setInterpolator(Motion.standard).start()
+            Motion.anim(t, Motion.SHORT).translationX((slots[place].left - slots[i].left).toFloat())
+                .translationY((slots[place].top - slots[i].top).toFloat()).start()
         }
     }
 
@@ -615,11 +782,11 @@ class HomeView @JvmOverloads constructor(
         val own = slots.getOrNull(from)
         val tx = if (place != null && own != null) (place.left - own.left).toFloat() else 0f
         val ty = if (place != null && own != null) (place.top - own.top).toFloat() else 0f
-        if (to == from) for ((i, t) in tileViews.withIndex()) if (i != from) t.animate().translationX(0f).translationY(0f).setDuration(Motion.SHORT).start()
-        v.animate().translationX(tx).translationY(ty).scaleX(1f).scaleY(1f).setDuration(150).withEndAction {
+        if (to == from) for ((i, t) in tileViews.withIndex()) if (i != from) Motion.anim(t, Motion.SHORT).translationX(0f).translationY(0f).start()
+        Motion.anim(v, Motion.SHORT).translationX(tx).translationY(ty).scaleX(1f).scaleY(1f).withEndAction {
             v.elevation = 0f
             (v.parent as? ViewGroup)?.translationZ = 0f
-            Ui.pressable(v, 0.92f)
+            Ui.pressable(v, Motion.PRESS_ICON, morph = false)
             if (to != from && from >= 0 && to >= 0 && dragged == null) moveTile(from, to)
         }.start()
     }
@@ -671,7 +838,7 @@ class HomeView @JvmOverloads constructor(
         v.findViewById<View>(R.id.tile_letter).visibility = View.GONE
         v.contentDescription = "Add a shortcut"
         v.setOnClickListener { listener?.onAddTile() }
-        Ui.pressable(v, 0.92f)
+        finishCell(v)
         return v
     }
 
@@ -691,7 +858,14 @@ class HomeView @JvmOverloads constructor(
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
     private companion object {
+        /** How far from the top still counts as the page's top, and how long the fade at the page's end is (dp). */
+        const val AT_TOP_DP = 2
+        const val BOTTOM_FADE_DP = 40
+
         /** Shortcuts to a row (2.7: five, smaller). */
         const val COLUMNS = 5
+
+        /** The Add button's place among the shortcuts' keys. */
+        const val ADD_CELL = "+"
     }
 }

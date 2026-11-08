@@ -120,7 +120,7 @@ class Piece private constructor(private val fill: GradientDrawable, private val 
         private fun sizes(ctx: Context): Sizes {
             val density = ctx.resources.displayMetrics.density
             sizes?.takeIf { sizesDensity == density }?.let { return it }
-            return Sizes(Ui.dpf(ctx, Ui.R_LARGE.toFloat()), Ui.dpf(ctx, Ui.R_XSMALL.toFloat())).also {
+            return Sizes(Ui.dpf(ctx, Ui.R_MEDIUM.toFloat()), Ui.dpf(ctx, Ui.R_XSMALL.toFloat())).also {
                 sizes = it
                 sizesDensity = density
             }

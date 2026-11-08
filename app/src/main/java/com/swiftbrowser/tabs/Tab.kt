@@ -265,6 +265,6 @@ interface BrowserUi {
     /** A short message at the bottom of the screen, optionally with a button. */
     fun showMessage(text: String, action: String? = null, long: Boolean = false, onAction: (() -> Unit)? = null)
 
-    /** Lets the user choose files for a page's upload field; null when cancelled. */
-    fun pickFiles(mimeTypes: Array<String>, multiple: Boolean, callback: (List<android.net.Uri>?) -> Unit)
+    /** Lets the user choose files for a page's upload field; null when cancelled. [camera]: the page asks for a new photo or video. */
+    fun pickFiles(mimeTypes: Array<String>, multiple: Boolean, camera: Boolean, callback: (List<android.net.Uri>?) -> Unit)
 }

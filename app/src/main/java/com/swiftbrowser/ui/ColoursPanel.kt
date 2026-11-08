@@ -26,7 +26,7 @@ object ColoursPanel {
     fun build(a: Activity): View {
         val box = LinearLayout(a).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(Ui.dp(a, 14), Ui.dp(a, 14), Ui.dp(a, 14), Ui.dp(a, 16))
+            setPadding(Ui.dp(a, Ui.ROW_INSET), Ui.dp(a, 14), Ui.dp(a, Ui.ROW_INSET), Ui.dp(a, 16))
             // Made with the chosen colours already; the swatches show exact colours.
             setTag(R.id.palette_keep, true)
         }
@@ -83,10 +83,13 @@ object ColoursPanel {
         isHorizontalScrollBarEnabled = false
         overScrollMode = View.OVER_SCROLL_NEVER
         Ui.fadeEdges(this)
-        addView(LinearLayout(a).apply {
+        val row = LinearLayout(a).apply {
             orientation = LinearLayout.HORIZONTAL
             for (p in PRESETS) addView(presetCard(a, p, p === chosen), LinearLayout.LayoutParams(Ui.dp(a, 84), ViewGroup.LayoutParams.WRAP_CONTENT))
-        })
+        }
+        addView(row)
+        // The chosen one in sight, also after the page is redrawn in its colours.
+        if (chosen != null) post { row.getChildAt(PRESETS.indexOf(chosen))?.let { scrollTo(it.left, 0) } }
     }
 
     private fun presetCard(a: Activity, p: Preset, chosen: Boolean): View = LinearLayout(a).apply {
@@ -121,7 +124,7 @@ object ColoursPanel {
         })
         contentDescription = p.label + if (chosen) ", chosen" else ""
         background = Ui.ripple(a, null, 12)
-        Ui.pressable(this, 0.92f)
+        Ui.pressable(this, Motion.PRESS_BUTTON)
         setOnClickListener {
             Haptics.tick(this)
             Looks.setColours(a, p.accent, p.light, p.dark)
@@ -216,7 +219,7 @@ object ColoursPanel {
         })
         contentDescription = "Colours from your ${label.lowercase()}" + if (chosen) ", chosen" else ""
         background = Ui.ripple(a, null, Ui.R_SMALL)
-        Ui.pressable(this, 0.92f)
+        Ui.pressable(this, Motion.PRESS_BUTTON)
         setOnClickListener {
             Haptics.tick(this)
             Looks.setPictureColours(a, m[0], m[1], m[2])
@@ -284,7 +287,7 @@ object ColoursPanel {
                 setLineSpacing(0f, 1f)
                 setPadding(Ui.dp(a, 2), Ui.dp(a, 6), Ui.dp(a, 2), 0)
             })
-            Ui.pressable(this, 0.9f)
+            Ui.pressable(this, Motion.PRESS_BUTTON)
             setOnClickListener {
                 Haptics.tick(this)
                 onClick()
@@ -387,6 +390,9 @@ object ColoursPanel {
 object ColorPicker {
     enum class Kind { ACCENT, LIGHT_BACKGROUND, DARK_BACKGROUND }
 
+    /** While a colour is being dragged, how often the previews are made again (building them is the costly part). */
+    private const val PREVIEW_MS = 80L
+
     fun show(a: Activity, kind: Kind, initial: Int, onPick: (Int) -> Unit) {
         var picked = initial or 0xFF000000.toInt()
         val dp = { v: Int -> Ui.dp(a, v) }
@@ -420,17 +426,17 @@ object ColorPicker {
         }
         col.addView(previewBox, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         col.addView(note.apply { setPadding(0, dp(6), 0, dp(4)) })
-        // The colour maker (2.5): any colour, made with a finger. The preview follows at once: 3.0, at
-        // most once a frame (it was built again for every finger move, faster than the screen shows).
+        // The colour maker (2.5): any colour, made with a finger. The preview follows, at most every
+        // PREVIEW_MS (two small screens built again on every frame were too much for a slow phone).
         var refreshing = false
         col.addView(ColorMaker(a, picked) { c ->
             picked = c
             if (!refreshing) {
                 refreshing = true
-                previewBox.postOnAnimation {
+                previewBox.postDelayed({
                     refreshing = false
                     refresh()
-                }
+                }, PREVIEW_MS)
             }
         }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         refresh()

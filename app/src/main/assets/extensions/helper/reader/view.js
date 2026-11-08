@@ -56,6 +56,7 @@ function applyColours(theme, look) {
   root.setProperty('--link', c.link);
   root.setProperty('--reading', c.reading);
   root.setProperty('color-scheme', dark ? 'dark' : 'light');
+  document.documentElement.classList.toggle('dark', dark);
 }
 
 function applyStyle(look) {
@@ -207,11 +208,34 @@ function showRate() {
   rateButton.textContent = String(rate).replace(/^0\./, '.') + '×';
 }
 
+const stillMotion = matchMedia('(prefers-reduced-motion: reduce)');
+let playerLeaving = 0;
+
+// The read-aloud bar fades in by itself (its animation in view.css); leaving, it fades out first.
+function showPlayer(show) {
+  clearTimeout(playerLeaving);
+  if (show) {
+    player.classList.remove('leaving');
+    player.hidden = false;
+    return;
+  }
+  if (player.hidden) { return; }
+  if (stillMotion.matches) {
+    player.hidden = true;
+    return;
+  }
+  player.classList.add('leaving');
+  playerLeaving = setTimeout(() => {
+    player.classList.remove('leaving');
+    player.hidden = true;
+  }, 150);
+}
+
 function setState(s) {
   state = s;
   const reading = s !== 'idle';
   listen.hidden = reading;
-  player.hidden = !reading;
+  showPlayer(reading);
   document.body.classList.toggle('playing', reading);
   toggle.textContent = s === 'paused' ? 'Resume' : 'Pause';
   showRate();

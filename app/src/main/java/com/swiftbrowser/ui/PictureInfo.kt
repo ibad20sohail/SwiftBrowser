@@ -97,27 +97,29 @@ object PictureInfo {
 
     /** The sheet with [d]. */
     fun show(a: Activity, d: Details) {
-        val col = Sheets.column(a)
-        col.addView(Sheets.header(a, d.name))
-        d.folder?.let { col.addView(row(a, R.drawable.ic_folder, "Folder", it, selectable = true)) }
+        // The viewer's screen is black in both looks, so its sheets are dark in both.
+        val ctx = PlayerPanel.dark(a)
+        val col = Sheets.column(ctx)
+        col.addView(Sheets.header(ctx, d.name))
+        d.folder?.let { col.addView(row(ctx, R.drawable.ic_folder, "Folder", it, selectable = true)) }
         val sizes = listOfNotNull(
             d.size.takeIf { it >= 0 }?.let { UrlUtils.formatBytes(it) },
             if (d.width > 0) "${d.width} × ${d.height}" else null,
             if (d.width > 0) String.format(Locale.US, "%.1f MP", d.width.toLong() * d.height / 1_000_000.0) else null,
         )
-        if (sizes.isNotEmpty()) col.addView(row(a, R.drawable.ic_image, "Size and resolution", sizes.joinToString(" · ")))
+        if (sizes.isNotEmpty()) col.addView(row(ctx, R.drawable.ic_image, "Size and resolution", sizes.joinToString(" · ")))
         if (d.date > 0) {
             val flags = DateUtils.FORMAT_SHOW_DATE or DateUtils.FORMAT_SHOW_YEAR or DateUtils.FORMAT_SHOW_TIME or DateUtils.FORMAT_SHOW_WEEKDAY
-            col.addView(row(a, R.drawable.ic_history, if (d.taken) "Taken" else "Saved (the camera's date isn't in the picture)", DateUtils.formatDateTime(a, d.date, flags)))
+            col.addView(row(ctx, R.drawable.ic_history, if (d.taken) "Taken" else "Saved (the camera's date isn't in the picture)", DateUtils.formatDateTime(a, d.date, flags)))
         }
-        d.camera?.let { col.addView(row(a, R.drawable.ic_pic_camera, "Camera", it)) }
-        d.settings?.let { col.addView(row(a, R.drawable.ic_tune, "Camera settings", it)) }
+        d.camera?.let { col.addView(row(ctx, R.drawable.ic_pic_camera, "Camera", it)) }
+        d.settings?.let { col.addView(row(ctx, R.drawable.ic_tune, "Camera settings", it)) }
         val lat = d.latitude
         val lon = d.longitude
         if (lat != null && lon != null) {
             val where = String.format(Locale.US, "%.5f, %.5f", lat, lon)
-            col.addView(row(a, R.drawable.ic_pic_place, "Location", where, selectable = true))
-            col.addView(MaterialButton(a, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
+            col.addView(row(ctx, R.drawable.ic_pic_place, "Location", where, selectable = true))
+            col.addView(MaterialButton(ctx, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
                 text = "Open in maps"
                 setOnClickListener { openMap(a, lat, lon) }
             }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
@@ -125,24 +127,26 @@ object PictureInfo {
                 topMargin = Ui.dp(a, 2)
             })
         }
-        Sheets.sheet(a, col).showImmersive()
+        Sheets.sheet(ctx, col).showImmersive()
     }
 
-    /** A detail: an icon, what it is (small) and its value. */
-    private fun row(a: Activity, icon: Int, label: String, value: String, selectable: Boolean = false): View = LinearLayout(a).apply {
+    /** A detail: an icon (null: none, the player's Details), what it is (small) and its value. */
+    fun row(ctx: Context, icon: Int?, label: String, value: String, selectable: Boolean = false): View = LinearLayout(ctx).apply {
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
-        minimumHeight = Ui.dp(a, 56)
-        setPadding(Ui.dp(a, 24), Ui.dp(a, 8), Ui.dp(a, 24), Ui.dp(a, 8))
-        addView(ImageView(a).apply {
-            setImageDrawable(Ui.icon(a, icon, Ui.textSecondary(a)))
-            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-        }, LinearLayout.LayoutParams(Ui.dp(a, 24), Ui.dp(a, 24)).apply { marginEnd = Ui.dp(a, 20) })
-        addView(LinearLayout(a).apply {
+        minimumHeight = Ui.dp(ctx, Ui.ROW_ONE_LINE)
+        setPadding(Ui.dp(ctx, 24), Ui.dp(ctx, 8), Ui.dp(ctx, 24), Ui.dp(ctx, 8))
+        if (icon != null) {
+            addView(ImageView(ctx).apply {
+                setImageDrawable(Ui.icon(ctx, icon, Ui.textSecondary(ctx)))
+                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            }, LinearLayout.LayoutParams(Ui.dp(ctx, 24), Ui.dp(ctx, 24)).apply { marginEnd = Ui.dp(ctx, 20) })
+        }
+        addView(LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
-            addView(Ui.text(a, Ui.Type.CAPTION, label))
-            addView(Ui.text(a, Ui.Type.BODY, value).apply {
-                setPadding(0, Ui.dp(a, 2), 0, 0)
+            addView(Ui.text(ctx, Ui.Type.CAPTION, label))
+            addView(Ui.text(ctx, Ui.Type.BODY, value).apply {
+                setPadding(0, Ui.dp(ctx, 2), 0, 0)
                 // A folder's path or a place can be copied (a long press).
                 setTextIsSelectable(selectable)
             })

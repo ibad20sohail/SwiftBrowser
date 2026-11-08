@@ -127,7 +127,7 @@ object ClearData {
                 if (w.name !in ticked) continue
                 val m = sizes[w]
                 if (m == null) {
-                    clearButton.text = "Clear"
+                    Motion.swapText(clearButton, "Clear")
                     return
                 }
                 total += m.bytes
@@ -135,7 +135,7 @@ object ClearData {
             }
             val f = files
             if (deleteFiles && f != null) total += f.bytes
-            clearButton.text = if (total > 0) "Clear " + (if (about) "about " else "") + UrlUtils.formatBytes(total) else "Clear"
+            Motion.swapText(clearButton, if (total > 0) "Clear " + (if (about) "about " else "") + UrlUtils.formatBytes(total) else "Clear")
         }
 
         fun showSize(w: Clearing.What) {
@@ -170,7 +170,7 @@ object ClearData {
             sizes.clear()
             files = null
             if (deleteFiles) filesRow.box.isChecked = false
-            filesRow.view.visibility = View.GONE
+            Motion.reveal(filesRow.view, false)
             // 3.0: for a time, cookies go for those sites in every profile (the engine clears a site for all of them).
             rows[Clearing.What.COOKIES]?.setHint(hint(Clearing.What.COOKIES, span().isAll, profiles))
             for (w in Clearing.What.entries) showSize(w)
@@ -184,17 +184,17 @@ object ClearData {
                 if (f.ids.isNotEmpty()) {
                     val n = f.ids.size
                     filesRow.setSize((if (n == 1) "1 file" else "${number(n)} files") + " · " + UrlUtils.formatBytes(f.bytes))
-                    filesRow.view.visibility = View.VISIBLE
+                    Motion.reveal(filesRow.view, true)
                 }
             })
         }
 
         lateinit var sheet: com.google.android.material.bottomsheet.BottomSheetDialog
-        clearButton = button(a, "Clear", danger = true) {
+        clearButton = Sheets.wideButton(a, "Clear", danger = true) {
             val what = ticked.mapNotNull { n -> Clearing.What.entries.firstOrNull { it.name == n } }.toSet()
             if (what.isEmpty()) {
                 Messages.show(a, "Tick what to clear")
-                return@button
+                return@wideButton
             }
             val span = span()
             val chosen = choice
@@ -237,8 +237,9 @@ object ClearData {
                 else -> go()
             }
         }
-        col.addView(clearButton)
-        sheet = Sheets.sheet(a, col)
+        Ui.steadyFigures(clearButton)
+        // The main button stays in sight, however long the list is.
+        sheet = Sheets.sheet(a, col, footer = clearButton)
         // Closed: whatever is still being worked out stops.
         sheet.setOnDismissListener { ClearSizes.cancel() }
         sheet.showImmersive()
@@ -271,20 +272,6 @@ object ClearData {
         }
         return if (m.count == 1) "1 $one" else "${number(m.count)} $many"
     }
-
-    /** A wide button at the bottom of a sheet; [danger] in red, for what can't be undone. */
-    private fun button(a: Activity, text: String, danger: Boolean = false, onClick: () -> Unit) =
-        com.google.android.material.button.MaterialButton(a).apply {
-            this.text = text
-            if (danger) {
-                backgroundTintList = android.content.res.ColorStateList.valueOf(Ui.danger(a))
-                setTextColor(android.graphics.Color.WHITE)
-            }
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(a, 52)).apply {
-                setMargins(Ui.dp(a, 20), Ui.dp(a, 12), Ui.dp(a, 20), 0)
-            }
-            setOnClickListener { onClick() }
-        }
 
     /**
      * What a row means for the time chosen ([all]: all time). 3.0: for a time, cookies go for the
@@ -325,12 +312,12 @@ object ClearData {
         }
         col.addView(list)
         lateinit var sheet: com.google.android.material.bottomsheet.BottomSheetDialog
-        col.addView(button(a, "Done") {
+        val doneButton = Sheets.wideButton(a, "Done") {
             SwiftApp.prefs.sp.edit().putStringSet(PREF_QUIT, ticked).apply()
             sheet.dismiss()
             done()
-        })
-        sheet = Sheets.sheet(a, col)
+        }
+        sheet = Sheets.sheet(a, col, footer = doneButton)
         sheet.showImmersive()
     }
 
@@ -373,7 +360,7 @@ object ClearData {
     /** 2.8: a row of Clear browsing data: its tick, its name with what it takes away on the right (in grey), and what it means. */
     private class SizedRow(val view: View, val box: CheckBox, private val hint: TextView, private val size: TextView, private val title: String) {
         fun setSize(text: String) {
-            size.text = text
+            Motion.swapText(size, text)
             view.contentDescription = "$title, $text, ${hint.text}"
         }
 
@@ -393,6 +380,7 @@ object ClearData {
         val size = Ui.text(a, Ui.Type.CAPTION, "", lines = 1).apply {
             gravity = Gravity.END
             setPadding(Ui.dp(a, 8), 0, 0, 0)
+            Ui.steadyFigures(this)
         }
         val hintView = Ui.text(a, Ui.Type.CAPTION, hint)
         val view = LinearLayout(a).apply {
@@ -400,7 +388,7 @@ object ClearData {
             gravity = Gravity.CENTER_VERTICAL
             minimumHeight = Ui.dp(a, if (indent) 48 else 56)
             if (indent) setPadding(Ui.dp(a, 32), 0, 0, 0)
-            setBackgroundResource(RowHolder.selectableBackground(a))
+            background = Ui.ripple(a, null, Ui.R_XSMALL)
             setOnClickListener { box.isChecked = !box.isChecked }
             accessibilityDelegate = TickAccessibility(box)
             addView(box)
@@ -429,7 +417,7 @@ object ClearData {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             minimumHeight = Ui.dp(a, 56)
-            setBackgroundResource(RowHolder.selectableBackground(a))
+            background = Ui.ripple(a, null, Ui.R_XSMALL)
             setOnClickListener { box.isChecked = !box.isChecked }
             contentDescription = "$title, $hint"
             accessibilityDelegate = TickAccessibility(box)

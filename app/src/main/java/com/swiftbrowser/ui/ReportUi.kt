@@ -92,14 +92,9 @@ object ReportUi {
             }
         })
         lateinit var dialog: com.google.android.material.bottomsheet.BottomSheetDialog
-        col.addView(com.google.android.material.button.MaterialButton(a).apply {
-            this.text = "Send…"
-            setOnClickListener {
-                dialog.dismiss()
-                send(a, extra, withSites)
-            }
-        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(a, 52)).apply {
-            setMargins(Ui.dp(a, 20), Ui.dp(a, 4), Ui.dp(a, 20), Ui.dp(a, 4))
+        col.addView(Sheets.wideButton(a, "Send…") {
+            dialog.dismiss()
+            send(a, extra, withSites)
         })
         col.addView(Sheets.label(a, "What it holds"))
         col.addView(text, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {

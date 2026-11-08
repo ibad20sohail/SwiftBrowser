@@ -2,7 +2,6 @@ package com.swiftbrowser.ui
 
 import android.annotation.SuppressLint
 import android.content.res.ColorStateList
-import android.graphics.Typeface
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.InsetDrawable
@@ -181,6 +180,7 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
         imageTintList = ColorStateList.valueOf(Palette.color(a, R.color.text_secondary))
         contentDescription = "Site settings"
         setBackgroundResource(borderless())
+        Ui.pressable(this, Motion.PRESS_ICON, morph = false)
         setOnClickListener {
             val tab = TabManager.current ?: return@setOnClickListener
             val site = UrlUtils.site(tab.url) ?: return@setOnClickListener
@@ -193,6 +193,7 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
         imageTintList = ColorStateList.valueOf(Palette.color(a, R.color.text_secondary))
         setBackgroundResource(borderless())
         contentDescription = "Copy address"
+        Ui.pressable(this, Motion.PRESS_ICON, morph = false)
         setOnClickListener {
             val tab = TabManager.current ?: return@setOnClickListener
             if (UrlUtils.isHttp(tab.url)) {
@@ -254,6 +255,8 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
             cornerRadii = floatArrayOf(r, r, r, r, 0f, 0f, 0f, 0f)
         }
         panel.elevation = dp(16).toFloat()
+        // Its place above the rest, without a shadow: the scrim already sets it apart.
+        panel.outlineProvider = null
         // 3.0: no space under the page dots: their finger-sized places take it.
         panel.setPadding(0, dp(8), 0, 0)
         // Touches between the buttons stay in the menu instead of reaching the page.
@@ -312,11 +315,11 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
             setPadding(dp(12), dp(8), dp(12), dp(8))
             visibility = View.GONE
         }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-            setMargins(dp(18), 0, dp(18), dp(8))
+            setMargins(dp(Ui.MARGIN), 0, dp(Ui.MARGIN), dp(8))
         })
         content.addView(View(a).apply { setBackgroundColor(color(R.color.divider)) },
             LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)).apply {
-                setMargins(dp(18), 0, dp(18), dp(4))
+                setMargins(dp(Ui.MARGIN), 0, dp(Ui.MARGIN), dp(4))
             })
 
         // Pages of buttons, swiped sideways.
@@ -325,14 +328,14 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
             gravity = Gravity.CENTER_HORIZONTAL
             setPadding(dp(2), dp(8), dp(2), dp(6))
             compoundDrawablePadding = dp(8)
-            Ui.size(this, Ui.Type.CAPTION, keepFont = true)
+            Ui.size(this, Ui.Type.CAPTION)
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.END
             setTextColor(color(R.color.text_secondary))
             setBackgroundResource(borderless())
             minHeight = dp(88)
             setCompoundDrawablesRelativeWithIntrinsicBounds(null, roundIcon(R.drawable.ic_hide, false), null, null)
-            Ui.pressable(this, 0.92f)
+            Ui.pressable(this, Motion.PRESS_ICON)
             setOnClickListener { hiddenSheet() }
         }
         content.addView(pager, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
@@ -436,11 +439,11 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
         if (dots.childCount != count) {
             dots.removeAllViews()
             repeat(count) { i ->
-                // 3.0: a finger-sized place (48 dp) round the same small dot; it was 18 by 20.
+                // 3.0: a finger-tall place (48 dp) round the same small dot, close enough to read as one row.
                 dots.addView(View(a).apply {
                     contentDescription = "Page ${i + 1}"
                     setOnClickListener { pager.goTo(i) }
-                }, LinearLayout.LayoutParams(dp(DOT_PLACE), dp(DOT_PLACE)))
+                }, LinearLayout.LayoutParams(dp(DOT_WIDTH), dp(DOT_PLACE)))
             }
         }
         if (pager.page >= count) pager.goTo(count - 1) else showPage(pager.page)
@@ -655,8 +658,9 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
                     setColor(target)
                 }
                 dot.setTag(R.id.motion_icon, fresh)
+                val side = dp((DOT_WIDTH - 6) / 2)
                 val inset = dp((DOT_PLACE - 6) / 2)
-                dot.background = InsetDrawable(fresh, inset, inset, inset, inset)
+                dot.background = InsetDrawable(fresh, side, inset, side, inset)
                 dot.scaleX = if (i == index) 1.3f else 1f
                 dot.scaleY = dot.scaleX
                 continue
@@ -881,7 +885,7 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
                         setBackgroundResource(borderless())
                         setCompoundDrawablesRelativeWithIntrinsicBounds(null, roundIcon(b.icon, false), null, null)
                         contentDescription = "Put back ${b.label}"
-                        Ui.pressable(this, 0.92f)
+                        Ui.pressable(this, Motion.PRESS_ICON)
                         setOnClickListener {
                             dialog.dismiss()
                             putBack(key)
@@ -1193,7 +1197,7 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
     private fun header(): View = LinearLayout(a).apply {
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
-        setPadding(dp(18), 0, dp(10), dp(6))
+        setPadding(dp(Ui.MARGIN), 0, dp(10), dp(6))
         addView(FrameLayout(a).apply {
             background = GradientDrawable().apply {
                 setColor(color(R.color.surface_alt))
@@ -1208,7 +1212,7 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
                 Ui.size(this, Ui.Type.BODY, keepFont = true)
                 maxLines = 1
                 ellipsize = TextUtils.TruncateAt.END
-                setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL))
+                typeface = Ui.medium(Ui.Type.BODY)
                 setTextColor(color(R.color.text_primary))
             })
             addView(headerSite.apply {
@@ -1227,6 +1231,7 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
             imageTintList = ColorStateList.valueOf(color(R.color.text_secondary))
             setBackgroundResource(borderless())
             contentDescription = "Settings"
+            Ui.pressable(this, Motion.PRESS_ICON, morph = false)
             setOnClickListener {
                 close()
                 a.openList(SettingsActivity::class.java)
@@ -1249,7 +1254,8 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
             }
             if (view.isEnabled != enabled) {
                 view.isEnabled = enabled
-                view.alpha = if (enabled) 1f else Ui.DISABLED_ALPHA
+                // Fades rather than jumps, as the grid's buttons do.
+                Motion.anim(view, Motion.SHORT).alpha(if (enabled) 1f else Ui.DISABLED_ALPHA).start()
             }
         }
     }
@@ -1259,6 +1265,7 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
             contentDescription = label
             setBackgroundResource(borderless())
             scaleType = ImageView.ScaleType.CENTER
+            Ui.pressable(this, Motion.PRESS_ICON, morph = false)
         }
         row.addView(view, LinearLayout.LayoutParams(0, dp(48), 1f))
         val item = IconAction(view)
@@ -1361,7 +1368,7 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
             gravity = Gravity.CENTER_HORIZONTAL
             setPadding(dp(2), dp(8), dp(2), dp(6))
             compoundDrawablePadding = dp(8)
-            textSize = LABEL_SP
+            Ui.size(this, Ui.Type.CAPTION)
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.END
             setTextColor(color(R.color.text_primary))
@@ -1369,7 +1376,7 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
         }
         // At least this tall, taller with large phone text (the name never gets cut).
         view.minHeight = dp(88)
-        Ui.pressable(view, 0.92f)
+        Ui.pressable(view, Motion.PRESS_ICON)
         val item = Item(key, view, action ?: { tab -> run(key, tab) })
         item.set(icon, label)
         view.setOnClickListener {
@@ -1427,8 +1434,9 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
         const val HOLD_MS = 320L
         const val HINT_SEEN = "menu_move_hint_seen"
 
-        /** A page dot's finger-sized place (dp, 3.0). */
+        /** A page dot's finger-sized height and how far apart the dots are (dp). */
         const val DOT_PLACE = 48
+        const val DOT_WIDTH = 22
 
         /** The buttons' names (sp), and the smallest a long one is drawn (3.0). */
         const val LABEL_SP = 12.5f

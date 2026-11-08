@@ -1,21 +1,22 @@
 <!DOCTYPE html>
-<!-- 2.9: Wi-Fi transfer's code page. {{ACCENT}} and {{ON_ACCENT}} are the phone's colours. -->
+<!-- 2.9: Wi-Fi transfer's code page. {{ACCENT_LIGHT}}, {{ON_ACCENT_LIGHT}}, {{ACCENT_DARK}} and {{ON_ACCENT_DARK}} are the phone's colours for each look. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Swift · Wi-Fi transfer</title>
 <style>
-:root{--accent:{{ACCENT}};--on:{{ON_ACCENT}};--bg:#f6f7f9;--card:#fff;--text:#1b1c1f;--muted:#5f6368;--line:#dfe2e7}
-@media (prefers-color-scheme:dark){:root{--bg:#15171c;--card:#1f2228;--text:#e8eaed;--muted:#a0a4ab;--line:#33363d}}
+:root{--accent:{{ACCENT_LIGHT}};--on:{{ON_ACCENT_LIGHT}};--bg:#f6f7f9;--card:#fff;--text:#1b1c1f;--muted:#5f6368;--line:#dfe2e7;--danger:#d93025}
+@media (prefers-color-scheme:dark){:root{--accent:{{ACCENT_DARK}};--on:{{ON_ACCENT_DARK}};--bg:#15171c;--card:#1f2228;--text:#e8eaed;--muted:#a0a4ab;--line:#33363d;--danger:#f28b82}}
 body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text);margin:0;display:flex;min-height:100vh;align-items:center;justify-content:center}
 form{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:32px;max-width:360px;width:calc(100% - 48px);box-sizing:border-box;text-align:center}
 h1{font-size:20px;margin:0 0 8px}
 p{color:var(--muted);margin:0 0 20px;line-height:1.45}
 input{font-size:28px;letter-spacing:8px;text-align:center;width:100%;box-sizing:border-box;padding:12px;border:1px solid var(--line);border-radius:12px;outline:none;background:transparent;color:var(--text)}
 input:focus{border-color:var(--accent)}
-button{margin-top:16px;width:100%;padding:12px;font-size:16px;border:0;border-radius:24px;background:var(--accent);color:var(--on);cursor:pointer}
-.err{color:#d93025;min-height:20px;margin-top:12px;font-size:14px}
+button{margin-top:16px;width:100%;padding:12px;font-size:16px;border:0;border-radius:24px;background:var(--accent);color:var(--on);cursor:pointer;transition:background-color .12s,transform .12s}
+button:active{transform:scale(.97)}
+.err{color:var(--danger);min-height:20px;margin-top:12px;font-size:14px}
 .note{font-size:12px;margin:16px 0 0}
 </style>
 </head>

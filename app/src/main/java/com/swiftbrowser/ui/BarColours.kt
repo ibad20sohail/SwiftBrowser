@@ -44,6 +44,16 @@ class BarColours(
             )
         }
 
+        /**
+         * 3.0.5: the bar over the home page's picture: nothing of its own to see, only its buttons in
+         * [ink]. Its see-through colour is on the side away from [ink], so [dark] is right for it.
+         * [pill]: the address box, which only shows again once the bar is solid to type in.
+         */
+        fun overPicture(ink: Int, pill: Int, danger: Int): BarColours {
+            val clear = if (Contrast.luminance(ink) > 0.5) 0 else 0x00FFFFFF
+            return BarColours(bar = clear, pill = pill, text = ink, icon = ink, line = clear, accent = ink, danger = danger)
+        }
+
         /** [t] (0..1) of the way from [a] to [b]: the bar's colours while they change. */
         fun between(a: BarColours, b: BarColours, t: Float): BarColours {
             fun m(x: Int, y: Int) = BarTones.blend(x, y, t.toDouble())

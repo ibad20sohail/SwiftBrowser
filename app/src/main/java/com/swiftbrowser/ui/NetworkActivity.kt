@@ -5,8 +5,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
-import android.graphics.drawable.ColorDrawable
-import android.graphics.drawable.Drawable
 import android.os.Build
 import android.os.Bundle
 import android.text.InputType
@@ -109,6 +107,7 @@ class NetworkActivity : ListActivity() {
     private lateinit var pathScroll: HorizontalScrollView
     private lateinit var crumbs: LinearLayout
     private lateinit var bottom: LinearLayout
+    private lateinit var bottomBar: BottomBar
     private lateinit var jobStrip: LinearLayout
     private lateinit var jobText: TextView
     private lateinit var jobBar: ProgressBar
@@ -127,11 +126,7 @@ class NetworkActivity : ListActivity() {
     /** The jobs running at the last look: one of Files' that ends meanwhile is told here (Files is behind). */
     private var seen: Map<Int, FileJobs.Job> = emptyMap()
     private var questionShown: FileJobs.Question? = null
-    private var progressDialog: AlertDialog? = null
-    private var progressFor: FileJobs.Job? = null
-    private var progressName: TextView? = null
-    private var progressBar: ProgressBar? = null
-    private var progressDetail: TextView? = null
+    private val progress = FileJobDialogs.Progress(this)
 
     /** What to copy once Android has answered about the storage. */
     private var pendingCopy: List<NetClient.Entry>? = null
@@ -163,13 +158,7 @@ class NetworkActivity : ListActivity() {
             true
         }
         list.adapter = adapter
-        list.itemAnimator = androidx.recyclerview.widget.DefaultItemAnimator().apply {
-            removeDuration = Motion.SHORT
-            moveDuration = Motion.SHORT
-            addDuration = Motion.SHORT
-            changeDuration = 0
-            supportsChangeAnimations = false
-        }
+        list.itemAnimator = Motion.listAnimator()
         buildChrome()
         onBackPressedDispatcher.addCallback(this, back)
         // Turned sideways: the same place, read again.
@@ -207,7 +196,7 @@ class NetworkActivity : ListActivity() {
     }
 
     override fun onDestroy() {
-        progressDialog?.dismiss()
+        progress.dismiss()
         opening?.dismiss()
         super.onDestroy()
     }
@@ -228,18 +217,8 @@ class NetworkActivity : ListActivity() {
     private fun buildChrome() {
         val box = list.parent as ViewGroup
         val column = box.parent as LinearLayout
-        crumbs = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            // 3.0.5: the first icon (24 dp in a 36 dp button) starts at the one side margin, like the rows below.
-            setPadding(dp(Ui.MARGIN - 6), 0, dp(12), 0)
-        }
-        pathScroll = HorizontalScrollView(this).apply {
-            isHorizontalScrollBarEnabled = false
-            overScrollMode = View.OVER_SCROLL_NEVER
-            visibility = View.GONE
-            addView(crumbs)
-        }
+        crumbs = PathRow.crumbs(this)
+        pathScroll = PathRow.scroll(this, crumbs).apply { visibility = View.GONE }
         column.addView(pathScroll, column.indexOfChild(box), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(40)))
 
         bottom = LinearLayout(this).apply {
@@ -247,6 +226,7 @@ class NetworkActivity : ListActivity() {
             visibility = View.GONE
             setBackgroundColor(Palette.color(this@NetworkActivity, R.color.sheet_bg))
         }
+        bottomBar = BottomBar(bottom)
         // 3.0.5: no line above it: its own colour against the page's says where it begins.
         jobStrip = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -260,7 +240,7 @@ class NetworkActivity : ListActivity() {
             ellipsize = TextUtils.TruncateAt.MIDDLE
             Ui.steadyFigures(this)
         }
-        jobBar = horizontalBar()
+        jobBar = FileJobDialogs.bar(this)
         jobStrip.addView(jobText)
         jobStrip.addView(jobBar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(6)).apply { topMargin = dp(8) })
         bottom.addView(jobStrip)
@@ -276,34 +256,8 @@ class NetworkActivity : ListActivity() {
         Palette.paint(bottom)
     }
 
-    private fun horizontalBar(): ProgressBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
-        max = 1000
-        progressDrawable = ContextCompat.getDrawable(this@NetworkActivity, R.drawable.progress_rounded)
-        progressTintList = accentTint
-        indeterminateTintList = accentTint
-    }
-
     /** A button of the bar at the bottom: an icon over a short word (as in Files). */
-    private fun barButton(icon: Int, label: String, onClick: () -> Unit): View = LinearLayout(this).apply {
-        val ctx = this@NetworkActivity
-        orientation = LinearLayout.VERTICAL
-        gravity = Gravity.CENTER_HORIZONTAL
-        setPadding(0, dp(8), 0, dp(6))
-        background = Ui.ripple(ctx, null, 12)
-        contentDescription = label
-        isClickable = true
-        isFocusable = true
-        addView(ImageView(ctx).apply {
-            setImageDrawable(Ui.icon(ctx, icon, Ui.text(ctx)))
-            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-        }, LinearLayout.LayoutParams(dp(24), dp(24)))
-        addView(Ui.text(ctx, Ui.Type.CAPTION, label, Ui.text(ctx), lines = 1).apply {
-            gravity = Gravity.CENTER
-            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-            setPadding(dp(2), dp(4), dp(2), 0)
-        })
-        setOnClickListener { onClick() }
-    }
+    private fun barButton(icon: Int, label: String, onClick: () -> Unit): View = BottomBar.button(this, icon, label, onClick = onClick)
 
     /** A message at the bottom, above the bar there. */
     private fun say(text: CharSequence, action: String? = null, long: Boolean = false, onAction: (() -> Unit)? = null) {
@@ -504,10 +458,10 @@ class NetworkActivity : ListActivity() {
         return if (share == null) shares.orEmpty().map { Item.ShareRow(it) } else shownEntries().map { Item.EntryRow(it) }
     }
 
-    private fun render() {
+    private fun render(removals: Boolean = false) {
         list.removeCallbacks(showLoading)
         val items = shown()
-        adapter.set(items)
+        adapter.set(items, removals)
         // The place comes in from its side once it has rows (not its moment of waiting).
         if (pendingSlide != 0 && items.isNotEmpty()) {
             slideList(pendingSlide)
@@ -528,6 +482,7 @@ class NetworkActivity : ListActivity() {
                 R.drawable.ic_files_network, "No network folders yet",
                 "Add the address of a computer or storage that shares folders.",
                 listOf("Add a computer or storage" to { editSheet(null) }),
+                EmptyArt.FOLDER,
             ) else showEmpty(false, "")
             p != null -> showProblem(s, p)
             // Nothing from before while waiting (the spinner comes after a moment).
@@ -542,9 +497,11 @@ class NetworkActivity : ListActivity() {
     }
 
     /** An empty screen with buttons (the first one filled). */
-    private fun showState(icon: Int, title: String, hint: String?, buttons: List<Pair<String, () -> Unit>>) {
+    private fun showState(icon: Int, title: String, hint: String?, buttons: List<Pair<String, () -> Unit>>, art: EmptyArt? = null) {
         empty.removeAllViews()
-        val state = Ui.emptyState(this, icon, title, hint)
+        val state = Ui.emptyState(this, icon, title, hint, art)
+        // A whole sentence (what went wrong) isn't a heading; the big bold title is for a few words.
+        if (title.length > SENTENCE_TITLE) (state.getChildAt(1) as? TextView)?.let { Ui.style(it, Ui.Type.HEADING) }
         buttons.forEachIndexed { i, (label, run) ->
             val b = if (i == 0) MaterialButton(this) else MaterialButton(this, null, androidx.appcompat.R.attr.borderlessButtonStyle)
             b.text = label
@@ -595,11 +552,11 @@ class NetworkActivity : ListActivity() {
         val selecting = selected.isNotEmpty()
         if (navClose != selecting) {
             navClose = selecting
-            toolbar.setNavigationIcon(if (selecting) R.drawable.ic_close else R.drawable.ic_back)
+            TitleBar.swapBackIcon(toolbar, if (selecting) R.drawable.ic_close else R.drawable.ic_back)
             toolbar.navigationContentDescription = if (selecting) "Leave selection" else "Back"
         }
         if (selecting) {
-            toolbar.title = if (selected.size == 1) "1 selected" else "${selected.size} selected"
+            toolbar.title = TitleBar.steady(if (selected.size == 1) "1 selected" else "${selected.size} selected")
             toolbar.subtitle = null
         } else {
             val sh = share
@@ -631,15 +588,6 @@ class NetworkActivity : ListActivity() {
             return
         }
         pathScroll.visibility = View.VISIBLE
-        crumbs.removeAllViews()
-        crumbs.addView(ImageView(this).apply {
-            setImageDrawable(Ui.icon(this@NetworkActivity, R.drawable.ic_files_network, Ui.accent(this@NetworkActivity)))
-            scaleType = ImageView.ScaleType.CENTER
-            background = Ui.ripple(this@NetworkActivity, null, 12)
-            contentDescription = "Network folders"
-            TooltipCompat.setTooltipText(this, "Network folders")
-            setOnClickListener { showServers() }
-        }, LinearLayout.LayoutParams(dp(36), dp(36)))
         val parts = ArrayList<Pair<String, () -> Unit>>()
         parts += s.title to { openShares() }
         share?.let { sh ->
@@ -651,21 +599,7 @@ class NetworkActivity : ListActivity() {
                 parts += p to { openFolder(target, SLIDE_BACK) }
             }
         }
-        parts.forEachIndexed { i, (label, go) ->
-            crumbs.addView(ImageView(this).apply {
-                setImageDrawable(Ui.icon(this@NetworkActivity, R.drawable.ic_chevron_right, Ui.textSecondary(this@NetworkActivity)))
-                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-            }, LinearLayout.LayoutParams(dp(18), dp(18)))
-            val last = i == parts.size - 1
-            crumbs.addView(Ui.text(this, Ui.Type.LABEL, label, if (last) Ui.text(this) else Ui.accent(this), lines = 1).apply {
-                setPadding(dp(8), dp(8), dp(8), dp(8))
-                background = Ui.ripple(this@NetworkActivity, null, 12)
-                maxWidth = dp(200)
-                ellipsize = TextUtils.TruncateAt.MIDDLE
-                if (!last) setOnClickListener { go() }
-            })
-        }
-        pathScroll.post { pathScroll.fullScroll(View.FOCUS_RIGHT) }
+        PathRow.show(crumbs, pathScroll, R.drawable.ic_files_network, "Network folders", tooltip = true, onHome = { showServers() }, parts = parts)
     }
 
     /** Two buttons at most at the top: Add (servers) or Refresh, and ⋮; "Select all" in words while selecting. */
@@ -683,19 +617,7 @@ class NetworkActivity : ListActivity() {
         toolbar.menu.clear()
         val color = Ui.text(this)
         when {
-            selecting -> {
-                val label = if (all) "Clear selection" else "Select all"
-                val v = Ui.text(this, Ui.Type.LABEL, label, Ui.accent(this), lines = 1).apply {
-                    gravity = Gravity.CENTER
-                    setPadding(dp(14), dp(10), dp(14), dp(10))
-                    background = Ui.ripple(this@NetworkActivity, null, 18)
-                    setOnClickListener { onMenu(MENU_SELECT_ALL) }
-                }
-                toolbar.menu.add(0, MENU_SELECT_ALL, 0, label).apply {
-                    actionView = v
-                    setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS)
-                }
-            }
+            selecting -> TitleBar.addTextAction(toolbar, MENU_SELECT_ALL, if (all) "Clear selection" else "Select all") { onMenu(MENU_SELECT_ALL) }
             s == null -> addMenu(MENU_ADD, "Add a computer or storage", R.drawable.ic_add, color)
             else -> {
                 addMenu(MENU_REFRESH, "Refresh", R.drawable.ic_refresh, color)
@@ -740,19 +662,7 @@ class NetworkActivity : ListActivity() {
 
     // ------------------------------------------------------------------ the bar at the bottom and jobs
 
-    private fun updateBottom() {
-        val any = jobStrip.visibility == View.VISIBLE || actionBar.visibility == View.VISIBLE
-        if (any == (bottom.visibility == View.VISIBLE)) return
-        bottom.animate().cancel()
-        if (any) {
-            bottom.visibility = View.VISIBLE
-            bottom.translationY = Ui.dpf(this, 56f)
-            bottom.animate().translationY(0f).setDuration(Motion.SHORT).setInterpolator(Motion.enter).start()
-        } else {
-            bottom.visibility = View.GONE
-            bottom.translationY = 0f
-        }
-    }
+    private fun updateBottom() = bottomBar.show(jobStrip.visibility == View.VISIBLE || actionBar.visibility == View.VISIBLE, Motion.enabled(this))
 
     private val jobListener: () -> Unit = { onJobsChanged() }
 
@@ -764,23 +674,13 @@ class NetworkActivity : ListActivity() {
         if (job == null) {
             jobStrip.visibility = View.GONE
         } else {
-            jobStrip.visibility = View.VISIBLE
+            bottomBar.part(jobStrip, Motion.enabled(this))
             val more = if (jobs.size > 1) "  (+${jobs.size - 1})" else ""
             jobText.text = job.title + more + "  ·  " + FileJobs.detail(job).ifBlank { "Waiting…" }
-            setBar(jobBar, job)
+            FileJobDialogs.setBar(jobBar, job)
         }
         updateBottom()
-        progressFor?.let { j ->
-            if (j.finished) {
-                progressDialog?.dismiss()
-                progressDialog = null
-                progressFor = null
-            } else {
-                progressName?.text = j.current.ifBlank { if (j.counting) "Getting ready…" else "" }
-                progressDetail?.text = FileJobs.detail(j)
-                progressBar?.let { setBar(it, j) }
-            }
-        }
+        progress.changed()
         // Another screen's job (a copy in Files) that ended while this one is on show: said here.
         val now = all.associateBy { it.id }
         for ((id, j) in seen) {
@@ -791,52 +691,8 @@ class NetworkActivity : ListActivity() {
         if (q != null && q !== questionShown && !isFinishing) showQuestion(q)
     }
 
-    private fun setBar(bar: ProgressBar, job: FileJobs.Job) {
-        val indeterminate = job.fraction < 0 || job.counting
-        if (bar.isIndeterminate != indeterminate) bar.isIndeterminate = indeterminate
-        if (!indeterminate) bar.progress = (job.fraction * 1000).toInt()
-    }
-
     /** The job's progress in a window: the file, how far, Hide (it goes on) and Cancel. */
-    private fun showProgress(job: FileJobs.Job) {
-        if (isFinishing || job.finished) return
-        progressDialog?.dismiss()
-        val box = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(24), dp(8), dp(24), 0)
-        }
-        val name = Ui.text(this, Ui.Type.BODY, job.current).apply {
-            isSingleLine = true
-            ellipsize = TextUtils.TruncateAt.MIDDLE
-        }
-        val bar = horizontalBar()
-        val detail = Ui.steadyFigures(Ui.text(this, Ui.Type.CAPTION, FileJobs.detail(job)))
-        box.addView(name)
-        box.addView(bar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(6)).apply {
-            topMargin = dp(12)
-            bottomMargin = dp(8)
-        })
-        box.addView(detail)
-        progressName = name
-        progressBar = bar
-        progressDetail = detail
-        progressFor = job
-        setBar(bar, job)
-        progressDialog = MaterialAlertDialogBuilder(this)
-            .setTitle(job.title)
-            .setView(box)
-            .setPositiveButton("Hide", null)
-            .setNegativeButton("Cancel") { _, _ -> job.cancel() }
-            .showImmersive()
-            .also { d ->
-                d.setOnDismissListener {
-                    if (progressDialog === d) {
-                        progressDialog = null
-                        progressFor = null
-                    }
-                }
-            }
-    }
+    private fun showProgress(job: FileJobs.Job) = progress.show(job)
 
     /** A job asks: a name already taken on the phone, or (one of Files') an archive's password. */
     private fun showQuestion(q: FileJobs.Question) {
@@ -846,9 +702,10 @@ class NetworkActivity : ListActivity() {
                 hint = "Password"
                 setSingleLine()
                 inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+                Ui.field(this)
             }
             val box = LinearLayout(this).apply {
-                setPadding(dp(20), dp(4), dp(20), 0)
+                setPadding(dp(24), dp(4), dp(24), 0)
                 addView(input, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
             }
             Palette.paint(box)
@@ -868,26 +725,7 @@ class NetworkActivity : ListActivity() {
             d.setOnDismissListener { if (!answered) q.reply(null) }
             return
         }
-        val box = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(24), dp(4), dp(24), 0)
-        }
-        box.addView(Ui.text(this, Ui.Type.BODY_SECONDARY, "There's already ${if (q.isFolder) "a folder" else "a file"} called “${q.name}” in “${q.folder}”."))
-        val all = CheckBox(this).apply {
-            text = "Do the same for the rest"
-            setPadding(dp(4), 0, 0, 0)
-        }
-        box.addView(all, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) })
-        Palette.paint(box)
-        val d = MaterialAlertDialogBuilder(this)
-            .setTitle("“${q.name}” is already there")
-            .setView(box)
-            .setPositiveButton("Replace") { _, _ -> q.reply(FileJobs.Answer(FileJobs.Choice.REPLACE, all.isChecked)) }
-            .setNegativeButton("Keep both") { _, _ -> q.reply(FileJobs.Answer(FileJobs.Choice.KEEP_BOTH, all.isChecked)) }
-            .setNeutralButton("Skip") { _, _ -> q.reply(FileJobs.Answer(FileJobs.Choice.SKIP, all.isChecked)) }
-            .setCancelable(false)
-            .showImmersive()
-        Dialogs.markDanger(d)
+        FileJobDialogs.askNameTaken(this, q)
     }
 
     // ------------------------------------------------------------------ servers
@@ -904,16 +742,17 @@ class NetworkActivity : ListActivity() {
         col.addView(Sheets.header(ctx, if (old == null) "Add a computer or storage" else "Edit ${old.title}"))
         val form = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), 0, dp(20), 0)
+            setPadding(dp(24), 0, dp(24), 0)
         }
         fun field(hint: String, value: String, type: Int): EditText = EditText(ctx).apply {
             this.hint = hint
             setText(value)
             setSingleLine()
             inputType = type
-            form.addView(this, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            Ui.field(this)
+            form.addView(this, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) })
         }
-        fun label(text: String) = form.addView(Ui.text(ctx, Ui.Type.SECTION, text).apply { setPadding(dp(4), dp(14), dp(4), 0) })
+        fun label(text: String) = form.addView(Ui.text(ctx, Ui.Type.SECTION, text).apply { setPadding(0, dp(14), 0, 0) })
         label("Where it is")
         val address = field(
             "Its IP address or name, like 192.168.1.5", old?.address().orEmpty(),
@@ -1019,7 +858,7 @@ class NetworkActivity : ListActivity() {
             "server:${s.id}", "Removed ${s.title}",
             hide = {
                 hiddenServers += s.id
-                if (server == null) render()
+                if (server == null) render(removals = true)
             },
             restore = {
                 hiddenServers -= s.id
@@ -1048,16 +887,17 @@ class NetworkActivity : ListActivity() {
         if (isFinishing) return
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(4), dp(20), 0)
+            setPadding(dp(24), dp(4), dp(24), 0)
         }
         val who = (if (s.domain.isNotEmpty()) s.domain + "\\" else "") + s.user
         box.addView(Ui.text(this, Ui.Type.BODY_SECONDARY, if (wrong) "Wrong user name or password. Type the password for $who again." else "Type the password for $who.").apply {
-            setPadding(dp(4), 0, dp(4), dp(4))
+            setPadding(0, 0, 0, dp(8))
         })
         val input = EditText(this).apply {
             hint = "Password"
             setSingleLine()
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            Ui.field(this)
         }
         box.addView(input)
         box.addView(CheckBox(this).apply {
@@ -1269,17 +1109,35 @@ class NetworkActivity : ListActivity() {
         root: View, val icon: ImageView, val title: TextView, val subtitle: TextView, val more: ImageButton, val check: ImageView,
     ) : RecyclerView.ViewHolder(root) {
         var marked = false
-        lateinit var plain: Drawable
-        lateinit var markedFill: Drawable
     }
 
     private inner class Adapter : RecyclerView.Adapter<NetRow>() {
         var items: List<Item> = emptyList()
             private set
 
-        fun set(list: List<Item>) {
+        /** Shows [list]. With [removals], when it is the list on show less a few things, those close up. */
+        fun set(list: List<Item>, removals: Boolean = false) {
+            val old = items
             items = list
+            val gone = old.size - list.size
+            if (removals && gone > 0 && Motion.enabled(this@NetworkActivity)) {
+                val removed = ArrayList<Int>(gone)
+                var j = 0
+                for (i in old.indices) {
+                    if (j < list.size && keyOf(old[i]) == keyOf(list[j])) j++ else removed += i
+                }
+                if (j == list.size && removed.size == gone) {
+                    for (p in removed.asReversed()) notifyItemRemoved(p)
+                    return
+                }
+            }
             notifyDataSetChanged()
+        }
+
+        private fun keyOf(item: Item): Any = when (item) {
+            is Item.Server -> "server:" + item.s.id
+            is Item.ShareRow -> "share:" + item.share.name
+            is Item.EntryRow -> "entry:" + item.e.path
         }
 
         override fun getItemCount() = items.size
@@ -1290,7 +1148,7 @@ class NetworkActivity : ListActivity() {
 
         override fun onBindViewHolder(holder: NetRow, position: Int, payloads: MutableList<Any>) {
             if (payloads.isEmpty()) bind(holder, items[position], false)
-            else bindSelection(holder, items[position], payloads.contains(PAYLOAD_TOGGLED))
+            else bindSelection(holder, items[position], payloads.contains(PAYLOAD_TOGGLED), fade = payloads.contains(PAYLOAD_SELECTION))
         }
     }
 
@@ -1303,7 +1161,7 @@ class NetworkActivity : ListActivity() {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(Ui.MARGIN), dp(8), dp(8), dp(8))
             minimumHeight = dp(Ui.ROW_TWO_LINES)
-            setBackgroundResource(RowHolder.selectableBackground(ctx))
+            background = MarkFill.row(ctx)
             layoutParams = RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         }
         val icon = ImageView(ctx).apply {
@@ -1327,7 +1185,8 @@ class NetworkActivity : ListActivity() {
             setImageDrawable(Ui.icon(ctx, R.drawable.ic_more, Ui.textSecondary(ctx)))
             contentDescription = "More"
             TooltipCompat.setTooltipText(this, "More")
-            setBackgroundResource(RowHolder.selectableBackground(ctx))
+            background = Ui.rippleBorderless(ctx)
+            Ui.pressable(this, Motion.PRESS_ICON, morph = false)
         }
         root.addView(more, LinearLayout.LayoutParams(dp(44), dp(44)))
         val check = ImageView(ctx).apply {
@@ -1337,8 +1196,6 @@ class NetworkActivity : ListActivity() {
         }
         root.addView(check, LinearLayout.LayoutParams(dp(44), dp(44)))
         val h = NetRow(root, icon, title, subtitle, more, check)
-        h.plain = root.background
-        h.markedFill = Ui.ripple(ctx, ColorDrawable(Ui.accentContainer(ctx)), 0)
         root.setOnClickListener {
             when (val item = itemAt(h)) {
                 is Item.Server -> openServer(item.s)
@@ -1349,7 +1206,10 @@ class NetworkActivity : ListActivity() {
         }
         root.setOnLongClickListener { v ->
             when (val item = itemAt(h)) {
-                is Item.Server -> serverSheet(item.s)
+                is Item.Server -> {
+                    Haptics.hold(v)
+                    serverSheet(item.s)
+                }
                 is Item.ShareRow -> openShare(item.share.name)
                 is Item.EntryRow -> {
                     Haptics.hold(v)
@@ -1407,20 +1267,20 @@ class NetworkActivity : ListActivity() {
     }
 
     /** The tick while selecting (a small pop when tapped), and the selected row's colour. */
-    private fun bindSelection(h: NetRow, item: Item, toggled: Boolean) {
+    private fun bindSelection(h: NetRow, item: Item, toggled: Boolean, fade: Boolean = false) {
         val e = (item as? Item.EntryRow)?.e
         val selecting = selected.isNotEmpty() && e != null
         val on = e != null && e.path in selected
-        h.check.visibility = if (selecting) View.VISIBLE else View.GONE
-        h.more.visibility = if (selecting) View.GONE else View.VISIBLE
+        Ticks.show(h.check, h.more, selecting, fade && Motion.enabled(this), View.GONE)
         if (selecting) {
             h.check.setImageResource(if (on) R.drawable.ic_check_box else R.drawable.ic_check_box_blank)
             h.check.imageTintList = if (on) accentTint else secondaryTint
-            if (toggled && on) Motion.bump(h.check, 1.2f)
+            if (toggled && on) Motion.bump(h.check, 1.12f)
         }
         if (on != h.marked) {
             h.marked = on
-            h.itemView.background = if (on) h.markedFill else h.plain
+            // Fades over the row's own background, so a press on it isn't cut off.
+            MarkFill.set(h.itemView, on, animate = (toggled || fade) && Motion.enabled(this))
         }
         val what = when (item) {
             is Item.Server -> "computer"
@@ -1453,6 +1313,9 @@ class NetworkActivity : ListActivity() {
 
         private const val PAYLOAD_SELECTION = "selection"
         private const val PAYLOAD_TOGGLED = "toggled"
+
+        /** Longer than this, what went wrong is a sentence, not a title (its look when it heads an empty screen). */
+        private const val SENTENCE_TITLE = 60
 
         /** Places read lately, shown at once when gone back to (and read again). */
         private const val CACHED_PLACES = 24

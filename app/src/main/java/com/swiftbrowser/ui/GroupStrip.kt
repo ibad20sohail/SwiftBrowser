@@ -59,9 +59,16 @@ class GroupStrip(context: Context) : FrameLayout(context) {
     private var openTab: Tab? = null
     private var groupColour = 0
 
+    /** The colours of the chips of the tab left and the tab opened, fading. */
+    private var openFade: android.animation.ValueAnimator? = null
+
+    /** Whether the ripples are a dark bar's; null until first painted. */
+    private var rippleDark: Boolean? = null
+
     /** A chip's tab, the address its icon is for, and whether that icon is one of Swift's (tinted, not the site's). */
     private class Chip(val tab: Tab, val url: String) {
         var tinted = false
+        var open = false
     }
 
     init {
@@ -74,6 +81,7 @@ class GroupStrip(context: Context) : FrameLayout(context) {
         chips.orientation = LinearLayout.HORIZONTAL
         chips.gravity = Gravity.CENTER_VERTICAL
         chips.setPadding(dp(6), 0, dp(2), 0)
+        Ui.fadeEdges(scroller)
         scroller.addView(chips, ViewGroup.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT))
         bar.addView(scroller, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
         add.setImageResource(R.drawable.ic_add)
@@ -81,7 +89,7 @@ class GroupStrip(context: Context) : FrameLayout(context) {
         add.background = Ui.rippleBorderless(context)
         add.contentDescription = "New tab in this group"
         TooltipCompat.setTooltipText(add, add.contentDescription)
-        Ui.pressable(add, 0.88f)
+        Ui.pressable(add, Motion.PRESS_ICON)
         add.setOnClickListener { group?.let { g -> listener?.onNewTab(g) } }
         bar.addView(add, LinearLayout.LayoutParams(dp(44), ViewGroup.LayoutParams.MATCH_PARENT))
         addView(bar, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
@@ -119,8 +127,11 @@ class GroupStrip(context: Context) : FrameLayout(context) {
         while (chips.childCount > tabs.size) chips.removeViewAt(chips.childCount - 1)
         groupColour = color(TabGroup.colorRes(group.color))
         openTab = current
-        tabs.forEachIndexed { i, t -> bindChip(chips.getChildAt(i) as TextView, t, t === current) }
+        openFade?.cancel()
+        val fading = ArrayList<TextView>()
+        tabs.forEachIndexed { i, t -> bindChip(chips.getChildAt(i) as TextView, t, t === current, if (sameGroup) fading else null) }
         contentDescription = "Tabs in the group ${TabManager.groupTitle(group)}"
+        if (fading.isNotEmpty()) fadeChips(fading)
         reveal(tabs.indexOf(current), smooth = sameGroup)
     }
 
@@ -129,10 +140,18 @@ class GroupStrip(context: Context) : FrameLayout(context) {
      * incognito's or a website's.
      */
     fun paint(c: BarColours) {
+        openFade?.cancel()
         colours = c
         setBackgroundColor(c.bar)
         line.setBackgroundColor(c.line)
         add.imageTintList = ColorStateList.valueOf(c.icon)
+        // Light ripples on a dark bar, also in the light look: only when that changes.
+        if (c.dark != rippleDark) {
+            rippleDark = c.dark
+            val tint = if (c.dark) Ui.RIPPLE_ON_DARK else null
+            add.background = Ui.rippleBorderless(context, tint)
+            for (i in 0 until chips.childCount) chips.getChildAt(i).foreground = Ui.ripple(context, null, 15, tint)
+        }
         for (i in 0 until chips.childCount) {
             val v = chips.getChildAt(i) as TextView
             val chip = v.tag as? Chip ?: continue
@@ -149,7 +168,9 @@ class GroupStrip(context: Context) : FrameLayout(context) {
         gravity = Gravity.CENTER_VERTICAL
         compoundDrawablePadding = dp(6)
         setPadding(dp(9), 0, dp(11), 0)
-        Ui.pressable(this, 0.94f)
+        // Over the chip's own shape, which colourChip changes.
+        foreground = Ui.ripple(context, null, 15, if (rippleDark == true) Ui.RIPPLE_ON_DARK else null)
+        Ui.pressable(this, Motion.PRESS_BUTTON)
         setOnClickListener { v -> (v.tag as? Chip)?.let { listener?.onTabChosen(it.tab) } }
         setOnLongClickListener { v ->
             val chip = v.tag as? Chip ?: return@setOnLongClickListener false
@@ -159,15 +180,50 @@ class GroupStrip(context: Context) : FrameLayout(context) {
         }
     }
 
-    private fun bindChip(v: TextView, tab: Tab, open: Boolean) {
+    /** [fading]: where a chip goes that has just become the open one, or just stopped being it; null: all at once. */
+    private fun bindChip(v: TextView, tab: Tab, open: Boolean, fading: MutableList<TextView>?) {
         val title = tab.displayTitle
         if (v.text.toString() != title) v.text = title
-        colourChip(v, open)
         v.contentDescription = if (open) "$title, the open tab" else title
         val was = v.tag as? Chip
+        val turned = was != null && was.tab === tab && was.open != open
         if (was?.tab !== tab || was.url != tab.url) {
             v.tag = Chip(tab, tab.url)
             setIcon(v, tab)
+        }
+        (v.tag as Chip).open = open
+        if (turned && fading != null && isShown && Motion.enabled(context)) fading += v else colourChip(v, open)
+    }
+
+    /** The two chips involved when another tab opens take their new colours smoothly; only their shapes are redrawn. */
+    private fun fadeChips(list: List<TextView>) {
+        val c = colours
+        if (c == null) {
+            for (v in list) colourChip(v, (v.tag as Chip).open)
+            return
+        }
+        val opening = list.map { (it.tag as Chip).open }
+        val ring = if (c.site) BarTones.onBar(groupColour, c.bar, c.text) else groupColour
+        val openFill = Tones.mix(ring, c.bar, 0.8)
+        val width = Ui.dpf(context, 1.5f).toInt().coerceAtLeast(1)
+        openFade = android.animation.ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = Motion.SHORT
+            interpolator = Motion.standard
+            addUpdateListener { anim ->
+                val t = anim.animatedFraction.toDouble()
+                list.forEachIndexed { i, v ->
+                    val shape = v.background as? android.graphics.drawable.GradientDrawable ?: return@forEachIndexed
+                    val to = if (opening[i]) t else 1.0 - t
+                    shape.setColor(BarTones.blend(c.pill, openFill, to))
+                    shape.setStroke(width, BarTones.blend(c.pill, ring, to))
+                }
+            }
+            addListener(object : android.animation.AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: android.animation.Animator) {
+                    list.forEachIndexed { i, v -> colourChip(v, opening[i]) }
+                }
+            })
+            start()
         }
     }
 

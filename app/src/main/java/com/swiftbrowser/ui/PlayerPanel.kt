@@ -6,11 +6,13 @@ import android.content.res.Configuration
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.LayerDrawable
+import android.graphics.drawable.RippleDrawable
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import android.widget.TextView
 import androidx.core.widget.NestedScrollView
 import com.swiftbrowser.R
 
@@ -62,6 +64,8 @@ class PlayerPanel(private val root: FrameLayout, private val host: Host) {
     fun show(content: View, scrolls: Boolean = true) {
         if (root.width <= 0 || root.height <= 0) return
         val wasOpen = isOpen
+        val wasSide = side
+        val oldSize = size
         val fresh = content !== shown
         val dark = host.panelOverVideo()
         side = root.width > root.height
@@ -112,10 +116,17 @@ class PlayerPanel(private val root: FrameLayout, private val host: Host) {
         } else {
             Motion.stopSprings(b)
             b.translationX = 0f
-            b.translationY = 0f
+            // Upright, a taller panel in place of a shorter one rises to its height; a shorter one, the fade covers.
+            if (fresh && !side && !wasSide && size > oldSize) {
+                b.translationY = (size - oldSize).toFloat()
+                Motion.spring(b, androidx.dynamicanimation.animation.SpringAnimation.TRANSLATION_Y, 0f)
+            } else {
+                b.translationY = 0f
+            }
             if (fresh) {
                 inner.alpha = 0f
-                inner.animate().alpha(1f).setDuration(Motion.SHORT).start()
+                // Through a layer: the whole panel isn't drawn again every frame over the video.
+                Motion.anim(inner, Motion.SHORT, Motion.standard).alpha(1f).withLayer().start()
             }
         }
         host.onPanelMoved(side, size, true)
@@ -166,12 +177,12 @@ class PlayerPanel(private val root: FrameLayout, private val host: Host) {
     }
 
     private fun background(dark: Boolean, side: Boolean): Drawable {
-        val r = Ui.dpf(ctx, 16f)
+        val r = Ui.dpf(ctx, Ui.R_MEDIUM.toFloat())
         // The corners away from the screen's edge are round.
         val radii = if (side) floatArrayOf(r, r, 0f, 0f, 0f, 0f, r, r) else floatArrayOf(r, r, r, r, 0f, 0f, 0f, 0f)
         val fill = GradientDrawable().apply {
             cornerRadii = radii
-            setColor(if (dark) DARK_FILL else Palette.color(ctx, R.color.sheet_bg))
+            setColor(if (dark) OverPicture.FILL_PANEL else Palette.color(ctx, R.color.sheet_bg))
         }
         if (dark) return fill
         // On the music screen a thin line where it meets the screen (both can be white).
@@ -223,9 +234,6 @@ class PlayerPanel(private val root: FrameLayout, private val host: Host) {
 
     companion object {
 
-        /** Over a video: dark and a little see-through. */
-        private const val DARK_FILL = 0xF0121418.toInt()
-
         /** Swift's dark mode colours (and the theme's, for Material parts), whatever the app's own mode is. */
         fun dark(base: Context): Context {
             val config = Configuration(base.resources.configuration)
@@ -236,4 +244,104 @@ class PlayerPanel(private val root: FrameLayout, private val host: Host) {
             }
         }
     }
+}
+
+/**
+ * What the player, the picture viewer and the picture editor share over a dark picture: its fills
+ * and shades, its pills, and the bars that come and go.
+ */
+internal object OverPicture {
+    /** Under the top bar, and from the bottom edge up under the bottom bar. */
+    private const val SHADE_TOP = 0xCC000000.toInt()
+    private const val SHADE_BOTTOM = 0xE0000000.toInt()
+    private const val SHADE_BOTTOM_MIDDLE = 0x99000000.toInt()
+
+    /** A small dark shape on the picture (the boost sign, unlock, frame by frame's bar). */
+    const val FILL_SOFT = 0x99000000.toInt()
+
+    /** The gesture readout's box. */
+    const val FILL_HUD = 0xB3000000.toInt()
+
+    /** Panels and Up next: dark and a little see-through. */
+    const val FILL_PANEL = 0xF0121418.toInt()
+
+    /** Behind the loading indicator. */
+    const val FILL_SPINNER = 0x66000000
+
+    /** A chip or a small picture's place, and a pill that isn't the main one. */
+    const val TINT_CHIP = 0x33FFFFFF
+    const val TINT_PILL = 0x26FFFFFF
+
+    /** A quick answer (a readout, a picture after a wait, the grid while dragging). */
+    const val QUICK_MS = 120L
+
+    /** A double tap's icon going toward the skip and back: [QUICK_MS] in all. */
+    const val NUDGE_OUT_MS = 50L
+    const val NUDGE_BACK_MS = 70L
+    const val NUDGE_DP = 6f
+
+    /** How long a wait must be before the loading indicator shows. */
+    const val SPINNER_WAIT_MS = 400L
+
+    /** How far bars slide as they come and go (dp). */
+    private const val BAR_SLIDE_DP = 8f
+
+    fun shadeTop() = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(SHADE_TOP, 0))
+
+    fun shadeBottom() = GradientDrawable(GradientDrawable.Orientation.BOTTOM_TOP, intArrayOf(SHADE_BOTTOM, SHADE_BOTTOM_MIDDLE, 0))
+
+    /** A ripple in [ink] that shows on what [ink] is written on. */
+    fun rippleOf(ink: Int): Int = Tones.withAlpha(ink, android.graphics.Color.alpha(Ui.RIPPLE_ON_DARK))
+
+    /**
+     * [top] and [bottom] coming or going: a fade and a small slide from their edges, each through its
+     * one layer. Asked again on the way, they turn back from where they are.
+     */
+    fun bars(top: View, bottom: View, show: Boolean) {
+        bar(top, -1, show)
+        bar(bottom, 1, show)
+    }
+
+    private fun bar(v: View, edge: Int, show: Boolean) {
+        v.animate().cancel()
+        val slide = Ui.dpf(v.context, BAR_SLIDE_DP) * edge
+        if (show) {
+            if (v.visibility != View.VISIBLE) {
+                v.alpha = 0f
+                v.translationY = slide
+                v.visibility = View.VISIBLE
+            }
+            Motion.anim(v, Motion.SHORT, Motion.enter).alpha(1f).translationY(0f).withLayer().start()
+        } else {
+            Motion.anim(v, Motion.SHORT, Motion.exit).alpha(0f).translationY(slide).withLayer().withEndAction { v.visibility = View.INVISIBLE }.start()
+        }
+    }
+
+    /**
+     * Words on a filled pill, at least [heightDp] high, round at half that unless [radiusDp] says
+     * otherwise; a ripple in [ripple] (null: the screen's own) and a press.
+     */
+    fun pill(
+        ctx: Context,
+        label: CharSequence,
+        type: Ui.Type,
+        ink: Int,
+        fill: Int,
+        heightDp: Int,
+        radiusDp: Int = heightDp / 2,
+        ripple: Int? = Ui.RIPPLE_ON_DARK,
+        outline: Int? = null,
+    ): TextView = TextView(ctx).apply {
+        text = label
+        gravity = Gravity.CENTER
+        setTextColor(ink)
+        Ui.size(this, type, keepFont = true)
+        typeface = Ui.medium(type)
+        minHeight = Ui.dp(ctx, heightDp)
+        background = Ui.ripple(ctx, Ui.shape(ctx, fill, radiusDp, outline), radiusDp, ripple)
+        Ui.pressable(this, Motion.PRESS_BUTTON)
+    }
+
+    /** The shape of a [pill], for what changes its colour later. */
+    fun pillFill(pill: View): GradientDrawable = (pill.background as RippleDrawable).getDrawable(0) as GradientDrawable
 }

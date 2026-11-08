@@ -26,7 +26,6 @@ import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
-import android.view.animation.DecelerateInterpolator
 import android.view.animation.LinearInterpolator
 import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
@@ -239,6 +238,11 @@ class MainActivity : AppCompatActivity(), BrowserUi {
                 return@registerForActivityResult
             }
             val data = r.data!!
+            // From Swift's own Files.
+            FilePick.picked(data)?.let {
+                cb?.invoke(it)
+                return@registerForActivityResult
+            }
             val uris = ArrayList<Uri>()
             data.clipData?.let { clip -> for (i in 0 until clip.itemCount) clip.getItemAt(i).uri?.let { uris.add(it) } }
             if (uris.isEmpty()) data.data?.let { uris.add(it) }
@@ -553,7 +557,9 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             contentDescription = b.label
             imageTintList = ColorStateList.valueOf(iconColor())
             layoutParams = LinearLayout.LayoutParams(resources.getDimensionPixelSize(R.dimen.toolbar_button_width), dp(48f).toInt())
-            Ui.pressable(this, 0.88f)
+            Ui.pressable(this, Motion.PRESS_ICON)
+            // The ripple of the bar it joins.
+            if (barRippleDark == true) background = Ui.rippleBorderless(this@MainActivity, Ui.RIPPLE_ON_DARK)
             // 3.0.3: holding it shows its name.
             androidx.appcompat.widget.TooltipCompat.setTooltipText(this, b.label)
             setOnClickListener { toolbarAction(key) }
@@ -612,20 +618,46 @@ class MainActivity : AppCompatActivity(), BrowserUi {
                         b.tag = UrlUtils.isHttp(tab.url) && SwiftApp.db.isBookmarked(tab.profileId, tab.url)
                     }
                     val on = b.tag == true
-                    b.setImageResource(if (on) R.drawable.ic_star else R.drawable.ic_star_border)
+                    setBarIcon(b, if (on) R.drawable.ic_star else R.drawable.ic_star_border, if (UrlUtils.isHttp(tab.url)) 1f else Ui.DISABLED_ALPHA)
                     if (on) tint = barAccent()
-                    b.alpha = if (UrlUtils.isHttp(tab.url)) 1f else Ui.DISABLED_ALPHA
                 }
                 "vpn" -> {
                     val on = com.swiftbrowser.vpn.Vpn.state == com.swiftbrowser.vpn.Vpn.State.ON
                     // 3.0.4: and its key filled, as Swift's icons are when on.
-                    OnIcons.show(b, R.drawable.ic_vpn, on)
+                    setBarIcon(b, OnIcons.of(R.drawable.ic_vpn, on))
                     if (on) tint = barAccent()
                 }
             }
             // Only when it changed (2.6): this runs on every page update.
             if (b.imageTintList?.defaultColor != tint) b.imageTintList = ColorStateList.valueOf(tint)
         }
+    }
+
+    /** How solid each of the bar's icons was last set to be (see [setBarIcon]). */
+    private val barIconAlpha = HashMap<View, Float>()
+
+    /**
+     * [b] shows [res] at [restAlpha]. A new icon comes in with a short fade; this runs on every page
+     * update, so nothing is touched while nothing changes.
+     */
+    private fun setBarIcon(b: ImageButton, res: Int, restAlpha: Float = 1f) {
+        val shown = b.getTag(R.id.motion_icon) as? Int
+        if (shown == res) {
+            if (barIconAlpha[b] != restAlpha) {
+                barIconAlpha[b] = restAlpha
+                b.alpha = restAlpha
+            }
+            return
+        }
+        b.setTag(R.id.motion_icon, res)
+        b.setImageResource(res)
+        barIconAlpha[b] = restAlpha
+        if (shown == null || !b.isShown) {
+            b.alpha = restAlpha
+            return
+        }
+        b.alpha = 0f
+        Motion.anim(b, Motion.ICON, Motion.enter).alpha(restAlpha).start()
     }
 
     /** Adds or removes the page's bookmark (the menu's star and the toolbar's). */
@@ -818,6 +850,11 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     private val vpnBadge by lazy { findViewById<TextView>(R.id.vpn_badge) }
     private var vpnBadgeShown: Any? = null
 
+    /** The colours the badge has, and its fade from one state's to the next. */
+    private var vpnBadgeFill = 0
+    private var vpnBadgeInk = 0
+    private var vpnBadgeAnim: ValueAnimator? = null
+
     private fun updateVpnBadge() {
         val badge = vpnBadge
         val vpn = com.swiftbrowser.vpn.Vpn
@@ -828,15 +865,48 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             vpn.wanted -> Quad(true, R.color.danger_container, R.color.on_danger_container, "VPN off")
             else -> Quad(false, 0, 0, "")
         }
+        // Coming into sight it pops; a change while it is there cross-fades (never both at once: they share its animation).
+        val appearing = show && (badge.visibility != View.VISIBLE || badge.getTag(R.id.motion_hiding) == true)
         Motion.pop(badge, show)
-        if (!show) return
+        if (!show) {
+            // Hiding stops a change of its words on the way: they are the ones shown next time.
+            (badge.getTag(R.id.motion_text) as? CharSequence)?.let {
+                badge.text = it
+                badge.setTag(R.id.motion_text, null)
+            }
+            return
+        }
         // Asked on every key typed: only redone when it changed (2.6).
         val key = listOf(fill, ink, text, Looks.accent, VpnUi.label())
         if (key == vpnBadgeShown) return
         vpnBadgeShown = key
-        badge.text = text
-        badge.setTextColor(color(ink))
-        badge.background = Ui.shape(this, color(fill), 12)
+        val toFill = color(fill)
+        val toInk = color(ink)
+        val shape = badge.background as? android.graphics.drawable.GradientDrawable ?: Ui.shape(this, toFill, 12).also { badge.background = it }
+        vpnBadgeAnim?.cancel()
+        vpnBadgeAnim = null
+        if (appearing || vpnBadgeFill == 0 || !Motion.enabled(this)) {
+            badge.setTag(R.id.motion_text, null)
+            badge.text = text
+            shape.setColor(toFill)
+            badge.setTextColor(toInk)
+        } else {
+            Motion.swapText(badge, text)
+            val fromFill = vpnBadgeFill
+            val fromInk = vpnBadgeInk
+            vpnBadgeAnim = ValueAnimator.ofFloat(0f, 1f).apply {
+                duration = Motion.SHORT
+                interpolator = Motion.standard
+                addUpdateListener {
+                    val t = it.animatedFraction.toDouble()
+                    shape.setColor(BarTones.blend(fromFill, toFill, t))
+                    badge.setTextColor(BarTones.blend(fromInk, toInk, t))
+                }
+                start()
+            }
+        }
+        vpnBadgeFill = toFill
+        vpnBadgeInk = toInk
         badge.contentDescription = VpnUi.label()
         badge.setOnClickListener { showVpnSheet() }
         // Holding it: switch country straight away (2.3).
@@ -974,6 +1044,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         gestureLayer.fingerListener = null
         settleAnim?.cancel()
         barAnim?.cancel()
+        vpnBadgeAnim?.cancel()
         com.swiftbrowser.engine.DataSaver.listener = null
         com.swiftbrowser.engine.Power.listener = null
         gestureLayer.edgeListener = null
@@ -999,11 +1070,11 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         urlIcon = findViewById(R.id.url_icon)
         urlIcon.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
         urlIcon.contentDescription = "Site settings"
-        // 18 dp to look at, 48 dp to tap (2.6).
+        // 18 dp to look at (in a 24 dp box), 48 dp to tap (2.6).
         (urlIcon.parent as View).post {
             val r = android.graphics.Rect()
             urlIcon.getHitRect(r)
-            val grow = Ui.dp(this, 15)
+            val grow = Ui.dp(this, 12)
             r.inset(-grow, -grow)
             (urlIcon.parent as View).touchDelegate = android.view.TouchDelegate(r, urlIcon)
         }
@@ -1013,9 +1084,11 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             val site = tab?.takeIf { !editing && !it.showsHome && UrlUtils.isHttp(it.url) }?.let { UrlUtils.site(it.url) }
             if (site == null) startEditing() else Sheets.siteSettings(this, site, tab)
         }
+        Ui.pressable(urlIcon, Motion.PRESS_ICON, morph = false)
         urlMic = findViewById(R.id.url_mic)
         urlScan = findViewById(R.id.url_scan)
         urlClear = findViewById(R.id.url_clear)
+        for (v in listOf<View>(urlMic, urlScan, urlClear)) Ui.pressable(v, Motion.PRESS_ICON, morph = false)
         videoBtn = findViewById(R.id.video_btn)
         tabsCount = findViewById(R.id.tabs_count)
         menuBtn = findViewById(R.id.menu_btn)
@@ -1030,9 +1103,32 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         suggestionsList = findViewById(R.id.suggestions)
         ptrIndicator = findViewById(R.id.ptr_indicator)
         hud = findViewById(R.id.hud)
+        // As the player's own gesture readout.
+        hud.typeface = Ui.MEDIUM
         findBar = findViewById(R.id.find_bar)
         findEdit = findViewById(R.id.find_edit)
         findCount = findViewById(R.id.find_count)
+        // Swift's own font on every Android (it takes the phone's place by itself only below Android 9).
+        Ui.size(urlEdit, Ui.Type.BODY)
+        Ui.size(findEdit, Ui.Type.BODY)
+        Ui.size(vpnBadge, Ui.Type.SMALL)
+        Ui.pressable(vpnBadge, Motion.PRESS_BUTTON)
+        AppFont.cut(Ui.Type.SMALL.sp, Ui.Weight.BOLD)?.let { tabsCount.typeface = it }
+        // The find box as Swift's other search boxes: a 20 dp icon.
+        ContextCompat.getDrawable(this, R.drawable.ic_find)?.mutate()?.let {
+            val size = Ui.dp(this, 20)
+            it.setBounds(0, 0, size, size)
+            findEdit.setCompoundDrawablesRelative(it, null, null, null)
+        }
+        findBar.foreground = findLine
+        // The crashed tab in the toolkit's look: an icon in a soft circle and the title style.
+        findViewById<ImageView>(R.id.crash_icon).apply {
+            val inset = Ui.dp(this@MainActivity, 18)
+            background = Ui.circle(Ui.accentContainer(this@MainActivity))
+            setImageDrawable(Ui.icon(this@MainActivity, R.drawable.ic_error, Ui.accent(this@MainActivity)))
+            setPadding(inset, inset, inset, inset)
+        }
+        Ui.style(findViewById<TextView>(R.id.crash_title), Ui.Type.TITLE)
         startup = findViewById(R.id.startup)
         findViewById<ImageView>(R.id.startup_logo).setImageDrawable(Ui.logo(this))
         // 3.0.5: exactly where the start screen has them, which this cover takes over from.
@@ -1045,7 +1141,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         shownVpnState = com.swiftbrowser.vpn.Vpn.state
         updateVpnBadge()
         // The toolbar's buttons give the same small press as every button in the app.
-        for (v in listOf<View>(homeBtn, tabsBtn, menuBtn, videoBtn, profileChip.parent as View)) Ui.pressable(v, 0.88f)
+        for (v in listOf<View>(homeBtn, tabsBtn, menuBtn, videoBtn, profileChip.parent as View)) Ui.pressable(v, Motion.PRESS_ICON)
         // 3.0.3: holding an icon-only button shows its name (the tab button keeps its own hold menu).
         for (v in listOf<View>(homeBtn, menuBtn, videoBtn)) {
             v.contentDescription?.let { androidx.appcompat.widget.TooltipCompat.setTooltipText(v, it) }
@@ -1177,6 +1273,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
         suggestionsList.layoutManager = LinearLayoutManager(this).apply { reverseLayout = bottomBar }
         suggestionsList.adapter = suggestionAdapter
+        // Rows change at once while typing; only the search engine's late results move them (refreshSuggestions).
+        suggestionsList.itemAnimator = null
         suggestionsList.addOnScrollListener(object : RecyclerView.OnScrollListener() {
             override fun onScrollStateChanged(rv: RecyclerView, newState: Int) {
                 if (newState == RecyclerView.SCROLL_STATE_DRAGGING) hideKeyboard()
@@ -1338,8 +1436,9 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         if (!wasEditing) loadCompletions()
         setUrlIcon(com.swiftbrowser.core.SearchEngine.current.icon)
         if (!wasEditing) {
+            suggestionsList.animate().cancel()
             suggestionsList.alpha = 0f
-            suggestionsList.animate().alpha(1f).setDuration(180).start()
+            Motion.anim(suggestionsList, Motion.PAGE_MS, Motion.page).alpha(1f).withLayer().start()
         }
         suggestionsList.visibility = View.VISIBLE
         updateUrlButtons()
@@ -1366,12 +1465,12 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         (appBar as android.view.ViewGroup).clipChildren = false
         urlBox.animate().cancel()
         urlBox.translationY = dy
-        urlBox.animate().translationY(0f).setDuration(240).setInterpolator(DecelerateInterpolator(1.8f)).withEndAction {
+        Motion.anim(urlBox, Motion.PAGE_MS, Motion.page).translationY(0f).withEndAction {
             toolbar.clipChildren = true
             (appBar as android.view.ViewGroup).clipChildren = true
         }.start()
         box.animate().cancel()
-        box.animate().alpha(0f).translationY(-dy / 3f).setDuration(160).start()
+        Motion.anim(box, Motion.PAGE_MS, Motion.page).alpha(0f).translationY(-dy / 3f).start()
     }
 
     /** The home page's search box comes back (Back from typing on the home page). */
@@ -1379,7 +1478,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         val box = home.searchBox
         if (box.alpha == 1f && box.translationY == 0f) return
         box.animate().cancel()
-        box.animate().alpha(1f).translationY(0f).setDuration(200).setInterpolator(DecelerateInterpolator(1.6f)).start()
+        Motion.anim(box, Motion.PAGE_MS, Motion.page).alpha(1f).translationY(0f).start()
     }
 
     /**
@@ -1392,7 +1491,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             addTransition(android.transition.Fade(android.transition.Fade.OUT))
             addTransition(android.transition.ChangeBounds())
             addTransition(android.transition.Fade(android.transition.Fade.IN).excludeTarget(urlBox, true))
-            duration = 170
+            duration = Motion.PAGE_MS
+            interpolator = Motion.page
             ordering = android.transition.TransitionSet.ORDERING_TOGETHER
         }
         android.transition.TransitionManager.beginDelayedTransition(toolbar, transition)
@@ -1410,7 +1510,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         urlBox.animate().cancel()
         urlBox.translationY = 0f
         suggestJob?.cancel()
-        suggestionsList.visibility = View.GONE
+        if (suggestionsList.visibility == View.VISIBLE) Motion.fadeOut(suggestionsList, toDy = 0, duration = Motion.PAGE_OUT_MS)
         restoreHomeSearch()
         updateUrlButtons()
         hideKeyboard()
@@ -1505,6 +1605,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
                 SuggestionAdapter.Group("Bookmarks", local.filter { it.kind == Suggestion.Kind.BOOKMARK }),
                 SuggestionAdapter.Group(if (text.isBlank()) "Recent sites" else "History", local.filter { it.kind == Suggestion.Kind.HISTORY }),
             )
+            suggestionsList.itemAnimator = null
             suggestionAdapter.show(groups(emptyList()), text)
             if (google && text.isNotBlank()) {
                 delay(150)
@@ -1512,6 +1613,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
                     .filter { !it.equals(text, ignoreCase = true) }
                     .take(5)
                     .map { Suggestion(Suggestion.Kind.SEARCH, it, UrlUtils.searchUrl(it)) }
+                // They arrive late: the rows they push down move instead of jumping, this once.
+                suggestionsList.itemAnimator = Motion.listAnimator()
                 suggestionAdapter.show(groups(fromGoogle), text)
             }
         }
@@ -1605,6 +1708,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
                 shownUrlIcon = -1
                 urlIcon.imageTintList = null
                 urlIcon.setImageBitmap(favicon)
+                updateNotSecureBacking()
+                fadeInUrlIcon()
             }
             urlIcon.contentDescription = "Site settings"
             return
@@ -1662,15 +1767,38 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     private var lastFit: Triple<String, Int, String>? = null
 
     private fun setUrlIcon(res: Int) {
+        val changed = res != shownUrlIcon
         shownUrlIcon = res
         shownFavicon = null
         urlIcon.setImageResource(res)
         urlIcon.imageTintList = urlIconTint(res)
+        updateNotSecureBacking()
+        if (changed) fadeInUrlIcon()
+    }
+
+    /** The address's icon changed: it comes in with a short fade (a security mark doesn't spin, see [Motion.swapIcon]). */
+    private fun fadeInUrlIcon() {
+        if (!urlIcon.isShown) return
+        urlIcon.animate().cancel()
+        urlIcon.alpha = 0f
+        Motion.anim(urlIcon, Motion.ICON, Motion.enter).alpha(1f).start()
+    }
+
+    /** Whether the open lock has its circle behind it now. */
+    private var notSecureBacked = false
+
+    /** On Swift's own bar the open lock sits on a soft red circle, as "VPN off" does; on a website's colour it stays in the bar's red. */
+    private fun updateNotSecureBacking() {
+        val backed = shownFavicon == null && shownUrlIcon == R.drawable.ic_not_secure && barShown?.site != true
+        if (backed == notSecureBacked) return
+        notSecureBacked = backed
+        urlIcon.background = if (backed) Ui.circle(color(R.color.danger_container)) else null
     }
 
     /** The address's icon [res] in the bar's colours (3.0.4: a website's too); a search engine's logo as it is. */
     private fun urlIconTint(res: Int): ColorStateList? = when {
         com.swiftbrowser.core.SearchEngine.isLogo(res) -> null
+        res == R.drawable.ic_not_secure && barShown?.site != true -> ColorStateList.valueOf(color(R.color.on_danger_container))
         res == R.drawable.ic_not_secure -> ColorStateList.valueOf(barShown?.danger ?: Ui.danger(this))
         else -> ColorStateList.valueOf(iconColor())
     }
@@ -1828,6 +1956,22 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
     private val findButtons by lazy { listOf<ImageView>(findViewById(R.id.find_prev), findViewById(R.id.find_next), findViewById(R.id.find_close)) }
 
+    /** The find bar's top hairline, in the bar's colours (its foreground). */
+    private val findLine by lazy {
+        android.graphics.drawable.GradientDrawable().apply { setSize(-1, Ui.dp(this@MainActivity, 1).coerceAtMost(2)) }
+    }
+
+    /** Whether the bar's buttons have a dark bar's ripple; null until first painted. */
+    private var barRippleDark: Boolean? = null
+
+    /** Light ripples on a dark bar, also in the light look (a website's dark colour, incognito): only when that changes. */
+    private fun paintBarRipples(dark: Boolean) {
+        barRippleDark = dark
+        val tint = if (dark) Ui.RIPPLE_ON_DARK else null
+        val buttons = listOf<View>(menuBtn, homeBtn, tabsBtn, videoBtn, urlMic, urlScan, urlClear) + findButtons + extraButtons.values
+        for (b in buttons) b.background = Ui.rippleBorderless(this, tint)
+    }
+
     /**
      * The website's colour for the bar now (its theme-color, fit for the bar: BarTones.forBar), or null
      * for Swift's own: not with website colours off, in incognito, while typing an address or in full
@@ -1847,6 +1991,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         val accent = Ui.accent(this)
         val danger = Ui.danger(this)
         if (site != null) return BarColours.forSite(site, accent, danger)
+        pictureBarInk(tab)?.let { return BarColours.overPicture(it, color(R.color.surface_alt), danger) }
         return if (incognito) {
             BarColours(
                 color(R.color.incognito_toolbar), color(R.color.incognito_url), color(R.color.incognito_text),
@@ -1861,6 +2006,21 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     }
 
     /**
+     * 3.0.5: the colour of the bar's buttons while the home page's picture runs on behind the bar:
+     * the page at its top with a picture. Null for a solid bar: typing an address, scrolled down, and
+     * everywhere else.
+     */
+    private fun pictureBarInk(tab: Tab?): Int? {
+        if (tab == null || !tab.showsHome || tab.incognito || tab.crashed || editing || fullscreenTab != null || !home.atTop) return null
+        return home.barInk()
+    }
+
+    /** The status bar's colour for the bar's [bar]: over a see-through bar, as the top of the picture is (it can't show the picture itself). */
+    private fun statusColour(bar: Int): Int =
+        if (android.graphics.Color.alpha(bar) == 255) bar
+        else androidx.core.graphics.ColorUtils.compositeColors(bar, home.pictureTopColour() ?: color(R.color.toolbar_bg))
+
+    /**
      * The bar takes the colours it should have now: a website's, Swift's or incognito's. A change
      * fades in [BAR_COLOUR_MS] ([animate]: a tab switch, another page, typing an address), only the
      * bar's own views redrawn; at once with Android's animations off. Cheap when nothing changed: it
@@ -1870,12 +2030,12 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         if (!::gecko.isInitialized) return
         val tab = current
         val site = siteColourFor(tab)
-        val key = listOf(site, tab?.incognito == true, editing, tab?.showsHome == true, tab?.crashed == true, fullscreenTab != null)
+        val key = listOf(site, tab?.incognito == true, editing, tab?.showsHome == true, tab?.crashed == true, fullscreenTab != null, pictureBarInk(tab), home.barPicture)
         if (key == barKey) return
         barKey = key
         val target = barColoursFor(tab, site)
         // The status bar's icons dark or light at once (changing them redraws the system's bars).
-        val status = target.bar
+        val status = statusColour(target.bar)
         val dark = Contrast.ratio(BarTones.BLACK, status) > Contrast.ratio(BarTones.WHITE, status)
         if (dark != statusIconsDark) {
             statusIconsDark = dark
@@ -1884,7 +2044,9 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         val from = barShown
         barAnim?.cancel()
         barAnim = null
-        if (from == null || from == target || !animate || !Motion.enabled(this) || !appBar.isShown) {
+        // 3.0.5: nothing left to see through (the picture was taken away): no fade over what is underneath.
+        val nothingBehind = from != null && android.graphics.Color.alpha(from.bar) < 255 && home.barPicture == null
+        if (from == null || from == target || !animate || nothingBehind || !Motion.enabled(this) || !appBar.isShown) {
             paintBar(target)
             return
         }
@@ -1901,13 +2063,18 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         barShown = c
         toolbar.setBackgroundColor(c.bar)
         toolbarDivider.setBackgroundColor(c.line)
-        window.statusBarColor = c.bar
+        window.statusBarColor = statusColour(c.bar)
+        // 3.0.5: the picture's share behind a bar that isn't solid; nothing to draw behind a solid one.
+        val behind = if (android.graphics.Color.alpha(c.bar) < 255) home.barPicture else null
+        if (appBar.background !== behind) appBar.background = behind
         urlShape.setTint(c.pill)
         urlEdit.setTextColor(c.text)
         urlEdit.setHintTextColor(c.icon)
         val icons = ColorStateList.valueOf(c.icon)
-        for (b in listOf(menuBtn, homeBtn, urlClear, urlScan)) b.imageTintList = icons
+        for (b in listOf(menuBtn, homeBtn, urlClear, urlScan, urlMic)) b.imageTintList = icons
         if (shownFavicon == null && shownUrlIcon > 0) urlIcon.imageTintList = urlIconTint(shownUrlIcon)
+        updateNotSecureBacking()
+        if (c.dark != barRippleDark) paintBarRipples(c.dark)
         // The accent's bits: itself, or the bar's text colour on a website's colour close to it.
         val accent = ColorStateList.valueOf(c.accent)
         progress.progressTintList = accent
@@ -1917,11 +2084,12 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         styleTabCount()
         // The find bar in the same colours (2.6).
         findBar.setBackgroundColor(c.bar)
+        findLine.setColor(c.line)
         findShape.setTint(c.pill)
         findEdit.setTextColor(c.text)
         findEdit.setHintTextColor(c.icon)
         androidx.core.widget.TextViewCompat.setCompoundDrawableTintList(findEdit, icons)
-        findCount.setTextColor(c.icon)
+        styleFindCount()
         for (b in findButtons) b.imageTintList = icons
         groupStrip?.paint(c)
     }
@@ -1943,6 +2111,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             override fun onStoryClicked(story: com.swiftbrowser.news.Story) = openInCurrent(story.url)
 
             override fun onStoryLongClicked(story: com.swiftbrowser.news.Story) = storyMenu(story)
+
+            override fun onHomeBarChanged() = updateBarColours(animate = true)
 
             override fun onNewsSettings() {
                 openUrlLauncher.launch(Intent(this@MainActivity, SettingsActivity::class.java).putExtra(SettingsActivity.EXTRA_TOPIC, "NEWS"))
@@ -2173,7 +2343,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         home.animate().cancel()
         home.alpha = 0f
         home.translationY = dp(24f)
-        home.animate().alpha(1f).translationY(0f).setDuration(220).setInterpolator(DecelerateInterpolator(1.6f)).start()
+        Motion.anim(home, Motion.PAGE_MS, Motion.page).alpha(1f).translationY(0f).withLayer().start()
         refreshToolbarNow()
     }
 
@@ -2342,17 +2512,19 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             orientation = LinearLayout.HORIZONTAL
             gravity = android.view.Gravity.CENTER_VERTICAL
             setPadding(pad, 0, dp(4f).toInt(), 0)
-            background = android.graphics.drawable.GradientDrawable().apply {
+            background = Ui.ripple(this@MainActivity, android.graphics.drawable.GradientDrawable().apply {
                 cornerRadius = dp(24f)
                 setColor(color(Looks.accent.primary))
-            }
+            }, 24)
             elevation = dp(6f)
+            Ui.pressable(this, Motion.PRESS_BUTTON)
             addView(TextView(this@MainActivity).apply {
-                text = "▶  Continue from $position"
+                text = "Continue from $position"
                 Ui.size(this, Ui.Type.BODY, keepFont = true)
                 setTextColor(color(Looks.accent.onPrimary))
                 setTypeface(typeface, android.graphics.Typeface.BOLD)
                 setPadding(0, 0, dp(6f).toInt(), 0)
+                playIcon(this, color(Looks.accent.onPrimary))
             })
             addView(ImageButton(this@MainActivity).apply {
                 setImageResource(R.drawable.ic_close)
@@ -2371,7 +2543,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         root.addView(chip, lp)
         chip.alpha = 0f
         chip.translationY = dp(16f)
-        chip.animate().alpha(1f).translationY(0f).setDuration(200).start()
+        Motion.anim(chip, Motion.DIALOG, Motion.enter).alpha(1f).translationY(0f).start()
         resumeChip = chip
         // Not for ever: after two minutes the offer goes.
         handler.postDelayed(hideChipLater, 120_000)
@@ -2386,7 +2558,15 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         resumeChip = null
         resumeChipFor = null
         resumeChipPage = null
-        chip.animate().alpha(0f).translationY(dp(16f)).setDuration(150).withEndAction { root.removeView(chip) }.start()
+        Motion.anim(chip, Motion.SHORT, Motion.exit).alpha(0f).translationY(dp(16f)).withEndAction { root.removeView(chip) }.start()
+    }
+
+    /** The play mark before a chip's words, in the words' colour. */
+    private fun playIcon(tv: TextView, ink: Int) {
+        val size = dp(18f).toInt()
+        val mark = Ui.icon(this, R.drawable.ic_play, ink)?.apply { setBounds(0, 0, size, size) }
+        tv.setCompoundDrawablesRelative(mark, null, null, null)
+        tv.compoundDrawablePadding = dp(6f).toInt()
     }
 
     override fun onTabSelected(tab: Tab) {
@@ -2634,35 +2814,38 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         if (!wanted) {
             sitePlayerChip?.let { chip ->
                 sitePlayerChip = null
-                chip.animate().alpha(0f).setDuration(150).withEndAction { root.removeView(chip) }.start()
+                Motion.anim(chip, Motion.SHORT, Motion.exit).alpha(0f).withEndAction { root.removeView(chip) }.start()
             }
             return
         }
         if (sitePlayerChip != null) return
-        val pad = dp(12f).toInt()
         val chip = TextView(this).apply {
-            text = "▶  Swift player"
-            Ui.size(this, Ui.Type.BODY_SECONDARY, keepFont = true)
+            text = "Swift player"
+            Ui.size(this, Ui.Type.LABEL)
             setTextColor(color(Looks.accent.onPrimary))
-            setTypeface(typeface, android.graphics.Typeface.BOLD)
             gravity = android.view.Gravity.CENTER
-            setPadding(pad + dp(2f).toInt(), 0, pad + dp(2f).toInt(), 0)
-            background = android.graphics.drawable.GradientDrawable().apply {
+            setPadding(dp(14f).toInt(), 0, dp(14f).toInt(), 0)
+            background = Ui.ripple(this@MainActivity, android.graphics.drawable.GradientDrawable().apply {
                 cornerRadius = dp(20f)
                 setColor(color(Looks.accent.primary))
-            }
-            elevation = dp(6f)
+            }, 20)
+            elevation = dp(2f)
             contentDescription = "Play this video in Swift's player"
+            playIcon(this, color(Looks.accent.onPrimary))
+            Ui.pressable(this, Motion.PRESS_BUTTON)
             setOnClickListener { playInSwiftPlayer() }
         }
         val lp = FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, dp(40f).toInt(), android.view.Gravity.TOP or android.view.Gravity.END)
-        lp.topMargin = pad + if (bottomBar || fullscreenTab != null) 0 else barPx
-        lp.marginEnd = pad
+        lp.topMargin = sitePlayerChipTop()
+        lp.marginEnd = dp(16f).toInt()
         root.addView(chip, lp)
         chip.alpha = 0f
-        chip.animate().alpha(1f).setDuration(200).start()
+        Motion.anim(chip, Motion.DIALOG, Motion.enter).alpha(1f).start()
         sitePlayerChip = chip
     }
+
+    /** How far the Swift player button is from the top: under the bar, or from the screen's edge in full screen. */
+    private fun sitePlayerChipTop() = dp(16f).toInt() + if (bottomBar || fullscreenTab != null) 0 else barPx
 
     /**
      * Hands the site's video to Swift's player, with what the site needs (where it was shown, the
@@ -2707,8 +2890,9 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         permissionLauncher.launch(missing.toTypedArray())
     }
 
-    override fun pickFiles(mimeTypes: Array<String>, multiple: Boolean, callback: (List<Uri>?) -> Unit) {
-        val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
+    override fun pickFiles(mimeTypes: Array<String>, multiple: Boolean, camera: Boolean, callback: (List<Uri>?) -> Unit) {
+        // Swift's Files, unless turned off; a page asking for a new photo goes to Android's, where the camera is.
+        val intent = if (prefs.uploadFromFiles && !camera) FilePick.intent(this, mimeTypes, multiple) else Intent(Intent.ACTION_GET_CONTENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
             type = if (mimeTypes.size == 1) mimeTypes[0] else "*/*"
             if (mimeTypes.size > 1) putExtra(Intent.EXTRA_MIME_TYPES, mimeTypes)
@@ -2753,6 +2937,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         val gravity = if (bottomBar) android.view.Gravity.BOTTOM else android.view.Gravity.TOP
         (appBar.layoutParams as FrameLayout.LayoutParams).gravity = gravity
         appBar.layoutParams = appBar.layoutParams
+        // 3.0.5: the home page's picture also fills the bar's room, at whichever end that is.
+        home.setBarReach(if (bottomBar) 0 else toolbarPx, if (bottomBar) toolbarPx else 0)
         val edge = if (bottomBar) android.view.Gravity.TOP else android.view.Gravity.BOTTOM
         for (id in intArrayOf(R.id.toolbar_divider, R.id.progress)) {
             val v = findViewById<View>(id)
@@ -3020,18 +3206,38 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         val tab = current
         val group = tab?.let { TabManager.groupOf(it) }
         if (tab == null || group == null || stripPx == 0 || stripState() != TabRules.Strip.SHOWN) {
-            toolbarDivider.visibility = View.VISIBLE
-            groupStrip?.let { if (it.visibility != View.GONE) it.visibility = View.GONE }
+            // No line under the empty bar over the home page (its address box is hidden there).
+            toolbarDivider.visibility = if (home.visibility == View.VISIBLE && !editing) View.INVISIBLE else View.VISIBLE
+            groupStrip?.let { if (it.visibility != View.GONE && !stripLeaving) fadeStripAway(it) }
             return
         }
         // The strip's own hairline is at the page's edge; the bar's would be between the two.
         toolbarDivider.visibility = View.INVISIBLE
         val strip = groupStrip ?: makeGroupStrip()
         strip.show(group, TabManager.tabsIn(group), tab)
-        if (strip.visibility != View.VISIBLE) {
-            strip.translationY = appBar.translationY
-            strip.visibility = View.VISIBLE
+        if (strip.visibility != View.VISIBLE || stripLeaving) {
+            stripLeaving = false
+            strip.animate().cancel()
+            if (strip.visibility != View.VISIBLE) {
+                strip.translationY = appBar.translationY
+                strip.alpha = 0f
+                strip.visibility = View.VISIBLE
+            }
+            Motion.anim(strip, Motion.SHORT, Motion.enter).alpha(1f).withLayer().start()
         }
+    }
+
+    /** The strip is fading away: for the bar's height it has gone already (see [visibleBarPx]). */
+    private var stripLeaving = false
+
+    private fun fadeStripAway(strip: GroupStrip) {
+        stripLeaving = true
+        strip.animate().cancel()
+        Motion.anim(strip, Motion.PAGE_OUT_MS, Motion.exit).alpha(0f).withLayer().withEndAction {
+            stripLeaving = false
+            strip.visibility = View.GONE
+            strip.alpha = 1f
+        }.start()
     }
 
     private fun makeGroupStrip(): GroupStrip {
@@ -3075,7 +3281,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
     /** How much of the bar shows (px): the group strip's room counts only while the strip itself shows. */
     private fun visibleBarPx(): Int {
-        val hiddenStrip = if (stripPx > 0 && groupStrip?.visibility != View.VISIBLE) stripPx else 0
+        val hiddenStrip = if (stripPx > 0 && (groupStrip?.visibility != View.VISIBLE || stripLeaving)) stripPx else 0
         return (toolbarShown.roundToInt() - hiddenStrip).coerceAtLeast(0)
     }
 
@@ -3133,7 +3339,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         ptrRefreshing = true
         ptrStartedAt = System.currentTimeMillis()
         ptrIndicator.imageTintList = ColorStateList.valueOf(color(Looks.accent.primary))
-        ptrIndicator.animate().translationY(ptrHiddenY() + dp(56f)).scaleX(1f).scaleY(1f).alpha(1f).setDuration(150).start()
+        Motion.anim(ptrIndicator, Motion.SHORT).translationY(ptrHiddenY() + dp(56f)).scaleX(1f).scaleY(1f).alpha(1f).start()
         ptrSpin?.cancel()
         ptrSpin = ObjectAnimator.ofFloat(ptrIndicator, View.ROTATION, ptrIndicator.rotation, ptrIndicator.rotation + 360f).apply {
             duration = 700
@@ -3170,7 +3376,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     private fun hidePullIndicator() {
         if (ptrIndicator.visibility != View.VISIBLE) return
         ptrIndicator.animate().cancel()
-        ptrIndicator.animate().scaleX(0.3f).scaleY(0.3f).alpha(0f).setDuration(160).withEndAction {
+        Motion.anim(ptrIndicator, Motion.SHORT, Motion.exit).scaleX(0.3f).scaleY(0.3f).alpha(0f).withEndAction {
             ptrSpin?.cancel()
             ptrSpin = null
             if (!ptrRefreshing) ptrIndicator.visibility = View.GONE
@@ -3184,8 +3390,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         if (tab.isHome) {
             home.animate().cancel()
             home.alpha = 0f
-            home.translationY = dp(40f)
-            home.animate().alpha(1f).translationY(0f).setDuration(260).setInterpolator(DecelerateInterpolator(1.6f)).start()
+            home.translationY = dp(24f)
+            Motion.anim(home, Motion.PAGE_MS, Motion.page).alpha(1f).translationY(0f).withLayer().start()
         } else {
             // The page view can't be animated itself; fade a cover off it instead.
             pageCover.setBackgroundColor(color(if (tab.incognito) R.color.incognito_bg else R.color.page_bg))
@@ -3208,12 +3414,12 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     private var coverWaitsForLeaving = false
 
     private fun fadePageCover() {
-        pageCover.animate().alpha(0f).translationY(0f).setStartDelay(80).setDuration(300).withEndAction {
+        Motion.anim(pageCover, Motion.PAGE_MS, Motion.page).alpha(0f).translationY(0f).withLayer().withEndAction {
             pageCover.visibility = View.GONE
         }.start()
     }
 
-    private fun bumpTabCount() = Motion.bump(tabsCount, 1.35f)
+    private fun bumpTabCount() = Motion.bump(tabsCount, 1.2f)
 
     // ------------------------------------------------------------------ pop-ups, redirects, external apps
 
@@ -3562,8 +3768,12 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         if (tab !== current) return
         if (fullScreen) enterFullscreen(tab) else exitFullscreen()
         // The Swift player button moves with the bars (2.9).
-        sitePlayerChip?.let { root.removeView(it) }
-        sitePlayerChip = null
+        sitePlayerChip?.let { chip ->
+            (chip.layoutParams as? FrameLayout.LayoutParams)?.let { lp ->
+                lp.topMargin = sitePlayerChipTop()
+                chip.layoutParams = lp
+            }
+        }
         updateSitePlayerChip()
     }
 
@@ -3668,7 +3878,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
                 skipRun = if (now - lastSkipAt < 1200 && (skipRun > 0) == (step > 0)) skipRun + step else step
                 lastSkipAt = now
                 Helper.seek(tab, step.toDouble())
-                showHud(if (leftSide) R.drawable.ic_fast_rewind else R.drawable.ic_fast_forward, "${if (skipRun > 0) "+" else "−"}${abs(skipRun)} s")
+                showHud(if (leftSide) R.drawable.ic_fast_rewind else R.drawable.ic_fast_forward, "${if (skipRun > 0) "+" else "−"}${abs(skipRun)} s", if (leftSide) -1 else 1)
                 handler.postDelayed(hideHud, 700)
             }
 
@@ -3679,7 +3889,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
                     showHud(R.drawable.ic_fast_forward, "2×")
                 } else {
                     handler.removeCallbacks(hideHud)
-                    hud.visibility = View.GONE
+                    if (hud.visibility == View.VISIBLE) hideHud.run()
                 }
             }
         }
@@ -3717,7 +3927,23 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         showHud(R.drawable.ic_volume, "${if (max > 0) cur * 100 / max else 0}%")
     }
 
-    private fun showHud(icon: Int, text: String) {
+    /** A double tap's readout on its side of the screen, where the eyes are; the rest in the middle (as the player's). */
+    private fun placeHud(side: Int) {
+        val lp = hud.layoutParams as? FrameLayout.LayoutParams ?: return
+        val gravity = when {
+            side < 0 -> android.view.Gravity.CENTER_VERTICAL or android.view.Gravity.START
+            side > 0 -> android.view.Gravity.CENTER_VERTICAL or android.view.Gravity.END
+            else -> android.view.Gravity.CENTER
+        }
+        if (lp.gravity == gravity) return
+        lp.gravity = gravity
+        lp.marginStart = if (side != 0) dp(48f).toInt() else 0
+        lp.marginEnd = if (side != 0) dp(48f).toInt() else 0
+        hud.layoutParams = lp
+    }
+
+    private fun showHud(icon: Int, text: String, side: Int = 0) {
+        placeHud(side)
         hud.text = text
         hud.setCompoundDrawablesRelativeWithIntrinsicBounds(tinted(icon), null, null, null)
         if (hud.visibility != View.VISIBLE || hud.alpha < 1f) {
@@ -3736,6 +3962,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
             override fun afterTextChanged(s: Editable?) {
+                dimFindButtons()
                 find(s?.toString() ?: "", backwards = false, again = false)
             }
         })
@@ -3746,6 +3973,20 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         findViewById<View>(R.id.find_next).setOnClickListener { find(findEdit.text.toString(), false, true) }
         findViewById<View>(R.id.find_prev).setOnClickListener { find(findEdit.text.toString(), true, true) }
         findViewById<View>(R.id.find_close).setOnClickListener { closeFind() }
+        for (b in findButtons) Ui.pressable(b, Motion.PRESS_ICON, morph = false)
+        dimFindButtons()
+    }
+
+    /** Previous and Next look unavailable with nothing typed (they still answer, as before). */
+    private fun dimFindButtons() {
+        val alpha = if (findEdit.text.isNullOrEmpty()) Ui.DISABLED_ALPHA else 1f
+        findButtons[0].alpha = alpha
+        findButtons[1].alpha = alpha
+    }
+
+    /** The count in the bar's soft colour; "0/0" (nothing found) in its red. */
+    private fun styleFindCount() {
+        findCount.setTextColor(if (findCount.text.toString() == "0/0") barShown?.danger ?: Ui.danger(this) else barShown?.icon ?: color(R.color.text_secondary))
     }
 
     fun openFind() {
@@ -3753,16 +3994,17 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         selectionMenu.dismiss()
         stopEditing()
         showToolbar()
-        Motion.fadeIn(findBar, fromDy = 0, duration = Motion.SHORT)
+        Motion.fadeIn(findBar, fromDy = 16, duration = Motion.SHORT)
         findEdit.setText("")
         findCount.text = ""
+        styleFindCount()
         findEdit.requestFocus()
         showKeyboard(findEdit)
     }
 
     private fun closeFind() {
         if (findBar.visibility != View.VISIBLE) return
-        Motion.fadeOut(findBar, toDy = 0, duration = 120)
+        Motion.fadeOut(findBar, toDy = 0, duration = Motion.PAGE_OUT_MS)
         current?.session?.finder?.clear()
         hideKeyboard()
     }
@@ -3772,12 +4014,16 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         if (text.isEmpty()) {
             finder.clear()
             findCount.text = ""
+            styleFindCount()
             return
         }
         finder.displayFlags = GeckoSession.FINDER_DISPLAY_HIGHLIGHT_ALL or GeckoSession.FINDER_DISPLAY_DRAW_LINK_OUTLINE
         val flags = if (backwards) GeckoSession.FINDER_FIND_BACKWARDS else 0
         finder.find(if (again) null else text, flags).accept({ r ->
-            if (r != null) findCount.text = if (r.total > 0) "${r.current}/${r.total}" else "0/0"
+            if (r != null) {
+                findCount.text = if (r.total > 0) "${r.current}/${r.total}" else "0/0"
+                styleFindCount()
+            }
         }, { _ -> })
     }
 
@@ -4040,7 +4286,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         val b = TextView(this).apply {
             text = "Load now, without blocking ads"
             Ui.size(this, Ui.Type.BODY, keepFont = true)
-            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            typeface = Ui.medium(Ui.Type.BODY)
             setTextColor(color(Looks.accent.onContainer))
             gravity = android.view.Gravity.CENTER
             minHeight = dp(44f).toInt()
@@ -4094,10 +4340,9 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         startupLifting = false
         startupFor = null
         if (startup.visibility != View.VISIBLE) return
-        startup.animate().alpha(0f).setDuration(200).withEndAction {
-            startup.visibility = View.GONE
+        Motion.fadeOut(startup, toDy = 0, duration = Motion.DIALOG) {
             if (startupFor == null) clearStartupExtras()
-        }.start()
+        }
     }
 
     // ------------------------------------------------------------------ swipe the toolbar to switch tabs

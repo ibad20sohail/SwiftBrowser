@@ -71,6 +71,8 @@ class SwiftApp : Application() {
 
             override fun onActivityStarted(activity: Activity) {
                 if (started++ == 0) TabManager.inSight(true)
+                // The screen comes in softly if the look has just changed.
+                com.swiftbrowser.ui.Looks.fadeInAfterChange(activity)
             }
 
             override fun onActivityStopped(activity: Activity) {

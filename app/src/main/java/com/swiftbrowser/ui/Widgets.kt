@@ -60,7 +60,8 @@ class SlimSwitch(context: Context) : View(context) {
             return
         }
         animator = ValueAnimator.ofFloat(position, target).apply {
-            duration = 150
+            duration = Motion.SHORT
+            interpolator = Motion.standard
             addUpdateListener {
                 position = it.animatedValue as Float
                 invalidate()
@@ -203,12 +204,6 @@ object Immersive {
     private fun paintColors(d: android.app.Dialog) {
         if (d is com.google.android.material.bottomsheet.BottomSheetDialog) Palette.paintSheet(d)
         Palette.paintDialog(d)
-        // 3.0.3: a dialog's buttons spring when pressed, as Swift's own buttons do.
-        if (d is androidx.appcompat.app.AlertDialog) {
-            for (which in intArrayOf(android.content.DialogInterface.BUTTON_POSITIVE, android.content.DialogInterface.BUTTON_NEGATIVE, android.content.DialogInterface.BUTTON_NEUTRAL)) {
-                d.getButton(which)?.let { Ui.pressable(it, 0.95f) }
-            }
-        }
     }
 
     private fun hasTextField(v: View): Boolean = v is android.widget.EditText ||
@@ -287,10 +282,29 @@ class ProgressRing(ctx: Context) : android.graphics.drawable.Drawable() {
         set(v) {
             if (v == -1f) spin = (spin + 40f) % 360f
             if (field == v && v != -1f) return
+            val old = field
             field = v
-            invalidateSelf()
+            slide?.cancel()
+            slide = null
+            // From one known amount to another it slides, instead of jumping at each update.
+            if (v != null && v >= 0f && old != null && old >= 0f) {
+                slide = ValueAnimator.ofFloat(drawn, v).apply {
+                    duration = Motion.SHORT
+                    interpolator = Motion.standard
+                    addUpdateListener {
+                        drawn = it.animatedValue as Float
+                        invalidateSelf()
+                    }
+                    start()
+                }
+            } else {
+                drawn = v ?: 0f
+                invalidateSelf()
+            }
         }
     private var spin = 0f
+    private var drawn = 0f
+    private var slide: ValueAnimator? = null
 
     fun setColour(colour: Int) {
         paint.color = colour
@@ -306,7 +320,7 @@ class ProgressRing(ctx: Context) : android.graphics.drawable.Drawable() {
         box.set(b.exactCenterX() - side / 2, b.exactCenterY() - side / 2, b.exactCenterX() + side / 2, b.exactCenterY() + side / 2)
         canvas.drawOval(box, track)
         if (f < 0f) canvas.drawArc(box, spin - 90f, 70f, false, paint)
-        else canvas.drawArc(box, -90f, 360f * f.coerceIn(0.02f, 1f), false, paint)
+        else canvas.drawArc(box, -90f, 360f * drawn.coerceIn(0.02f, 1f), false, paint)
     }
 
     override fun setAlpha(alpha: Int) {

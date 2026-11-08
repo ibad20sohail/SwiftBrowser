@@ -17,9 +17,10 @@ import org.mozilla.geckoview.WebRequestError
 object ErrorPage {
     private enum class Kind { OFFLINE, SECURITY, OTHER }
 
-    private const val ICON_OFFLINE = "M23.64 7c-.45-.34-4.93-4-11.64-4-1.5 0-2.89.19-4.15.48L18.18 13.8 23.64 7zm-6.6 8.22L3.27 1.44 2 2.72l2.05 2.06C1.91 5.76.59 6.82.36 7l11.63 14.49.01.01.01-.01 3.9-4.86 3.32 3.32 1.27-1.27-3.46-3.46z"
-    private const val ICON_SECURITY = "M12 2 4 5v6.09c0 5.05 3.41 9.76 8 10.91 4.59-1.15 8-5.86 8-10.91V5l-8-3zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"
-    private const val ICON_OTHER = "M11 15h2v2h-2zm0-8h2v6h-2zm.99-5C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8z"
+    // Material Symbols Rounded "wifi_off", "gpp_maybe" and "error", in their 960 viewBox, as the app's icons.
+    private const val ICON_OFFLINE = "M762-84 414-434q-31 7-59.5 19T301-386q-21 14-46.5 14.5T212-389q-18-18-16.5-43.5T217-473q23-17 48.5-31t52.5-26l-90-90q-26 14-50.5 29.5T130-557q-20 16-45.5 16T42-559q-18-18-17-43t21-41q22-18 45-34.5t49-30.5l-56-56q-11-11-11-28t11-28q11-11 28-11t28 11l679 679q12 12 12 28.5T819-84q-12 11-28.5 11.5T762-84Zm-282-36q-42 0-71-29.5T380-220q0-42 29-71t71-29q42 0 71 29t29 71q0 41-29 70.5T480-120Zm273-275q-16 16-37.5 15.5T678-396l-10-10-10-10-96-96q-13-13-5-27t28-9q45 11 85.5 31t75.5 47q18 14 20.5 36.5T753-395Zm165-164q-17 18-42 18.5T831-556q-72-59-161.5-91.5T480-680q-21 0-40.5 1.5T400-674q-25 4-45-10.5T331-724q-4-25 11-45t40-24q24-4 48.5-5.5T480-800q125 0 235.5 41.5T914-644q20 17 21 42t-17 43Z"
+    private const val ICON_SECURITY = "M480-320q17 0 28.5-11.5T520-360q0-17-11.5-28.5T480-400q-17 0-28.5 11.5T440-360q0 17 11.5 28.5T480-320Zm0-160q17 0 28.5-11.5T520-520v-120q0-17-11.5-28.5T480-680q-17 0-28.5 11.5T440-640v120q0 17 11.5 28.5T480-480Zm0 396q-7 0-13-1t-12-3q-135-45-215-166.5T160-516v-189q0-25 14.5-45t37.5-29l240-90q14-5 28-5t28 5l240 90q23 9 37.5 29t14.5 45v189q0 140-80 261.5T505-88q-6 2-12 3t-13 1Zm0-80q104-33 172-132t68-220v-189l-240-90-240 90v189q0 121 68 220t172 132Zm0-316Z"
+    private const val ICON_OTHER = "M480-280q17 0 28.5-11.5T520-320q0-17-11.5-28.5T480-360q-17 0-28.5 11.5T440-320q0 17 11.5 28.5T480-280Zm0-160q17 0 28.5-11.5T520-480v-160q0-17-11.5-28.5T480-680q-17 0-28.5 11.5T440-640v160q0 17 11.5 28.5T480-440Zm0 360q-83 0-156-31.5T197-197q-54-54-85.5-127T80-480q0-83 31.5-156T197-763q54-54 127-85.5T480-880q83 0 156 31.5T763-763q54 54 85.5 127T880-480q0 83-31.5 156T763-197q-54 54-127 85.5T480-80Zm0-80q134 0 227-93t93-227q0-134-93-227t-227-93q-134 0-227 93t-93 227q0 134 93 227t227 93Zm0-320Z"
 
     /**
      * 3.0: whether a page that failed with [code] waits for the connection and loads again by itself
@@ -97,15 +98,16 @@ object ErrorPage {
             body{font-family:$fonts;margin:0;padding:12vh 28px 40px;max-width:520px;margin:0 auto;box-sizing:border-box}
             .icon{width:72px;height:72px;border-radius:50%;background:var(--c);display:flex;align-items:center;justify-content:center;margin-bottom:24px}
             .icon svg{width:36px;height:36px;fill:var(--a)}
-            h1{font-size:22px;line-height:1.3;margin:0 0 10px;font-weight:500}
+            h1{font-size:23px;line-height:1.3;margin:0 0 10px;font-weight:500}
             p{font-size:15px;line-height:1.55;color:var(--sub);margin:0 0 12px}
-            .site{display:inline-block;max-width:100%;box-sizing:border-box;padding:6px 12px;border-radius:14px;background:var(--chip);font-size:13px;color:var(--sub);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin:4px 0 8px}
+            .site{display:inline-block;max-width:100%;box-sizing:border-box;padding:6px 12px;border-radius:12px;background:var(--chip);font-size:13px;color:var(--sub);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin:4px 0 8px}
             .wait{font-size:14px}
             .buttons{margin-top:24px;display:flex;flex-wrap:wrap;gap:12px}
-            button,a.button{padding:12px 24px;font-size:15px;font-weight:500;border:0;border-radius:24px;background:var(--a);color:var(--on);font-family:inherit;text-decoration:none;display:inline-block;line-height:normal}
+            button,a.button{padding:12px 24px;font-size:15px;font-weight:500;border:0;border-radius:24px;background:var(--a);color:var(--on);font-family:inherit;text-decoration:none;display:inline-block;line-height:normal;transition:transform 100ms}
+            button:active,a.button:active{transform:scale(.97)}
             button.secondary{background:transparent;color:var(--sub);border:1px solid var(--sub)}
             </style></head><body>
-            <div class="icon"><svg viewBox="0 0 24 24"><path d="$icon"/></svg></div>
+            <div class="icon"><svg viewBox="0 -960 960 960"><path d="$icon"/></svg></div>
             <h1>${TextUtils.htmlEncode(title)}</h1>
             <p>${TextUtils.htmlEncode(message)}</p>
             <div class="site" title="$full">$site</div>

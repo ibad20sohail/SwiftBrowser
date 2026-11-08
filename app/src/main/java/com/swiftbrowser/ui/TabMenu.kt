@@ -1,6 +1,7 @@
 package com.swiftbrowser.ui
 
 import com.swiftbrowser.R
+import com.swiftbrowser.core.Favicons
 import com.swiftbrowser.media.Helper
 import com.swiftbrowser.tabs.Tab
 import com.swiftbrowser.tabs.TabManager
@@ -65,6 +66,6 @@ object TabMenu {
             }
         }
         actions += Sheets.Action(R.drawable.ic_close, "Close tab", danger = true) { TabManager.close(tab, undoable = true) }
-        Sheets.actions(a, title, null, actions)
+        Sheets.actions(a, title, null, actions, Favicons.cached(tab.url))
     }
 }

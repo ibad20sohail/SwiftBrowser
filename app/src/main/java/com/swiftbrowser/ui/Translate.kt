@@ -1,10 +1,8 @@
 package com.swiftbrowser.ui
 
 import android.view.ViewGroup
-import android.widget.LinearLayout
 import android.widget.TextView
 import com.google.android.material.bottomsheet.BottomSheetDialog
-import com.google.android.material.button.MaterialButton
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.swiftbrowser.R
 import com.swiftbrowser.SwiftApp
@@ -144,34 +142,21 @@ object Translate {
         checkSize()
 
         lateinit var dialog: BottomSheetDialog
-        val buttons = LinearLayout(a).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(Ui.dp(a, 16), Ui.dp(a, 8), Ui.dp(a, 16), 0)
-        }
-        buttons.addView(MaterialButton(a).apply {
-            text = "Translate"
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-            setOnClickListener {
-                dialog.dismiss()
-                if (source == target) {
-                    a.snack("Choose two different languages")
-                    return@setOnClickListener
-                }
-                SwiftApp.prefs.sp.edit().putString(PREF_TO, target).apply()
-                translate(a, session, source, target)
+        col.addView(Sheets.wideButton(a, "Translate") {
+            dialog.dismiss()
+            if (source == target) {
+                a.snack("Choose two different languages")
+                return@wideButton
             }
+            SwiftApp.prefs.sp.edit().putString(PREF_TO, target).apply()
+            translate(a, session, source, target)
         })
         if (translated != null) {
-            buttons.addView(MaterialButton(a, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
-                text = "Show the original"
-                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-                setOnClickListener {
-                    dialog.dismiss()
-                    session.sessionTranslation?.restoreOriginalPage()?.accept({ }, { _ -> a.snack("The original page couldn't be shown. Reload it.") })
-                }
-            })
+            col.addView(Sheets.wideButton(a, "Show the original", outlined = true) {
+                dialog.dismiss()
+                session.sessionTranslation?.restoreOriginalPage()?.accept({ }, { _ -> a.snack("The original page couldn't be shown. Reload it.") })
+            }.apply { (layoutParams as ViewGroup.MarginLayoutParams).topMargin = 0 })
         }
-        col.addView(buttons)
         dialog = Sheets.sheet(a, col)
         dialog.showImmersive()
     }

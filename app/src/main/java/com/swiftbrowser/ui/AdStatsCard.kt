@@ -7,7 +7,6 @@ import android.graphics.Paint
 import android.graphics.RectF
 import android.view.View
 import android.view.ViewGroup
-import android.view.animation.DecelerateInterpolator
 import android.widget.LinearLayout
 import com.swiftbrowser.R
 import com.swiftbrowser.adblock.AdStats
@@ -23,7 +22,7 @@ object AdStatsCard {
         val total = days.sum()
         return LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(Ui.dp(ctx, 18), Ui.dp(ctx, 16), Ui.dp(ctx, 18), Ui.dp(ctx, 12))
+            setPadding(Ui.dp(ctx, Ui.ROW_INSET), Ui.dp(ctx, 16), Ui.dp(ctx, Ui.ROW_INSET), Ui.dp(ctx, 12))
             addView(Ui.text(ctx, Ui.Type.DISPLAY, NumberFormat.getIntegerInstance().format(total)))
             // 3.0: "1 ad or tracker", not "1 ads and trackers".
             val what = if (total == 1) "ad or tracker blocked in the last 7 days" else "ads and trackers blocked in the last 7 days"
@@ -36,13 +35,16 @@ object AdStatsCard {
     /** One bar a day, today on the right in the accent colour; they grow in when shown. */
     private class Bars(ctx: Context, private val days: IntArray) : View(ctx) {
         private val bar = Paint(Paint.ANTI_ALIAS_FLAG)
+        private val dayFont = AppFont.cut(Ui.Type.SMALL.sp, Ui.Weight.REGULAR) ?: android.graphics.Typeface.DEFAULT
+        private val todayFont = Ui.medium(Ui.Type.SMALL)
         private val label = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            textSize = Ui.dpf(ctx, 11.5f) * ctx.resources.configuration.fontScale
+            textSize = Ui.dpf(ctx, Ui.Type.SMALL.sp) * ctx.resources.configuration.fontScale
             textAlign = Paint.Align.CENTER
         }
         private val rect = RectF()
         private val letters: List<String>
         private var grow = 1f
+        private var growing: ValueAnimator? = null
 
         init {
             val today = AdStats.today()
@@ -58,15 +60,23 @@ object AdStatsCard {
         override fun onAttachedToWindow() {
             super.onAttachedToWindow()
             if (days.sum() == 0) return
-            ValueAnimator.ofFloat(0f, 1f).apply {
-                duration = 420
-                interpolator = DecelerateInterpolator(1.6f)
+            growing?.cancel()
+            growing = ValueAnimator.ofFloat(0f, 1f).apply {
+                duration = Motion.NORMAL
+                interpolator = Motion.standard
                 addUpdateListener {
                     grow = it.animatedValue as Float
                     invalidate()
                 }
                 start()
             }
+        }
+
+        override fun onDetachedFromWindow() {
+            growing?.cancel()
+            growing = null
+            grow = 1f
+            super.onDetachedFromWindow()
         }
 
         override fun onDraw(c: Canvas) {
@@ -92,7 +102,7 @@ object AdStatsCard {
                 }
                 c.drawRoundRect(rect, minOf(width / 2, Ui.dpf(context, 8f)), minOf(width / 2, Ui.dpf(context, 8f)), bar)
                 label.color = if (i == days.lastIndex) accent else Ui.textSecondary(context)
-                label.isFakeBoldText = i == days.lastIndex
+                label.typeface = if (i == days.lastIndex) todayFont else dayFont
                 c.drawText(letters[i], cx, height - Ui.dpf(context, 4f), label)
             }
         }

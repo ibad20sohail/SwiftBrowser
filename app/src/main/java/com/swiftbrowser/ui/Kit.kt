@@ -5,6 +5,7 @@ import android.animation.AnimatorListenerAdapter
 import android.animation.AnimatorSet
 import android.animation.ObjectAnimator
 import android.animation.StateListAnimator
+import android.animation.TimeInterpolator
 import android.animation.ValueAnimator
 import android.app.Activity
 import android.content.Context
@@ -12,6 +13,7 @@ import android.content.res.ColorStateList
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.drawable.Drawable
@@ -24,6 +26,8 @@ import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.view.ViewPropertyAnimator
+import android.view.ViewTreeObserver
 import android.view.animation.PathInterpolator
 import android.widget.FrameLayout
 import android.widget.ImageView
@@ -155,6 +159,7 @@ object Looks {
         val dark = wantsDark()
         if (dark == prefs.darkMode) return
         prefs.darkMode = dark
+        changedAt = android.os.SystemClock.uptimeMillis()
         // Sites that choose their colours when the page loads (Google, YouTube) follow after the
         // reload done when the screen restarts.
         try {
@@ -218,7 +223,46 @@ object Looks {
         colorsChanged(activity)
     }
 
+    /** When light, dark or a colour last changed: the screens made because of it come in softly. */
+    private var changedAt = 0L
+
+    /** How soon after a change a screen counts as made because of it (ms). */
+    private const val CHANGE_WINDOW_MS = 2500L
+
+    /**
+     * Android rebuilds every screen when the look changes and shows no transition for it. Called as
+     * each screen starts (SwiftApp): the new one comes in from under a flat cover of its own page
+     * colour. One colour and no picture of the old screen (that would be about 3.7 MB on a 720p phone,
+     * with the web page missing from it); it also hides the moment a page changes its colours.
+     */
+    fun fadeInAfterChange(activity: Activity) {
+        if (changedAt == 0L || android.os.SystemClock.uptimeMillis() - changedAt > CHANGE_WINDOW_MS || !Motion.enabled(activity)) return
+        val decor = activity.window.decorView
+        val dm = activity.resources.displayMetrics
+        val side = 2 * maxOf(dm.widthPixels, dm.heightPixels)
+        val cover = android.graphics.drawable.ColorDrawable(Palette.color(activity, R.color.page_bg)).apply { setBounds(0, 0, side, side) }
+        decor.overlay.add(cover)
+        val observer = decor.viewTreeObserver
+        observer.addOnPreDrawListener(object : ViewTreeObserver.OnPreDrawListener {
+            override fun onPreDraw(): Boolean {
+                (if (observer.isAlive) observer else decor.viewTreeObserver).removeOnPreDrawListener(this)
+                // From the first frame, so the time making the screen doesn't use up the fade.
+                ValueAnimator.ofInt(255, 0).apply {
+                    duration = Motion.DIALOG
+                    interpolator = Motion.standard
+                    addUpdateListener { cover.alpha = it.animatedValue as Int }
+                    addListener(object : AnimatorListenerAdapter() {
+                        override fun onAnimationEnd(animation: Animator) = decor.overlay.remove(cover)
+                    })
+                    start()
+                }
+                return true
+            }
+        })
+    }
+
     private fun colorsChanged(activity: Activity) {
+        changedAt = android.os.SystemClock.uptimeMillis()
         Palette.invalidate()
         // Reader view's links follow too.
         com.swiftbrowser.media.Helper.sendReaderStyle()
@@ -307,6 +351,9 @@ object Ui {
     /** How far everything full-width keeps from the screen's sides (dp): rows, cards, search boxes. */
     const val MARGIN = 16
 
+    /** Touch ripple on a dark surface (the player, a dark bar, a picture), also in the light look. */
+    const val RIPPLE_ON_DARK = 0x40FFFFFF
+
     /** How far in from a card's or grouped row's edge its first icon or text starts (dp). */
     const val ROW_INSET = 12
 
@@ -316,8 +363,11 @@ object Ui {
      */
     const val CONTENT_X = MARGIN + ROW_INSET
 
-    /** The holder of a row's or tile's icon (dp): a rounded square with [R_SMALL] corners (see [iconBadge]). */
+    /** The holder of a row's or tile's icon (dp) (see [iconBadge]). */
     const val ICON_BOX = 40
+
+    /** How big an icon is drawn in that holder (dp): one size, whatever the screen. */
+    const val ICON_IN_BOX = 22
 
     /** Title bars (Settings, the lists, Files) and search boxes (dp). */
     const val BAR_HEIGHT = 52
@@ -540,34 +590,28 @@ object Ui {
     }
 
     /** Touch ripple over [content], kept inside a rounded shape of [radiusDp]. */
-    fun ripple(ctx: Context, content: Drawable?, radiusDp: Int): RippleDrawable =
-        RippleDrawable(ColorStateList.valueOf(highlight(ctx)), content, shape(ctx, 0xFFFFFFFF.toInt(), radiusDp))
+    fun ripple(ctx: Context, content: Drawable?, radiusDp: Int, color: Int? = null): RippleDrawable =
+        RippleDrawable(ColorStateList.valueOf(color ?: highlight(ctx)), content, shape(ctx, 0xFFFFFFFF.toInt(), radiusDp))
 
     /** Touch ripple for a round icon button (spreads in a circle without a box). */
-    fun rippleBorderless(ctx: Context): RippleDrawable =
-        RippleDrawable(ColorStateList.valueOf(highlight(ctx)), null, null)
+    fun rippleBorderless(ctx: Context, color: Int? = null): RippleDrawable =
+        RippleDrawable(ColorStateList.valueOf(color ?: highlight(ctx)), null, null)
 
     fun icon(ctx: Context, res: Int, tint: Int): Drawable? =
         ContextCompat.getDrawable(ctx, res)?.mutate()?.also { it.setTint(tint) }
 
     /**
-     * An icon in a soft holder. 3.0.5: for rows and tiles a rounded square of [ICON_BOX] (one holder
-     * on every screen, the same shape as the pictures in Files and Downloads); the big badges of
-     * empty screens and the welcome stay round.
+     * An icon in a soft circle: [ICON_BOX] in rows and tiles, bigger on empty screens and the welcome.
      */
     fun iconBadge(ctx: Context, res: Int, sizeDp: Int = ICON_BOX, tint: Int = onAccentContainer(ctx), fill: Int = accentContainer(ctx)): ImageView =
         ImageView(ctx).apply {
             setImageDrawable(icon(ctx, res, tint))
-            background = if (sizeDp >= 56) circle(fill) else shape(ctx, fill, R_SMALL)
+            background = circle(fill)
             val size = dp(ctx, sizeDp)
-            // Big badges (empty screens, the welcome) get a big icon, drawn at its size.
-            if (sizeDp >= 56) {
-                scaleType = ImageView.ScaleType.FIT_CENTER
-                val p = (size * 0.28f).toInt()
-                setPadding(p, p, p, p)
-            } else {
-                scaleType = ImageView.ScaleType.CENTER
-            }
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            // Big badges (empty screens, the welcome) get a big icon; a row's the one size of every row.
+            val p = if (sizeDp >= 56) (size * 0.28f).toInt() else (size - dp(ctx, ICON_IN_BOX)) / 2
+            setPadding(p, p, p, p)
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
             layoutParams = LinearLayout.LayoutParams(size, size)
         }
@@ -621,7 +665,7 @@ object Ui {
      * Pressing [v] shrinks it a little and lets go with a small spring: every button, tile and card
      * reacts to the finger the same way. Done by state, so it never interferes with touch handling.
      */
-    fun pressable(v: View, scale: Float = 0.96f, morph: Boolean = true) {
+    fun pressable(v: View, scale: Float = Motion.PRESS_BUTTON, morph: Boolean = true) {
         // 3.0.4: and its shape changes a little as it is pressed (rounded corners squarer, a circle a
         // rounded square), springing back as it is let go: Android 16's buttons do that. Only its
         // background is redrawn, so it costs next to nothing.
@@ -629,14 +673,14 @@ object Ui {
             val parts = arrayListOf<Animator>(ObjectAnimator.ofFloat(v, View.SCALE_X, scale), ObjectAnimator.ofFloat(v, View.SCALE_Y, scale))
             if (morph) parts += ObjectAnimator.ofFloat(v, PRESS_SHAPE, 1f)
             playTogether(parts)
-            duration = 90
+            duration = Motion.PRESS_DOWN
             interpolator = Motion.standard
         }
         val up = AnimatorSet().apply {
             val parts = arrayListOf<Animator>(ObjectAnimator.ofFloat(v, View.SCALE_X, 1f), ObjectAnimator.ofFloat(v, View.SCALE_Y, 1f))
             if (morph) parts += ObjectAnimator.ofFloat(v, PRESS_SHAPE, 0f)
             playTogether(parts)
-            duration = 180
+            duration = Motion.PRESS_UP
             interpolator = Motion.overshoot
         }
         v.stateListAnimator = StateListAnimator().apply {
@@ -775,7 +819,7 @@ object Ui {
         orientation = LinearLayout.VERTICAL
         gravity = Gravity.CENTER_HORIZONTAL
         setPadding(dp(ctx, 40), dp(ctx, 48), dp(ctx, 40), dp(ctx, 48))
-        addView(art?.view(ctx) ?: iconBadge(ctx, iconRes, 88, tint = accent(ctx)))
+        addView(art?.view(ctx) ?: iconBadge(ctx, iconRes, 64, tint = accent(ctx)))
         addView(text(ctx, Type.TITLE, title).apply {
             gravity = Gravity.CENTER
             setPadding(0, dp(ctx, 24), 0, 0)
@@ -789,24 +833,107 @@ object Ui {
     }
 
     /** A soft rounded box in the accent's container colour, for a small note at the top of a page. */
-    fun noteBox(ctx: Context, iconRes: Int, message: CharSequence): LinearLayout = LinearLayout(ctx).apply {
+    fun noteBox(ctx: Context, iconRes: Int, message: CharSequence, fill: Int = accentContainer(ctx), ink: Int = onAccentContainer(ctx)): LinearLayout = LinearLayout(ctx).apply {
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
-        background = shape(ctx, accentContainer(ctx), R_MEDIUM)
+        background = shape(ctx, fill, R_MEDIUM)
         setPadding(dp(ctx, 16), dp(ctx, 12), dp(ctx, 16), dp(ctx, 12))
         addView(ImageView(ctx).apply {
-            setImageDrawable(icon(ctx, iconRes, onAccentContainer(ctx)))
+            setImageDrawable(icon(ctx, iconRes, ink))
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }, LinearLayout.LayoutParams(dp(ctx, 20), dp(ctx, 20)).apply { marginEnd = dp(ctx, 12) })
-        addView(text(ctx, Type.BODY_SECONDARY, message, onAccentContainer(ctx)), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        addView(text(ctx, Type.BODY_SECONDARY, message, ink), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+    }
+
+    /**
+     * A text field in a dialog or a sheet, filled like Swift's search boxes instead of underlined:
+     * 48 dp tall at least, [R_SMALL] corners. Its box starts where the dialog's title does (24 dp in).
+     */
+    fun field(box: android.widget.EditText, fill: Int = color(box.context, R.color.surface_alt)) {
+        val ctx = box.context
+        size(box, Type.BODY, keepFont = true)
+        box.background = shape(ctx, fill, R_SMALL)
+        // On the view too: a field whose default look was already painted keeps a tint of its own.
+        box.backgroundTintList = ColorStateList.valueOf(fill)
+        box.minHeight = dp(ctx, 48)
+        box.setPaddingRelative(dp(ctx, 14), dp(ctx, 12), dp(ctx, 14), dp(ctx, 12))
     }
 }
 
-/** How things move: three durations and the same curves everywhere. */
+/** How things move: one set of durations, curves and press depths for every screen. */
 object Motion {
     const val SHORT = 150L
     const val NORMAL = 220L
     const val LONG = 300L
+
+    // By what is moving. The window animations in res/anim and the buttons' res/animator say the same.
+
+    /** A press going down and coming back. */
+    const val PRESS_DOWN = 100L
+    const val PRESS_UP = 150L
+
+    /** An icon changing. */
+    const val ICON = 150L
+
+    /** A small part of a screen changing (a list, a bar, a fade). */
+    const val SMALL = 180L
+
+    /** A dialog opening, a sheet opening and closing. */
+    const val DIALOG = 200L
+    const val SHEET = 250L
+    const val SHEET_OUT = 200L
+
+    /** A section opening or closing. */
+    const val EXPAND = 220L
+
+    /** How far a press shrinks what is pressed: an icon or small round thing, a button, a whole card. */
+    const val PRESS_ICON = 0.90f
+    const val PRESS_BUTTON = 0.95f
+    const val PRESS_CARD = 0.98f
+
+    /**
+     * [v].animate() with its time, curve and delay all said: what a call leaves out stays from the
+     * last animation on that view (a delay left over made a shortcut's lift start late).
+     */
+    fun anim(v: View, ms: Long, curve: TimeInterpolator = standard, delay: Long = 0L): ViewPropertyAnimator =
+        v.animate().setDuration(ms).setInterpolator(curve).setStartDelay(delay)
+
+    /** For a list whose rows come and go: only they and the rows closing up move; a row changing stays put. */
+    fun listAnimator() = androidx.recyclerview.widget.DefaultItemAnimator().apply {
+        removeDuration = SHORT
+        moveDuration = SHORT
+        addDuration = SHORT
+        changeDuration = 0
+        supportsChangeAnimations = false
+    }
+
+    /** A bar's value going to [value] smoothly (Android's own short slide; a value set often stays cheap). */
+    fun progress(bar: android.widget.ProgressBar, value: Int) = bar.setProgress(value, true)
+
+    /** A running [fadePicture], and how solid the picture is meant to be (a dimmed one, SoftPictures, stays dimmed). */
+    private class PictureFade(val animator: ValueAnimator, val rest: Int)
+
+    /** A picture that arrived after its row was shown fades in, up to the strength it has now: only the picture, with no layer. */
+    fun fadePicture(v: ImageView) {
+        stopPicture(v)
+        if (!enabled(v.context)) return
+        val rest = v.imageAlpha
+        v.imageAlpha = 0
+        v.setTag(R.id.motion_picture, PictureFade(ValueAnimator.ofInt(0, rest).apply {
+            duration = ICON
+            interpolator = standard
+            addUpdateListener { v.imageAlpha = it.animatedValue as Int }
+            start()
+        }, rest))
+    }
+
+    /** [v] is showing something else now (a row used again): whatever was fading in stops, at the strength it was meant to end at. */
+    fun stopPicture(v: ImageView) {
+        val fade = v.getTag(R.id.motion_picture) as? PictureFade ?: return
+        fade.animator.cancel()
+        v.setTag(R.id.motion_picture, null)
+        v.imageAlpha = fade.rest
+    }
 
     /** Starts quickly and settles gently: things moving on screen. */
     val standard = PathInterpolator(0.2f, 0f, 0f, 1f)
@@ -994,20 +1121,21 @@ object Motion {
         }
     }
 
-    /** Changes [v]'s icon with a quick turn and settle (reload ↔ stop, 2.3); the same icon again does nothing. */
-    fun swapIcon(v: android.widget.ImageView, res: Int) {
+    /** Changes [v]'s icon with a quick turn and settle (reload ↔ stop, 2.3); the same icon again does nothing. [restAlpha]: how solid it ends (shuffle when off is dimmer). */
+    fun swapIcon(v: android.widget.ImageView, res: Int, restAlpha: Float = 1f) {
         val shown = v.getTag(R.id.motion_icon) as? Int
         if (shown == res) return
         v.setTag(R.id.motion_icon, res)
         if (shown == null || !v.isShown) {
             v.setImageResource(res)
+            v.alpha = restAlpha
             return
         }
         v.animate().cancel()
         v.animate().rotation(-45f).scaleX(0.7f).scaleY(0.7f).alpha(0.3f).setStartDelay(0).setDuration(80).setInterpolator(exit).withEndAction {
             v.setImageResource(res)
             v.rotation = 45f
-            v.animate().rotation(0f).scaleX(1f).scaleY(1f).alpha(1f).setDuration(SHORT).setInterpolator(enter).start()
+            v.animate().rotation(0f).scaleX(1f).scaleY(1f).alpha(restAlpha).setDuration(ICON).setInterpolator(enter).start()
         }.start()
     }
 
@@ -1032,14 +1160,18 @@ object Motion {
     }
 
     /** A quick grow-and-settle, to show something changed (the tab count, a new item). */
-    fun bump(v: View, scale: Float = 1.18f) {
+    fun bump(v: View, scale: Float = 1.12f) {
         v.animate().cancel()
-        v.animate().scaleX(scale).scaleY(scale).setDuration(110).setInterpolator(standard).withEndAction {
-            v.animate().scaleX(1f).scaleY(1f).setDuration(220).setInterpolator(overshoot).start()
+        anim(v, 70).scaleX(scale).scaleY(scale).withEndAction {
+            anim(v, 110).scaleX(1f).scaleY(1f).start()
         }.start()
     }
 
-    /** Folds [v] away (fading and closing its height), then runs [then]: rows that were removed. */
+    /**
+     * Folds [v] away (fading and closing its height), then runs [then]. Lays the screen out on every
+     * frame: for something small, once in a while (the ≡ menu's hint). A section the user opens and
+     * closes uses [reveal].
+     */
     fun collapse(v: View, then: () -> Unit) {
         val start = v.height
         if (start <= 0 || !v.isAttachedToWindow) {
@@ -1048,7 +1180,7 @@ object Motion {
         }
         val lp = v.layoutParams
         ValueAnimator.ofFloat(1f, 0f).apply {
-            duration = NORMAL
+            duration = EXPAND
             interpolator = standard
             addUpdateListener {
                 val f = it.animatedValue as Float
@@ -1068,53 +1200,275 @@ object Motion {
         }
     }
 
-    /** Opens [v] (hidden before) by growing its height and fading it in: a list folding open (2.3). */
-    fun expand(v: View) {
-        val parent = v.parent as? View
-        val margins = (v.layoutParams as? ViewGroup.MarginLayoutParams)?.let { it.leftMargin + it.rightMargin } ?: 0
-        val width = (parent?.width ?: 0) - (parent?.paddingLeft ?: 0) - (parent?.paddingRight ?: 0) - margins
-        if (width <= 0 || !v.isAttachedToWindow) {
-            v.visibility = View.VISIBLE
-            return
-        }
-        v.measure(
-            View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
-            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
-        )
-        val target = v.measuredHeight
-        val lp = v.layoutParams
-        lp.height = 1
-        v.layoutParams = lp
-        v.alpha = 0f
-        v.visibility = View.VISIBLE
-        ValueAnimator.ofFloat(0f, 1f).apply {
-            duration = NORMAL
-            interpolator = standard
-            addUpdateListener {
-                val f = it.animatedValue as Float
-                v.alpha = f
-                lp.height = maxOf(1, (target * f).toInt())
-                v.layoutParams = lp
+    /**
+     * Opens or closes [v], a section in a column, as if its height changed, with no layout while it
+     * moves: it is laid out once at full size and shown through a growing clip, and what is under it
+     * moves by translation (in a sheet, the sheet's top edge too). Asked again on the way, it turns
+     * back from where it is. [then] runs when it has got there; closed, it is GONE.
+     */
+    fun reveal(v: View, open: Boolean, then: (() -> Unit)? = null) {
+        val r = v.getTag(R.id.motion_reveal) as? Reveal ?: Reveal(v).also { v.setTag(R.id.motion_reveal, it) }
+        r.go(open, then)
+    }
+
+    private class Reveal(private val v: View) {
+        private var animator: ValueAnimator? = null
+        private var opening = false
+        private var then: (() -> Unit)? = null
+        /** 0 shut, 1 open. */
+        private var f = 0f
+        private var full = 0
+        private var sheet: View? = null
+        private var sheetShift = 0
+        private var scroll: ViewGroup? = null
+        /** In the same scrolling column, under it: they follow its edge. */
+        private val below = ArrayList<View>()
+        /** After the scrolling part, in the sheet (a button pinned at the bottom): they stay where they are on screen. */
+        private val pinned = ArrayList<View>()
+        private val clip = Rect()
+
+        fun go(open: Boolean, done: (() -> Unit)?) {
+            if (animator != null) {
+                then = done
+                if (open != opening) {
+                    opening = open
+                    run(if (open) 1f else 0f)
+                }
+                return
             }
-            addListener(object : AnimatorListenerAdapter() {
-                override fun onAnimationEnd(animation: Animator) {
-                    lp.height = ViewGroup.LayoutParams.WRAP_CONTENT
-                    v.layoutParams = lp
-                    v.alpha = 1f
+            if (open == (v.visibility == View.VISIBLE)) {
+                done?.invoke()
+                return
+            }
+            then = done
+            opening = open
+            if (!enabled(v.context) || !v.isAttachedToWindow || (!open && v.height <= 0)) {
+                v.visibility = if (open) View.VISIBLE else View.GONE
+                finish()
+                return
+            }
+            sheet = sheetOf(v)
+            if (open) open() else close()
+        }
+
+        private fun open() {
+            val top = sheet?.top ?: 0
+            clip.set(0, 0, 0, 0)
+            v.clipBounds = clip
+            v.visibility = View.VISIBLE
+            // After its one layout: how tall it is and how far the sheet's edge has gone are known then.
+            val observer = v.viewTreeObserver
+            observer.addOnPreDrawListener(object : ViewTreeObserver.OnPreDrawListener {
+                override fun onPreDraw(): Boolean {
+                    (if (observer.isAlive) observer else v.viewTreeObserver).removeOnPreDrawListener(this)
+                    full = v.height
+                    sheetShift = top - (sheet?.top ?: top)
+                    findWhatMoves()
+                    f = 0f
+                    show()
+                    run(1f)
+                    return true
                 }
             })
+        }
+
+        private fun close() {
+            full = v.height
+            findWhatMoves()
+            // How much shorter the sheet will be: as much as the list under its top stops filling it.
+            val content = scroll?.getChildAt(0)?.height
+            sheetShift = when {
+                sheet == null -> 0
+                scroll == null || content == null -> full
+                else -> (scroll!!.height - (content - full)).coerceIn(0, full)
+            }
+            f = 1f
+            run(0f)
+        }
+
+        private fun sheetOf(view: View): View? {
+            var p = view.parent as? View
+            while (p != null) {
+                if (p.id == com.google.android.material.R.id.design_bottom_sheet) return p
+                p = p.parent as? View
+            }
+            return null
+        }
+
+        private fun findWhatMoves() {
+            below.clear()
+            pinned.clear()
+            scroll = null
+            var child: View = v
+            var parent = v.parent as? ViewGroup
+            while (parent != null && parent !== sheet && parent.id != android.R.id.content) {
+                if (parent is LinearLayout && parent.orientation == LinearLayout.VERTICAL) {
+                    val list = if (scroll == null) below else pinned
+                    for (i in parent.indexOfChild(child) + 1 until parent.childCount) {
+                        parent.getChildAt(i).takeIf { it.visibility == View.VISIBLE }?.let { list += it }
+                    }
+                }
+                if (scroll == null && (parent is androidx.core.widget.NestedScrollView || parent is android.widget.ScrollView)) scroll = parent
+                child = parent
+                parent = parent.parent as? ViewGroup
+            }
+        }
+
+        private fun run(to: Float) {
+            animator?.cancel()
+            val from = f
+            animator = ValueAnimator.ofFloat(from, to).apply {
+                duration = (EXPAND * kotlin.math.abs(to - from)).toLong().coerceAtLeast(60L)
+                interpolator = standard
+                addUpdateListener {
+                    if (!v.isAttachedToWindow) {
+                        cancel()
+                        return@addUpdateListener
+                    }
+                    f = it.animatedValue as Float
+                    show()
+                }
+                addListener(object : AnimatorListenerAdapter() {
+                    private var cancelled = false
+
+                    override fun onAnimationCancel(animation: Animator) {
+                        cancelled = true
+                    }
+
+                    override fun onAnimationEnd(animation: Animator) {
+                        if (cancelled) return
+                        animator = null
+                        if (!opening) v.visibility = View.GONE
+                        finish()
+                    }
+                })
+                start()
+            }
+        }
+
+        private fun show() {
+            clip.set(0, 0, v.width, (full * f).toInt())
+            v.clipBounds = clip
+            val up = -full * (1f - f)
+            for (b in below) b.translationY = up
+            val shift = sheetShift * (1f - f)
+            sheet?.translationY = shift
+            for (b in pinned) b.translationY = -shift
+        }
+
+        private fun finish() {
+            v.clipBounds = null
+            for (b in below) b.translationY = 0f
+            for (b in pinned) b.translationY = 0f
+            sheet?.translationY = 0f
+            below.clear()
+            pinned.clear()
+            sheet = null
+            scroll = null
+            val run = then
+            then = null
+            run?.invoke()
+        }
+    }
+
+    /** The first children of [group] come in one after another (a sheet's rows), all done within the sheet's own opening. */
+    fun stagger(group: ViewGroup, step: Long = 16, max: Int = 6) {
+        var n = 0
+        for (i in 0 until group.childCount) {
+            val c = group.getChildAt(i)
+            if (c.visibility != View.VISIBLE) continue
+            if (n >= max) break
+            fadeIn(c, fromDy = 8, delay = n * step, duration = SHORT)
+            n++
+        }
+    }
+}
+
+/**
+ * A choice of a few short options side by side (Settings' ad blocking level): one filled part slides to
+ * the one chosen and the words change colour with it. Drawn here, so moving it lays nothing out.
+ * Give it a fixed height (44 dp).
+ */
+class Segmented(context: Context, labels: List<String>, selected: Int, private val onPick: (Int) -> Unit) : LinearLayout(context) {
+    private val inset = Ui.dpf(context, 3f)
+    private val rect = RectF()
+    private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Ui.accentContainer(context) }
+    private val chosenInk = Ui.onAccentContainer(context)
+    private val plainInk = Ui.text(context)
+    private val names = labels
+    private val views: List<TextView>
+    private var position = selected.toFloat()
+    private var animator: ValueAnimator? = null
+
+    var selected = selected
+        private set
+
+    init {
+        orientation = HORIZONTAL
+        setWillNotDraw(false)
+        background = Ui.shape(context, Ui.color(context, R.color.surface_alt), 22)
+        views = labels.mapIndexed { i, label ->
+            Ui.text(context, Ui.Type.LABEL, label, lines = 1).apply {
+                gravity = Gravity.CENTER
+                background = Ui.ripple(context, null, 19)
+                setOnClickListener {
+                    if (i == this@Segmented.selected) return@setOnClickListener
+                    Haptics.tick(this)
+                    select(i, animate = true)
+                    onPick(i)
+                }
+                this@Segmented.addView(this, LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
+            }
+        }
+        paintWords()
+    }
+
+    /** Shows [index] as chosen (from outside: the same choice made elsewhere). */
+    fun select(index: Int, animate: Boolean) {
+        if (index == selected && animator == null && position == index.toFloat()) return
+        selected = index
+        animator?.cancel()
+        animator = null
+        if (!animate || !isAttachedToWindow || !Motion.enabled(context)) {
+            position = index.toFloat()
+            paintWords()
+            invalidate()
+            return
+        }
+        animator = ValueAnimator.ofFloat(position, index.toFloat()).apply {
+            duration = Motion.SHORT
+            interpolator = Motion.standard
+            addUpdateListener {
+                position = it.animatedValue as Float
+                paintWords()
+                invalidate()
+            }
             start()
         }
     }
 
-    /** Children of [group] come in one after another (only for short lists: a sheet's rows). */
-    fun stagger(group: ViewGroup, step: Long = 22, max: Int = 10) {
-        for (i in 0 until group.childCount) {
-            val c = group.getChildAt(i)
-            if (c.visibility != View.VISIBLE) continue
-            if (i >= max) break
-            fadeIn(c, fromDy = 10, delay = i * step, duration = NORMAL)
+    private fun paintWords() {
+        views.forEachIndexed { i, tv ->
+            val near = (1f - kotlin.math.abs(position - i)).coerceIn(0f, 1f)
+            tv.setTextColor(androidx.core.graphics.ColorUtils.blendARGB(plainInk, chosenInk, near))
+            tv.contentDescription = names[i] + if (i == selected) ", selected" else ""
         }
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        val part = width.toFloat() / views.size
+        val rtl = layoutDirection == View.LAYOUT_DIRECTION_RTL
+        val x = if (rtl) width - part * (position + 1) else part * position
+        rect.set(x + inset, inset, x + part - inset, height - inset)
+        val r = rect.height() / 2
+        canvas.drawRoundRect(rect, r, r, fill)
+    }
+
+    override fun onDetachedFromWindow() {
+        animator?.cancel()
+        animator = null
+        position = selected.toFloat()
+        super.onDetachedFromWindow()
     }
 }
 
@@ -1139,36 +1493,51 @@ class MaxWidthLayout @JvmOverloads constructor(context: Context, attrs: android.
 }
 
 /**
- * Grey shapes where content is about to appear (news, lists), gently pulsing, instead of a
- * spinner. [rows] rows of a picture-less line pair, or with a picture on the right.
+ * Grey shapes where the news is about to appear, gently pulsing, instead of a spinner: [cards] story
+ * cards as they will be (a picture across the top, the site, two lines of headline), so the page
+ * keeps its shape when the stories arrive.
  */
-class SkeletonView(context: Context, private val rows: Int = 4, private val picture: Boolean = true) : View(context) {
+class SkeletonView(context: Context, private val cards: Int = 2) : View(context) {
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Ui.color(context, R.color.skeleton) }
     private val rect = RectF()
     private val d = resources.displayMetrics.density
     private var pulse: ObjectAnimator? = null
 
+    // A flat shape's fading needs no picture of itself first (a slow graphics chip).
+    override fun hasOverlappingRendering() = false
+
+    private fun pictureHeight(width: Int) = width * 9f / 16f
+
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-        setMeasuredDimension(MeasureSpec.getSize(widthMeasureSpec), (rows * 88 * d).toInt())
+        val w = MeasureSpec.getSize(widthMeasureSpec)
+        setMeasuredDimension(w, (cards * (pictureHeight(w) + (TEXT_DP + GAP_DP) * d)).toInt())
     }
 
     override fun onDraw(canvas: Canvas) {
-        val pad = 16 * d
-        val r = 6 * d
-        for (i in 0 until rows) {
-            val top = i * 88 * d + 14 * d
-            val right = if (picture) width - pad - 72 * d - 12 * d else width - pad
-            rect.set(pad, top, right, top + 14 * d)
-            canvas.drawRoundRect(rect, r, r, paint)
-            rect.set(pad, top + 22 * d, pad + (right - pad) * 0.7f, top + 36 * d)
-            canvas.drawRoundRect(rect, r, r, paint)
-            rect.set(pad, top + 48 * d, pad + 90 * d, top + 58 * d)
-            canvas.drawRoundRect(rect, r, r, paint)
-            if (picture) {
-                rect.set(width - pad - 72 * d, top, width - pad, top + 60 * d)
-                canvas.drawRoundRect(rect, 10 * d, 10 * d, paint)
-            }
+        val picture = pictureHeight(width)
+        val inset = Ui.ROW_INSET * d
+        val small = Ui.R_XSMALL * d
+        val big = Ui.R_MEDIUM * d
+        for (i in 0 until cards) {
+            val top = i * (picture + (TEXT_DP + GAP_DP) * d) + GAP_DP / 2 * d
+            rect.set(0f, top, width.toFloat(), top + picture)
+            canvas.drawRoundRect(rect, big, big, paint)
+            var y = top + picture + 12 * d
+            rect.set(inset, y, inset + 120 * d, y + 14 * d)
+            canvas.drawRoundRect(rect, small, small, paint)
+            y += 22 * d
+            rect.set(inset, y, width - inset, y + 18 * d)
+            canvas.drawRoundRect(rect, small, small, paint)
+            y += 26 * d
+            rect.set(inset, y, inset + (width - 2 * inset) * 0.7f, y + 18 * d)
+            canvas.drawRoundRect(rect, small, small, paint)
         }
+    }
+
+    private companion object {
+        /** The site and the headline under the picture, and the gap between two cards (dp). */
+        const val TEXT_DP = 106
+        const val GAP_DP = 12
     }
 
     /** Pulses only while it can be seen (2.6): hidden, or with Swift in the background, it costs nothing. */

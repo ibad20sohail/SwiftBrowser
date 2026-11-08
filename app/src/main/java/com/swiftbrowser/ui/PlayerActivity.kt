@@ -11,6 +11,7 @@ import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.Rect
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.RippleDrawable
 import android.media.AudioManager
 import android.net.Uri
 import android.os.Bundle
@@ -119,10 +120,20 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
     private lateinit var hudText: TextView
     private lateinit var hudSub: TextView
     private lateinit var hudLevel: ProgressBar
+
+    /** The icon the readout shows, and that it is fading out. */
+    private var hudIconShown = 0
+    private var hudLeaving = false
     private lateinit var spinner: LoadingIndicator
     private lateinit var topBar: LinearLayout
     private lateinit var titleView: TextView
     private lateinit var countView: TextView
+
+    // The title and "2 of 7": beside the buttons, or on a line of their own under them (see arrangeUpright).
+    private lateinit var titleBox: LinearLayout
+    private lateinit var topRow: LinearLayout
+    private lateinit var titleGap: View
+    private var titleBelow = false
     private lateinit var controls: LinearLayout
     private lateinit var seek: SwiftSlider
     private lateinit var elapsed: TextView
@@ -147,6 +158,10 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
     private lateinit var nextButton: ImageButton
     private lateinit var speedButton: ImageButton
     private var chipsShown = ""
+
+    /** The chips showing, by their icon, and those before the row was made again: only a new one fades in. */
+    private var chipKinds = HashSet<Int>()
+    private var chipKindsBefore: Set<Int> = emptySet()
     private var problem: View? = null
 
     // 3.0.3: menus in a panel beside the video (PlayerPanel); Back closes it first.
@@ -251,6 +266,12 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
     /** The cover's colours shown (null: Swift's own), and the cover they were worked out from. */
     private var coverScheme: CoverColours.Scheme? = null
     private var coverFor: Any? = null
+
+    /** What the cover shows: its picture, or the accent the picture for no cover was made in (null: nothing yet). */
+    private var coverDrawn: Any? = null
+
+    /** A song started without its picture yet: the last one stays a moment (see showCover). */
+    private var coverWaiting = false
 
     /** The music screen's colours changing to another song's (300 ms). */
     private val coverFade = android.animation.ValueAnimator.ofFloat(0f, 1f).apply {
@@ -578,11 +599,16 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
     private fun updateBoost() {
         val b = LocalPlayback.boost
         if (b <= 0f) {
-            boostBadge.visibility = View.GONE
+            Motion.pop(boostBadge, false)
             return
         }
-        boostBadge.text = "Boost ${100 + (b * 100).roundToInt()}%"
-        boostBadge.visibility = View.VISIBLE
+        setIfChanged(boostBadge, "Boost ${100 + (b * 100).roundToInt()}%")
+        Motion.pop(boostBadge, true)
+    }
+
+    /** Text that changes while watched: set only when it is different (setting it measures the screen again). */
+    private fun setIfChanged(v: TextView, value: CharSequence) {
+        if (!TextUtils.equals(v.text, value)) v.text = value
     }
 
     override fun onReleased() {
@@ -652,8 +678,8 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
             Ui.size(this, Ui.Type.CAPTION, keepFont = true)
             typeface = Ui.medium(Ui.Type.CAPTION)
             Ui.steadyFigures(this)
-            background = Ui.ripple(this@PlayerActivity, Ui.shape(this@PlayerActivity, 0x99000000.toInt(), 12), 12)
-            setPadding(dp(10), dp(4), dp(10), dp(5))
+            background = Ui.ripple(this@PlayerActivity, Ui.shape(this@PlayerActivity, OverPicture.FILL_SOFT, Ui.R_SMALL), Ui.R_SMALL, Ui.RIPPLE_ON_DARK)
+            setPadding(dp(8), dp(4), dp(8), dp(4))
             contentDescription = "Volume boost on. Tap to turn it off"
             visibility = View.GONE
             setOnClickListener {
@@ -663,14 +689,15 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
             }
         }
         root.addView(boostBadge, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.END).apply {
-            setMargins(0, dp(64), dp(14), 0)
+            setMargins(0, dp(64), dp(16), 0)
         })
 
         unlockButton = ImageButton(this).apply {
             // 3.0.4: the lock filled while locked (outlined on "Lock the screen"), as Swift's icons are when on.
             setImageResource(R.drawable.ic_lock_on)
             imageTintList = ColorStateList.valueOf(Color.WHITE)
-            background = Ui.circle(0x99000000.toInt())
+            background = Ui.ripple(this@PlayerActivity, Ui.circle(OverPicture.FILL_SOFT), UNLOCK_DP / 2, Ui.RIPPLE_ON_DARK)
+            Ui.pressable(this, Motion.PRESS_ICON)
             contentDescription = "Unlock the screen"
             visibility = View.GONE
             setOnClickListener {
@@ -678,7 +705,7 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
                 setLocked(false)
             }
         }
-        root.addView(unlockButton, FrameLayout.LayoutParams(dp(52), dp(52), Gravity.START or Gravity.CENTER_VERTICAL).apply { marginStart = dp(20) })
+        root.addView(unlockButton, FrameLayout.LayoutParams(dp(UNLOCK_DP), dp(UNLOCK_DP), Gravity.START or Gravity.CENTER_VERTICAL).apply { marginStart = dp(20) })
         panel = PlayerPanel(root, this)
         setContentView(root)
     }
@@ -688,10 +715,12 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
     private fun button(icon: Int, label: String, click: () -> Unit): ImageButton = ImageButton(this, null, 0, R.style.Swift_ToolbarButton).apply {
         setImageResource(icon)
         contentDescription = label
+        // A ripple that can be seen on the dark picture also in the light look (paintText follows the screen's colours).
+        background = Ui.rippleBorderless(this@PlayerActivity, Ui.RIPPLE_ON_DARK)
         setOnClickListener { click() }
         // 3.0.3: holding one shows its name, and a press springs.
         androidx.appcompat.widget.TooltipCompat.setTooltipText(this, label)
-        Ui.pressable(this, 0.88f)
+        Ui.pressable(this, Motion.PRESS_ICON, morph = false)
         icons += this
     }
 
@@ -699,7 +728,7 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         hudIcon = ImageView(this)
         hudText = TextView(this).apply {
             setTextColor(Color.WHITE)
-            Ui.size(this, Ui.Type.TITLE, keepFont = true)
+            Ui.size(this, Ui.Type.HEADING, keepFont = true)
             typeface = Ui.MEDIUM
             gravity = Gravity.CENTER
             Ui.steadyFigures(this)
@@ -712,16 +741,18 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         }
         hudLevel = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
             max = 1000
-            progressTintList = ColorStateList.valueOf(Ui.accent(this@PlayerActivity))
+            progressDrawable = androidx.core.content.ContextCompat.getDrawable(this@PlayerActivity, R.drawable.progress_rounded)
+            // The dark look's accent: the box is dark also in the light look.
+            progressTintList = ColorStateList.valueOf(Palette.colorFor(this@PlayerActivity, true, Looks.accent.primary))
             progressBackgroundTintList = ColorStateList.valueOf(0x55FFFFFF)
         }
         hud = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
-            background = Ui.shape(this@PlayerActivity, 0xB3000000.toInt(), Ui.R_MEDIUM)
-            setPadding(dp(22), dp(14), dp(22), dp(14))
+            background = Ui.shape(this@PlayerActivity, OverPicture.FILL_HUD, Ui.R_MEDIUM)
+            setPadding(dp(20), dp(12), dp(20), dp(12))
             visibility = View.GONE
-            addView(hudIcon, LinearLayout.LayoutParams(dp(28), dp(28)))
+            addView(hudIcon, LinearLayout.LayoutParams(dp(24), dp(24)))
             addView(hudText, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6) })
             addView(hudSub)
             addView(hudLevel, LinearLayout.LayoutParams(dp(120), dp(4)).apply { topMargin = dp(10) })
@@ -736,7 +767,7 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
     private fun buildTopBar() {
         titleView = TextView(this).apply {
             Ui.size(this, Ui.Type.HEADING, keepFont = true)
-            typeface = Ui.MEDIUM
+            typeface = Ui.medium(Ui.Type.HEADING)
             isSingleLine = true
             ellipsize = TextUtils.TruncateAt.END
         }
@@ -753,25 +784,30 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         subtitlesButton = button(R.drawable.ic_subtitles, "Sound and subtitles") { tracksPanel() }
         playlistButton = button(R.drawable.ic_view_list, "Playlist") { playlistPanel() }
         val size = dp(48)
+        titleBox = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(8), dp(12), dp(4), 0)
+            addView(titleView)
+            addView(countView)
+        }
+        // Keeps the buttons at the end while the title is on the line under them.
+        titleGap = View(this).apply { visibility = View.GONE }
+        topRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.TOP
+            addView(button(R.drawable.ic_back, "Back") { close() }, LinearLayout.LayoutParams(size, size))
+            addView(titleGap, LinearLayout.LayoutParams(0, 1, 1f))
+            addView(titleBox, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            addView(subtitlesButton, LinearLayout.LayoutParams(size, size))
+            addView(rotateButton, LinearLayout.LayoutParams(size, size))
+            addView(playlistButton, LinearLayout.LayoutParams(size, size))
+            addView(button(R.drawable.ic_more, "More") { morePanel() }, LinearLayout.LayoutParams(size, size))
+        }
         topBar = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             // Room below for the shade to fade out, so the title reads over any picture.
             setPadding(dp(4), dp(4), dp(4), dp(36))
-            addView(LinearLayout(this@PlayerActivity).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.TOP
-                addView(button(R.drawable.ic_back, "Back") { close() }, LinearLayout.LayoutParams(size, size))
-                addView(LinearLayout(this@PlayerActivity).apply {
-                    orientation = LinearLayout.VERTICAL
-                    setPadding(dp(8), dp(12), dp(4), 0)
-                    addView(titleView)
-                    addView(countView)
-                }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-                addView(subtitlesButton, LinearLayout.LayoutParams(size, size))
-                addView(rotateButton, LinearLayout.LayoutParams(size, size))
-                addView(playlistButton, LinearLayout.LayoutParams(size, size))
-                addView(button(R.drawable.ic_more, "More") { morePanel() }, LinearLayout.LayoutParams(size, size))
-            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            addView(topRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
             // 3.0.4: the chips on a line of their own under the title, as wide as the bar. Upright, the
             // title's column beside four buttons left them about 60 dp ("A 6:39 · tap to set the end" was cut short).
             addView(chips, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
@@ -787,14 +823,20 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
             Ui.size(this, Ui.Type.CAPTION, keepFont = true)
             Ui.steadyFigures(this)
             gravity = Gravity.CENTER_VERTICAL or Gravity.START
-            minWidth = dp(48)
+            isSingleLine = true
+            // As high as the length beside it, so the two read on one line.
+            minHeight = dp(48)
+            setPadding(0, dp(8), 0, 0)
         }
         length = TextView(this).apply {
             Ui.size(this, Ui.Type.CAPTION, keepFont = true)
             Ui.steadyFigures(this)
             gravity = Gravity.CENTER_VERTICAL or Gravity.END
-            minWidth = dp(48)
-            minHeight = dp(40)
+            isSingleLine = true
+            // The seek bar's finger area covers its lower part; the taller box keeps a place to tap.
+            minHeight = dp(48)
+            setPadding(0, dp(8), 0, 0)
+            background = Ui.ripple(this@PlayerActivity, null, Ui.R_SMALL, Ui.RIPPLE_ON_DARK)
             contentDescription = "Length (tap for the time left)"
             setOnClickListener {
                 showRemaining = !showRemaining
@@ -803,10 +845,13 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         }
         // 3.0.4: Swift's own slider (a SeekBar still); its colours and look follow the screen (applyMode).
         seek = SwiftSlider(this, SwiftSlider.Style.VIDEO).apply {
+            // Its edges where the times' are, and a 40 dp finger area that looks no taller (no TouchDelegate:
+            // it would aim the touch at the bar's middle and the video would jump).
+            setPadding(dp(10), dp(8), dp(10), dp(8))
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onProgressChanged(bar: SeekBar, value: Int, fromUser: Boolean) {
                     if (!fromUser) return
-                    elapsed.text = time(value.toLong())
+                    setIfChanged(elapsed, time(value.toLong()))
                     previewAt(value.toLong())
                 }
 
@@ -827,7 +872,7 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
             scaleType = ImageView.ScaleType.CENTER
             setImageDrawable(playIcon)
             contentDescription = "Play"
-            Ui.pressable(this, 0.92f)
+            Ui.pressable(this, Motion.PRESS_ICON)
             setOnClickListener {
                 LocalPlayback.toggle()
                 scheduleHide()
@@ -841,8 +886,9 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         fitButton = button(R.drawable.ic_aspect_ratio, "Picture size") { nextFit() }
         shuffleButton = button(R.drawable.ic_shuffle, "Shuffle") { toggleShuffle() }
         repeatButton = button(R.drawable.ic_repeat, "Repeat") { nextRepeat() }
-        previousButton = button(R.drawable.ic_media_previous, "Previous") { LocalPlayback.previous() }
-        nextButton = button(R.drawable.ic_media_next, "Next") { LocalPlayback.next() }
+        // Bigger glyphs than the buttons around them, so the play group stands out.
+        previousButton = button(R.drawable.ic_media_previous, "Previous") { LocalPlayback.previous() }.apply { bigGlyph(this) }
+        nextButton = button(R.drawable.ic_media_next, "Next") { LocalPlayback.next() }.apply { bigGlyph(this) }
         speedButton = button(R.drawable.ic_speed, "Playback speed") { speedPanel() }
         val small = dp(44)
         // 3.0.3: previous and next beside play (skipping back and on is the double taps' alone), at
@@ -865,19 +911,20 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             addView(start, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-            addView(previousButton, LinearLayout.LayoutParams(dp(48), dp(48)))
-            addView(playButton, LinearLayout.LayoutParams(dp(60), dp(60)).apply { setMargins(dp(18), 0, dp(18), 0) })
-            addView(nextButton, LinearLayout.LayoutParams(dp(48), dp(48)))
+            addView(previousButton, LinearLayout.LayoutParams(small, small))
+            addView(playButton, LinearLayout.LayoutParams(dp(60), dp(60)).apply { setMargins(dp(8), 0, dp(8), 0) })
+            addView(nextButton, LinearLayout.LayoutParams(small, small))
             addView(end, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         }
         // The times above a bar as wide as the screen (3.0.2: the bar no longer shares its line).
         val times = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(8), 0, dp(4), 0)
-            addView(elapsed)
+            setPadding(dp(10), 0, dp(10), 0)
+            // A fixed width: setting the time then doesn't lay the screen out again every half second.
+            addView(elapsed, LinearLayout.LayoutParams(dp(TIME_DP), ViewGroup.LayoutParams.WRAP_CONTENT))
             addView(View(this@PlayerActivity), LinearLayout.LayoutParams(0, 1, 1f))
-            addView(length)
+            addView(length, LinearLayout.LayoutParams(dp(TIME_DP), ViewGroup.LayoutParams.WRAP_CONTENT))
         }
         frameBar = buildFrameBar()
         controls = LinearLayout(this).apply {
@@ -889,12 +936,21 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
                 bottomMargin = dp(6)
             })
             // Pulled down onto the bar, so the times read as the bar's own (the length keeps its tap room).
-            // 3.0.4: 13 dp: the new bar is 6 dp taller (its handle grows while dragged); its track stays where it was.
-            addView(times, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = -dp(13) })
-            addView(seek, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            // 3.0.4: 12 dp: the new bar is 6 dp taller (its handle grows while dragged); its track stays where it was.
+            addView(times, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = -dp(12) })
+            // Its finger area reaches over what is around it, taking no more room.
+            addView(seek, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                topMargin = -dp(8)
+                bottomMargin = -dp(8)
+            })
             addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(2) })
         }
         root.addView(controls, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM))
+    }
+
+    private fun bigGlyph(b: ImageButton) {
+        b.scaleType = ImageView.ScaleType.FIT_CENTER
+        b.setPadding(dp(8), dp(8), dp(8), dp(8))
     }
 
     /**
@@ -906,6 +962,39 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         for (v in listOf(lockButton, fitButton, rotateButton, subtitlesButton, speedButton)) v.visibility = if (video) View.VISIBLE else View.GONE
         for (v in listOf(shuffleButton, repeatButton)) v.visibility = if (video) View.GONE else View.VISIBLE
         updateSteps()
+        arrangeUpright()
+    }
+
+    /**
+     * Upright the row at the bottom fits a 360 dp phone with smaller gaps beside play. Over a video
+     * the title then has a line of its own under the buttons, starting where the chips do (about
+     * twelve letters fit beside four buttons). Turned, and on the music screen, as it always was.
+     */
+    private fun arrangeUpright() {
+        val upright = resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT
+        val gap = dp(if (upright) 8 else 18)
+        (playButton.layoutParams as? LinearLayout.LayoutParams)?.let { lp ->
+            if (lp.leftMargin != gap) {
+                lp.setMargins(gap, 0, gap, 0)
+                playButton.layoutParams = lp
+            }
+        }
+        val below = upright && videoMode
+        if (below == titleBelow) return
+        titleBelow = below
+        (titleBox.parent as? ViewGroup)?.removeView(titleBox)
+        titleGap.visibility = if (below) View.VISIBLE else View.GONE
+        titleBox.setPadding(dp(8), if (below) 0 else dp(12), dp(4), 0)
+        if (below) {
+            topBar.addView(titleBox, 1, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = dp(48) })
+        } else {
+            topRow.addView(titleBox, 2, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        }
+        // The boost's sign keeps clear of the title's line.
+        (boostBadge.layoutParams as? FrameLayout.LayoutParams)?.let { lp ->
+            lp.topMargin = dp(if (below) 96 else 64)
+            boostBadge.layoutParams = lp
+        }
     }
 
     /**
@@ -932,7 +1021,8 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         val soundDelay = LocalPlayback.soundDelayMs
         val subtitlesOn = subFile != null || p.currentTracks.isTypeSelected(C.TRACK_TYPE_TEXT)
         // 3.0.4: the subtitles button is filled while subtitles show, as Swift's icons are when on.
-        OnIcons.show(subtitlesButton, R.drawable.ic_subtitles, subtitlesOn)
+        Motion.swapIcon(subtitlesButton, OnIcons.of(R.drawable.ic_subtitles, subtitlesOn))
+        OnIcons.show(speedButton, R.drawable.ic_speed, abs(speed - 1f) > 0.01f)
         val subChip = if (videoMode && subtitlesOn && subDelay != 0L) "Subtitles ${Delays.label(subDelay)}" else null
         val soundChip = if (videoMode && soundDelay != 0L) "Sound ${Delays.label(soundDelay)}" else null
         // 3.0.4: night sound, while it is on, and the part repeated (A-B) or its start waiting for an end.
@@ -947,6 +1037,8 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         val key = "$speed|$sleep|$subChip|$soundChip|$night|$loopChip|$videoMode"
         if (key == chipsShown) return
         chipsShown = key
+        chipKindsBefore = chipKinds
+        chipKinds = HashSet()
         chips.removeAllViews()
         // First, so it is in sight to be tapped.
         if (loopChip != null) {
@@ -990,13 +1082,8 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         chips.visibility = if (chips.childCount > 0) View.VISIBLE else View.GONE
     }
 
-    private fun chip(icon: Int, text: String, description: String, onTap: () -> Unit, onReset: () -> Unit): TextView = TextView(this).apply {
-        // 3.0.5: on the music screen a tone that goes with the cover (they ignored its colours).
-        val fg = if (videoMode) Color.WHITE else coverScheme?.onTrack ?: Palette.color(this@PlayerActivity, R.color.text_primary)
-        this.text = text
-        setTextColor(fg)
-        Ui.size(this, Ui.Type.CAPTION, keepFont = true)
-        typeface = Ui.medium(Ui.Type.CAPTION)
+    private fun chip(icon: Int, text: String, description: String, onTap: () -> Unit, onReset: () -> Unit): TextView = chipPill(text).apply {
+        val fg = chipInk()
         // 3.0.5: A-B, the sleep timer and the delays count while watched.
         Ui.steadyFigures(this)
         isSingleLine = true
@@ -1004,10 +1091,8 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         ellipsize = TextUtils.TruncateAt.END
         val mark = Ui.icon(this@PlayerActivity, icon, fg)?.mutate()?.apply { setBounds(0, 0, dp(14), dp(14)) }
         setCompoundDrawablesRelative(mark, null, null, null)
-        compoundDrawablePadding = dp(5)
-        val fill = if (videoMode) 0x33FFFFFF else coverScheme?.track ?: Palette.color(this@PlayerActivity, R.color.surface_alt)
-        background = Ui.ripple(this@PlayerActivity, Ui.shape(this@PlayerActivity, fill, 14), 14)
-        setPadding(dp(10), dp(5), dp(11), dp(6))
+        compoundDrawablePadding = dp(4)
+        setPadding(dp(8), 0, dp(12), 0)
         contentDescription = description
         setOnClickListener { onTap() }
         setOnLongClickListener {
@@ -1015,6 +1100,20 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
             true
         }
         layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(6) }
+        // Only a chip that wasn't there fades in: the row is made again whenever one changes.
+        chipKinds += icon
+        if (icon !in chipKindsBefore) {
+            alpha = 0f
+            Motion.anim(this, Motion.SHORT, Motion.enter).alpha(1f).start()
+        }
+    }
+
+    /** On the music screen a tone that goes with the cover (chips used to ignore its colours). */
+    private fun chipInk(): Int = if (videoMode) Color.WHITE else coverScheme?.onTrack ?: Palette.color(this, R.color.text_primary)
+
+    private fun chipPill(text: String): TextView {
+        val fill = if (videoMode) OverPicture.TINT_CHIP else coverScheme?.track ?: Palette.color(this, R.color.surface_alt)
+        return OverPicture.pill(this, text, Ui.Type.CAPTION, chipInk(), fill, CHIP_DP, Ui.R_XSMALL, OverPicture.rippleOf(chipInk()))
     }
 
     /** Video (black, controls over the picture) or music (Swift's colours, the cover, controls that stay). */
@@ -1035,9 +1134,11 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         music.visibility = if (video) View.GONE else View.VISIBLE
         // 3.0.2: deeper shades (as VLC's), so the controls read over a bright picture; the rest of
         // the picture is left alone (no dimming, no blur).
-        topBar.background = if (video) GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(0xCC000000.toInt(), 0)) else null
-        controls.background = if (video) GradientDrawable(GradientDrawable.Orientation.BOTTOM_TOP, intArrayOf(0xE0000000.toInt(), 0x99000000.toInt(), 0)) else null
-        controls.setPadding(dp(8), if (video) dp(44) else dp(8), dp(8), dp(10))
+        topBar.background = if (video) OverPicture.shadeTop() else null
+        controls.background = if (video) OverPicture.shadeBottom() else null
+        // Music: everything 28 dp from the sides, as its title is, and clear of the phone's edge.
+        val sides = dp(if (video) 8 else 18)
+        controls.setPadding(sides, if (video) dp(44) else dp(8), sides, if (video) dp(10) else dp(24))
         // Over a video a light ring; on the music screen the accent's round button (3.0.4: or the cover's colour).
         playButton.background = if (video) {
             GradientDrawable().apply {
@@ -1057,7 +1158,7 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
             seek.setColours(Palette.colorFor(this, true, R.color.accent), 0x40FFFFFF, Color.WHITE, 0x66FFFFFF)
             // White on a dark circle, so it reads on any picture.
             spinner.colour = Color.WHITE
-            spinner.container = 0x66000000
+            spinner.container = OverPicture.FILL_SPINNER
         } else {
             // 3.0.4: Swift's colours, or the song's cover's, at once (another song's fade in, see showScheme);
             // the part played a wave.
@@ -1086,7 +1187,12 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
     /** The screen's text and icons in [fg], the quieter lines in [muted] (3.0.4: and the A-B ticks in [fg]). */
     private fun paintText(fg: Int, muted: Int) {
         val tint = ColorStateList.valueOf(fg)
-        for (b in icons) b.imageTintList = tint
+        val ripple = ColorStateList.valueOf(OverPicture.rippleOf(fg))
+        for (b in icons) {
+            b.imageTintList = tint
+            (b.background as? RippleDrawable)?.setColor(ripple)
+        }
+        (length.background as? RippleDrawable)?.setColor(ripple)
         titleView.setTextColor(fg)
         countView.setTextColor(muted)
         elapsed.setTextColor(fg)
@@ -1210,7 +1316,7 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         music.orientation = if (landscape) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
         music.gravity = Gravity.CENTER
         val top = dp(64)
-        val bottom = dp(150)
+        val bottom = dp(164)
         val side = if (landscape) {
             (dm.heightPixels - top - bottom).coerceAtLeast(dp(96))
         } else {
@@ -1291,9 +1397,11 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
                 e.stream && !e.incognito -> UrlUtils.host(e.uri.toString())?.removePrefix("www.") ?: "Music"
                 else -> "Music"
             }
-            songTitle.text = LocalPlayback.displayTitle()
-            songArtist.text = LocalPlayback.tagArtist.orEmpty()
-            songArtist.visibility = if (songArtist.text.isNullOrBlank()) View.GONE else View.VISIBLE
+            // Another song's words cross-fade, as its colours do (the same words do nothing).
+            Motion.swapText(songTitle, LocalPlayback.displayTitle())
+            val artist = LocalPlayback.tagArtist.orEmpty()
+            songArtist.visibility = if (artist.isBlank()) View.GONE else View.VISIBLE
+            Motion.swapText(songArtist, artist)
             showCover()
         }
         countView.text = position.orEmpty()
@@ -1303,8 +1411,39 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         updateChips()
     }
 
+    /**
+     * A song's picture is read after the song starts: until it comes the last one stays a moment (as
+     * the colours do), so a change of song fades once, not to the empty picture and back.
+     */
     private fun showCover() {
         val art = LocalPlayback.art
+        if (art != null) {
+            handler.removeCallbacks(coverNone)
+            coverWaiting = false
+            drawCover(art)
+        } else if (coverDrawn is android.graphics.Bitmap) {
+            if (!coverWaiting) {
+                coverWaiting = true
+                handler.postDelayed(coverNone, COVER_WAIT_MS)
+            }
+        } else {
+            drawCover(null)
+        }
+        updateCoverColours()
+    }
+
+    /** No picture came for the song: the one for no cover. */
+    private val coverNone = Runnable {
+        coverWaiting = false
+        if (LocalPlayback.art == null) drawCover(null)
+    }
+
+    /** The cover shows [art] (null: none); nothing happens unless that changes. A real change fades in. */
+    private fun drawCover(art: android.graphics.Bitmap?) {
+        val key: Any = art ?: Ui.accentContainer(this)
+        if (key == coverDrawn) return
+        val first = coverDrawn == null
+        coverDrawn = key
         if (art != null) {
             cover.background = Ui.shape(this, Palette.color(this, R.color.surface_alt), Ui.R_LARGE)
             cover.scaleType = ImageView.ScaleType.CENTER_CROP
@@ -1322,7 +1461,11 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
             cover.imageTintList = null
             cover.setImageDrawable(NoCoverArt(Tones.mix(soft, ink, 0.08), Ui.icon(this, R.drawable.ic_music_note, Tones.mix(ink, soft, 0.3))!!))
         }
-        updateCoverColours()
+        if (!first && LocalPlayback.screenVisible && cover.isShown) {
+            cover.animate().cancel()
+            cover.alpha = 0f
+            Motion.anim(cover, Motion.NORMAL).alpha(1f).withLayer().start()
+        }
     }
 
     /**
@@ -1355,14 +1498,16 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         val accent = if (videoMode || musicTo[MUSIC_ACCENT] == 0) Ui.accent(this) else musicTo[MUSIC_ACCENT]
         val shuffle = p.shuffleModeEnabled
         // 3.0.4: on, shuffle and repeat are also Google's filled ones.
-        OnIcons.show(shuffleButton, R.drawable.ic_shuffle, shuffle)
+        Motion.swapIcon(shuffleButton, OnIcons.of(R.drawable.ic_shuffle, shuffle), if (shuffle) 1f else 0.6f)
         shuffleButton.imageTintList = ColorStateList.valueOf(if (shuffle) accent else fg)
-        shuffleButton.alpha = if (shuffle) 1f else 0.6f
         shuffleButton.contentDescription = if (shuffle) "Shuffle: on" else "Shuffle: off"
         val repeat = p.repeatMode
-        OnIcons.show(repeatButton, if (repeat == Player.REPEAT_MODE_ONE) R.drawable.ic_repeat_one else R.drawable.ic_repeat, repeat != Player.REPEAT_MODE_OFF)
+        Motion.swapIcon(
+            repeatButton,
+            OnIcons.of(if (repeat == Player.REPEAT_MODE_ONE) R.drawable.ic_repeat_one else R.drawable.ic_repeat, repeat != Player.REPEAT_MODE_OFF),
+            if (repeat != Player.REPEAT_MODE_OFF) 1f else 0.6f,
+        )
         repeatButton.imageTintList = ColorStateList.valueOf(if (repeat != Player.REPEAT_MODE_OFF) accent else fg)
-        repeatButton.alpha = if (repeat != Player.REPEAT_MODE_OFF) 1f else 0.6f
         repeatButton.contentDescription = "Repeat: " + repeatLabel(repeat)
     }
 
@@ -1380,15 +1525,15 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
             seek.max = d.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
             seek.progress = pos.toInt()
             seek.secondaryProgress = p.bufferedPosition.toInt()
-            elapsed.text = time(pos)
+            setIfChanged(elapsed, time(pos))
         }
         seek.isEnabled = d > 0 && p.isCurrentMediaItemSeekable
-        length.text = when {
+        setIfChanged(length, when {
             p.isCurrentMediaItemLive -> "Live"
             d <= 0 -> "–:––"
             showRemaining -> "−" + time(d - pos)
             else -> time(d)
-        }
+        })
         updateLoopMarks()
     }
 
@@ -1453,18 +1598,7 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         // 3.0.3: hidden while a panel is open (they come back when it closes).
         if (show && videoMode && panel.isOpen) return
         controlsShown = show
-        for (v in arrayOf<View>(topBar, controls)) {
-            v.animate().cancel()
-            if (show) {
-                if (v.visibility != View.VISIBLE) {
-                    v.alpha = 0f
-                    v.visibility = View.VISIBLE
-                }
-                v.animate().alpha(1f).setDuration(Motion.SHORT).withLayer().start()
-            } else {
-                v.animate().alpha(0f).setDuration(Motion.SHORT).withLayer().withEndAction { if (!controlsShown) v.visibility = View.INVISIBLE }.start()
-            }
-        }
+        OverPicture.bars(topBar, controls, show)
         moveSubtitles()
         placeUpNext()
         if (show) {
@@ -1491,16 +1625,22 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
     }
 
     private val hideUnlock = Runnable {
-        unlockButton.animate().alpha(0f).setDuration(Motion.SHORT).withEndAction {
+        Motion.anim(unlockButton, Motion.SHORT, Motion.exit).alpha(0f).withEndAction {
             unlockButton.visibility = View.GONE
             unlockButton.alpha = 1f
         }.start()
     }
 
     private fun showUnlock() {
+        val coming = unlockButton.visibility != View.VISIBLE
         unlockButton.animate().cancel()
-        unlockButton.alpha = 1f
         unlockButton.visibility = View.VISIBLE
+        if (coming) {
+            unlockButton.alpha = 0f
+            Motion.anim(unlockButton, OverPicture.QUICK_MS, Motion.enter).alpha(1f).start()
+        } else {
+            unlockButton.alpha = 1f
+        }
         handler.removeCallbacks(hideUnlock)
         handler.postDelayed(hideUnlock, 3000)
     }
@@ -1510,12 +1650,24 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
     private fun showHud(icon: Int, text: String, sub: String?, level: Float?, side: Int = 0) {
         handler.removeCallbacks(hideHud)
         placeHud(side)
-        hud.animate().cancel()
-        hud.alpha = 1f
-        hud.visibility = View.VISIBLE
-        hudIcon.setImageDrawable(Ui.icon(this, icon, Color.WHITE))
-        hudText.text = text
-        hudSub.text = sub
+        // Runs on every finger move: an icon and words are set only when they change. Fades in on its first show only.
+        if (hud.visibility != View.VISIBLE) {
+            hudLeaving = false
+            hud.animate().cancel()
+            hud.alpha = 0f
+            hud.visibility = View.VISIBLE
+            Motion.anim(hud, OverPicture.QUICK_MS, Motion.enter).alpha(1f).start()
+        } else if (hudLeaving) {
+            hudLeaving = false
+            hud.animate().cancel()
+            hud.alpha = 1f
+        }
+        if (icon != hudIconShown) {
+            hudIconShown = icon
+            hudIcon.setImageDrawable(Ui.icon(this, icon, Color.WHITE))
+        }
+        setIfChanged(hudText, text)
+        setIfChanged(hudSub, sub.orEmpty())
         hudSub.visibility = if (sub == null) View.GONE else View.VISIBLE
         if (level == null) {
             hudLevel.visibility = View.GONE
@@ -1541,7 +1693,9 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
     }
 
     private val hideHud = Runnable {
-        hud.animate().alpha(0f).setDuration(Motion.SHORT).withEndAction {
+        hudLeaving = true
+        Motion.anim(hud, Motion.SHORT, Motion.exit).alpha(0f).withEndAction {
+            hudLeaving = false
             hud.visibility = View.GONE
             hud.alpha = 1f
         }.start()
@@ -1592,6 +1746,11 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         LocalPlayback.seekBy(side * step)
         showHud(if (side < 0) R.drawable.ic_fast_rewind else R.drawable.ic_fast_forward, PlayerRules.runLabel(side, tapTotal), null, null, side)
         hideHudSoon()
+        // The icon nudges toward the skip, so a tap that only changes the count is still seen.
+        hudIcon.animate().cancel()
+        Motion.anim(hudIcon, OverPicture.NUDGE_OUT_MS).translationX(Ui.dpf(this, OverPicture.NUDGE_DP) * side).withEndAction {
+            Motion.anim(hudIcon, OverPicture.NUDGE_BACK_MS).translationX(0f).start()
+        }.start()
     }
 
     /** 3.0.3: pinching out fills the screen (the black bars are cut off), pinching in fits the whole picture. */
@@ -1701,7 +1860,7 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
                 )
                 if (controlsShown) {
                     seek.progress = seekTarget.toInt()
-                    elapsed.text = time(seekTarget)
+                    setIfChanged(elapsed, time(seekTarget))
                 }
                 previewAt(seekTarget)
             }
@@ -1873,17 +2032,17 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         return LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            background = Ui.shape(this@PlayerActivity, 0x99000000.toInt(), 22)
+            background = Ui.shape(this@PlayerActivity, OverPicture.FILL_SOFT, FRAME_BAR_DP / 2)
             setPadding(dp(2), 0, dp(2), 0)
             visibility = View.GONE
-            addView(back, LinearLayout.LayoutParams(dp(44), dp(44)))
+            addView(back, LinearLayout.LayoutParams(dp(FRAME_BAR_DP), dp(FRAME_BAR_DP)))
             addView(frameTime, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-            addView(on, LinearLayout.LayoutParams(dp(44), dp(44)))
+            addView(on, LinearLayout.LayoutParams(dp(FRAME_BAR_DP), dp(FRAME_BAR_DP)))
             addView(View(this@PlayerActivity).apply { setBackgroundColor(0x40FFFFFF) }, LinearLayout.LayoutParams(dp(1), dp(22)).apply {
                 marginStart = dp(4)
                 marginEnd = dp(2)
             })
-            addView(close, LinearLayout.LayoutParams(dp(44), dp(44)))
+            addView(close, LinearLayout.LayoutParams(dp(FRAME_BAR_DP), dp(FRAME_BAR_DP)))
         }
     }
 
@@ -1984,7 +2143,7 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         frameBar.animate().cancel()
         frameBar.alpha = 0f
         frameBar.visibility = View.VISIBLE
-        frameBar.animate().alpha(1f).setDuration(Motion.SHORT).start()
+        Motion.anim(frameBar, Motion.SHORT, Motion.enter).alpha(1f).start()
         showControls(true)
         // The controls are taller now: what sits above them follows once they are laid out.
         controls.post {
@@ -2002,11 +2161,12 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         syncFrameBack()
         player?.setSeekParameters(seekBefore ?: SeekParameters.DEFAULT)
         seekBefore = null
-        frameBar.animate().cancel()
-        frameBar.visibility = View.GONE
-        controls.post {
-            moveSubtitles()
-            placeUpNext()
+        // The controls get shorter once it has gone: what sits above them follows then.
+        Motion.fadeOut(frameBar, toDy = 0) {
+            controls.post {
+                moveSubtitles()
+                placeUpNext()
+            }
         }
         scheduleHide()
     }
@@ -2018,12 +2178,11 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
 
     // ------------------------------------------------------------------ menus
 
-    private fun choiceRow(ctx: Context, text: String, chosen: Boolean, icon: Int, onClick: () -> Unit): TextView =
-        Sheets.row(ctx, if (chosen) R.drawable.ic_check else icon, text) { onClick() }.apply {
-            if (chosen) {
-                setTextColor(Ui.accent(ctx))
-                setCompoundDrawablesRelativeWithIntrinsicBounds(Ui.icon(ctx, R.drawable.ic_check, Ui.accent(ctx)), null, null, null)
-            }
+    /** A choice in a list of choices: just its words, the one chosen in the accent with ✓ at the row's end. */
+    private fun choiceRow(ctx: Context, text: String, chosen: Boolean, onClick: () -> Unit): TextView =
+        Sheets.row(ctx, R.drawable.ic_check, text) { onClick() }.apply {
+            if (chosen) setTextColor(Ui.accent(ctx))
+            setCompoundDrawablesRelativeWithIntrinsicBounds(null, null, if (chosen) Ui.icon(ctx, R.drawable.ic_check, Ui.accent(ctx)) else null, null)
         }
 
     /** 3.0.3: a menu in the panel beside the video, its content made by [build] in the panel's colours. */
@@ -2122,7 +2281,7 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         after += Sheets.Action(R.drawable.ic_info, "Details") { details() }
         showPanel { ctx ->
             Sheets.column(ctx).apply {
-                addView(Sheets.header(ctx, e.title, sub))
+                addView(Sheets.header(ctx, e.title, sub, lines = 2))
                 // 3.0.5: as in the sheets, no line under the title: space does it.
                 addView(Sheets.actionList(ctx, actions) { a -> picked { a.run() } })
                 // The line under the big buttons, when no row above the switch has drawn it.
@@ -2149,7 +2308,7 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
     private fun switchRow(ctx: Context, icon: Int, text: String, on: Boolean, change: (Boolean) -> Unit): View {
         val sw = SlimSwitch(ctx).apply { setChecked(on, animate = false) }
         val label = Ui.text(ctx, Ui.Type.BODY, text).apply {
-            minHeight = dp(52)
+            minHeight = dp(Ui.ROW_ONE_LINE)
             gravity = Gravity.CENTER_VERTICAL
             setPaddingRelative(dp(24), dp(10), dp(8), dp(10))
             compoundDrawablePadding = dp(20)
@@ -2161,7 +2320,7 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
             gravity = Gravity.CENTER_VERTICAL
             background = Ui.ripple(ctx, null, 0)
             addView(label, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-            addView(sw, LinearLayout.LayoutParams(dp(46), dp(32)).apply { marginEnd = dp(14) })
+            addView(sw, LinearLayout.LayoutParams(dp(46), dp(32)).apply { marginEnd = dp(16) })
             accessibilityDelegate = SwitchRowAccessibility(sw)
             contentDescription = text
             setOnClickListener {
@@ -2191,16 +2350,21 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
             col.addView(Sheets.header(ctx, "Equalizer", "For everything Swift's player plays"))
             val sw = SlimSwitch(ctx).apply { setChecked(PlayerSettings.equalizerOn, animate = false) }
             val controls = ArrayList<View>()
+            var dimmed: Boolean? = null
             fun showOn(on: Boolean) {
                 if (sw.isChecked != on) sw.setChecked(on, animate = true)
-                for (v in controls) v.alpha = if (on) 1f else 0.5f
+                // Dragging a band turns it on over and over: only a real change fades.
+                if (dimmed == !on) return
+                val first = dimmed == null
+                dimmed = !on
+                for (v in controls) if (first) v.alpha = if (on) 1f else 0.5f else Motion.anim(v, Motion.SHORT).alpha(if (on) 1f else 0.5f).start()
             }
             col.addView(LinearLayout(ctx).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                minimumHeight = dp(56)
-                setPadding(dp(24), dp(4), dp(14), dp(4))
-                setBackgroundResource(RowHolder.selectableBackground(ctx))
+                minimumHeight = dp(Ui.ROW_ONE_LINE)
+                setPadding(dp(24), dp(4), dp(16), dp(4))
+                background = Ui.ripple(ctx, null, 0)
                 addView(Ui.text(ctx, Ui.Type.BODY, "On"), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
                 addView(sw, LinearLayout.LayoutParams(dp(46), dp(32)))
                 accessibilityDelegate = SwitchRowAccessibility(sw)
@@ -2241,7 +2405,10 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
             val accent = Ui.accent(ctx)
             val soft = Ui.accentContainer(ctx)
             for (b in 0 until info.bands) {
-                val value = Ui.text(ctx, Ui.Type.CAPTION, "").apply { gravity = Gravity.END or Gravity.CENTER_VERTICAL }
+                val value = Ui.text(ctx, Ui.Type.CAPTION, "").apply {
+                    gravity = Gravity.END or Gravity.CENTER_VERTICAL
+                    Ui.steadyFigures(this)
+                }
                 val bar = SwiftSlider(ctx, SwiftSlider.Style.PANEL).apply {
                     max = ((info.maxLevel - info.minLevel) / 100).coerceAtLeast(1)
                     setColours(accent, soft)
@@ -2268,9 +2435,9 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
                     gravity = Gravity.CENTER_VERTICAL
                     setPadding(dp(24), 0, dp(24), 0)
                     minimumHeight = dp(44)
-                    addView(Ui.text(ctx, Ui.Type.LABEL, EqualizerRules.frequency(info.centres[b])), LinearLayout.LayoutParams(dp(64), ViewGroup.LayoutParams.WRAP_CONTENT))
+                    addView(Ui.text(ctx, Ui.Type.LABEL, EqualizerRules.frequency(info.centres[b])), LinearLayout.LayoutParams(dp(52), ViewGroup.LayoutParams.WRAP_CONTENT))
                     addView(bar, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-                    addView(value, LinearLayout.LayoutParams(dp(60), ViewGroup.LayoutParams.WRAP_CONTENT))
+                    addView(value, LinearLayout.LayoutParams(dp(52), ViewGroup.LayoutParams.WRAP_CONTENT))
                 }
                 controls += line
                 col.addView(line)
@@ -2278,7 +2445,10 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
             showLevels()
             if (info.bass) {
                 col.addView(caption(ctx, "Bass boost"))
-                val value = Ui.text(ctx, Ui.Type.CAPTION, EqualizerRules.bassLabel(PlayerSettings.bassBoost)).apply { gravity = Gravity.END or Gravity.CENTER_VERTICAL }
+                val value = Ui.text(ctx, Ui.Type.CAPTION, EqualizerRules.bassLabel(PlayerSettings.bassBoost)).apply {
+                    gravity = Gravity.END or Gravity.CENTER_VERTICAL
+                    Ui.steadyFigures(this)
+                }
                 val bar = SwiftSlider(ctx, SwiftSlider.Style.PANEL).apply {
                     max = 20
                     progress = PlayerSettings.bassBoost / 50
@@ -2303,7 +2473,7 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
                     setPadding(dp(24), 0, dp(24), 0)
                     minimumHeight = dp(44)
                     addView(bar, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-                    addView(value, LinearLayout.LayoutParams(dp(60), ViewGroup.LayoutParams.WRAP_CONTENT))
+                    addView(value, LinearLayout.LayoutParams(dp(52), ViewGroup.LayoutParams.WRAP_CONTENT))
                 }
                 controls += line
                 col.addView(line)
@@ -2410,13 +2580,13 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
             Sheets.column(ctx).apply {
                 addView(Sheets.header(ctx, "Sleep timer", left))
                 for (m in LocalPlayback.SLEEP_CHOICES) {
-                    addView(Sheets.row(ctx, R.drawable.ic_timer, "In $m minutes") {
+                    addView(choiceRow(ctx, "In $m minutes", false) {
                         panel.close()
                         LocalPlayback.setSleep(m)
                         say("Playing stops in $m minutes")
                     })
                 }
-                addView(Sheets.row(ctx, R.drawable.ic_timer, "At the end of this $kind") {
+                addView(choiceRow(ctx, "At the end of this $kind", false) {
                     panel.close()
                     LocalPlayback.setSleep(LocalPlayback.SLEEP_END)
                     say("Playing stops at the end of this $kind")
@@ -2437,7 +2607,7 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
             Sheets.column(ctx).apply {
                 addView(Sheets.header(ctx, "Turn the screen", "For every video, until you change it"))
                 for (key in PlayerSettings.ROTATIONS) {
-                    addView(choiceRow(ctx, PlayerSettings.rotationLabel(key), key == PlayerSettings.rotation, R.drawable.ic_rotate) {
+                    addView(choiceRow(ctx, PlayerSettings.rotationLabel(key), key == PlayerSettings.rotation) {
                         panel.close()
                         PlayerSettings.rotation = key
                         applyRotation()
@@ -2460,6 +2630,8 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
                     val e = entries[i]
                     h.set(if (i == now) R.drawable.ic_play else if (e.video) R.drawable.ic_movie else R.drawable.ic_music_note, e.title, if (i == now) "Playing now" else null)
                     h.title.setTextColor(if (i == now) accent else text)
+                    // Where the panel's header starts.
+                    h.itemView.setPaddingRelative(dp(24), h.itemView.paddingTop, h.itemView.paddingEnd, h.itemView.paddingBottom)
                 },
                 onClick = { i ->
                     panel.close()
@@ -2586,7 +2758,7 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
             Sheets.column(ctx).apply {
                 addView(Sheets.header(ctx, "Text encoding", "Choose another when letters show as boxes or strange signs"))
                 for ((name, label) in Subtitles.ENCODINGS) {
-                    addView(choiceRow(ctx, label, name.equals(track.encoding, ignoreCase = true), R.drawable.ic_translate) {
+                    addView(choiceRow(ctx, label, name.equals(track.encoding, ignoreCase = true)) {
                         panel.close()
                         val token = subToken
                         LocalPlayback.io.execute {
@@ -2732,7 +2904,7 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
                     s++
                     val f = g.getTrackFormat(t)
                     val name = trackName(f, s, "Sound") + if (!g.isTrackSupported(t, true)) " (your phone can't play it)" else ""
-                    col.addView(choiceRow(ctx, name, g.isTrackSelected(t), R.drawable.ic_volume) {
+                    col.addView(choiceRow(ctx, name, g.isTrackSelected(t)) {
                         panel.close()
                         p.trackSelectionParameters = p.trackSelectionParameters.buildUpon()
                             .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, false)
@@ -2746,7 +2918,7 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         col.addView(Sheets.label(ctx, "Subtitles", top = if (severalSounds) 16 else 12))
         val groups = p.currentTracks.groups.filter { it.type == C.TRACK_TYPE_TEXT }
         val ownOn = subFile == null && !subOff && groups.any { it.isSelected }
-        col.addView(choiceRow(ctx, "Off", subFile == null && !ownOn, R.drawable.ic_close) {
+        col.addView(choiceRow(ctx, "Off", subFile == null && !ownOn) {
             panel.close()
             subtitlesOff()
             LocalPlayback.rememberTracks { it.withSubtitlesOff() }
@@ -2756,7 +2928,7 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
             for (t in 0 until g.length) {
                 n++
                 val f = g.getTrackFormat(t)
-                col.addView(choiceRow(ctx, trackName(f, n, "Subtitles"), subFile == null && !subOff && g.isTrackSelected(t), R.drawable.ic_subtitles) {
+                col.addView(choiceRow(ctx, trackName(f, n, "Subtitles"), subFile == null && !subOff && g.isTrackSelected(t)) {
                     panel.close()
                     useVideoSubtitles(g, t)
                     LocalPlayback.rememberTracks { it.withSubtitles(f.language, f.label) }
@@ -2764,14 +2936,14 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
             }
         }
         for (f in subFiles) {
-            col.addView(choiceRow(ctx, f.name, subFile?.label == f.name, R.drawable.ic_subtitles) {
+            col.addView(choiceRow(ctx, f.name, subFile?.label == f.name) {
                 panel.close()
                 readSubtitles(f)
             })
         }
         for (track in subAdded) {
             if (subFiles.any { it.name == track.label }) continue
-            col.addView(choiceRow(ctx, track.label, subFile === track, R.drawable.ic_subtitles) {
+            col.addView(choiceRow(ctx, track.label, subFile === track) {
                 panel.close()
                 useSubtitles(track)
                 subSources[track]?.let { src -> LocalPlayback.rememberTracks { it.withSubtitleFile(src) } }
@@ -2845,24 +3017,36 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
     private fun timingRow(ctx: Context, name: String, value: () -> Long, set: (Long) -> Unit): View {
         val shown = Ui.text(ctx, Ui.Type.LABEL, "").apply {
             gravity = Gravity.CENTER
-            minHeight = dp(40)
-            background = Ui.ripple(ctx, null, 20)
+            minHeight = dp(TIMING_DP)
+            background = Ui.ripple(ctx, null, TIMING_DP / 2)
             Ui.steadyFigures(this)
         }
-        fun refresh() {
+        // [fade]: a tap on the value, never the steps of a held button (a late fade would put an old value back).
+        fun refresh(fade: Boolean = false) {
             val label = Delays.label(value())
-            shown.text = label
+            if (fade) {
+                Motion.swapText(shown, label)
+            } else {
+                shown.animate().cancel()
+                shown.setTag(R.id.motion_text, null)
+                shown.alpha = 1f
+                shown.text = label
+            }
             shown.contentDescription = "$name: $label. Tap to put it back in time"
         }
         refresh()
         shown.setOnClickListener {
             set(0)
-            refresh()
+            refresh(fade = true)
         }
-        fun pill(sign: String, direction: Int, description: String) = Ui.text(ctx, Ui.Type.TITLE, sign).apply {
-            gravity = Gravity.CENTER
-            background = Ui.ripple(ctx, Ui.shape(ctx, Palette.color(ctx, R.color.surface_alt), 20), 20)
+        fun pill(icon: Int, direction: Int, description: String) = ImageView(ctx).apply {
+            setImageDrawable(Ui.icon(ctx, icon, Palette.color(ctx, R.color.text_primary)))
+            // A 20 dp glyph in the 52 by 40 pill.
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            setPadding(dp(16), dp(10), dp(16), dp(10))
+            background = Ui.ripple(ctx, Ui.shape(ctx, Palette.color(ctx, R.color.surface_alt), TIMING_DP / 2), TIMING_DP / 2)
             contentDescription = description
+            Ui.pressable(this, Motion.PRESS_BUTTON, morph = false)
             holdToRepeat(this) {
                 set(Delays.step(value(), direction))
                 refresh()
@@ -2872,12 +3056,12 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(20), 0, dp(20), dp(4))
-            addView(pill("−", -1, "$name earlier"), LinearLayout.LayoutParams(dp(52), dp(40)))
+            addView(pill(R.drawable.ic_remove, -1, "$name earlier"), LinearLayout.LayoutParams(dp(52), dp(TIMING_DP)))
             addView(shown, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
                 marginStart = dp(8)
                 marginEnd = dp(8)
             })
-            addView(pill("+", 1, "$name later"), LinearLayout.LayoutParams(dp(52), dp(40)))
+            addView(pill(R.drawable.ic_add, 1, "$name later"), LinearLayout.LayoutParams(dp(52), dp(TIMING_DP)))
         }
         return LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
@@ -3140,11 +3324,12 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         if (locked) setLocked(false)
         showControls(true)
         val fg = if (videoMode) Color.WHITE else Palette.color(this, R.color.text_primary)
-        fun pill(text: String, main: Boolean, click: () -> Unit) = Ui.text(this, Ui.Type.LABEL, text, if (main) Ui.onAccent(this) else fg).apply {
-            gravity = Gravity.CENTER
+        fun pill(text: String, main: Boolean, click: () -> Unit) = OverPicture.pill(
+            this, text, Ui.Type.LABEL, if (main) Ui.onAccent(this) else fg, if (main) Ui.accent(this) else Color.TRANSPARENT, 48,
+            ripple = if (videoMode) Ui.RIPPLE_ON_DARK else null, outline = if (main) null else (fg and 0x66FFFFFF),
+        ).apply {
             minWidth = dp(220)
-            setPadding(dp(20), dp(12), dp(20), dp(12))
-            background = Ui.ripple(this@PlayerActivity, Ui.shape(this@PlayerActivity, if (main) Ui.accent(this@PlayerActivity) else Color.TRANSPARENT, 24, if (main) null else (fg and 0x66FFFFFF)), 24)
+            setPadding(dp(20), dp(8), dp(20), dp(8))
             setOnClickListener { click() }
         }
         val panel = LinearLayout(this).apply {
@@ -3157,7 +3342,7 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
             }, LinearLayout.LayoutParams(dp(40), dp(40)))
             addView(Ui.text(this@PlayerActivity, Ui.Type.BODY, message, fg).apply {
                 gravity = Gravity.CENTER
-                setPadding(0, dp(14), 0, dp(18))
+                setPadding(0, dp(16), 0, dp(16))
             })
             val gap = { LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(10) } }
             if (openWith) addView(pill("Open with another app", true) { openWith() }, gap())
@@ -3165,6 +3350,7 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
             if (player?.hasNextMediaItem() == true) addView(pill("Next", false) { LocalPlayback.next() }, gap())
         }
         root.addView(panel, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
+        Motion.fadeIn(panel, fromDy = 8)
         problem = panel
         updatePlaying()
     }
@@ -3244,13 +3430,13 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
     private fun details() {
         val e = LocalPlayback.current ?: return
         val p = player ?: return
-        val lines = ArrayList<String>()
+        val lines = ArrayList<Pair<String, String>>()
         e.file?.let { f ->
-            lines += "Size: ${UrlUtils.formatBytes(f.length())}"
-            if (!e.private) lines += "Folder: ${f.parent}"
+            lines += "Size" to UrlUtils.formatBytes(f.length())
+            if (!e.private) lines += "Folder" to f.parent.orEmpty()
         }
-        if (e.stream && !e.incognito) UrlUtils.host(e.uri.toString())?.let { lines += "From: $it" + if (e.hls) " (stream)" else "" }
-        p.duration.takeIf { it != C.TIME_UNSET && it > 0 }?.let { lines += "Length: ${time(it)}" }
+        if (e.stream && !e.incognito) UrlUtils.host(e.uri.toString())?.let { lines += "From" to it + if (e.hls) " (stream)" else "" }
+        p.duration.takeIf { it != C.TIME_UNSET && it > 0 }?.let { lines += "Length" to time(it) }
         p.videoFormat?.let { v ->
             val rate = v.frameRate
             val fps = when {
@@ -3258,17 +3444,17 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
                 abs(rate - rate.roundToInt()) < 0.01f -> ", ${rate.roundToInt()} frames a second"
                 else -> String.format(Locale.US, ", %.3f frames a second", rate)
             }
-            lines += "Picture: ${v.width} × ${v.height}" + (codecName(v)?.let { ", $it" } ?: "") + (if (tenBit(v)) " 10-bit" else "") + fps
+            lines += "Picture" to "${v.width} × ${v.height}" + (codecName(v)?.let { ", $it" } ?: "") + (if (tenBit(v)) " 10-bit" else "") + fps
         }
         p.audioFormat?.let { a ->
-            lines += "Sound: " + listOfNotNull(codecName(a), channels(a.channelCount), if (a.sampleRate > 0) "${a.sampleRate / 1000.0} kHz".replace(".0 ", " ") else null).joinToString(", ")
+            lines += "Sound" to listOfNotNull(codecName(a), channels(a.channelCount), if (a.sampleRate > 0) "${a.sampleRate / 1000.0} kHz".replace(".0 ", " ") else null).joinToString(", ")
         }
         // 3.0.3: in the panel beside the video, as the other menus.
         showPanel { ctx ->
             Sheets.column(ctx).apply {
                 addView(Sheets.header(ctx, e.title, null))
-                if (lines.isEmpty()) lines += "Nothing more is known about it."
-                for (line in lines) addView(Sheets.note(ctx, line))
+                if (lines.isEmpty()) addView(Sheets.note(ctx, "Nothing more is known about it."))
+                for ((label, value) in lines) addView(PictureInfo.row(ctx, null, label, value))
             }
         }
     }
@@ -3343,7 +3529,7 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         panel.close()
         val white = Color.WHITE
         val thumb = ImageView(this).apply {
-            background = Ui.shape(this@PlayerActivity, 0x33FFFFFF, Ui.R_SMALL)
+            background = Ui.shape(this@PlayerActivity, OverPicture.TINT_CHIP, Ui.R_SMALL)
             clipToOutline = true
             scaleType = ImageView.ScaleType.CENTER
             setImageDrawable(Ui.icon(this@PlayerActivity, R.drawable.ic_movie, 0xCCFFFFFF.toInt()))
@@ -3363,14 +3549,9 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
             maxLines = 2
             ellipsize = TextUtils.TruncateAt.END
         }
-        fun pill(text: String, main: Boolean, click: () -> Unit) = TextView(this).apply {
-            this.text = text
-            gravity = Gravity.CENTER
-            Ui.size(this, Ui.Type.BODY_SECONDARY, keepFont = true)
-            typeface = Ui.MEDIUM
-            setTextColor(if (main) Ui.onAccent(this@PlayerActivity) else white)
-            background = Ui.ripple(this@PlayerActivity, Ui.shape(this@PlayerActivity, if (main) Ui.accent(this@PlayerActivity) else 0x26FFFFFF, 18), 18)
-            minHeight = dp(40)
+        fun pill(text: String, main: Boolean, click: () -> Unit) = OverPicture.pill(
+            this, text, Ui.Type.BODY_SECONDARY, if (main) Ui.onAccent(this) else white, if (main) Ui.accent(this) else OverPicture.TINT_PILL, 40,
+        ).apply {
             setPadding(dp(16), dp(8), dp(16), dp(8))
             setOnClickListener {
                 if (locked) {
@@ -3382,8 +3563,8 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         }
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            background = Ui.shape(this@PlayerActivity, 0xEB121418.toInt(), 16)
-            setPadding(dp(14), dp(12), dp(14), dp(12))
+            background = Ui.shape(this@PlayerActivity, OverPicture.FILL_PANEL, Ui.R_MEDIUM)
+            setPadding(dp(16), dp(12), dp(16), dp(12))
             isClickable = true
             addView(LinearLayout(this@PlayerActivity).apply {
                 orientation = LinearLayout.HORIZONTAL
@@ -3589,6 +3770,18 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
 
         /** 3.0.3: how long Up next waits before the next video plays. */
         private const val UP_NEXT_SECONDS = 5
+
+        /** How long the last song's picture stays while the next one's is read. */
+        private const val COVER_WAIT_MS = 400L
+
+        // Heights and widths (dp) that are also half of a corner or a mask.
+        private const val UNLOCK_DP = 52
+        private const val CHIP_DP = 32
+        private const val FRAME_BAR_DP = 44
+        private const val TIMING_DP = 40
+
+        /** The times' fixed width (dp), wider than "−1:23:45". */
+        private const val TIME_DP = 64
 
         /** 3.0.4: the music screen's colours, in [musicShown] and the rest. */
         private const val MUSIC_BG = 0

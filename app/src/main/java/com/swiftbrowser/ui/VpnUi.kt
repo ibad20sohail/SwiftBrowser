@@ -1,10 +1,15 @@
 package com.swiftbrowser.ui
 
+import android.animation.ValueAnimator
 import android.app.Activity
+import android.content.Context
 import android.content.Intent
+import android.graphics.drawable.GradientDrawable
 import android.net.VpnService
 import android.view.Gravity
+import android.view.View
 import android.view.ViewGroup
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.activity.result.ActivityResultLauncher
@@ -52,6 +57,67 @@ object VpnUi {
         Vpn.turnOff()
         if (waited) com.swiftbrowser.tabs.TabManager.onOnline()
         Messages.show(a, if (waited) "VPN off. Pages load over your own connection." else "VPN off")
+    }
+
+    /**
+     * How the VPN's state is shown, in the colours of the address bar's badge: the accent's soft colour
+     * and the filled key when it's on, red when it should be on but isn't, grey otherwise. [busy]:
+     * connecting or testing.
+     */
+    data class StateColours(val fill: Int, val ink: Int, val icon: Int, val busy: Boolean)
+
+    fun stateColours(ctx: Context): StateColours {
+        val grey = StateColours(Ui.color(ctx, R.color.surface_alt), Ui.textSecondary(ctx), R.drawable.ic_vpn, false)
+        return when {
+            Vpn.testing -> grey.copy(busy = true)
+            Vpn.state == Vpn.State.ON -> StateColours(Ui.accentContainer(ctx), Ui.onAccentContainer(ctx), R.drawable.ic_vpn_on, false)
+            Vpn.state == Vpn.State.CONNECTING -> grey.copy(busy = true)
+            dropped() -> StateColours(Ui.color(ctx, R.color.danger_container), Ui.color(ctx, R.color.on_danger_container), R.drawable.ic_vpn, false)
+            else -> grey
+        }
+    }
+
+    /** The round holder of the VPN page and sheet, in the state's colours ([stateColours]); the loading shape while busy. */
+    class StateMark(private val ctx: Context) {
+        private var shown = stateColours(ctx)
+        private var painted = shown.fill
+        private var fade: ValueAnimator? = null
+        private val badge = Ui.iconBadge(ctx, shown.icon, tint = shown.ink, fill = shown.fill).apply {
+            if (shown.busy) setImageDrawable(null)
+        }
+        private val spinner = LoadingIndicator(ctx).apply {
+            visibility = if (shown.busy) View.VISIBLE else View.GONE
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }
+        val view = FrameLayout(ctx).apply {
+            addView(badge, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+            addView(spinner, FrameLayout.LayoutParams(Ui.dp(ctx, 24), Ui.dp(ctx, 24), Gravity.CENTER))
+        }
+
+        /** Follows the state; nothing happens while it stays the same. */
+        fun update() {
+            val now = stateColours(ctx)
+            if (now == shown) return
+            shown = now
+            badge.setImageDrawable(if (now.busy) null else Ui.icon(ctx, now.icon, now.ink))
+            val circle = badge.background as GradientDrawable
+            fade?.cancel()
+            if (badge.isShown && Motion.enabled(ctx)) {
+                fade = ValueAnimator.ofArgb(painted, now.fill).apply {
+                    duration = Motion.SHORT
+                    interpolator = Motion.standard
+                    addUpdateListener {
+                        painted = it.animatedValue as Int
+                        circle.setColor(painted)
+                    }
+                    start()
+                }
+            } else {
+                painted = now.fill
+                circle.setColor(painted)
+            }
+            Motion.pop(spinner, now.busy)
+        }
     }
 
     /** A line about the state for sheets and Settings. */
@@ -213,8 +279,8 @@ object VpnUi {
             if (flag != null) {
                 addView(TextView(a).apply {
                     text = flag
-                    textSize = 22f
-                }, LinearLayout.LayoutParams(Ui.dp(a, 40), ViewGroup.LayoutParams.WRAP_CONTENT))
+                    Ui.size(this, Ui.Type.HEADLINE, keepFont = true)
+                }, LinearLayout.LayoutParams(Ui.dp(a, Ui.ICON_BOX), ViewGroup.LayoutParams.WRAP_CONTENT))
             } else {
                 addView(android.widget.ImageView(a).apply {
                     setImageDrawable(Ui.icon(a, icon, Ui.textSecondary(a)))
@@ -246,7 +312,6 @@ object VpnUi {
         }
         col.addView(Ui.divider(a, 24))
         col.addView(row(null, "More VPN options", null, false, icon = R.drawable.ic_settings) { openSheet() })
-        Motion.stagger(col, step = 18, max = 8)
         dialog = Sheets.sheet(a, col)
         dialog.showImmersive()
     }
@@ -254,40 +319,52 @@ object VpnUi {
     /** The quick sheet: the state, on/off, and the locations to pick from. */
     fun sheet(a: Activity, permission: ActivityResultLauncher<Intent>, openSettings: () -> Unit) {
         val col = Sheets.column(a)
-        col.addView(Sheets.header(a, "VPN", status()))
+        val mark = StateMark(a)
+        val statusLine = Ui.text(a, Ui.Type.CAPTION, status()).apply { setPadding(0, Ui.dp(a, 3), 0, 0) }
+        col.addView(LinearLayout(a).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(Ui.dp(a, 24), Ui.dp(a, 8), Ui.dp(a, 24), Ui.dp(a, 14))
+            addView(mark.view, LinearLayout.LayoutParams(Ui.dp(a, Ui.ICON_BOX), Ui.dp(a, Ui.ICON_BOX)).apply { marginEnd = Ui.dp(a, 14) })
+            addView(LinearLayout(a).apply {
+                orientation = LinearLayout.VERTICAL
+                addView(Ui.text(a, Ui.Type.SUBTITLE, "VPN"))
+                addView(statusLine)
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        })
+        // The state follows while the sheet is open (it connects, or drops); only for as long as it's on screen.
+        val changed: () -> Unit = {
+            mark.update()
+            Motion.swapText(statusLine, status())
+        }
+        col.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+            override fun onViewAttachedToWindow(v: View) = Vpn.addListener(changed)
+
+            override fun onViewDetachedFromWindow(v: View) = Vpn.removeListener(changed)
+        })
         lateinit var dialog: com.google.android.material.bottomsheet.BottomSheetDialog
         val locations = Vpn.locations()
         val on = Vpn.wanted
         val actions = ArrayList<Sheets.Action>()
         if (locations.isNotEmpty()) {
             val dropped = dropped()
-            col.addView(LinearLayout(a).apply {
-                orientation = LinearLayout.VERTICAL
-                setPadding(Ui.dp(a, 24), Ui.dp(a, 4), Ui.dp(a, 24), Ui.dp(a, 8))
-                addView(com.google.android.material.button.MaterialButton(a).apply {
-                    text = if (Vpn.testing) "Stop testing" else if (dropped) reconnectLabel() else if (on) "Turn off" else "Turn on"
-                    setOnClickListener {
-                        dialog.dismiss()
-                        if (Vpn.testing) {
-                            if (on) turnOn(a, permission) else Vpn.turnOff()
-                        } else if (on && !dropped) {
-                            turnOff(a)
-                        } else {
-                            turnOn(a, permission)
-                        }
-                    }
-                }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(a, 52)))
-                if (dropped) {
-                    // 3.0: after a start that didn't bring it back, "Continue without VPN".
-                    addView(com.google.android.material.button.MaterialButton(a, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
-                        text = turnOffLabel()
-                        setOnClickListener {
-                            dialog.dismiss()
-                            turnOff(a)
-                        }
-                    }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(a, 52)).apply { topMargin = Ui.dp(a, 4) })
+            col.addView(Sheets.wideButton(a, if (Vpn.testing) "Stop testing" else if (dropped) reconnectLabel() else if (on) "Turn off" else "Turn on") {
+                dialog.dismiss()
+                if (Vpn.testing) {
+                    if (on) turnOn(a, permission) else Vpn.turnOff()
+                } else if (on && !dropped) {
+                    turnOff(a)
+                } else {
+                    turnOn(a, permission)
                 }
             })
+            if (dropped) {
+                // 3.0: after a start that didn't bring it back, "Continue without VPN".
+                col.addView(Sheets.wideButton(a, turnOffLabel(), outlined = true) {
+                    dialog.dismiss()
+                    turnOff(a)
+                }.apply { (layoutParams as ViewGroup.MarginLayoutParams).topMargin = 0 })
+            }
             col.addView(Sheets.label(a, "Locations"))
             val chosen = Vpn.current()
             // One row per country (2.2); tapping it connects to its fastest server, the arrow shows them all.
@@ -301,7 +378,7 @@ object VpnUi {
                 ).joinToString(" · ")
                 val list = LinearLayout(a).apply {
                     orientation = LinearLayout.VERTICAL
-                    visibility = android.view.View.GONE
+                    visibility = View.GONE
                 }
                 col.addView(LinearLayout(a).apply {
                     orientation = LinearLayout.HORIZONTAL
@@ -312,8 +389,8 @@ object VpnUi {
                     contentDescription = best.countryName + if (here) ", in use" else ""
                     addView(TextView(a).apply {
                         text = best.flag
-                        textSize = 22f
-                    }, LinearLayout.LayoutParams(Ui.dp(a, 36), ViewGroup.LayoutParams.WRAP_CONTENT))
+                        Ui.size(this, Ui.Type.HEADLINE, keepFont = true)
+                    }, LinearLayout.LayoutParams(Ui.dp(a, Ui.ICON_BOX), ViewGroup.LayoutParams.WRAP_CONTENT))
                     addView(LinearLayout(a).apply {
                         orientation = LinearLayout.VERTICAL
                         addView(Ui.text(a, Ui.Type.BODY, best.countryName))
@@ -326,11 +403,12 @@ object VpnUi {
                         setImageDrawable(Ui.icon(a, R.drawable.ic_down, Ui.textSecondary(a)))
                         background = Ui.rippleBorderless(a)
                         contentDescription = "Servers in ${best.countryName}"
+                        var open = false
                         setOnClickListener {
                             // Folds open and shut, the arrow turning with it (2.3).
-                            val open = rotation < 90f
-                            if (open) Motion.expand(list) else Motion.collapse(list) { list.visibility = android.view.View.GONE }
-                            animate().rotation(if (open) 180f else 0f).setDuration(Motion.NORMAL).setInterpolator(Motion.standard).start()
+                            open = !open
+                            Motion.reveal(list, open)
+                            Motion.anim(this, Motion.EXPAND).rotation(if (open) 180f else 0f).start()
                         }
                     }, LinearLayout.LayoutParams(Ui.dp(a, 48), Ui.dp(a, 48)))
                     setOnClickListener {
@@ -345,7 +423,7 @@ object VpnUi {
                         Ui.style(this, Ui.Type.BODY_SECONDARY)
                         gravity = Gravity.CENTER_VERTICAL
                         minHeight = Ui.dp(a, 48)
-                        setPadding(Ui.dp(a, 24) + Ui.dp(a, 36), 0, Ui.dp(a, 24), 0)
+                        setPadding(Ui.dp(a, 24) + Ui.dp(a, Ui.ICON_BOX), 0, Ui.dp(a, 24), 0)
                         if (loc.id == chosen?.id) {
                             setCompoundDrawablesRelativeWithIntrinsicBounds(null, null, Ui.icon(a, R.drawable.ic_check, Ui.accent(a)), null)
                         }

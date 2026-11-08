@@ -1,9 +1,9 @@
 package com.swiftbrowser.ui
 
+import android.animation.ValueAnimator
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Context
-import android.content.res.ColorStateList
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.BitmapRegionDecoder
@@ -13,7 +13,6 @@ import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Rect
 import android.graphics.RectF
-import android.graphics.drawable.RippleDrawable
 import android.os.Build
 import android.view.Gravity
 import android.view.MotionEvent
@@ -55,20 +54,24 @@ class PictureEditor(
     private val save: TextView
     private val chips = ArrayList<TextView>()
 
+    /** Each chip's change of colour under way. */
+    private val chipFades = arrayOfNulls<ValueAnimator>(SHAPES.size)
+
     /** The shape chosen: an index of [SHAPES]. */
     private var shape = 0
+
+    /** The chip painted as chosen (-1: none yet), and how solid Save is (-1: not yet said). */
+    private var chipPainted = -1
+    private var saveLook = -1f
     val view: View
 
     init {
         crop.setPicture(preview)
         val white = Color.WHITE
-        save = TextView(a).apply {
-            text = "Save"
-            Ui.style(this, Ui.Type.LABEL, Ui.onAccent(a))
-            gravity = Gravity.CENTER
-            minWidth = Ui.dp(a, 76)
-            setPadding(Ui.dp(a, 18), 0, Ui.dp(a, 18), 0)
-            background = RippleDrawable(ColorStateList.valueOf(0x40FFFFFF), Ui.shape(a, Ui.accent(a), 20), null)
+        save = OverPicture.pill(a, "Save", Ui.Type.LABEL, Ui.onAccent(a), Ui.accent(a), BUTTON_DP).apply {
+            // As wide as "Saving…", so the button keeps its width.
+            minWidth = Ui.dp(a, 92)
+            setPadding(Ui.dp(a, 16), 0, Ui.dp(a, 16), 0)
             setOnClickListener {
                 if (crop.changed) onSave(crop.turns, RectF(crop.crop)) else Messages.show(a, "Turn or cut the picture first")
             }
@@ -80,26 +83,28 @@ class PictureEditor(
             addView(ImageButton(a, null, 0, R.style.Swift_ToolbarButton).apply {
                 setImageDrawable(Ui.icon(a, R.drawable.ic_close, white))
                 contentDescription = "Close without saving"
-                background = whiteRipple()
+                background = Ui.rippleBorderless(a, Ui.RIPPLE_ON_DARK)
+                Ui.pressable(this, Motion.PRESS_ICON, morph = false)
                 setOnClickListener { requestClose() }
             }, LinearLayout.LayoutParams(Ui.dp(a, 48), Ui.dp(a, 48)))
-            addView(Ui.text(a, Ui.Type.TITLE, "Edit", white).apply { setPadding(Ui.dp(a, 8), 0, 0, 0) }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-            addView(save, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, Ui.dp(a, 40)))
+            addView(Ui.text(a, Ui.Type.HEADING, "Edit", white).apply {
+                typeface = Ui.medium(Ui.Type.HEADING)
+                setPadding(Ui.dp(a, 8), 0, 0, 0)
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            addView(save, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, Ui.dp(a, BUTTON_DP)))
         }
         val shapes = LinearLayout(a).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
             setPadding(Ui.dp(a, 12), Ui.dp(a, 8), Ui.dp(a, 12), Ui.dp(a, 4))
             SHAPES.indices.forEach { i ->
-                val chip = TextView(a).apply {
-                    Ui.style(this, Ui.Type.LABEL, white)
-                    gravity = Gravity.CENTER
+                val chip = OverPicture.pill(a, "", Ui.Type.LABEL, white, OverPicture.TINT_PILL, BUTTON_DP, radiusDp = Ui.R_XSMALL).apply {
                     minWidth = Ui.dp(a, 56)
-                    setPadding(Ui.dp(a, 14), 0, Ui.dp(a, 14), 0)
+                    setPadding(Ui.dp(a, 12), 0, Ui.dp(a, 12), 0)
                     setOnClickListener { pickShape(i) }
                 }
                 chips += chip
-                addView(chip, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, Ui.dp(a, 36)).apply {
+                addView(chip, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, Ui.dp(a, BUTTON_DP)).apply {
                     marginStart = Ui.dp(a, 4)
                     marginEnd = Ui.dp(a, 4)
                 })
@@ -121,7 +126,7 @@ class PictureEditor(
             setBackgroundColor(Color.BLACK)
             // Touches stay here (the pictures underneath don't move).
             isClickable = true
-            addView(top, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(a, 56)))
+            addView(top, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(a, Ui.BAR_HEIGHT)))
             addView(crop, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
             addView(shapes, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
             addView(tools, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
@@ -129,8 +134,6 @@ class PictureEditor(
         crop.onChange = { paintChips() }
         paintChips()
     }
-
-    private fun whiteRipple() = RippleDrawable(ColorStateList.valueOf(0x40FFFFFF), null, null)
 
     /**
      * 3.0.3: icons only, as the viewer's own bar (2.9.1): holding one shows its name, and screen
@@ -141,7 +144,7 @@ class PictureEditor(
         gravity = Gravity.CENTER
         minimumHeight = Ui.dp(a, 52)
         setPadding(0, Ui.dp(a, 12), 0, Ui.dp(a, 12))
-        background = whiteRipple()
+        background = Ui.rippleBorderless(a, Ui.RIPPLE_ON_DARK)
         contentDescription = label
         isClickable = true
         isFocusable = true
@@ -150,7 +153,7 @@ class PictureEditor(
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }, LinearLayout.LayoutParams(Ui.dp(a, 24), Ui.dp(a, 24)))
         androidx.appcompat.widget.TooltipCompat.setTooltipText(this, label)
-        Ui.pressable(this, 0.9f)
+        Ui.pressable(this, Motion.PRESS_ICON, morph = false)
         setOnClickListener { click() }
     }
 
@@ -177,9 +180,35 @@ class PictureEditor(
             // The chosen shape says which way it stands (3:4 when tall).
             chip.text = if (chosen && i > 1 && crop.ratio in 0.01f..0.999f) label.split(':').reversed().joinToString(":") else label
             chip.setTextColor(if (chosen) Ui.onAccent(a) else Color.WHITE)
-            chip.background = RippleDrawable(ColorStateList.valueOf(0x40FFFFFF), Ui.shape(a, if (chosen) Ui.accent(a) else 0x26FFFFFF, 18), null)
         }
-        save.alpha = if (crop.changed) 1f else Ui.DISABLED_ALPHA
+        if (chipPainted != shape) {
+            val was = chipPainted
+            chipPainted = shape
+            if (was < 0) {
+                OverPicture.pillFill(chips[shape]).setColor(Ui.accent(a))
+            } else {
+                fadeChip(was, OverPicture.TINT_PILL)
+                fadeChip(shape, Ui.accent(a))
+            }
+        }
+        val look = if (crop.changed) 1f else Ui.DISABLED_ALPHA
+        if (look != saveLook) {
+            if (saveLook < 0f) save.alpha = look else Motion.anim(save, Motion.SHORT).alpha(look).start()
+            saveLook = look
+        }
+    }
+
+    /** Chip [i]'s colour fading to [to], as the chips of a sheet do. */
+    private fun fadeChip(i: Int, to: Int) {
+        chipFades[i]?.cancel()
+        val chip = chips[i]
+        chipFades[i] = ValueAnimator.ofArgb(OverPicture.pillFill(chip).color?.defaultColor ?: to, to).apply {
+            duration = Motion.SHORT
+            interpolator = Motion.standard
+            // Asked for each frame: a chip's first press gives it a copy of its shape.
+            addUpdateListener { OverPicture.pillFill(chip).setColor(it.animatedValue as Int) }
+            start()
+        }
     }
 
     /** While the picture is written: the Save button waits. */
@@ -200,6 +229,9 @@ class PictureEditor(
     companion object {
         private val SHAPES = floatArrayOf(0f, 1f, 4f / 3f, 16f / 9f)
         private val SHAPE_LABELS = listOf("Free", "1:1", "4:3", "16:9")
+
+        /** How high Save and the shape chips are (dp). */
+        private const val BUTTON_DP = 40
     }
 }
 
@@ -258,8 +290,15 @@ class CropView(context: Context) : View(context) {
         color = Color.WHITE
         style = Paint.Style.STROKE
         strokeWidth = 3f * d
-        strokeCap = Paint.Cap.SQUARE
+        strokeCap = Paint.Cap.ROUND
     }
+
+    /** The frame gliding to where it was just put; [crop] is already there, so nothing waits for it. */
+    private var boxGlide: ValueAnimator? = null
+
+    /** How much of the grid shows (0 to 1), and its fade. */
+    private var gridShown = 0f
+    private var gridFade: ValueAnimator? = null
 
     fun setPicture(b: Bitmap) {
         bmp = b
@@ -275,6 +314,7 @@ class CropView(context: Context) : View(context) {
     private fun place() {
         val b = bmp ?: return
         if (width == 0 || height == 0) return
+        boxGlide?.cancel()
         val tw = turnedWidth.toFloat()
         val th = turnedHeight.toFloat()
         val s = min((width - 2 * pad) / tw, (height - 2 * pad) / th)
@@ -300,16 +340,19 @@ class CropView(context: Context) : View(context) {
 
     /** A quarter turn; the frame turns with the picture, around the same part. */
     fun rotate(clockwise: Boolean) {
+        val oldWidth = pic.width()
         val c = RectF(crop)
         if (clockwise) crop.set(1f - c.bottom, c.left, 1f - c.top, c.right) else crop.set(c.top, 1f - c.right, c.bottom, 1f - c.left)
         turns = (turns + if (clockwise) 1 else 3) % 4
         if (ratio > 0f) ratio = 1f / ratio
         place()
-        // A small turn into place, so it's clear which way it went.
+        // The quarter turn itself: from where the picture was, at the size it had, into its new place.
         animate().cancel()
-        rotation = if (clockwise) -20f else 20f
-        alpha = 0.6f
-        animate().rotation(0f).alpha(1f).setDuration(Motion.NORMAL).setInterpolator(Motion.standard).start()
+        val fit = if (pic.height() > 0f && oldWidth > 0f) oldWidth / pic.height() else 1f
+        rotation = if (clockwise) -90f else 90f
+        scaleX = fit
+        scaleY = fit
+        Motion.anim(this, Motion.NORMAL, Motion.standard).rotation(0f).scaleX(1f).scaleY(1f).start()
         onChange?.invoke()
     }
 
@@ -323,8 +366,11 @@ class CropView(context: Context) : View(context) {
                 h = pic.height()
                 w = h * r
             }
+            val from = RectF(box)
+            boxGlide?.cancel()
             box.set(pic.centerX() - w / 2f, pic.centerY() - h / 2f, pic.centerX() + w / 2f, pic.centerY() + h / 2f)
             boxToCrop()
+            glideBox(from)
         }
         invalidate()
         onChange?.invoke()
@@ -332,11 +378,56 @@ class CropView(context: Context) : View(context) {
 
     /** The picture as it was: not turned, nothing cut. */
     fun reset() {
+        // The frame glides back only over a picture that isn't turning back too.
+        val from = if (turns == 0 && !pic.isEmpty) RectF(box) else null
         turns = 0
         ratio = 0f
         crop.set(0f, 0f, 1f, 1f)
         place()
+        from?.let { glideBox(it) }
         onChange?.invoke()
+    }
+
+    /** The frame moves from [from] to where it now is; only this view is drawn again. */
+    private fun glideBox(from: RectF) {
+        val to = RectF(box)
+        box.set(from)
+        boxGlide = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = Motion.SMALL
+            interpolator = Motion.standard
+            addUpdateListener {
+                val f = it.animatedValue as Float
+                box.set(from.left + (to.left - from.left) * f, from.top + (to.top - from.top) * f, from.right + (to.right - from.right) * f, from.bottom + (to.bottom - from.bottom) * f)
+                invalidate()
+            }
+            start()
+        }
+    }
+
+    private fun fadeGrid(to: Float) {
+        gridFade?.cancel()
+        gridFade = ValueAnimator.ofFloat(gridShown, to).apply {
+            duration = OverPicture.QUICK_MS
+            interpolator = Motion.standard
+            addUpdateListener {
+                gridShown = it.animatedValue as Float
+                invalidate()
+            }
+            start()
+        }
+    }
+
+    /** A glide under way ends where it was going (ending one already over would run it again). */
+    private fun settleBox() {
+        boxGlide?.let { if (it.isStarted) it.end() }
+        boxGlide = null
+    }
+
+    override fun onDetachedFromWindow() {
+        settleBox()
+        gridFade?.cancel()
+        animate().cancel()
+        super.onDetachedFromWindow()
     }
 
     // ------------------------------------------------------------------ dragging the frame
@@ -409,12 +500,15 @@ class CropView(context: Context) : View(context) {
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 if (bmp == null) return false
+                // A finger on a frame still gliding: it is where it was going.
+                settleBox()
                 mode = hit(e.x, e.y)
                 if (mode == NONE) return false
                 start.set(box)
                 downX = e.x
                 downY = e.y
                 parent?.requestDisallowInterceptTouchEvent(true)
+                fadeGrid(1f)
                 invalidate()
             }
             MotionEvent.ACTION_MOVE -> {
@@ -424,6 +518,7 @@ class CropView(context: Context) : View(context) {
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> if (mode != NONE) {
                 mode = NONE
+                fadeGrid(0f)
                 invalidate()
                 onChange?.invoke()
             }
@@ -440,7 +535,8 @@ class CropView(context: Context) : View(context) {
         canvas.drawRect(pic.left, box.top, box.left, box.bottom, shade)
         canvas.drawRect(box.right, box.top, pic.right, box.bottom, shade)
         // Thirds while dragging, to place things as photographers do.
-        if (mode != NONE) {
+        if (gridShown > 0f) {
+            thirds.alpha = (GRID_ALPHA * gridShown).toInt()
             for (i in 1..2) {
                 val x = box.left + box.width() * i / 3f
                 val y = box.top + box.height() * i / 3f
@@ -462,6 +558,8 @@ class CropView(context: Context) : View(context) {
     }
 
     companion object {
+        /** How solid the grid's lines are at their most. */
+        private const val GRID_ALPHA = 0x80
         private const val NONE = 0
         private const val MOVE = 1
         private const val LEFT = 2

@@ -20,6 +20,27 @@ class BarColoursTest {
     }
 
     @Test
+    fun overAPictureTheBarIsClearAndItsButtonsAreInTheInk() {
+        val pill = 0xFF2A2C31.toInt()
+        val danger = 0xFFB00020.toInt()
+        for (ink in listOf(white, 0xFF1A1C21.toInt())) {
+            val c = BarColours.overPicture(ink, pill, danger)
+            assertEquals(0, c.bar ushr 24)
+            assertEquals(0, c.line ushr 24)
+            assertEquals(ink, c.text)
+            assertEquals(ink, c.icon)
+            assertEquals(ink, c.accent)
+            assertEquals(pill, c.pill)
+        }
+    }
+
+    @Test
+    fun overAPictureTheRipplesFollowTheInk() {
+        assertTrue(BarColours.overPicture(white, 0, 0).dark)
+        assertEquals(false, BarColours.overPicture(0xFF1A1C21.toInt(), 0, 0).dark)
+    }
+
+    @Test
     fun hexColours() {
         assertEquals(white, CssColour.parse("#fff"))
         assertEquals(white, CssColour.parse("#FFF"))

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A sheet opening: a short rise and a fade (Motion.SHEET). -->
+<set xmlns:android="http://schemas.android.com/apk/res/android"
+    android:duration="250"
+    android:interpolator="@interpolator/swift_standard"
+    android:shareInterpolator="true">
+    <translate
+        android:fromYDelta="20%p"
+        android:toYDelta="0" />
+    <alpha
+        android:fromAlpha="0"
+        android:toAlpha="1" />
+</set>

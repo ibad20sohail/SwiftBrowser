@@ -92,6 +92,11 @@ class SwiftSlider(context: Context, style: Style) : AppCompatSeekBar(context) {
         splitTrack = false
         progressDrawable = track
         thumb = handle
+        // In a panel the track gets the room AppCompat's own 16 dp at each end would take.
+        if (style == Style.PANEL) {
+            val side = (8 * density + 0.5f).toInt()
+            setPadding(side, 0, side, 0)
+        }
     }
 
     /**

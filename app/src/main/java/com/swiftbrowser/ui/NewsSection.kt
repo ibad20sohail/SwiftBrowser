@@ -56,7 +56,7 @@ class NewsSection(context: Context, private val listener: Listener) : LinearLayo
     private var shown = 0
     private val chips = ChipGroup(context)
     private val body = LinearLayout(context).apply { orientation = VERTICAL }
-    private val skeleton = SkeletonView(context, rows = 4, picture = true)
+    private val skeleton = SkeletonView(context)
     private val message = LinearLayout(context).apply {
         orientation = VERTICAL
         gravity = Gravity.CENTER_HORIZONTAL
@@ -65,7 +65,7 @@ class NewsSection(context: Context, private val listener: Listener) : LinearLayo
     }
     private val refreshButton: ImageButton
     private val settingsButton: ImageButton
-    private val title: TextView
+    private val heading: TextView
     private var refreshing = false
     private val cardPictureSize = Ui.dp(context, CARD_PICTURE_DP)
     private val cardPictureWidth = cardPictureSize * 16 / 9
@@ -84,12 +84,11 @@ class NewsSection(context: Context, private val listener: Listener) : LinearLayo
         val head = LinearLayout(context).apply {
             orientation = HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, 0, 0, Ui.dp(context, 4))
+            setPadding(0, 0, 0, Ui.dp(context, Ui.SECTION_BELOW))
         }
-        // 3.0.4: as bold as the home page's other headings (the scale's HEADING). 3.0.5: just its word
-        // wide, 8 dp in by its own padding as before, so a soft backing can go behind it on the picture.
-        title = Ui.text(context, Ui.Type.HEADING, "News").apply { setPadding(Ui.dp(context, 8), 0, Ui.dp(context, 8), 0) }
-        head.addView(title, LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        // 3.0.4: as bold as the home page's other headings (the scale's HEADING).
+        heading = Ui.text(context, Ui.Type.HEADING, "News").apply { setPadding(Ui.dp(context, Ui.ROW_INSET), 0, Ui.dp(context, 8), 0) }
+        head.addView(heading, LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         head.addView(View(context), LayoutParams(0, 0, 1f))
         refreshButton = iconButton(R.drawable.ic_refresh, "Refresh news") { refresh(force = true) }
         head.addView(refreshButton)
@@ -103,7 +102,7 @@ class NewsSection(context: Context, private val listener: Listener) : LinearLayo
         chips.chipSpacingHorizontal = Ui.dp(context, 8)
         // 3.0.5: the row's side padding is the chips' own, so the fade below reaches the row's real end
         // (padding on the row left a sliver of the next chip showing past the fade).
-        chips.setPadding(Ui.dp(context, 4), 0, Ui.dp(context, 4), 0)
+        chips.setPadding(Ui.dp(context, Ui.ROW_INSET), 0, Ui.dp(context, Ui.ROW_INSET), 0)
         addView(HorizontalScrollView(context).apply {
             isHorizontalScrollBarEnabled = false
             overScrollMode = View.OVER_SCROLL_NEVER
@@ -128,13 +127,21 @@ class NewsSection(context: Context, private val listener: Listener) : LinearLayo
         super.onDetachedFromWindow()
     }
 
+    /** The home page's picture is behind the news: its heading and two buttons read on it (HomeBackground.Ink). */
+    fun setInk(ink: HomeBackground.Ink?) {
+        HomeBackground.paint(heading, ink, Ui.text(context))
+        val tint = ink?.color ?: Ui.textSecondary(context)
+        refreshButton.drawable?.setTint(tint)
+        settingsButton.drawable?.setTint(tint)
+    }
+
     private fun iconButton(icon: Int, label: String, onClick: () -> Unit) = ImageButton(context).apply {
         setImageDrawable(Ui.icon(context, icon, Ui.textSecondary(context)))
         background = Ui.rippleBorderless(context)
         contentDescription = label
         layoutParams = LayoutParams(Ui.dp(context, 44), Ui.dp(context, 44))
         setOnClickListener { onClick() }
-        Ui.pressable(this, 0.88f)
+        Ui.pressable(this, Motion.PRESS_ICON)
     }
 
     private var chipsFor = ""
@@ -153,6 +160,8 @@ class NewsSection(context: Context, private val listener: Listener) : LinearLayo
         val states = arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf())
         val bg = ColorStateList(states, intArrayOf(if (night) Ui.accentContainer(context) else Ui.accent(context), Ui.color(context, R.color.surface_alt)))
         val fg = ColorStateList(states, intArrayOf(if (night) Ui.onAccentContainer(context) else Ui.onAccent(context), Ui.text(context)))
+        val on = if (night) Ui.accentContainer(context) else Ui.accent(context)
+        val off = Ui.color(context, R.color.surface_alt)
         for (t in topics) {
             chips.addView(Chip(context).apply {
                 id = View.generateViewId()
@@ -164,10 +173,30 @@ class NewsSection(context: Context, private val listener: Listener) : LinearLayo
                 chipBackgroundColor = bg
                 setTextColor(fg)
                 chipStrokeWidth = 0f
+                chipMinHeight = Ui.dp(context, 40).toFloat()
                 isChecked = t.key == topic
+                // The chosen chip's colour fades in and the one left fades out, as in sheets.
+                setOnCheckedChangeListener { chip, checked ->
+                    android.animation.ValueAnimator.ofArgb(if (checked) off else on, if (checked) on else off).apply {
+                        duration = Motion.SHORT
+                        interpolator = Motion.standard
+                        addUpdateListener { (chip as Chip).chipBackgroundColor = ColorStateList.valueOf(it.animatedValue as Int) }
+                        addListener(object : android.animation.AnimatorListenerAdapter() {
+                            override fun onAnimationEnd(animation: android.animation.Animator) {
+                                (chip as Chip).chipBackgroundColor = bg
+                            }
+                        })
+                    }.start()
+                }
+                Ui.pressable(this, Motion.PRESS_BUTTON)
                 setOnClickListener {
                     if (!isChecked) isChecked = true
                     if (topic != t.key) {
+                        // The tick widens the chosen chip: the row makes room smoothly.
+                        android.transition.TransitionManager.beginDelayedTransition(chips, android.transition.ChangeBounds().apply {
+                            duration = Motion.SHORT
+                            interpolator = Motion.standard
+                        })
                         topic = t.key
                         com.swiftbrowser.SwiftApp.prefs.newsTopic = t.key
                         load(switched = true)
@@ -265,17 +294,8 @@ class NewsSection(context: Context, private val listener: Listener) : LinearLayo
         lastScan = Int.MIN_VALUE
         shown = 0
         showMore()
-        if (animate) Motion.stagger(body, step = 30, max = 6)
+        if (animate) Motion.stagger(body, step = 30, max = 2)
         post { checkVisible() }
-    }
-
-    /** 3.0.5: the home page's picture is behind the news (HomeView.setOnPicture). */
-    fun setOnPicture(on: Boolean) {
-        // Its heading on a soft pill, its two buttons on soft round backings, as they have one colour.
-        title.background = if (on) Ui.shape(context, HomeBackground.backing(context, Ui.text(context)), Ui.R_SMALL) else null
-        title.setPadding(Ui.dp(context, 8), if (on) Ui.dp(context, 3) else 0, if (on) Ui.dp(context, 12) else Ui.dp(context, 8), if (on) Ui.dp(context, 3) else 0)
-        val fill = if (on) HomeBackground.backing(context, Ui.textSecondary(context), 3.0) else 0
-        for (b in listOf(refreshButton, settingsButton)) b.background = if (on) Ui.ripple(context, Ui.circle(fill), 22) else Ui.rippleBorderless(context)
     }
 
     private fun showMore() {
@@ -391,7 +411,7 @@ class NewsSection(context: Context, private val listener: Listener) : LinearLayo
                 setMargins(0, Ui.dp(ctx, 6), 0, Ui.dp(ctx, 6))
             }
         }
-        Ui.pressable(card, 0.98f)
+        Ui.pressable(card, Motion.PRESS_CARD, morph = false)
         if (s.image != null && !DataSaver.active) {
             val picture = WidePicture(ctx).apply {
                 id = R.id.row_icon
@@ -408,7 +428,7 @@ class NewsSection(context: Context, private val listener: Listener) : LinearLayo
         }
         val texts = LinearLayout(ctx).apply {
             orientation = VERTICAL
-            setPadding(Ui.dp(ctx, 14), Ui.dp(ctx, 12), Ui.dp(ctx, 14), Ui.dp(ctx, 14))
+            setPadding(Ui.dp(ctx, Ui.ROW_INSET), Ui.dp(ctx, 12), Ui.dp(ctx, Ui.ROW_INSET), Ui.dp(ctx, 14))
         }
         val meta = LinearLayout(ctx).apply {
             orientation = HORIZONTAL

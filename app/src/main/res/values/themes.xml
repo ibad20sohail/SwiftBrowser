@@ -34,6 +34,10 @@
         <item name="bottomSheetDialogTheme">@style/Theme.Swift.BottomSheet</item>
         <item name="materialAlertDialogTheme">@style/ThemeOverlay.Swift.Dialog</item>
         <item name="android:windowAnimationStyle">@style/Swift.WindowAnimations</item>
+        <!-- Every Material button is pressed the same way (res/animator/swift_press). -->
+        <item name="materialButtonStyle">@style/Swift.Button</item>
+        <item name="materialButtonOutlinedStyle">@style/Swift.Button.Outlined</item>
+        <item name="borderlessButtonStyle">@style/Swift.Button.Text</item>
         <!-- 3.0.4: no words split at the end of a line in any text (Android 7 hyphenates by default). -->
         <item name="android:textViewStyle">@style/Swift.TextView</item>
         <!-- 3.0.4: title bars' titles in bold (bolder headlines). -->
@@ -60,6 +64,34 @@
         <item name="android:activityOpenExitAnimation">@anim/swift_hold</item>
         <item name="android:activityCloseEnterAnimation">@anim/swift_hold</item>
         <item name="android:activityCloseExitAnimation">@anim/swift_close_exit</item>
+        <!-- The player and Files are screens of their own task: the same motion. -->
+        <item name="android:taskOpenEnterAnimation">@anim/swift_open_enter</item>
+        <item name="android:taskOpenExitAnimation">@anim/swift_hold</item>
+        <item name="android:taskCloseEnterAnimation">@anim/swift_hold</item>
+        <item name="android:taskCloseExitAnimation">@anim/swift_close_exit</item>
+    </style>
+
+    <!-- Dialogs: a fade and a slight scale; sheets: a short slide. Material's own take 400 ms. -->
+    <style name="Swift.DialogAnimation" parent="">
+        <item name="android:windowEnterAnimation">@anim/swift_dialog_enter</item>
+        <item name="android:windowExitAnimation">@anim/swift_dialog_exit</item>
+    </style>
+
+    <style name="Swift.SheetAnimation" parent="">
+        <item name="android:windowEnterAnimation">@anim/swift_sheet_enter</item>
+        <item name="android:windowExitAnimation">@anim/swift_sheet_exit</item>
+    </style>
+
+    <style name="Swift.Button" parent="Widget.Material3.Button">
+        <item name="android:stateListAnimator">@animator/swift_press</item>
+    </style>
+
+    <style name="Swift.Button.Outlined" parent="Widget.Material3.Button.OutlinedButton">
+        <item name="android:stateListAnimator">@animator/swift_press</item>
+    </style>
+
+    <style name="Swift.Button.Text" parent="Widget.Material3.Button.TextButton">
+        <item name="android:stateListAnimator">@animator/swift_press</item>
     </style>
 
     <style name="Theme.Swift" parent="Base.Theme.Swift">
@@ -72,8 +104,14 @@
         <item name="android:windowDisablePreview">true</item>
     </style>
 
+    <!-- The QR scanner: the library's own screen, moving as Swift's screens do. -->
+    <style name="Swift.Capture" parent="zxing_CaptureTheme">
+        <item name="android:windowAnimationStyle">@style/Swift.WindowAnimations</item>
+    </style>
+
     <style name="Theme.Swift.BottomSheet" parent="ThemeOverlay.Material3.BottomSheetDialog">
         <item name="bottomSheetStyle">@style/Swift.BottomSheetStyle</item>
+        <item name="android:windowAnimationStyle">@style/Swift.SheetAnimation</item>
     </style>
 
     <style name="Swift.BottomSheetStyle" parent="Widget.Material3.BottomSheet.Modal">
@@ -91,6 +129,8 @@
 
     <!-- Dialogs: Swift's surface colour and slightly tighter corners than Material's default. -->
     <style name="ThemeOverlay.Swift.Dialog" parent="ThemeOverlay.Material3.MaterialAlertDialog">
+        <item name="android:windowAnimationStyle">@style/Swift.DialogAnimation</item>
+        <item name="android:checkedTextViewStyle">@style/Swift.DialogChoice</item>
         <item name="shapeAppearanceOverlay">@style/Swift.DialogShape</item>
         <item name="colorSurface">@color/sheet_bg</item>
         <item name="colorSurfaceContainerHigh">@color/sheet_bg</item>
@@ -109,6 +149,12 @@
     <!-- 2.1: plain lists (setItems) in normal text too. -->
     <style name="Swift.AlertDialog" parent="MaterialAlertDialog.Material3">
         <item name="listItemLayout">@layout/dialog_list_item</item>
+    </style>
+
+    <!-- Radio lists: the same size as the plain lists beside them (Material's are 16 sp, spaced wider). -->
+    <style name="Swift.DialogChoice" parent="Widget.Material3.CheckedTextView">
+        <item name="android:textSize">@dimen/text_body</item>
+        <item name="android:letterSpacing">0</item>
     </style>
 
     <style name="Swift.DialogShape" parent="">
@@ -133,6 +179,7 @@
     <style name="Swift.DialogButton" parent="Widget.Material3.Button.TextButton.Dialog">
         <item name="android:textSize">@dimen/text_body</item>
         <item name="android:minHeight">48dp</item>
+        <item name="android:stateListAnimator">@animator/swift_press</item>
     </style>
 
     <!-- 48 dp high to tap (2.6); 40 wide, so the address keeps its room. -->

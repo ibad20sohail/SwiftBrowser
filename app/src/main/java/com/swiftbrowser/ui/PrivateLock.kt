@@ -76,6 +76,8 @@ object PrivateLock {
         filters = arrayOf(InputFilter.LengthFilter(8))
         gravity = Gravity.CENTER
         letterSpacing = 0.3f
+        // The filled look of every field in a dialog, the digits as large as ever.
+        Ui.field(this)
         Ui.size(this, Ui.Type.HEADLINE, keepFont = true)
     }
 
@@ -110,7 +112,7 @@ object PrivateLock {
         val first = pinInput(a, "PIN")
         val second = pinInput(a, "The same PIN again")
         box.addView(first)
-        box.addView(second)
+        box.addView(second, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = Ui.dp(a, 8) })
         val error = Ui.text(a, Ui.Type.CAPTION, "", Ui.danger(a))
         box.addView(error)
         box.addView(Ui.text(a, Ui.Type.CAPTION, UNINSTALL_TEXT).apply { setPadding(0, Ui.dp(a, 10), 0, 0) })
@@ -124,9 +126,9 @@ object PrivateLock {
         d.getButton(DialogInterface.BUTTON_POSITIVE)?.setOnClickListener {
             val pin = first.text.toString()
             when {
-                !PrivateFolder.validPin(pin) -> error.text = "A PIN is 4 to 8 digits."
+                !PrivateFolder.validPin(pin) -> Motion.swapText(error, "A PIN is 4 to 8 digits.")
                 second.text.toString() != pin -> {
-                    error.text = "The two PINs aren't the same."
+                    Motion.swapText(error, "The two PINs aren't the same.")
                     second.setText("")
                     second.requestFocus()
                 }
@@ -178,7 +180,7 @@ object PrivateLock {
             val wait = PrivateFolder.waitLeft()
             val pin = input.text.toString()
             when {
-                wait > 0 -> error.text = "Too many wrong PINs. Try again in ${duration(wait)}."
+                wait > 0 -> Motion.swapText(error, "Too many wrong PINs. Try again in ${duration(wait)}.")
                 pin.isEmpty() -> {}
                 else -> {
                     ok?.isEnabled = false
@@ -191,7 +193,7 @@ object PrivateLock {
                         } else {
                             input.setText("")
                             val next = PrivateFolder.waitLeft()
-                            error.text = if (next > 0) "That PIN isn't right. Too many wrong PINs: try again in ${duration(next)}." else "That PIN isn't right."
+                            Motion.swapText(error, if (next > 0) "That PIN isn't right. Too many wrong PINs: try again in ${duration(next)}." else "That PIN isn't right.")
                             Motion.bump(input, 1.04f)
                         }
                     }

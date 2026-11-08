@@ -73,7 +73,7 @@ class StartScreen(activity: Activity, loading: Boolean = false) {
         val at = IntArray(2)
         mark.getLocationInWindow(from)
         ValueAnimator.ofFloat(0f, 1f).apply {
-            duration = if (to != null) 420L else Motion.LONG
+            duration = Motion.LONG
             interpolator = Motion.standard
             addUpdateListener {
                 val f = it.animatedValue as Float

@@ -2,8 +2,6 @@ package com.swiftbrowser.ui
 
 import android.content.Intent
 import android.content.res.ColorStateList
-import android.graphics.Typeface
-import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.text.Editable
 import android.text.TextUtils
@@ -222,6 +220,7 @@ class SettingsActivity : AppCompatActivity() {
             setBackgroundResource(borderless())
             contentDescription = "Back"
             setOnClickListener { onBackPressedDispatcher.onBackPressed() }
+            Ui.pressable(this, Motion.PRESS_ICON, morph = false)
         }, LinearLayout.LayoutParams(dp(48), dp(48)))
         titleView = TextView(this@SettingsActivity).apply {
             // The same size as the other screens' titles (2.6). 3.0.4: in bold. 3.0.5: the same as
@@ -242,7 +241,7 @@ class SettingsActivity : AppCompatActivity() {
         refreshers.clear()
         resultRefreshers.clear()
         hideKeyboard()
-        titleView.text = t?.title ?: "Settings"
+        setPageName(t?.title ?: "Settings", animate)
         val page = ScrollView(this).apply {
             isFillViewport = true
             isVerticalScrollBarEnabled = false
@@ -254,7 +253,6 @@ class SettingsActivity : AppCompatActivity() {
         // 3.0.4: the page opens with its large title; scrolled, it goes up under the bar, whose own
         // title fades in as it goes (and out again back at the top). A page too short to scroll keeps it.
         val big = pageTitle
-        setBarTitle(0f)
         page.setOnScrollChangeListener { _, _, y, _, _ -> followTitle(big, y) }
         // 3.0.5: a page still on its way out (two quick taps) goes now, so none can stay behind the new one.
         while (container.childCount > 1) container.removeViewAt(0)
@@ -284,7 +282,7 @@ class SettingsActivity : AppCompatActivity() {
 
     /** 3.0.4: the page's large title, at its top. 3.0.5: lined up with the headings and row icons under it (and the lists' titles). */
     private fun largeTitle(col: LinearLayout, text: String) {
-        val big = Ui.text(this, Ui.Type.DISPLAY, text, lines = 2).apply { setPadding(dp(Ui.ROW_INSET), dp(8), dp(Ui.ROW_INSET), dp(12)) }
+        val big = Ui.text(this, Ui.Type.HEADLINE, text, lines = 2).apply { setPadding(dp(Ui.ROW_INSET), dp(8), dp(Ui.ROW_INSET), dp(12)) }
         col.addView(big)
         pageTitle = big
     }
@@ -300,8 +298,34 @@ class SettingsActivity : AppCompatActivity() {
         setBarTitle(((gone - 0.5f) * 2f).coerceIn(0f, 1f))
     }
 
+    /** The name the bar's title takes once the page being left has faded it out. */
+    private var comingTitle: String? = null
+
+    /** A new page's name for the bar. If the old page's name showed there, it fades out with its page first. */
+    private fun setPageName(name: String, animate: Boolean) {
+        if (animate && titleView.alpha > 0f && Motion.enabled(this)) {
+            comingTitle = name
+            titleView.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            Motion.anim(titleView, Motion.PAGE_OUT_MS, Motion.exit).alpha(0f).withEndAction {
+                comingTitle?.let { titleView.text = it }
+                comingTitle = null
+            }.start()
+        } else {
+            comingTitle = null
+            titleView.animate().cancel()
+            titleView.text = name
+            setBarTitle(0f)
+        }
+    }
+
     /** The bar's own title at [alpha]; TalkBack reads it only while it shows (the large title says it otherwise). */
     private fun setBarTitle(alpha: Float) {
+        // Scrolled while the old name was still fading out: the new one, now.
+        comingTitle?.let {
+            titleView.animate().cancel()
+            titleView.text = it
+            comingTitle = null
+        }
         if (titleView.alpha == alpha) return
         titleView.alpha = alpha
         titleView.importantForAccessibility = if (alpha > 0f) View.IMPORTANT_FOR_ACCESSIBILITY_AUTO else View.IMPORTANT_FOR_ACCESSIBILITY_NO
@@ -309,6 +333,7 @@ class SettingsActivity : AppCompatActivity() {
 
     private fun mainPage(): View {
         val col = column()
+        shownResults = null
         largeTitle(col, "Settings")
         val results = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -328,9 +353,16 @@ class SettingsActivity : AppCompatActivity() {
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
             override fun afterTextChanged(s: Editable?) {
                 val q = s?.toString()?.trim().orEmpty()
+                val cleared = q.isEmpty() && normal.visibility != View.VISIBLE
                 normal.visibility = if (q.isEmpty()) View.VISIBLE else View.GONE
                 results.visibility = if (q.isEmpty()) View.GONE else View.VISIBLE
                 showResults(results, q)
+                if (cleared) {
+                    // The same short fade as results coming in, for the same reason without a layer.
+                    normal.animate().cancel()
+                    normal.alpha = 0.4f
+                    Motion.anim(normal, Motion.SHORT, Motion.enter).alpha(1f).start()
+                }
             }
         })
         search.setOnEditorActionListener { _, _, _ ->
@@ -343,15 +375,22 @@ class SettingsActivity : AppCompatActivity() {
             bottomMargin = dp(12)
         })
 
-        val card = card()
-        val topics = Section(card)
+        // The topics in the same order, in four groups rather than one long wall (About alone).
+        var card = card()
+        var topics = Section(card)
+        normal.addView(card)
         for (t in Topic.entries) {
             topics.action(t.icon, t.title, { keepParts(topicSummary(t)) }, badge = true) { show(t) }
+            if (t == Topic.BROWSING || t == Topic.FILES || t == Topic.STORAGE) {
+                normal.addView(spacer())
+                card = card()
+                topics = Section(card)
+                normal.addView(card)
+            }
         }
-        normal.addView(card)
         normal.addView(TextView(this).apply {
             text = "Swift ${BuildConfig.VERSION_NAME}"
-            Ui.size(this, Ui.Type.CAPTION, keepFont = true)
+            Ui.size(this, Ui.Type.CAPTION)
             gravity = Gravity.CENTER
             setTextColor(color(R.color.text_secondary))
             setPadding(0, dp(18), 0, 0)
@@ -361,24 +400,41 @@ class SettingsActivity : AppCompatActivity() {
         return col
     }
 
+    /** The settings the results show now; null with no results up. */
+    private var shownResults: List<Def>? = null
+
     private fun showResults(results: LinearLayout, query: String) {
-        results.removeAllViews()
-        resultRefreshers.clear()
-        if (query.isEmpty()) return
+        if (query.isEmpty()) {
+            results.removeAllViews()
+            resultRefreshers.clear()
+            shownResults = null
+            return
+        }
         // Everyday words find the settings they are about ("battery" finds Lite mode and Data saver).
         // 3.0: whole words, every word of the search, and what the rows say (SettingsSearch).
         val found = defs.filter { d -> SettingsSearch.matches(query, SettingsSearch.Entry(d.title, rowTexts[d].orEmpty(), d.keywords, d.topic.title)) }
+        // Another letter that finds the same settings changes nothing (the colours panel and the ad
+        // bars aren't made again, and nothing blinks).
+        if (found.isNotEmpty() && found == shownResults) return
+        // "Nothing found" again: only its words change.
+        val quiet = found.isEmpty() && shownResults?.isEmpty() == true
+        shownResults = found
+        results.removeAllViews()
+        resultRefreshers.clear()
         // Each new word brings its results in with a short fade (2.3). No layer: the list can be
         // taller than the GPU's biggest picture.
-        results.animate().cancel()
-        results.alpha = 0.4f
-        results.animate().alpha(1f).setDuration(Motion.SHORT).setInterpolator(Motion.enter).start()
+        if (!quiet) {
+            results.animate().cancel()
+            results.alpha = 0.4f
+            Motion.anim(results, Motion.SHORT, Motion.enter).alpha(1f).start()
+        }
         if (found.isEmpty()) {
             results.addView(Ui.emptyState(this, R.drawable.ic_search, "Nothing found for \"$query\"", "Try another word, such as \"dark\", \"ads\" or \"video\"."))
             return
         }
         for ((t, items) in found.groupBy { it.topic }) {
-            results.addView(label(t.title))
+            // The first heading sits as close under the box as the topics do.
+            results.addView(label(t.title).apply { if (results.childCount == 0) setPadding(paddingLeft, dp(4), paddingRight, paddingBottom) })
             val card = card()
             val section = Section(card, resultRefreshers)
             items.forEach { it.build(section) }
@@ -562,8 +618,15 @@ class SettingsActivity : AppCompatActivity() {
                 }
             }
         }
+        def(Topic.FILES, null, "Upload from Swift's Files", "upload attach choose file picker website android default phone file manager") {
+            switch(R.drawable.ic_upload, "Upload from Swift's Files", {
+                if (prefs.uploadFromFiles) "A website's upload button opens Swift's Files" else "Off: a website's upload button opens your phone's own file picker"
+            }, checked = { prefs.uploadFromFiles }) {
+                prefs.uploadFromFiles = it
+            }
+        }
         def(Topic.FILES, null, "Show hidden files", "hidden dot files system") {
-            switch(R.drawable.ic_folder, "Show hidden files", { "Also shows files and folders normally kept out of sight" }, checked = { FilesSettings.showHidden }) {
+            switch(R.drawable.ic_visibility, "Show hidden files", { "Also shows files and folders normally kept out of sight" }, checked = { FilesSettings.showHidden }) {
                 FilesSettings.showHidden = it
             }
         }
@@ -627,7 +690,7 @@ class SettingsActivity : AppCompatActivity() {
         }
         def(Topic.FILES, "Recycle bin", "Empty the recycle bin", "empty recycle bin trash delete forever") {
             action(R.drawable.ic_delete, "Empty the recycle bin", { "Deletes everything in it for good" }) {
-                Dialogs.confirm(this@SettingsActivity, "Empty the recycle bin?", "Everything in it is deleted for good. This can't be undone.", "Empty") {
+                Dialogs.confirm(this@SettingsActivity, "Empty the recycle bin?", "Everything in it is deleted for good. This can't be undone.", "Empty", danger = true) {
                     FilesSettings.emptyBin(this@SettingsActivity) { n -> snack(if (n > 0) "Deleted $n for good" else "The recycle bin was empty") }
                 }
             }
@@ -679,7 +742,7 @@ class SettingsActivity : AppCompatActivity() {
             }) { chooseHomeOrder() }
         }
         // 3.0.4: a gradient or a picture of your own behind the home page.
-        def(Topic.NEWS, null, "Background of the home page", "background wallpaper picture photo image gradient colour color home page") {
+        def(Topic.NEWS, null, "Background of the home page", "background wallpaper picture photo image gradient colour color home page opacity transparency clear fade dim") {
             action(R.drawable.ic_image, "Background of the home page", { HomeBackground.label(HomeBackground.current(this@SettingsActivity)) }) { chooseHomeBackground() }
         }
         def(Topic.NEWS, "News", "News country", "country region edition pakistan india uk us") {
@@ -898,7 +961,7 @@ class SettingsActivity : AppCompatActivity() {
             }
         }
         def(Topic.VIDEO, "Videos on websites", "Play silent videos by themselves", "autoplay previews muted") {
-            switch(R.drawable.ic_play, "Play silent videos by themselves", { "Like the previews on YouTube's home page. Off: smoother scrolling." }, checked = { prefs.autoplayMuted }) {
+            switch(R.drawable.ic_volume_off, "Play silent videos by themselves", { "Like the previews on YouTube's home page. Off: smoother scrolling." }, checked = { prefs.autoplayMuted }) {
                 prefs.autoplayMuted = it
             }
         }
@@ -919,7 +982,7 @@ class SettingsActivity : AppCompatActivity() {
         }
         // 2.9: Swift's video and music player (PlayerSettings).
         def(Topic.VIDEO, "Swift's player", "Swipes in the player", "player gestures swipe brightness volume seek vlc") {
-            switch(R.drawable.ic_play, "Swipes in the player", { "Brightness on the left, volume on the right, sideways to move through the video" }, checked = { PlayerSettings.gestures }) {
+            switch(R.drawable.ic_gesture, "Swipes in the player", { "Brightness on the left, volume on the right, sideways to move through the video" }, checked = { PlayerSettings.gestures }) {
                 PlayerSettings.gestures = it
             }
         }
@@ -1119,7 +1182,7 @@ class SettingsActivity : AppCompatActivity() {
             "safer security secure safe javascript scripts jit compiler webassembly wasm attack attacks exploit hack hacked virus old engine protect",
         ) {
             switch(
-                R.drawable.ic_shield, "Safer browsing",
+                R.drawable.ic_safer, "Safer browsing",
                 { if (prefs.saferBrowsing) "Harder for bad sites to attack your phone; some games and video players may not work" else "Off: sites run at full speed" },
                 details = "Swift uses the last browser version made for Android 7, which doesn't get security fixes any more. " +
                     "Most attacks on older browsers go through the parts that make websites run fast.\n\n" +
@@ -1301,12 +1364,12 @@ class SettingsActivity : AppCompatActivity() {
     private fun aboutHeader(): View = LinearLayout(this).apply {
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
-        setPadding(dp(Ui.ROW_INSET), dp(16), dp(18), dp(16))
+        setPadding(dp(Ui.ROW_INSET), dp(16), dp(Ui.ROW_INSET), dp(16))
         // 3.0.4: rounded like a row alone in its group.
         background = Ui.shape(this@SettingsActivity, color(R.color.card_bg), Ui.R_LARGE)
         layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
             topMargin = dp(8)
-            bottomMargin = dp(14)
+            bottomMargin = dp(Ui.GROUP_GAP)
         }
         addView(ImageView(this@SettingsActivity).apply { setImageDrawable(Ui.logo(this@SettingsActivity)) }, LinearLayout.LayoutParams(dp(52), dp(52)))
         addView(LinearLayout(this@SettingsActivity).apply {
@@ -1315,12 +1378,12 @@ class SettingsActivity : AppCompatActivity() {
             addView(TextView(this@SettingsActivity).apply {
                 text = "Swift ${BuildConfig.VERSION_NAME}"
                 Ui.size(this, Ui.Type.TITLE, keepFont = true)
-                setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL))
+                setTypeface(Ui.medium(Ui.Type.TITLE))
                 setTextColor(color(R.color.text_primary))
             })
             addView(TextView(this@SettingsActivity).apply {
                 text = "Built on Firefox, with uBlock Origin ${AdBlock.uboVersion}\nProfile: ${Profiles.current().name}"
-                Ui.size(this, Ui.Type.CAPTION, keepFont = true)
+                Ui.size(this, Ui.Type.CAPTION)
                 setTextColor(color(R.color.text_secondary))
                 setPadding(0, dp(2), 0, 0)
             })
@@ -1386,7 +1449,7 @@ class SettingsActivity : AppCompatActivity() {
             if (noted(title, summary)) return
             val (row, sub) = row(icon, title, summary())
             if (details != null) {
-                row.addView(ImageButton(this@SettingsActivity).apply {
+                val info = ImageButton(this@SettingsActivity).apply {
                     setImageResource(R.drawable.ic_info)
                     imageTintList = ColorStateList.valueOf(color(R.color.text_secondary))
                     setBackgroundResource(borderless())
@@ -1400,7 +1463,10 @@ class SettingsActivity : AppCompatActivity() {
                             .setPositiveButton(android.R.string.ok, null)
                             .showImmersive()
                     }
-                }, LinearLayout.LayoutParams(dp(36), dp(36)))
+                }
+                row.addView(info, LinearLayout.LayoutParams(dp(36), dp(36)))
+                // A near miss opens the explanation rather than flipping the switch beside it.
+                Ui.touchArea(info, row)
             }
             val sw = SlimSwitch(this@SettingsActivity)
             sw.setChecked(checked(), animate = false)
@@ -1420,12 +1486,14 @@ class SettingsActivity : AppCompatActivity() {
                 sw.setChecked(checked(), animate = false)
                 setSummary(sub, summary())
                 val e = enabled()
+                // Not pressable while unavailable; its (i) button, a view of its own, still is.
+                row.isEnabled = e
                 // 3.0.3: a row that becomes available (or not) fades rather than jumps. 3.0.4: what is
                 // in it, not its piece, which stays as solid as its neighbours.
-                val a = if (e) 1f else 0.5f
+                val a = if (e) 1f else Ui.DISABLED_ALPHA
                 for (i in 0 until row.childCount) {
                     val c = row.getChildAt(i)
-                    if (row.isAttachedToWindow && c.alpha != a) c.animate().alpha(a).setDuration(150).start() else c.alpha = a
+                    if (row.isAttachedToWindow && c.alpha != a) Motion.anim(c, Motion.SHORT).alpha(a).start() else c.alpha = a
                 }
             }
             update()
@@ -1444,8 +1512,10 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     private fun setSummary(sub: TextView, text: String?) {
-        if (sub.text.toString() != text.orEmpty()) sub.text = text.orEmpty()
-        sub.visibility = if (text.isNullOrEmpty()) View.GONE else View.VISIBLE
+        // A line that goes or comes changes at once (hidden, swapText doesn't fade); one that stays cross-fades.
+        if (text.isNullOrEmpty()) sub.visibility = View.GONE
+        Motion.swapText(sub, text.orEmpty())
+        if (!text.isNullOrEmpty()) sub.visibility = View.VISIBLE
         // 3.0.5: the one row rhythm: a row with a summary is at least a two-line row, one without a one-line row.
         val row = sub.parent?.parent as? View ?: return
         val min = dp(RowRhythm.minHeight(!text.isNullOrEmpty()))
@@ -1464,7 +1534,7 @@ class SettingsActivity : AppCompatActivity() {
             setPadding(dp(Ui.ROW_INSET), dp(8), dp(12), dp(8))
         }
         row.addView(ImageView(this).apply {
-            background = Ui.shape(this@SettingsActivity, if (badge) Ui.accentContainer(this@SettingsActivity) else color(R.color.surface_alt), Ui.R_SMALL)
+            background = Ui.circle(if (badge) Ui.accentContainer(this@SettingsActivity) else color(R.color.surface_alt))
             setPadding(dp(9), dp(9), dp(9), dp(9))
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
             setRowIcon(this, icon, badge)
@@ -1475,11 +1545,13 @@ class SettingsActivity : AppCompatActivity() {
         }
         texts.addView(TextView(this).apply {
             text = title
+            // The regular weight, as the lists' row titles, in Swift's own font on every Android.
             Ui.size(this, Ui.Type.SUBTITLE, keepFont = true)
+            typeface = Ui.typeface(Ui.Type.BODY)
             setTextColor(color(R.color.text_primary))
         })
         val sub = TextView(this).apply {
-            Ui.size(this, Ui.Type.CAPTION, keepFont = true)
+            Ui.size(this, Ui.Type.CAPTION)
             maxLines = 3
             ellipsize = TextUtils.TruncateAt.END
             setTextColor(color(R.color.text_secondary))
@@ -1507,50 +1579,25 @@ class SettingsActivity : AppCompatActivity() {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(Ui.ROW_INSET), dp(14), dp(Ui.ROW_INSET), dp(12))
         }
-        val segments = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(dp(3), dp(3), dp(3), dp(3))
-            background = GradientDrawable().apply {
-                cornerRadius = dp(22).toFloat()
-                setColor(color(R.color.surface_alt))
-            }
-        }
         val summary = TextView(this).apply {
             Ui.size(this, Ui.Type.LABEL, keepFont = true)
+            typeface = Ui.typeface(Ui.Type.BODY)
             setTextColor(color(R.color.text_secondary))
             setPadding(dp(4), dp(10), dp(4), 0)
         }
-        val views = AdLevel.entries.map { level ->
-            TextView(this).apply {
-                text = level.label
-                Ui.size(this, Ui.Type.LABEL, keepFont = true)
-                gravity = Gravity.CENTER
-                maxLines = 1
-                setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL))
-                setOnClickListener {
-                    AdBlock.setGlobal(level)
-                    refreshAll()
-                }
-                segments.addView(this, LinearLayout.LayoutParams(0, dp(38), 1f))
-            }
+        val levels = AdLevel.entries
+        val segments = Segmented(this, levels.map { it.label }, levels.indexOf(AdBlock.global)) { i ->
+            AdBlock.setGlobal(levels[i])
+            refreshAll()
         }
         val update = {
             val current = AdBlock.global
-            AdLevel.entries.forEachIndexed { i, level ->
-                val on = level == current
-                views[i].background = if (on) GradientDrawable().apply {
-                    cornerRadius = dp(19).toFloat()
-                    setColor(color(Looks.accent.container))
-                } else null
-                views[i].setTextColor(color(if (on) Looks.accent.onContainer else R.color.text_primary))
-                views[i].isSelected = on
-                views[i].contentDescription = "${level.label}${if (on) ", selected" else ""}"
-            }
-            summary.text = current.summary
+            segments.select(levels.indexOf(current), animate = true)
+            Motion.swapText(summary, current.summary)
         }
         update()
         target += update
-        box.addView(segments, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        box.addView(segments, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)))
         box.addView(summary)
         return box
     }
@@ -1587,35 +1634,25 @@ class SettingsActivity : AppCompatActivity() {
         val levels = intArrayOf(15, 20, 30)
         val labels = arrayOf("Off") + levels.map { "Below $it% battery" }
         val checked = if (!prefs.batterySaver) 0 else levels.indexOf(prefs.batterySaverLevel).coerceAtLeast(1) + 1
-        MaterialAlertDialogBuilder(this)
-            .setTitle("Battery saver")
-            .setSingleChoiceItems(labels, checked) { d, which ->
-                prefs.batterySaver = which > 0
-                if (which > 0) prefs.batterySaverLevel = levels[which - 1]
-                Power.update()
-                d.dismiss()
-                refreshAll()
-                if (which > 0) snack("Lite mode, one tab ready to open and no pictures on mobile data below ${levels[which - 1]}%, or with your phone's battery saver")
-            }
-            .setNegativeButton(android.R.string.cancel, null)
-            .showImmersive()
+        choose("Battery saver", labels.toList(), checked, then = { which ->
+            if (which > 0) snack("Lite mode, one tab ready to open and no pictures on mobile data below ${levels[which - 1]}%, or with your phone's battery saver")
+        }) { which ->
+            prefs.batterySaver = which > 0
+            if (which > 0) prefs.batterySaverLevel = levels[which - 1]
+            Power.update()
+        }
     }
 
     private fun chooseTextSize() {
         val options = floatArrayOf(0.8f, 0.9f, 1f, 1.1f, 1.25f, 1.5f)
-        val labels = options.map { textSizeText(it) }.toTypedArray()
+        val labels = options.map { textSizeText(it) }
         val checked = options.indexOfFirst { kotlin.math.abs(it - prefs.textScale) < 0.01f }
-        MaterialAlertDialogBuilder(this)
-            .setTitle("Text size")
-            .setSingleChoiceItems(labels, checked) { d, which ->
-                prefs.textScale = options[which]
-                Engine.setTextScale(options[which])
-                d.dismiss()
-                refreshAll()
-                snack("Sites without a size of their own use ${textSizeText(options[which])}")
-            }
-            .setNegativeButton(android.R.string.cancel, null)
-            .showImmersive()
+        choose("Text size", labels, checked, then = { which ->
+            snack("Sites without a size of their own use ${textSizeText(options[which])}")
+        }) { which ->
+            prefs.textScale = options[which]
+            Engine.setTextScale(options[which])
+        }
     }
 
     private fun chooseSearchEngine() {
@@ -1745,15 +1782,9 @@ class SettingsActivity : AppCompatActivity() {
 
     private fun chooseBarSwipes() {
         val modes = intArrayOf(Prefs.SWIPE_HIDE, Prefs.SWIPE_SHOW, Prefs.SWIPE_HIDE or Prefs.SWIPE_SHOW, 0)
-        MaterialAlertDialogBuilder(this)
-            .setTitle("Address bar swipes")
-            .setSingleChoiceItems(barSwipeLabels().toTypedArray(), modes.indexOf(prefs.barSwipes).coerceAtLeast(0)) { d, which ->
-                prefs.barSwipes = modes[which]
-                d.dismiss()
-                refreshAll()
-            }
-            .setNegativeButton(android.R.string.cancel, null)
-            .showImmersive()
+        choose("Address bar swipes", barSwipeLabels(), modes.indexOf(prefs.barSwipes).coerceAtLeast(0)) { which ->
+            prefs.barSwipes = modes[which]
+        }
     }
 
     private fun themeText() = when (prefs.themeMode) {
@@ -1836,16 +1867,10 @@ class SettingsActivity : AppCompatActivity() {
         val labels = listOf("From your phone (${com.swiftbrowser.news.News.countries[com.swiftbrowser.news.News.country()]})") +
             codes.map { com.swiftbrowser.news.News.countries[it]!! }
         val checked = if (prefs.newsCountry.isEmpty()) 0 else codes.indexOf(prefs.newsCountry) + 1
-        MaterialAlertDialogBuilder(this)
-            .setTitle("News from")
-            .setSingleChoiceItems(labels.toTypedArray(), checked) { d, which ->
-                d.dismiss()
-                prefs.newsCountry = if (which == 0) "" else codes[which - 1]
-                com.swiftbrowser.news.News.clearMemory()
-                refreshAll()
-            }
-            .setNegativeButton(android.R.string.cancel, null)
-            .showImmersive()
+        choose("News from", labels, checked) { which ->
+            prefs.newsCountry = if (which == 0) "" else codes[which - 1]
+            com.swiftbrowser.news.News.clearMemory()
+        }
     }
 
     private fun newsTopicsText(): String {
@@ -1889,8 +1914,7 @@ class SettingsActivity : AppCompatActivity() {
                 setPadding(dp(24), 0, dp(12), 0)
                 val badge = ImageView(this@SettingsActivity).apply {
                     setImageDrawable(Ui.icon(this@SettingsActivity, R.drawable.ic_news, color(R.color.text_secondary)))
-                    // 3.0.5: the one row icon holder.
-                    background = Ui.shape(this@SettingsActivity, color(R.color.surface_alt), Ui.R_SMALL)
+                    background = Ui.circle(color(R.color.surface_alt))
                     scaleType = ImageView.ScaleType.CENTER
                 }
                 addView(badge, LinearLayout.LayoutParams(dp(Ui.ICON_BOX), dp(Ui.ICON_BOX)).apply { marginEnd = dp(16) })
@@ -1994,24 +2018,30 @@ class SettingsActivity : AppCompatActivity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        val badge = Ui.iconBadge(this, R.drawable.ic_vpn)
-        head.addView(badge, LinearLayout.LayoutParams(dp(Ui.ICON_BOX), dp(Ui.ICON_BOX)).apply { marginEnd = dp(14) })
+        val mark = VpnUi.StateMark(this)
+        head.addView(mark.view, LinearLayout.LayoutParams(dp(Ui.ICON_BOX), dp(Ui.ICON_BOX)).apply { marginEnd = dp(14) })
         val title = Ui.text(this, Ui.Type.TITLE, "")
-        head.addView(title, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        val status = Ui.text(this, Ui.Type.BODY_SECONDARY, "").apply { setPadding(0, dp(2), 0, 0) }
+        head.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(title)
+            addView(status)
+        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         box.addView(head)
-        val status = Ui.text(this, Ui.Type.BODY_SECONDARY, "").apply { setPadding(0, dp(10), 0, dp(12)) }
-        box.addView(status)
         val button = com.google.android.material.button.MaterialButton(this)
-        box.addView(button, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(52)))
+        box.addView(button, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(52)).apply { topMargin = dp(12) })
         // After the VPN dropped: Reconnect above, and Turn off here (3.0: after a start that didn't
         // bring it back, Try again and Continue without VPN).
         val off = com.google.android.material.button.MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
             text = "Turn off"
+            // Hidden until it's needed: shown at first, it flashed and everything under it jumped as the page opened.
+            visibility = View.GONE
             setOnClickListener { VpnUi.turnOff(this@SettingsActivity) }
         }
         box.addView(off, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(52)).apply { topMargin = dp(4) })
         val update = {
             val vpn = com.swiftbrowser.vpn.Vpn
+            mark.update()
             // The words change with a quick cross-fade rather than a jump (2.3).
             Motion.swapText(title, if (vpn.testing) "Testing…" else when (vpn.state) {
                 com.swiftbrowser.vpn.Vpn.State.ON -> "Connected"
@@ -2022,7 +2052,10 @@ class SettingsActivity : AppCompatActivity() {
             Motion.swapText(status, VpnUi.status())
             val empty = vpn.locations().isEmpty()
             val dropped = VpnUi.dropped()
-            if (dropped && off.visibility != View.VISIBLE) Motion.fadeIn(off, fromDy = 6)
+            // On the page's first filling (not on screen yet) it is simply there.
+            if (dropped && off.visibility != View.VISIBLE) {
+                if (box.isShown) Motion.fadeIn(off, fromDy = 6) else off.visibility = View.VISIBLE
+            }
             if (!dropped && off.visibility == View.VISIBLE) Motion.fadeOut(off, toDy = 0)
             if (dropped) Motion.swapText(off, VpnUi.turnOffLabel())
             Motion.swapText(button, when {
@@ -2056,78 +2089,113 @@ class SettingsActivity : AppCompatActivity() {
     private fun vpnLocations(target: MutableList<() -> Unit>): View {
         // 3.0.4: each location a piece of the section's group, like the rows after it.
         val box = GroupLayout.Run(this)
+        val rows = ArrayList<VpnRow>()
         val update = {
-            box.removeAllViews()
             val vpn = com.swiftbrowser.vpn.Vpn
             // By country (2.2: there can be several servers in one).
             val list = vpn.locations().sortedWith(compareBy({ it.countryName }, { it.server }))
             // With none yet, the card above says so.
             val chosen = vpn.current()?.id
-            for (loc in list) {
-                box.addView(LinearLayout(this).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    gravity = Gravity.CENTER_VERTICAL
-                    minimumHeight = dp(Ui.ROW_TWO_LINES)
-                    setPadding(dp(Ui.ROW_INSET), dp(8), dp(4), dp(8))
-                    Piece.attach(this, tappable = true)
-                    // 2.2: how it did in the last test, and when it needs extending at Proton.
-                    val result = VpnUi.testResult(loc)
-                    val soon = loc.renewBy - System.currentTimeMillis() < 14L * 24 * 3600 * 1000
-                    // 3.0: its file can't be opened any more (Android's secure storage was reset).
-                    val unreadable = vpn.isUnreadable(loc)
-                    val state = if (unreadable) "Can't be opened any more: remove it and add it again" else listOfNotNull(result, VpnUi.renewText(loc)).joinToString(" · ")
-                    // 3.0: TalkBack also says the server, the test and when it stops working.
-                    contentDescription = listOf(loc.countryName, loc.server + if (loc.id == chosen) ", in use" else "", state).joinToString(", ")
-                    addView(TextView(this@SettingsActivity).apply {
-                        text = loc.flag
-                        Ui.size(this, Ui.Type.HEADLINE, keepFont = true)
-                        gravity = Gravity.CENTER
-                    }, LinearLayout.LayoutParams(dp(Ui.ICON_BOX), dp(Ui.ICON_BOX)).apply { marginEnd = dp(14) })
-                    addView(LinearLayout(this@SettingsActivity).apply {
-                        orientation = LinearLayout.VERTICAL
-                        addView(Ui.text(this@SettingsActivity, Ui.Type.BODY, loc.countryName))
-                        addView(Ui.text(this@SettingsActivity, Ui.Type.CAPTION, loc.server + if (loc.id == chosen) " · in use" else ""))
-                        addView(Ui.text(
-                            this@SettingsActivity, Ui.Type.CAPTION, state,
-                            if (unreadable || soon || result == "No answer") Ui.danger(this@SettingsActivity) else null,
-                        ))
-                        // 3.0: a visible "I extended it" when it needs extending.
-                        if (soon && !unreadable) addView(Ui.text(this@SettingsActivity, Ui.Type.LABEL, "I extended it", Ui.accent(this@SettingsActivity)).apply {
-                            setPadding(0, dp(8), dp(12), dp(4))
-                            contentDescription = "I extended ${loc.countryName} at Proton"
-                            setOnClickListener {
-                                VpnUi.markExtended(this@SettingsActivity, loc)
-                                refreshAll()
-                            }
-                        })
-                    }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-                    if (loc.id == chosen) {
-                        addView(ImageView(this@SettingsActivity).apply {
-                            setImageDrawable(Ui.icon(this@SettingsActivity, R.drawable.ic_check, Ui.accent(this@SettingsActivity)))
-                            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-                        }, LinearLayout.LayoutParams(dp(24), dp(24)).apply { marginEnd = dp(4) })
-                    }
-                    addView(ImageButton(this@SettingsActivity).apply {
-                        setImageDrawable(Ui.icon(this@SettingsActivity, R.drawable.ic_more, color(R.color.text_secondary)))
-                        background = Ui.rippleBorderless(this@SettingsActivity)
-                        contentDescription = "More for ${loc.countryName}"
-                        setOnClickListener { vpnLocationSheet(loc) }
-                    }, LinearLayout.LayoutParams(dp(48), dp(48)))
-                    setOnClickListener {
-                        vpn.choose(loc)
-                        if (vpn.wanted) VpnUi.turnOn(this@SettingsActivity, vpnPermission, loc)
-                        refreshAll()
-                    }
-                    setOnLongClickListener {
-                        vpnLocationSheet(loc)
-                        true
-                    }
-                })
+            // Made again only when the locations change: a refresh doesn't cut off a tapped row's ripple.
+            if (rows.map { it.loc.id } != list.map { it.id }) {
+                box.removeAllViews()
+                rows.clear()
+                for (loc in list) rows += VpnRow(loc, chosen).also { box.addView(it.view) }
+            } else {
+                list.forEachIndexed { i, loc -> rows[i].bind(loc, chosen) }
             }
         }
         update()
         target += update
         return box
+    }
+
+    /** A location's row, kept while the location is there and filled in again as things change. */
+    private inner class VpnRow(loc: com.swiftbrowser.vpn.Vpn.Location, chosen: String?) {
+        var loc = loc
+            private set
+        private val country = Ui.text(this@SettingsActivity, Ui.Type.BODY, loc.countryName)
+        private val server = Ui.text(this@SettingsActivity, Ui.Type.CAPTION, "")
+        private val state = Ui.text(this@SettingsActivity, Ui.Type.CAPTION, "")
+        private val plainState = state.currentTextColor
+
+        // 3.0: a visible "I extended it" when it needs extending.
+        private val extended = Ui.text(this@SettingsActivity, Ui.Type.LABEL, "I extended it", Ui.accent(this@SettingsActivity)).apply {
+            minHeight = dp(40)
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, 0, dp(12), 0)
+            background = Ui.ripple(this@SettingsActivity, null, Ui.R_XSMALL)
+            setOnClickListener {
+                VpnUi.markExtended(this@SettingsActivity, this@VpnRow.loc)
+                refreshAll()
+            }
+        }
+        private val check = ImageView(this@SettingsActivity).apply {
+            setImageDrawable(Ui.icon(this@SettingsActivity, R.drawable.ic_check, Ui.accent(this@SettingsActivity)))
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            visibility = if (loc.id == chosen) View.VISIBLE else View.GONE
+        }
+        private val more = ImageButton(this@SettingsActivity).apply {
+            setImageDrawable(Ui.icon(this@SettingsActivity, R.drawable.ic_more, color(R.color.text_secondary)))
+            background = Ui.rippleBorderless(this@SettingsActivity)
+            setOnClickListener { vpnLocationSheet(this@VpnRow.loc) }
+        }
+        val view = LinearLayout(this@SettingsActivity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            minimumHeight = dp(Ui.ROW_TWO_LINES)
+            setPadding(dp(Ui.ROW_INSET), dp(8), dp(4), dp(8))
+            Piece.attach(this, tappable = true)
+            addView(TextView(this@SettingsActivity).apply {
+                text = loc.flag
+                Ui.size(this, Ui.Type.HEADLINE, keepFont = true)
+                gravity = Gravity.CENTER
+            }, LinearLayout.LayoutParams(dp(Ui.ICON_BOX), dp(Ui.ICON_BOX)).apply { marginEnd = dp(14) })
+            addView(LinearLayout(this@SettingsActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                addView(country)
+                addView(server)
+                addView(state)
+                addView(extended)
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            addView(check, LinearLayout.LayoutParams(dp(24), dp(24)).apply { marginEnd = dp(4) })
+            addView(more, LinearLayout.LayoutParams(dp(48), dp(48)))
+            setOnClickListener {
+                val vpn = com.swiftbrowser.vpn.Vpn
+                vpn.choose(this@VpnRow.loc)
+                if (vpn.wanted) VpnUi.turnOn(this@SettingsActivity, vpnPermission, this@VpnRow.loc)
+                refreshAll()
+            }
+            setOnLongClickListener {
+                vpnLocationSheet(this@VpnRow.loc)
+                true
+            }
+        }
+
+        init {
+            bind(loc, chosen)
+        }
+
+        fun bind(fresh: com.swiftbrowser.vpn.Vpn.Location, chosen: String?) {
+            loc = fresh
+            // 2.2: how it did in the last test, and when it needs extending at Proton.
+            val result = VpnUi.testResult(fresh)
+            val soon = fresh.renewBy - System.currentTimeMillis() < 14L * 24 * 3600 * 1000
+            // 3.0: its file can't be opened any more (Android's secure storage was reset).
+            val unreadable = com.swiftbrowser.vpn.Vpn.isUnreadable(fresh)
+            val line = if (unreadable) "Can't be opened any more: remove it and add it again" else listOfNotNull(result, VpnUi.renewText(fresh)).joinToString(" · ")
+            val inUse = fresh.id == chosen
+            // 3.0: TalkBack also says the server, the test and when it stops working.
+            view.contentDescription = listOf(fresh.countryName, fresh.server + if (inUse) ", in use" else "", line).joinToString(", ")
+            more.contentDescription = "More for ${fresh.countryName}"
+            extended.contentDescription = "I extended ${fresh.countryName} at Proton"
+            Motion.swapText(country, fresh.countryName)
+            Motion.swapText(server, fresh.server + if (inUse) " · in use" else "")
+            Motion.swapText(state, line)
+            state.setTextColor(if (unreadable || soon || result == "No answer") Ui.danger(this@SettingsActivity) else plainState)
+            extended.visibility = if (soon && !unreadable) View.VISIBLE else View.GONE
+            Motion.pop(check, inUse)
+        }
     }
 
     /** ⋮ or held: connect, mark it extended at Proton (another year), or remove it. */
@@ -2327,17 +2395,11 @@ class SettingsActivity : AppCompatActivity() {
     /** DNS over HTTPS (2.2): who looks up sites' addresses, encrypted; your network's own when off. */
     private fun chooseSecureDns() {
         val keys = listOf("cloudflare", "quad9", "google", "off")
-        val labels = arrayOf("Cloudflare (recommended)", "Quad9 (also blocks known bad sites)", "Google", "Off (your internet provider's)")
-        MaterialAlertDialogBuilder(this)
-            .setTitle("Private site lookups")
-            .setSingleChoiceItems(labels, keys.indexOf(prefs.secureDns).coerceAtLeast(0)) { d, which ->
-                d.dismiss()
-                prefs.secureDns = keys[which]
-                Engine.applySecureDns()
-                refreshAll()
-            }
-            .setNegativeButton(android.R.string.cancel, null)
-            .showImmersive()
+        val labels = listOf("Cloudflare (recommended)", "Quad9 (also blocks known bad sites)", "Google", "Off (your internet provider's)")
+        choose("Private site lookups", labels, keys.indexOf(prefs.secureDns).coerceAtLeast(0)) { which ->
+            prefs.secureDns = keys[which]
+            Engine.applySecureDns()
+        }
     }
 
     private fun siteSettingsText(): String {
@@ -2446,6 +2508,8 @@ class SettingsActivity : AppCompatActivity() {
             prefs.homeBackground = key
             refreshAll()
         }
+        // First, so it is in sight on a small phone; only with a picture in use.
+        if (now == HomeBackground.PICTURE) list.addView(pictureClarity())
         row(HomeBackground.NONE, HomeBackground.swatch(this, HomeBackground.NONE), 0, HomeBackground.label(HomeBackground.NONE)) { choose(HomeBackground.NONE) }
         for (p in HomeBackground.PRESETS) row(p.key, HomeBackground.swatch(this, p.key), 0, p.label) { choose(p.key) }
         row(HomeBackground.ACCENT, HomeBackground.swatch(this, HomeBackground.ACCENT), 0, HomeBackground.label(HomeBackground.ACCENT)) { choose(HomeBackground.ACCENT) }
@@ -2459,14 +2523,83 @@ class SettingsActivity : AppCompatActivity() {
         } else {
             row("-", null, R.drawable.ic_image, "Your own picture…") { homePicturePicker.launch(arrayOf("image/*")) }
         }
-        list.addView(Ui.text(this, Ui.Type.CAPTION, "A picture is shown softly, so the shortcuts stay readable. Not in incognito.").apply {
+        list.addView(Ui.text(this, Ui.Type.CAPTION, "The less clear a picture is, the easier the shortcuts are to read. Not in incognito.").apply {
             setPadding(dp(22), dp(10), dp(22), dp(4))
         })
         dialog = MaterialAlertDialogBuilder(this)
             .setTitle("Background of the home page")
-            .setView(android.widget.ScrollView(this).apply { addView(list) })
+            .setView(android.widget.ScrollView(this).apply {
+                // Softly cut at the bottom when there is more to scroll to.
+                isVerticalFadingEdgeEnabled = true
+                setFadingEdgeLength(dp(24))
+                addView(list)
+            })
             .setNegativeButton("Close", null)
             .showImmersive()
+    }
+
+    /**
+     * How clear the home page's picture is: a little picture of it with a heading on it, as the home
+     * page will look, and a slider from softest (the page's colour laid over it) to the picture exactly
+     * as it is. The home page takes it when it next shows.
+     */
+    private fun pictureClarity(): View {
+        val shownAt = prefs.homePictureClarity
+        val percent = Ui.steadyFigures(Ui.text(this, Ui.Type.LABEL, "$shownAt%"))
+        var picture: android.graphics.drawable.Drawable? = null
+        val sample = Ui.text(this, Ui.Type.HEADING, "Shortcuts")
+        fun sampleInk() = HomeBackground.paint(sample, HomeBackground.inkOf(this, picture), Ui.text(this))
+        val preview = FrameLayout(this).apply {
+            outlineProvider = object : android.view.ViewOutlineProvider() {
+                override fun getOutline(v: View, o: android.graphics.Outline) = o.setRoundRect(0, 0, v.width, v.height, dp(Ui.R_SMALL).toFloat())
+            }
+            clipToOutline = true
+            setBackgroundColor(Palette.color(this@SettingsActivity, R.color.home_bg))
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            addView(sample, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
+        }
+        val slider = SwiftSlider(this, SwiftSlider.Style.PANEL).apply {
+            max = 100
+            progress = shownAt
+            setColours(Ui.accent(this@SettingsActivity), Ui.accentContainer(this@SettingsActivity))
+            contentDescription = "How clear the picture is"
+            setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(bar: android.widget.SeekBar, value: Int, fromUser: Boolean) {
+                    if (!fromUser) return
+                    percent.text = "$value%"
+                    HomeBackground.showClarity(picture, value)
+                    sampleInk()
+                    prefs.homePictureClarity = value
+                }
+
+                override fun onStartTrackingTouch(bar: android.widget.SeekBar) {}
+
+                override fun onStopTrackingTouch(bar: android.widget.SeekBar) {}
+            })
+        }
+        HomeBackground.drawable(this, incognito = false) { late ->
+            picture = late
+            HomeBackground.showClarity(late, slider.progress)
+            preview.background = late
+            sampleInk()
+        }?.let {
+            picture = it
+            preview.background = it
+            sampleInk()
+        }
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(24), dp(4), dp(24), dp(12))
+            addView(preview, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(84)))
+            addView(LinearLayout(this@SettingsActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, dp(12), 0, 0)
+                addView(Ui.text(this@SettingsActivity, Ui.Type.BODY, "How clear the picture is"), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                addView(percent)
+            })
+            addView(slider, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        }
     }
 
     private val restorePicker = registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenDocument()) { uri ->
@@ -2521,16 +2654,10 @@ class SettingsActivity : AppCompatActivity() {
 
     private fun chooseInactiveDays() {
         val options = intArrayOf(7, 14, 21, 30, 0)
-        val labels = options.map { if (it == 0) "Never" else "After $it days" }.toTypedArray()
-        MaterialAlertDialogBuilder(this)
-            .setTitle("Move tabs to \"Inactive tabs\"")
-            .setSingleChoiceItems(labels, options.indexOf(prefs.inactiveDays).coerceAtLeast(0)) { d, which ->
-                prefs.inactiveDays = options[which]
-                d.dismiss()
-                refreshAll()
-            }
-            .setNegativeButton(android.R.string.cancel, null)
-            .showImmersive()
+        val labels = options.map { if (it == 0) "Never" else "After $it days" }
+        choose("Move tabs to \"Inactive tabs\"", labels, options.indexOf(prefs.inactiveDays).coerceAtLeast(0)) { which ->
+            prefs.inactiveDays = options[which]
+        }
     }
 
     private fun checkForUpdates() {
@@ -2639,11 +2766,55 @@ class SettingsActivity : AppCompatActivity() {
                 vpnServer = com.swiftbrowser.vpn.Vpn.current()?.server?.takeIf { vpn == com.swiftbrowser.core.SecurityStatus.Vpn.ON },
                 locationSites = com.swiftbrowser.core.SiteSettings.locationAllowedCount(),
             )
+            val rows = dialogColumn()
+            for (line in com.swiftbrowser.core.SecurityStatus.lines(inputs)) rows.addView(securityRow(line))
+            rows.addView(Ui.text(this@SettingsActivity, Ui.Type.CAPTION, com.swiftbrowser.core.SecurityStatus.LEGEND).apply { setPadding(0, dp(12), 0, 0) })
             MaterialAlertDialogBuilder(this@SettingsActivity)
                 .setTitle("Security status")
-                .setMessage(com.swiftbrowser.core.SecurityStatus.text(com.swiftbrowser.core.SecurityStatus.lines(inputs)))
+                .setView(scrolling(rows))
                 .setPositiveButton("Close", null)
                 .showImmersive()
+        }
+    }
+
+    /** What a dialog of rows holds: a column lined up with the dialog's title. */
+    private fun dialogColumn() = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(dp(24), dp(4), dp(24), dp(8))
+    }
+
+    private fun scrolling(content: View) = ScrollView(this).apply {
+        isVerticalScrollBarEnabled = false
+        Palette.glow(this)
+        addView(content)
+    }
+
+    /** A protection: its name, what is known about it under that, and at the row's end how sure Swift is. */
+    private fun securityRow(line: com.swiftbrowser.core.SecurityStatus.Line): View = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(0, dp(9), 0, dp(9))
+        // TalkBack reads a row as one line, as the words did when they were one text.
+        isFocusable = true
+        contentDescription = "${line.name}, ${line.state.word}. ${line.detail}"
+        addView(LinearLayout(this@SettingsActivity).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(Ui.text(this@SettingsActivity, Ui.Type.BODY, line.name))
+            addView(Ui.text(this@SettingsActivity, Ui.Type.CAPTION, line.detail).apply { setPadding(0, dp(2), 0, 0) })
+        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        addView(stateLabel(line.state), LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = dp(12) })
+    }
+
+    /** Checked in the accent's soft colour, On on a grey, Off just in grey words. */
+    private fun stateLabel(state: com.swiftbrowser.core.SecurityStatus.State): TextView {
+        val (fill, ink) = when (state) {
+            com.swiftbrowser.core.SecurityStatus.State.CHECKED -> Ui.accentContainer(this) to Ui.onAccentContainer(this)
+            com.swiftbrowser.core.SecurityStatus.State.ON -> color(R.color.surface_alt) to color(R.color.text_primary)
+            com.swiftbrowser.core.SecurityStatus.State.OFF -> null to color(R.color.text_secondary)
+        }
+        return Ui.text(this, Ui.Type.SMALL, state.word, ink).apply {
+            if (fill != null) background = Ui.shape(this@SettingsActivity, fill, Ui.R_XSMALL)
+            setPadding(dp(8), dp(3), dp(8), dp(3))
         }
     }
 
@@ -2653,46 +2824,97 @@ class SettingsActivity : AppCompatActivity() {
         return com.swiftbrowser.core.RightNow.summary(free, total, TabManager.tabs.count { it.session != null }, TabManager.tabs.size)
     }
 
-    /** The details, measured now: Swift's own memory is read off the main thread. */
+    /** Measured now: Swift's own memory is read off the main thread. Null when Settings has closed meanwhile. */
+    private suspend fun measureRightNow(): com.swiftbrowser.core.RightNow.Snapshot? {
+        val app = applicationContext
+        val (parts, crashes) = withContext(Dispatchers.IO) {
+            com.swiftbrowser.core.RightNow.parts(app) to Diagnostics.engineCrashes(app).map { it.time }
+        }
+        if (isFinishing || isDestroyed) return null
+        val (free, total, low) = com.swiftbrowser.core.RightNow.memory(this@SettingsActivity)
+        val tabs = TabManager.tabs
+        return com.swiftbrowser.core.RightNow.Snapshot(
+            freeMb = free,
+            totalMb = total,
+            low = low,
+            parts = parts,
+            tabs = tabs.size,
+            loaded = tabs.count { it.session != null },
+            kept = tabs.count { it.kept },
+            limitedBy = when {
+                Power.saving -> "Battery saver is on"
+                prefs.maxLiveTabs > 1 && Diagnostics.memoryLow() -> "Memory is low"
+                else -> null
+            },
+            crashesThisWeek = com.swiftbrowser.core.RightNow.crashesSince(crashes, System.currentTimeMillis()),
+            lastUnloaded = TabManager.lastUnloaded?.let {
+                com.swiftbrowser.core.RightNow.unloadedText(it.count, System.currentTimeMillis() - it.time, it.why)
+            },
+            lastRun = when (Diagnostics.problem) {
+                Diagnostics.Problem.CLOSED_BY_ANDROID -> "Last time, Android closed Swift while it was on screen, most likely to free memory."
+                Diagnostics.Problem.ENGINE_CRASH -> "Last time, pages stopped working while Swift was on screen."
+                null -> null
+            },
+        )
+    }
+
+    /** The details. Refresh measures again with the dialog left open, and what changed cross-fades where it is. */
     private fun showRightNow() {
         lifecycleScope.launch {
-            val app = applicationContext
-            val (parts, crashes) = withContext(Dispatchers.IO) {
-                com.swiftbrowser.core.RightNow.parts(app) to Diagnostics.engineCrashes(app).map { it.time }
-            }
-            if (isFinishing || isDestroyed) return@launch
-            val (free, total, low) = com.swiftbrowser.core.RightNow.memory(this@SettingsActivity)
-            val tabs = TabManager.tabs
-            val snapshot = com.swiftbrowser.core.RightNow.Snapshot(
-                freeMb = free,
-                totalMb = total,
-                low = low,
-                parts = parts,
-                tabs = tabs.size,
-                loaded = tabs.count { it.session != null },
-                kept = tabs.count { it.kept },
-                limitedBy = when {
-                    Power.saving -> "Battery saver is on"
-                    prefs.maxLiveTabs > 1 && Diagnostics.memoryLow() -> "Memory is low"
-                    else -> null
-                },
-                crashesThisWeek = com.swiftbrowser.core.RightNow.crashesSince(crashes, System.currentTimeMillis()),
-                lastUnloaded = TabManager.lastUnloaded?.let {
-                    com.swiftbrowser.core.RightNow.unloadedText(it.count, System.currentTimeMillis() - it.time, it.why)
-                },
-                lastRun = when (Diagnostics.problem) {
-                    Diagnostics.Problem.CLOSED_BY_ANDROID -> "Last time, Android closed Swift while it was on screen, most likely to free memory."
-                    Diagnostics.Problem.ENGINE_CRASH -> "Last time, pages stopped working while Swift was on screen."
-                    null -> null
-                },
-            )
-            MaterialAlertDialogBuilder(this@SettingsActivity)
+            val first = measureRightNow() ?: return@launch
+            val rows = dialogColumn()
+            bindRightNow(rows, com.swiftbrowser.core.RightNow.rows(first))
+            val d = MaterialAlertDialogBuilder(this@SettingsActivity)
                 .setTitle("Right now")
-                .setMessage(com.swiftbrowser.core.RightNow.details(snapshot))
-                .setPositiveButton("Refresh") { _, _ -> showRightNow() }
+                .setView(scrolling(rows))
+                .setPositiveButton("Refresh", null)
                 .setNegativeButton("Close", null)
                 .showImmersive()
+            var measuring = false
+            // Its own listener: the dialog's would close it.
+            d.getButton(android.content.DialogInterface.BUTTON_POSITIVE)?.setOnClickListener {
+                if (measuring) return@setOnClickListener
+                measuring = true
+                lifecycleScope.launch {
+                    val now = measureRightNow()
+                    measuring = false
+                    if (now != null && d.isShowing) {
+                        bindRightNow(rows, com.swiftbrowser.core.RightNow.rows(now))
+                        refreshAll()
+                    }
+                }
+            }
             refreshAll()
+        }
+    }
+
+    /** [rows] into [box]: in the rows already there when they are the same ones, otherwise made anew. */
+    private fun bindRightNow(box: LinearLayout, rows: List<com.swiftbrowser.core.RightNow.Row>) {
+        val same = box.childCount == rows.size && rows.indices.all { box.getChildAt(it).tag == rows[it].label }
+        if (same) {
+            rows.forEachIndexed { i, row ->
+                val line = box.getChildAt(i) as LinearLayout
+                Motion.swapText(line.getChildAt(line.childCount - 1) as TextView, row.value)
+            }
+            return
+        }
+        box.removeAllViews()
+        for (row in rows) box.addView(rightNowRow(row))
+    }
+
+    /** A measure: what it is on the left, how much on the right; a sentence of its own across the row. */
+    private fun rightNowRow(row: com.swiftbrowser.core.RightNow.Row): View = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        setPadding(0, dp(6), 0, dp(6))
+        tag = row.label
+        if (row.label == null) {
+            addView(Ui.steadyFigures(Ui.text(this@SettingsActivity, Ui.Type.BODY_SECONDARY, row.value)), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        } else {
+            addView(Ui.text(this@SettingsActivity, Ui.Type.BODY_SECONDARY, row.label))
+            addView(Ui.steadyFigures(Ui.text(this@SettingsActivity, Ui.Type.BODY_SECONDARY, row.value, color(R.color.text_primary))).apply {
+                gravity = Gravity.END
+                setPadding(dp(16), 0, 0, 0)
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         }
     }
 
@@ -2703,14 +2925,15 @@ class SettingsActivity : AppCompatActivity() {
         else -> "$n tabs: uses a lot of memory"
     }
 
-    /** A single choice from [labels] (2.9); [picked] then the rows refresh. */
-    private fun choose(title: String, labels: List<String>, checked: Int, picked: (Int) -> Unit) {
+    /** A single choice from [labels] (2.9); [picked] then the rows refresh, then [then] (a message about it). */
+    private fun choose(title: String, labels: List<String>, checked: Int, then: ((Int) -> Unit)? = null, picked: (Int) -> Unit) {
         MaterialAlertDialogBuilder(this)
             .setTitle(title)
             .setSingleChoiceItems(labels.toTypedArray(), checked) { d, which ->
                 picked(which)
                 d.dismiss()
                 refreshAll()
+                then?.invoke(which)
             }
             .setNegativeButton(android.R.string.cancel, null)
             .showImmersive()
@@ -2718,18 +2941,12 @@ class SettingsActivity : AppCompatActivity() {
 
     private fun chooseLiveTabs() {
         val options = (1..Prefs.MAX_LIVE_TABS_LIMIT).toList()
-        val labels = options.map { liveTabsText(it) }.toTypedArray()
-        MaterialAlertDialogBuilder(this)
-            .setTitle("Tabs ready to open instantly")
-            .setSingleChoiceItems(labels, options.indexOf(prefs.maxLiveTabs)) { d, which ->
-                prefs.maxLiveTabs = options[which]
-                // 3.0.1: a lower number applies now, not at the next tab switch.
-                com.swiftbrowser.tabs.TabManager.trimLiveSessions()
-                d.dismiss()
-                refreshAll()
-            }
-            .setNegativeButton(android.R.string.cancel, null)
-            .showImmersive()
+        val labels = options.map { liveTabsText(it) }
+        choose("Tabs ready to open instantly", labels, options.indexOf(prefs.maxLiveTabs)) { which ->
+            prefs.maxLiveTabs = options[which]
+            // 3.0.1: a lower number applies now, not at the next tab switch.
+            com.swiftbrowser.tabs.TabManager.trimLiveSessions()
+        }
     }
 
     private fun confirmRestart(text: String) {
@@ -2767,13 +2984,31 @@ class SettingsActivity : AppCompatActivity() {
         val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
         val parse = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
         val show = java.text.SimpleDateFormat("EEE d MMM", java.util.Locale.getDefault())
-        val text = days.joinToString("\n") { d ->
-            val name = if (d.day == today) "Today" else try { show.format(parse.parse(d.day)!!) } catch (e: Exception) { d.day }
-            "$name: ${UrlUtils.formatBytes(d.mobile)} mobile · ${UrlUtils.formatBytes(d.other)} Wi-Fi"
+        // The day on the left, then mobile data and Wi-Fi in a column each.
+        val table = android.widget.TableLayout(this).apply {
+            setColumnStretchable(0, true)
+            setColumnShrinkable(0, true)
         }
+        fun amount(text: String) = Ui.steadyFigures(Ui.text(this, Ui.Type.CAPTION, text)).apply {
+            gravity = Gravity.END
+            setPadding(dp(12), 0, 0, 0)
+        }
+        for (day in days) {
+            val name = if (day.day == today) "Today" else try { show.format(parse.parse(day.day)!!) } catch (e: Exception) { day.day }
+            table.addView(android.widget.TableRow(this).apply {
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, dp(5), 0, dp(5))
+                addView(Ui.text(this@SettingsActivity, Ui.Type.BODY_SECONDARY, name, color(R.color.text_primary)))
+                addView(amount("${UrlUtils.formatBytes(day.mobile)} mobile"))
+                addView(amount("${UrlUtils.formatBytes(day.other)} Wi-Fi"))
+            })
+        }
+        val rows = dialogColumn()
+        rows.addView(table)
+        rows.addView(Ui.text(this, Ui.Type.CAPTION, "Counted by Swift while it runs, so your carrier's count may differ a little.").apply { setPadding(0, dp(12), 0, 0) })
         val d = MaterialAlertDialogBuilder(this)
             .setTitle("Data used")
-            .setMessage(text + "\n\nCounted by Swift while it runs, so your carrier's count may differ a little.")
+            .setView(scrolling(rows))
             .setPositiveButton("Close", null)
             .setNeutralButton("Reset") { _, _ ->
                 com.swiftbrowser.engine.DataUsage.reset()
@@ -2844,14 +3079,14 @@ class SettingsActivity : AppCompatActivity() {
             MaterialAlertDialogBuilder(this)
                 .setTitle("No screen lock")
                 .setMessage("Anyone holding your phone could see your passwords. A screen lock (PIN, pattern or password) keeps them for you only.")
-                .setPositiveButton("Show anyway") { _, _ -> then() }
-                .setNegativeButton("Set a screen lock") { _, _ ->
+                .setPositiveButton("Set a screen lock") { _, _ ->
                     try {
                         startActivity(android.content.Intent(android.provider.Settings.ACTION_SECURITY_SETTINGS))
                     } catch (e: Exception) {
                         snack("Open Android's Settings → Security")
                     }
                 }
+                .setNegativeButton("Show anyway") { _, _ -> then() }
                 .showImmersive()
             return
         }
@@ -2902,22 +3137,15 @@ class SettingsActivity : AppCompatActivity() {
     private fun storageBreakdown(refresh: MutableList<() -> Unit>): View {
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(16), dp(16), dp(16), dp(12))
+            setPadding(dp(Ui.ROW_INSET), dp(16), dp(Ui.ROW_INSET), dp(12))
         }
         val total = TextView(this).apply {
             Ui.size(this, Ui.Type.HEADLINE, keepFont = true)
-            setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL))
+            setTypeface(Ui.medium(Ui.Type.HEADLINE))
             setTextColor(color(R.color.text_primary))
         }
         box.addView(total)
-        val bar = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            background = GradientDrawable().apply {
-                cornerRadius = dp(5).toFloat()
-                setColor(color(R.color.surface_alt))
-            }
-            clipToOutline = true
-        }
+        val bar = StorageBar(this)
         box.addView(bar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(10)).apply {
             topMargin = dp(10)
             bottomMargin = dp(6)
@@ -2925,57 +3153,66 @@ class SettingsActivity : AppCompatActivity() {
         val rows = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         box.addView(rows)
         val note = TextView(this).apply {
-            Ui.size(this, Ui.Type.CAPTION, keepFont = true)
+            Ui.size(this, Ui.Type.CAPTION)
             setTextColor(color(R.color.text_secondary))
             setPadding(0, dp(10), 0, 0)
         }
         box.addView(note)
-        val colors = intArrayOf(
-            R.color.group_blue, R.color.group_red, R.color.group_green, R.color.group_yellow,
-            R.color.group_purple, R.color.group_cyan, R.color.group_pink, R.color.group_grey,
-        )
-        val update = {
+        // What is yours to clear in the colours made from your accent; what can't get smaller in greys.
+        val card = color(R.color.card_bg)
+        val night = Palette.isNight(this)
+        val yours = StorageColours.kinds(Ui.accent(this), card, night)
+        val grey = StorageColours.other(card, night)
+        val greys = IntArray(4) { androidx.core.graphics.ColorUtils.blendARGB(grey, card, it * 0.22f) }
+        // Room for the rows while measuring, so they don't push everything down when they come.
+        val reserved = dp(30) * 7
+        var shown: List<Long>? = null
+        val update: () -> Unit = update@{
             val u = usage
+            val numbers = u?.let { listOf(it.app, it.adBlock, it.sites, it.cache, it.engine, it.swift, it.kept, it.other, it.total, it.androidTotal) }
+            // The same numbers again (every refresh of the page): nothing to do.
+            if (numbers != null && numbers == shown) return@update
+            val first = shown == null && numbers != null
+            shown = numbers
+            rows.minimumHeight = if (u == null) reserved else 0
             total.text = if (u == null) "Calculating…" else "Swift uses ${UrlUtils.formatBytes(u.total)}"
             // Android's App info lists the cache on its own, outside its Total.
             note.text = (if (u == null) "" else "Android's App info shows ${UrlUtils.formatBytes(u.androidTotal)} for Swift, plus the cache on its own line. ") +
                 "Most of the app is the browser itself and can't get smaller; the ad blocking files stay so blocking is fast. Old update files are deleted by themselves."
-            bar.removeAllViews()
             rows.removeAllViews()
             if (u != null) {
                 val parts = listOf(
-                    "The app" to u.app, "Ad blocking files" to u.adBlock, "Data saved by sites" to u.sites,
-                    "Cache" to u.cache, "Browser files" to u.engine, "Tabs, history and pictures" to u.swift,
-                    "Downloads inside Swift" to u.kept, "Other" to u.other,
+                    Triple("The app", u.app, greys[0]), Triple("Ad blocking files", u.adBlock, greys[1]), Triple("Data saved by sites", u.sites, yours[0]),
+                    Triple("Cache", u.cache, yours[1]), Triple("Browser files", u.engine, greys[2]), Triple("Tabs, history and pictures", u.swift, yours[2]),
+                    Triple("Downloads inside Swift", u.kept, yours[3]), Triple("Other", u.other, greys[3]),
                 )
-                parts.forEachIndexed { i, (label, bytes) ->
+                bar.show(LongArray(parts.size) { parts[it].second }, IntArray(parts.size) { parts[it].third })
+                for ((label, bytes, c) in parts) {
                     // 2.8: only shown when there are some (the option to move them out is gone).
-                    if (bytes <= 0 && label == "Downloads inside Swift") return@forEachIndexed
-                    val c = color(colors[i])
-                    if (bytes > 0 && u.total > 0) {
-                        bar.addView(View(this).apply { setBackgroundColor(c) }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, bytes.toFloat() / u.total))
-                    }
+                    if (bytes <= 0 && label == "Downloads inside Swift") continue
                     rows.addView(LinearLayout(this).apply {
                         orientation = LinearLayout.HORIZONTAL
                         gravity = Gravity.CENTER_VERTICAL
                         setPadding(0, dp(5), 0, dp(5))
-                        addView(View(this@SettingsActivity).apply {
-                            background = GradientDrawable().apply {
-                                shape = GradientDrawable.OVAL
-                                setColor(c)
-                            }
-                        }, LinearLayout.LayoutParams(dp(10), dp(10)).apply { marginEnd = dp(12) })
+                        addView(View(this@SettingsActivity).apply { background = Ui.circle(c) }, LinearLayout.LayoutParams(dp(10), dp(10)).apply { marginEnd = dp(12) })
                         addView(TextView(this@SettingsActivity).apply {
                             text = label
-                            Ui.size(this, Ui.Type.BODY, keepFont = true)
+                            Ui.size(this, Ui.Type.BODY)
                             setTextColor(color(R.color.text_primary))
                         }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
                         addView(TextView(this@SettingsActivity).apply {
                             text = UrlUtils.formatBytes(bytes)
-                            Ui.size(this, Ui.Type.BODY_SECONDARY, keepFont = true)
+                            Ui.size(this, Ui.Type.BODY_SECONDARY)
                             setTextColor(color(R.color.text_secondary))
                         })
                     })
+                }
+                // Measured while the page was open: the rows fade in where room was kept, and the bar grows from its start.
+                if (first && box.isShown) {
+                    Motion.fadeIn(rows, fromDy = 0)
+                    bar.pivotX = if (bar.layoutDirection == View.LAYOUT_DIRECTION_RTL) bar.width.toFloat() else 0f
+                    bar.scaleX = 0f
+                    Motion.anim(bar, Motion.NORMAL, Motion.standard).scaleX(1f).start()
                 }
             }
         }

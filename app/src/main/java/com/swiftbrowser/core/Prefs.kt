@@ -58,6 +58,16 @@ class Prefs(ctx: Context) {
         get() = sp.getString(HOME_BACKGROUND, "") ?: ""
         set(v) = sp.edit { putString(HOME_BACKGROUND, v) }
 
+    /** A website's upload button opens Swift's Files; off, the phone's own file picker. */
+    var uploadFromFiles: Boolean
+        get() = sp.getBoolean(UPLOAD_FROM_FILES, true)
+        set(v) = sp.edit { putBoolean(UPLOAD_FROM_FILES, v) }
+
+    /** How clear the home page's picture is, 0..100: at 100 no colour lies over it at all (HomeBackground). */
+    var homePictureClarity: Int
+        get() = sp.getInt(HOME_PICTURE_CLARITY, 50).coerceIn(0, 100)
+        set(v) = sp.edit { putInt(HOME_PICTURE_CLARITY, v) }
+
     /** The home page's "Continue" row: videos and articles left half-way (2.3). */
     var homeContinue: Boolean
         get() = sp.getBoolean(HOME_CONTINUE, true)
@@ -476,6 +486,8 @@ class Prefs(ctx: Context) {
         const val HOME_CONTINUE = "home_continue"
         const val HOME_ORDER = "home_order"
         const val HOME_BACKGROUND = "home_background"
+        const val HOME_PICTURE_CLARITY = "home_picture_clarity"
+        const val UPLOAD_FROM_FILES = "upload_from_files"
         const val NIGHT_LIGHT = "night_light"
         const val NIGHT_LIGHT_STRENGTH = "night_light_strength"
         const val WELCOME_DONE = "welcome_done"

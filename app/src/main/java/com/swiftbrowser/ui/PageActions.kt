@@ -214,7 +214,7 @@ object PageActions {
         Favicons.load(url) { icon ->
             val info = ShortcutInfoCompat.Builder(a, "site-" + url.hashCode())
                 .setShortLabel(label)
-                .setIcon(IconCompat.createWithBitmap(shortcutIcon(a, icon, label)))
+                .setIcon(IconCompat.createWithBitmap(shortcutIcon(a, icon, label, url)))
                 .setIntent(Intent(Intent.ACTION_VIEW, Uri.parse(url), a, MainActivity::class.java))
                 .build()
             val ok = ShortcutManagerCompat.isRequestPinShortcutSupported(a) &&
@@ -224,7 +224,7 @@ object PageActions {
     }
 
     /** A round icon: the site's own icon on white, or its first letter on a colour. */
-    private fun shortcutIcon(a: MainActivity, favicon: Bitmap?, label: String): Bitmap {
+    private fun shortcutIcon(a: MainActivity, favicon: Bitmap?, label: String, url: String): Bitmap {
         val size = (48 * a.resources.displayMetrics.density * 1.5f).toInt().coerceAtLeast(96)
         val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
         val c = Canvas(bmp)
@@ -237,8 +237,8 @@ object PageActions {
             val left = (size - inner) / 2f
             c.drawBitmap(favicon, Rect(0, 0, favicon.width, favicon.height), RectF(left, left, left + inner, left + inner), paint)
         } else {
-            val colors = intArrayOf(0xFF1B66E4.toInt(), 0xFF0F9D58.toInt(), 0xFFE8710A.toInt(), 0xFF9334E6.toInt(), 0xFFD93025.toInt())
-            paint.color = colors[(label.hashCode() and 0x7fffffff) % colors.size]
+            // The same colour as the site's shortcut on the home page.
+            paint.color = Ui.siteColor(com.swiftbrowser.core.TopSites.key(UrlUtils.host(url) ?: url))
             c.drawCircle(r, r, r, paint)
             paint.color = 0xFFFFFFFF.toInt()
             paint.textSize = size * 0.46f

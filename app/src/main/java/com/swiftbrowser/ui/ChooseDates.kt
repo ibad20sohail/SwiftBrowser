@@ -32,6 +32,9 @@ import java.util.Locale
 object ChooseDates {
     private const val CELLS = 42
 
+    /** How small a day starts from when it is tapped. */
+    private const val TAPPED = 0.85f
+
     /** A label for chosen days: "12 Oct – 20 Oct", "12 Oct", or with years when not this year's. */
     fun label(first: Int, last: Int): String {
         val year = Calendar.getInstance().get(Calendar.YEAR)
@@ -109,6 +112,8 @@ object ChooseDates {
         val numbers = ArrayList<TextView>(CELLS)
         // A little smaller than a finger's 40dp, so all six weeks fit the dialog on a small phone.
         val circle = Ui.dp(a, 32)
+        // The six weeks together, so a new month can come in as one.
+        val grid = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
         for (r in 0 until CELLS / 7) {
             val row = LinearLayout(a).apply { orientation = LinearLayout.HORIZONTAL }
             for (c in 0 until 7) {
@@ -116,14 +121,17 @@ object ChooseDates {
                     Ui.style(this, Ui.Type.BODY)
                     gravity = Gravity.CENTER
                     importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+                    // Round like the day's circle; the cell's press reaches it, and its background is the circle itself.
+                    foreground = Ui.ripple(a, null, 16)
                 }
                 val cell = FrameLayout(a).apply { addView(number, FrameLayout.LayoutParams(circle, circle, Gravity.CENTER)) }
                 row.addView(cell, LinearLayout.LayoutParams(0, Ui.dp(a, 36), 1f))
                 cells += cell
                 numbers += number
             }
-            box.addView(row)
+            grid.addView(row)
         }
+        box.addView(grid)
 
         var dialog: androidx.appcompat.app.AlertDialog? = null
         val full = SimpleDateFormat("EEEE d MMMM yyyy", Locale.getDefault())
@@ -154,7 +162,7 @@ object ChooseDates {
                 val between = s != null && e != null && day > s && day < e
                 number.text = n.toString()
                 number.alpha = if (future) Ui.DISABLED_ALPHA else 1f
-                number.typeface = if (ends || day == today) Ui.MEDIUM else android.graphics.Typeface.DEFAULT
+                number.typeface = if (ends || day == today) Ui.MEDIUM else Ui.typeface(Ui.Type.BODY)
                 number.setTextColor(if (ends) onAccent else if (between) onBand else if (future) secondary else text)
                 number.background = when {
                     ends -> Ui.circle(accent)
@@ -187,6 +195,9 @@ object ChooseDates {
                         else -> end = day
                     }
                     bind()
+                    number.scaleX = TAPPED
+                    number.scaleY = TAPPED
+                    Motion.anim(number, Motion.SHORT, Motion.standard).scaleX(1f).scaleY(1f).start()
                 }
             }
             val ahead = year * 100 + m < thisMonth
@@ -205,11 +216,13 @@ object ChooseDates {
         previous.setOnClickListener {
             month.add(Calendar.MONTH, -1)
             bind()
+            Motion.pageIn(grid, Motion.BACK)
         }
         next.setOnClickListener {
             if (month.get(Calendar.YEAR) * 100 + month.get(Calendar.MONTH) + 1 >= thisMonth) return@setOnClickListener
             month.add(Calendar.MONTH, 1)
             bind()
+            Motion.pageIn(grid, Motion.FORWARD)
         }
         bind()
 

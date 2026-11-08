@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Every Material button's press: Ui.pressable's numbers (Motion.PRESS_BUTTON, PRESS_DOWN, PRESS_UP). -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_enabled="true" android:state_pressed="true">
+        <set>
+            <objectAnimator
+                android:duration="100"
+                android:interpolator="@interpolator/swift_standard"
+                android:propertyName="scaleX"
+                android:valueTo="0.95"
+                android:valueType="floatType" />
+            <objectAnimator
+                android:duration="100"
+                android:interpolator="@interpolator/swift_standard"
+                android:propertyName="scaleY"
+                android:valueTo="0.95"
+                android:valueType="floatType" />
+        </set>
+    </item>
+    <item>
+        <set>
+            <objectAnimator
+                android:duration="150"
+                android:interpolator="@android:anim/overshoot_interpolator"
+                android:propertyName="scaleX"
+                android:valueTo="1.0"
+                android:valueType="floatType" />
+            <objectAnimator
+                android:duration="150"
+                android:interpolator="@android:anim/overshoot_interpolator"
+                android:propertyName="scaleY"
+                android:valueTo="1.0"
+                android:valueType="floatType" />
+        </set>
+    </item>
+</selector>

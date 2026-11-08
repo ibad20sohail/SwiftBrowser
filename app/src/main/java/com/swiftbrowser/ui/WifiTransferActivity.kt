@@ -12,7 +12,9 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.text.SpannableString
 import android.text.TextUtils
+import android.text.style.LeadingMarginSpan
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -61,6 +63,10 @@ class WifiTransferActivity : ListActivity() {
     private var codeText: TextView? = null
     private var shownCode = ""
 
+    /** New code and Stop, pinned under the page (made once). */
+    private lateinit var buttonBar: LinearLayout
+    private lateinit var bottomBar: BottomBar
+
     private fun dp(v: Int) = Ui.dp(this, v)
 
     private val askStorage = registerForActivityResult(ActivityResultContracts.RequestPermission()) { begin() }
@@ -69,6 +75,7 @@ class WifiTransferActivity : ListActivity() {
         super.onCreate(savedInstanceState)
         toolbar.title = "Wi-Fi transfer"
         list.visibility = View.GONE
+        buildButtonBar()
         // The phone mustn't sleep while the computer is using it.
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         // Turned sideways, or (3.0) going on in the background: the same server, address and code.
@@ -139,15 +146,19 @@ class WifiTransferActivity : ListActivity() {
             ) { runCatching { startActivity(Intent(android.provider.Settings.ACTION_WIFI_SETTINGS)) } }
             return
         }
-        // The page for the computer, in the phone's colours (worked out here: the server's threads don't touch the screen).
-        val accent = css(Ui.accent(this))
-        val onAccent = css(Ui.onAccent(this))
+        // The page for the computer, in the phone's colours (worked out here: the server's threads don't touch the
+        // screen); each for its own look, the computer's page choosing light or dark for itself.
+        val accentLight = css(Palette.colorFor(this, false, Looks.accent.primary))
+        val onAccentLight = css(Palette.colorFor(this, false, Looks.accent.onPrimary))
+        val accentDark = css(Palette.colorFor(this, true, Looks.accent.primary))
+        val onAccentDark = css(Palette.colorFor(this, true, Looks.accent.onPrimary))
         val assets = applicationContext.assets
         val s = WifiServer(applicationContext, address) { name ->
             val text = synchronized(pages) {
                 pages.getOrPut(name) { runCatching { assets.open("transfer/$name.html").bufferedReader().use { it.readText() } }.getOrDefault("") }
             }
-            text.replace("{{ACCENT}}", accent).replace("{{ON_ACCENT}}", onAccent)
+            text.replace("{{ACCENT_LIGHT}}", accentLight).replace("{{ON_ACCENT_LIGHT}}", onAccentLight)
+                .replace("{{ACCENT_DARK}}", accentDark).replace("{{ON_ACCENT_DARK}}", onAccentDark)
         }
         if (!s.start(FilesSettings.wifiPort)) {
             showProblem(R.drawable.ic_error, "Swift couldn't start the transfer", "Something on the phone is in the way. Try again in a moment.", "Try again") { begin() }
@@ -216,6 +227,7 @@ class WifiTransferActivity : ListActivity() {
     private fun showProblem(icon: Int, title: String, text: String, button: String, onClick: () -> Unit) {
         list.removeCallbacks(tick)
         toolbar.subtitle = null
+        bottomBar.show(false, Motion.enabled(this))
         empty.removeAllViews()
         val state = Ui.emptyState(this, icon, title, text)
         state.addView(MaterialButton(this).apply {
@@ -249,11 +261,11 @@ class WifiTransferActivity : ListActivity() {
             gravity = Gravity.CENTER_HORIZONTAL
             setPadding(dp(20), dp(24), dp(20), dp(24))
             // 3.0.5: a plain filled card, no outline (the page behind it is a step darker).
-            background = Ui.shape(this@WifiTransferActivity, Palette.color(this@WifiTransferActivity, R.color.card_bg), Ui.R_LARGE)
+            background = Ui.shape(this@WifiTransferActivity, Palette.color(this@WifiTransferActivity, R.color.card_bg), Ui.R_MEDIUM)
         }
         card.addView(Ui.iconBadge(this, R.drawable.ic_files_transfer, 56))
         card.addView(centered(Ui.text(this, Ui.Type.BODY_SECONDARY, "On your computer, open"), 16))
-        card.addView(centered(Ui.text(this, Ui.Type.HEADLINE, s.url, Ui.accent(this)).apply {
+        card.addView(centered(Ui.text(this, Ui.Type.TITLE, s.url, Ui.accent(this)).apply {
             setTextIsSelectable(true)
             ellipsize = TextUtils.TruncateAt.MIDDLE
         }, 4))
@@ -267,14 +279,15 @@ class WifiTransferActivity : ListActivity() {
         shownCode = s.code
         col.addView(card)
 
-        val status = Ui.text(this, Ui.Type.SUBTITLE, "").apply { setPadding(dp(8), dp(20), dp(8), 0) }
-        val activity = Ui.steadyFigures(Ui.text(this, Ui.Type.BODY_SECONDARY, "").apply { setPadding(dp(8), dp(4), dp(8), 0) })
+        val inset = dp(Ui.ROW_INSET)
+        val status = Ui.text(this, Ui.Type.SUBTITLE, "").apply { setPadding(inset, dp(20), inset, 0) }
+        val activity = Ui.steadyFigures(Ui.text(this, Ui.Type.BODY_SECONDARY, "").apply { setPadding(inset, dp(4), inset, 0) })
         col.addView(status)
         col.addView(activity)
         statusText = status
         activityText = activity
 
-        col.addView(Sheets.label(this, "Good to know", 16).apply { setPadding(dp(8), dp(20), dp(8), dp(6)) })
+        col.addView(Sheets.label(this, "Good to know", 16).apply { setPadding(inset, dp(20), inset, dp(6)) })
         for (line in listOf(
             "Your phone and computer must be on the same Wi-Fi.",
             // 3.0: it goes on in the background while something is being sent.
@@ -284,30 +297,15 @@ class WifiTransferActivity : ListActivity() {
             "The transfer isn't encrypted. Use it on your own Wi-Fi, not public Wi-Fi.",
             "Anyone with the address and the code can reach your files while this screen is open: only give them to people you trust.",
         )) {
-            col.addView(Ui.text(this, Ui.Type.BODY_SECONDARY, "•  $line").apply { setPadding(dp(8), dp(4), dp(8), dp(4)) })
+            col.addView(Ui.text(this, Ui.Type.BODY_SECONDARY, "").apply {
+                setPadding(inset, dp(4), inset, dp(4))
+                // A long line wraps under its text, not under the bullet.
+                val bullet = "•  "
+                text = SpannableString(bullet + line).apply {
+                    setSpan(LeadingMarginSpan.Standard(0, paint.measureText(bullet).toInt()), 0, length, 0)
+                }
+            })
         }
-        val buttons = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.END
-            setPadding(0, dp(16), 0, 0)
-        }
-        buttons.addView(MaterialButton(this, null, androidx.appcompat.R.attr.borderlessButtonStyle).apply {
-            text = "New code"
-            setOnClickListener {
-                server?.renewCode()
-                updateStatus()
-                Messages.show(this@WifiTransferActivity, "A new code: the computer needs to enter it again")
-            }
-        })
-        buttons.addView(MaterialButton(this).apply {
-            text = "Stop"
-            setOnClickListener {
-                // 3.0: Stop means stop, even with something moving.
-                stopping = true
-                finish()
-            }
-        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = dp(8) })
-        col.addView(buttons)
         Palette.paint(col)
         empty.addView(ScrollView(this).apply {
             isVerticalScrollBarEnabled = false
@@ -316,9 +314,42 @@ class WifiTransferActivity : ListActivity() {
             addView(col)
         }, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         empty.visibility = View.VISIBLE
+        bottomBar.show(true, Motion.enabled(this))
         updateStatus()
         list.removeCallbacks(tick)
         list.postDelayed(tick, 500)
+    }
+
+    /** New code and Stop in a bar under the page, like Free up space's: always in sight on a small screen. */
+    private fun buildButtonBar() {
+        val box = list.parent as ViewGroup
+        val column = box.parent as LinearLayout
+        buttonBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.END or Gravity.CENTER_VERTICAL
+            setPadding(dp(16), dp(8), dp(8), dp(8))
+            visibility = View.GONE
+            setBackgroundColor(Palette.color(this@WifiTransferActivity, R.color.sheet_bg))
+        }
+        bottomBar = BottomBar(buttonBar)
+        buttonBar.addView(MaterialButton(this, null, androidx.appcompat.R.attr.borderlessButtonStyle).apply {
+            text = "New code"
+            setOnClickListener {
+                server?.renewCode()
+                updateStatus()
+                Messages.show(this@WifiTransferActivity, "A new code: the computer needs to enter it again", bottomOffset = buttonBar.height)
+            }
+        })
+        buttonBar.addView(MaterialButton(this).apply {
+            text = "Stop"
+            setOnClickListener {
+                // 3.0: Stop means stop, even with something moving.
+                stopping = true
+                finish()
+            }
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = dp(8) })
+        column.addView(buttonBar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        Palette.paint(buttonBar)
     }
 
     private fun centered(v: TextView, top: Int): TextView = v.apply {
@@ -339,13 +370,13 @@ class WifiTransferActivity : ListActivity() {
         val s = server ?: return
         if (s.code != shownCode) {
             shownCode = s.code
-            codeText?.text = spaced(s.code)
+            codeText?.let { Motion.swapText(it, spaced(s.code)) }
             codeText?.contentDescription = s.code.toCharArray().joinToString(" ")
         }
         val sending = s.sending.get()
         val receiving = s.receiving.get()
         val name = s.receivingName
-        statusText?.text = when {
+        val said = when {
             name != null -> "Receiving “$name”…"
             receiving > 0 -> "Receiving from your computer…"
             sending > 0 -> "Sending to your computer…"
@@ -355,6 +386,7 @@ class WifiTransferActivity : ListActivity() {
             s.lockedOut -> "Someone typed wrong codes. Tap New code to let computers in again."
             else -> "Waiting for your computer…"
         }
+        statusText?.let { Motion.swapText(it, said) }
         statusText?.setTextColor(if (s.lockedOut && !s.connected && sending == 0 && receiving == 0) Ui.danger(this) else Ui.text(this))
         val parts = ArrayList<String>(3)
         val received = s.bytesReceived.get()

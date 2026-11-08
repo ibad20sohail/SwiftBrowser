@@ -704,7 +704,7 @@ object Docs {
             .put("size", if (size > 0) size else doc.size).put("ranges", size > 0).put("place", doc.place ?: "")
             .put("progress", doc.progress.toDouble()).put("web", doc.web != null).put("where", where(ctx, doc))
             .put("copy", copy).put("accentLight", Helper.accentColor(false)).put("accentDark", Helper.accentColor(true))
-            .put("colorsLight", Helper.pageColors(false)).put("colorsDark", Helper.pageColors(true))
+            .put("colorsLight", viewerColors(ctx, false)).put("colorsDark", viewerColors(ctx, true))
             // 3.0.5: the viewer's bars and messages take Swift's font, or the phone's if it couldn't be read.
             .put("swiftFont", com.swiftbrowser.ui.AppFont.active)
             // 3.0: what the details panel says it is; incognito ones keep nothing (e-book pages);
@@ -712,6 +712,17 @@ object Docs {
             .put("label", doc.kind.label).put("incognito", doc.incognito)
             .put("thumb", doc.kind == Kind.PDF && !doc.incognito && !DocThumbs.hasViewerPicture(ctx, doc.uri)))
         if (!doc.incognito) updateShortcuts(ctx)
+    }
+
+    /** Swift's page colours, and what only the viewer's own look needs: the page behind documents, raised parts and the accent's soft colours. */
+    private fun viewerColors(ctx: Context, night: Boolean): JSONObject {
+        fun hex(res: Int) = String.format("#%06x", com.swiftbrowser.ui.Palette.colorFor(ctx, night, res) and 0xFFFFFF)
+        val accent = com.swiftbrowser.ui.Looks.accent
+        return Helper.pageColors(night)
+            .put("backdrop", hex(com.swiftbrowser.R.color.settings_bg))
+            .put("surfaceAlt", hex(com.swiftbrowser.R.color.surface_alt))
+            .put("accentSoft", hex(accent.container))
+            .put("onAccentSoft", hex(accent.onContainer))
     }
 
     private fun where(ctx: Context, doc: Doc): String {

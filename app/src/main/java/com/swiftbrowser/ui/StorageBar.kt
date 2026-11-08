@@ -1,5 +1,6 @@
 package com.swiftbrowser.ui
 
+import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Paint
@@ -18,6 +19,7 @@ import kotlin.math.sin
  * videos, music, documents, the rest) with what is free at the end, each part a thin rounded bar of
  * its own colour, a little apart. Until the split is known it has two parts, used and free, as
  * before. Drawn from widths worked out when what it shows or its size changes, never while drawing.
+ * Changing parts move to their new widths inside this one view, with no layout.
  */
 class StorageBar(ctx: Context) : View(ctx) {
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -27,6 +29,11 @@ class StorageBar(ctx: Context) : View(ctx) {
     private var colors = IntArray(0)
     private var widths = IntArray(0)
 
+    /** The widths the parts are moving from, how far they have got, and what moves them. */
+    private var movingFrom: IntArray? = null
+    private var along = 1f
+    private var mover: ValueAnimator? = null
+
     init {
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
     }
@@ -34,15 +41,60 @@ class StorageBar(ctx: Context) : View(ctx) {
     /** Shows [parts] (bytes, in order) in [colors]; the same again changes nothing. */
     fun show(parts: LongArray, colors: IntArray) {
         if (parts.contentEquals(this.parts) && colors.contentEquals(this.colors)) return
+        val before = widths
         this.parts = parts
         this.colors = colors
         measureParts()
-        invalidate()
+        stopMoving()
+        val from = if (isAttachedToWindow && isLaidOut && Motion.enabled(context)) startingWidths(before, widths) else null
+        if (from != null) move(from) else invalidate()
+    }
+
+    /** Where the parts start from: the same parts as before, or the used part splitting into what fills it. */
+    private fun startingWidths(old: IntArray, new: IntArray): IntArray? {
+        if (old.isEmpty() || new.isEmpty() || old.contentEquals(new)) return null
+        if (old.size == new.size) return old
+        if (old.size != 2 || new.size <= 2) return null
+        // Used and free (the two parts until the split is known) become the used parts and free.
+        val used = new.size - 1
+        val newUsed = (0 until used).sumOf { new[it] }
+        if (newUsed <= 0) return null
+        val shown = (0 until used).count { new[it] > 0 }
+        val room = (old[0] - gap * (shown - 1)).coerceAtLeast(0)
+        return IntArray(new.size) { i -> if (i == used) old[1] else new[i] * room / newUsed }
+    }
+
+    private fun move(from: IntArray) {
+        movingFrom = from
+        along = 0f
+        mover = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = Motion.NORMAL
+            interpolator = Motion.standard
+            addUpdateListener {
+                along = it.animatedValue as Float
+                if (along >= 1f) movingFrom = null
+                invalidate()
+            }
+            start()
+        }
+    }
+
+    private fun stopMoving() {
+        mover?.cancel()
+        mover = null
+        movingFrom = null
+        along = 1f
+    }
+
+    override fun onDetachedFromWindow() {
+        stopMoving()
+        super.onDetachedFromWindow()
     }
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
         measureParts()
+        stopMoving()
     }
 
     private fun measureParts() {
@@ -60,9 +112,10 @@ class StorageBar(ctx: Context) : View(ctx) {
         val r = (bottom - top) / 2f
         var x = paddingLeft.toFloat()
         val rtl = layoutDirection == LAYOUT_DIRECTION_RTL
+        val from = movingFrom
         for (i in parts.indices) {
-            val w = widths[i]
-            if (w <= 0) continue
+            val w = if (from != null && i < from.size) from[i] + (widths[i] - from[i]) * along else widths[i].toFloat()
+            if (w <= 0f) continue
             if (rtl) rect.set(width - x - w, top, width - x, bottom) else rect.set(x, top, x + w, bottom)
             paint.color = colors.getOrElse(i) { 0 }
             canvas.drawRoundRect(rect, r, r, paint)

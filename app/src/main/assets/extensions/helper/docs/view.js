@@ -29,6 +29,38 @@ const KINDS = {
   zip: ['ZIP', '#8d6e00'],
 };
 
+// The app's own icons (Material Symbols Rounded, in the same viewBox), for what the page draws itself.
+const SYMBOL = {
+  back: 'm313,-440l196,196q12,12 11.5,28T508,-188q-12,11 -28,11.5T452,-188L188,-452q-6,-6 -8.5,-13t-2.5,-15q0,-8 2.5,-15t8.5,-13l264,-264q11,-11 27.5,-11t28.5,11q12,12 12,28.5T508,-715L313,-520h447q17,0 28.5,11.5T800,-480q0,17 -11.5,28.5T760,-440H313Z',
+  play: 'M320,-273v-414q0,-17 12,-28.5t28,-11.5q5,0 10.5,1.5T381,-721l326,207q9,6 13.5,15t4.5,19q0,10 -4.5,19T707,-446L381,-239q-5,3 -10.5,4.5T360,-233q-16,0 -28,-11.5T320,-273Z',
+  search: 'M380,-320q-109,0 -184.5,-75.5T120,-580q0,-109 75.5,-184.5T380,-840q109,0 184.5,75.5T640,-580q0,44 -14,83t-38,69l224,224q11,11 11,28t-11,28q-11,11 -28,11t-28,-11L532,-372q-30,24 -69,38t-83,14Zm0,-80q75,0 127.5,-52.5T560,-580q0,-75 -52.5,-127.5T380,-760q-75,0 -127.5,52.5T200,-580q0,75 52.5,127.5T380,-400Z',
+  add: 'M440,-440H240q-17,0 -28.5,-11.5T200,-480q0,-17 11.5,-28.5T240,-520h200v-200q0,-17 11.5,-28.5T480,-760q17,0 28.5,11.5T520,-720v200h200q17,0 28.5,11.5T760,-480q0,17 -11.5,28.5T720,-440H520v200q0,17 -11.5,28.5T480,-200q-17,0 -28.5,-11.5T440,-240v-200Z',
+  volume: 'M760,-481q0,-83 -44,-151.5T598,-735q-15,-7 -22,-21.5t-2,-29.5q6,-16 21.5,-23t31.5,0q97,43 155,131.5T840,-481q0,108 -58,196.5T627,-153q-16,7 -31.5,0T574,-176q-5,-15 2,-29.5t22,-21.5q74,-34 118,-102.5T760,-481ZM280,-360H160q-17,0 -28.5,-11.5T120,-400v-160q0,-17 11.5,-28.5T160,-600h120l132,-132q19,-19 43.5,-8.5T480,-703v446q0,27 -24.5,37.5T412,-228L280,-360Zm380,-120q0,42 -19,79.5T591,-339q-10,6 -20.5,0.5T560,-356v-250q0,-12 10.5,-17.5t20.5,0.5q31,25 50,63t19,80ZM400,-606l-86,86H200v80h114l86,86v-252ZM300,-480Z',
+  more: 'M480,-160q-33,0 -56.5,-23.5T400,-240q0,-33 23.5,-56.5T480,-320q33,0 56.5,23.5T560,-240q0,33 -23.5,56.5T480,-160Zm0,-240q-33,0 -56.5,-23.5T400,-480q0,-33 23.5,-56.5T480,-560q33,0 56.5,23.5T560,-480q0,33 -23.5,56.5T480,-400Zm0,-240q-33,0 -56.5,-23.5T400,-720q0,-33 23.5,-56.5T480,-800q33,0 56.5,23.5T560,-720q0,33 -23.5,56.5T480,-640Z',
+  up: 'M480,-528L324,-372q-11,11 -28,11t-28,-11q-11,-11 -11,-28t11,-28l184,-184q12,-12 28,-12t28,12l184,184q11,11 11,28t-11,28q-11,11 -28,11t-28,-11L480,-528Z',
+  down: 'M480,-361q-8,0 -15,-2.5t-13,-8.5L268,-556q-11,-11 -11,-28t11,-28q11,-11 28,-11t28,11l156,156 156,-156q11,-11 28,-11t28,11q11,11 11,28t-11,28L508,-372q-6,6 -13,8.5t-15,2.5Z',
+  close: 'M480,-424L284,-228q-11,11 -28,11t-28,-11q-11,-11 -11,-28t11,-28l196,-196 -196,-196q-11,-11 -11,-28t11,-28q11,-11 28,-11t28,11l196,196 196,-196q11,-11 28,-11t28,11q11,11 11,28t-11,28L536,-480l196,196q11,11 11,28t-11,28q-11,11 -28,11t-28,-11L480,-424Z',
+  remove: 'M240-440q-17 0-28.5-11.5T200-480q0-17 11.5-28.5T240-520h480q17 0 28.5 11.5T760-480q0 17-11.5 28.5T720-440H240Z',
+  prev: 'm432-480 156 156q11 11 11 28t-11 28q-11 11-28 11t-28-11L348-452q-6-6-8.5-13t-2.5-15q0-8 2.5-15t8.5-13l184-184q11-11 28-11t28 11q11 11 11 28t-11 28L432-480Z',
+  next: 'M504,-480L348,-636q-11,-11 -11,-28t11,-28q11,-11 28,-11t28,11l184,184q6,6 8.5,13t2.5,15q0,8 -2.5,15t-8.5,13L404,-268q-11,11 -28,11t-28,-11q-11,-11 -11,-28t11,-28l156,-156Z',
+  share: 'M720,-80q-50,0 -85,-35t-35,-85q0,-7 1,-14.5t3,-13.5L322,-392q-17,15 -38,23.5t-44,8.5q-50,0 -85,-35t-35,-85q0,-50 35,-85t85,-35q23,0 44,8.5t38,23.5l282,-164q-2,-6 -3,-13.5t-1,-14.5q0,-50 35,-85t85,-35q50,0 85,35t35,85q0,50 -35,85t-85,35q-23,0 -44,-8.5T638,-672L356,-508q2,6 3,13.5t1,14.5q0,7 -1,14.5t-3,13.5l282,164q17,-15 38,-23.5t44,-8.5q50,0 85,35t35,85q0,50 -35,85t-85,35Zm0,-640q17,0 28.5,-11.5T760,-760q0,-17 -11.5,-28.5T720,-800q-17,0 -28.5,11.5T680,-760q0,17 11.5,28.5T720,-720ZM240,-440q17,0 28.5,-11.5T280,-480q0,-17 -11.5,-28.5T240,-520q-17,0 -28.5,11.5T200,-480q0,17 11.5,28.5T240,-440Zm480,280q17,0 28.5,-11.5T760,-200q0,-17 -11.5,-28.5T720,-240q-17,0 -28.5,11.5T680,-200q0,17 11.5,28.5T720,-160Zm0,-600ZM240,-480Zm480,280Z',
+  open: 'M200,-120q-33,0 -56.5,-23.5T120,-200v-560q0,-33 23.5,-56.5T200,-840h240q17,0 28.5,11.5T480,-800q0,17 -11.5,28.5T440,-760H200v560h560v-240q0,-17 11.5,-28.5T800,-480q17,0 28.5,11.5T840,-440v240q0,33 -23.5,56.5T760,-120H200Zm560,-584L416,-360q-11,11 -28,11t-28,-11q-11,-11 -11,-28t11,-28l344,-344H600q-17,0 -28.5,-11.5T560,-800q0,-17 11.5,-28.5T600,-840h200q17,0 28.5,11.5T840,-800v200q0,17 -11.5,28.5T800,-560q-17,0 -28.5,-11.5T760,-600v-104Z',
+  download: 'M480,-337q-8,0 -15,-2.5t-13,-8.5L308,-492q-12,-12 -11.5,-28t11.5,-28q12,-12 28.5,-12.5T365,-549l75,75v-286q0,-17 11.5,-28.5T480,-800q17,0 28.5,11.5T520,-760v286l75,-75q12,-12 28.5,-11.5T652,-548q11,12 11.5,28T652,-492L508,-348q-6,6 -13,8.5t-15,2.5ZM240,-160q-33,0 -56.5,-23.5T160,-240v-80q0,-17 11.5,-28.5T200,-360q17,0 28.5,11.5T240,-320v80h480v-80q0,-17 11.5,-28.5T760,-360q17,0 28.5,11.5T800,-320v80q0,33 -23.5,56.5T720,-160H240Z',
+  edit: 'M200,-200h57l391,-391 -57,-57 -391,391v57Zm-40,80q-17,0 -28.5,-11.5T120,-160v-97q0,-16 6,-30.5t17,-25.5l505,-504q12,-11 26.5,-17t30.5,-6q16,0 31,6t26,18l55,56q12,11 17.5,26t5.5,30q0,16 -5.5,30.5T817,-647L313,-143q-11,11 -25.5,17t-30.5,6h-97Zm600,-584l-56,-56 56,56Zm-141,85l-28,-29 57,57 -29,-28Z',
+  style: 'M560,-680H420q-25,0 -42.5,-17.5T360,-740q0,-25 17.5,-42.5T420,-800h400q25,0 42.5,17.5T880,-740q0,25 -17.5,42.5T820,-680H680v460q0,25 -17.5,42.5T620,-160q-25,0 -42.5,-17.5T560,-220v-460ZM200,-480h-60q-25,0 -42.5,-17.5T80,-540q0,-25 17.5,-42.5T140,-600h240q25,0 42.5,17.5T440,-540q0,25 -17.5,42.5T380,-480h-60v260q0,25 -17.5,42.5T260,-160q-25,0 -42.5,-17.5T200,-220v-260Z',
+  reader: 'M200,-120q-33,0 -56.5,-23.5T120,-200v-560q0,-33 23.5,-56.5T200,-840h560q33,0 56.5,23.5T840,-760v560q0,33 -23.5,56.5T760,-120H200Zm0,-80h560v-560H200v560Zm0,-560v560 -560Zm120,480h200q17,0 28.5,-11.5T560,-320q0,-17 -11.5,-28.5T520,-360H320q-17,0 -28.5,11.5T280,-320q0,17 11.5,28.5T320,-280Zm0,-160h320q17,0 28.5,-11.5T680,-480q0,-17 -11.5,-28.5T640,-520H320q-17,0 -28.5,11.5T280,-480q0,17 11.5,28.5T320,-440Zm0,-160h320q17,0 28.5,-11.5T680,-640q0,-17 -11.5,-28.5T640,-680H320q-17,0 -28.5,11.5T280,-640q0,17 11.5,28.5T320,-600Z',
+  pages: 'M200,-520q-33,0 -56.5,-23.5T120,-600v-160q0,-33 23.5,-56.5T200,-840h160q33,0 56.5,23.5T440,-760v160q0,33 -23.5,56.5T360,-520H200Zm0,400q-33,0 -56.5,-23.5T120,-200v-160q0,-33 23.5,-56.5T200,-440h160q33,0 56.5,23.5T440,-360v160q0,33 -23.5,56.5T360,-120H200Zm400,-400q-33,0 -56.5,-23.5T520,-600v-160q0,-33 23.5,-56.5T600,-840h160q33,0 56.5,23.5T840,-760v160q0,33 -23.5,56.5T760,-520H600Zm0,400q-33,0 -56.5,-23.5T520,-200v-160q0,-33 23.5,-56.5T600,-440h160q33,0 56.5,23.5T840,-360v160q0,33 -23.5,56.5T760,-120H600ZM200,-600h160v-160H200v160Zm400,0h160v-160H600v160Zm0,400h160v-160H600v160Zm-400,0h160v-160H200v160Zm400,-400Zm0,240Zm-240,0Zm0,-240Z',
+  info: 'M480,-280q17,0 28.5,-11.5T520,-320v-160q0,-17 -11.5,-28.5T480,-520q-17,0 -28.5,11.5T440,-480v160q0,17 11.5,28.5T480,-280Zm0,-320q17,0 28.5,-11.5T520,-640q0,-17 -11.5,-28.5T480,-680q-17,0 -28.5,11.5T440,-640q0,17 11.5,28.5T480,-600Zm0,520q-83,0 -156,-31.5T197,-197q-54,-54 -85.5,-127T80,-480q0,-83 31.5,-156T197,-763q54,-54 127,-85.5T480,-880q83,0 156,31.5T763,-763q54,54 85.5,127T880,-480q0,83 -31.5,156T763,-197q-54,54 -127,85.5T480,-80Zm0,-80q134,0 227,-93t93,-227q0,-134 -93,-227t-227,-93q-134,0 -227,93t-93,227q0,134 93,227t227,93Zm0,-320Z',
+  home: 'M320,-40q-33,0 -56.5,-23.5T240,-120v-120q0,-17 11.5,-28.5T280,-280q17,0 28.5,11.5T320,-240h400v-480H320q0,17 -11.5,28.5T280,-680q-17,0 -28.5,-11.5T240,-720v-120q0,-33 23.5,-56.5T320,-920h400q33,0 56.5,23.5T800,-840v720q0,33 -23.5,56.5T720,-40H320Zm0,-120v40h400v-40H320Zm80,-344L204,-308q-11,11 -28,11t-28,-11q-11,-11 -11,-28t11,-28l196,-196H240q-17,0 -28.5,-11.5T200,-600q0,-17 11.5,-28.5T240,-640h200q17,0 28.5,11.5T480,-600v200q0,17 -11.5,28.5T440,-360q-17,0 -28.5,-11.5T400,-400v-104Zm-80,-296h400v-40H320v40Zm0,0v-40 40Zm0,640v40 -40Z',
+  goto: 'M647-440H200q-17 0-28.5-11.5T160-480q0-17 11.5-28.5T200-520h447L451-716q-12-12-11.5-28t12.5-28q12-11 28-11.5t28 11.5l264 264q6 6 8.5 13t2.5 15q0 8-2.5 15t-8.5 13L508-188q-11 11-27.5 11T452-188q-12-12-12-28.5t12-28.5l195-195Z',
+  chapters: 'M160-280q-17 0-28.5-11.5T120-320q0-17 11.5-28.5T160-360h480q17 0 28.5 11.5T680-320q0 17-11.5 28.5T640-280H160Zm0-160q-17 0-28.5-11.5T120-480q0-17 11.5-28.5T160-520h480q17 0 28.5 11.5T680-480q0 17-11.5 28.5T640-440H160Zm0-160q-17 0-28.5-11.5T120-640q0-17 11.5-28.5T160-680h480q17 0 28.5 11.5T680-640q0 17-11.5 28.5T640-600H160Zm640 320q-17 0-28.5-11.5T760-320q0-17 11.5-28.5T800-360q17 0 28.5 11.5T840-320q0 17-11.5 28.5T800-280Zm0-160q-17 0-28.5-11.5T760-480q0-17 11.5-28.5T800-520q17 0 28.5 11.5T840-480q0 17-11.5 28.5T800-440Zm0-160q-17 0-28.5-11.5T760-640q0-17 11.5-28.5T800-680q17 0 28.5 11.5T840-640q0 17-11.5 28.5T800-600Z',
+  pdf: 'M400-540h40q17 0 28.5-11.5T480-580v-40q0-17-11.5-28.5T440-660h-60q-8 0-14 6t-6 14v160q0 8 6 14t14 6q8 0 14-6t6-14v-60Zm0-40v-40h40v40h-40Zm200 120q17 0 28.5-11.5T640-500v-120q0-17-11.5-28.5T600-660h-60q-8 0-14 6t-6 14v160q0 8 6 14t14 6h60Zm-40-40v-120h40v120h-40Zm160-40h20q8 0 14-6t6-14q0-8-6-14t-14-6h-20v-40h20q8 0 14-6t6-14q0-8-6-14t-14-6h-40q-8 0-14 6t-6 14v160q0 8 6 14t14 6q8 0 14-6t6-14v-60ZM320-240q-33 0-56.5-23.5T240-320v-480q0-33 23.5-56.5T320-880h480q33 0 56.5 23.5T880-800v480q0 33-23.5 56.5T800-240H320Zm0-80h480v-480H320v480ZM160-80q-33 0-56.5-23.5T80-160v-520q0-17 11.5-28.5T120-720q17 0 28.5 11.5T160-680v520h520q17 0 28.5 11.5T720-120q0 17-11.5 28.5T680-80H160Zm160-720v480-480Z',
+  print: 'M320-120q-33 0-56.5-23.5T240-200v-80h-80q-33 0-56.5-23.5T80-360v-160q0-51 35-85.5t85-34.5h560q51 0 85.5 34.5T880-520v160q0 33-23.5 56.5T800-280h-80v80q0 33-23.5 56.5T640-120H320ZM160-360h80q0-33 23.5-56.5T320-440h320q33 0 56.5 23.5T720-360h80v-160q0-17-11.5-28.5T760-560H200q-17 0-28.5 11.5T160-520v160Zm480-280v-120H320v120h-80v-120q0-33 23.5-56.5T320-840h320q33 0 56.5 23.5T720-760v120h-80Zm80 180q17 0 28.5-11.5T760-500q0-17-11.5-28.5T720-540q-17 0-28.5 11.5T680-500q0 17 11.5 28.5T720-460Zm-80 260v-160H320v160h320ZM160-560h640-640Z',
+  web: 'M480-80q-82 0-155-31.5t-127.5-86Q143-252 111.5-325T80-480q0-83 31.5-155.5t86-127Q252-817 325-848.5T480-880q83 0 155.5 31.5t127 86q54.5 54.5 86 127T880-480q0 82-31.5 155t-86 127.5q-54.5 54.5-127 86T480-80Zm0-82q26-36 45-75t31-83H404q12 44 31 83t45 75Zm-104-16q-18-33-31.5-68.5T322-320H204q29 50 72.5 87t99.5 55Zm208 0q56-18 99.5-55t72.5-87H638q-9 38-22.5 73.5T584-178ZM170-400h136q-3-20-4.5-39.5T300-480q0-21 1.5-40.5T306-560H170q-5 20-7.5 39.5T160-480q0 21 2.5 40.5T170-400Zm216 0h188q3-20 4.5-39.5T580-480q0-21-1.5-40.5T574-560H386q-3 20-4.5 39.5T380-480q0 21 1.5 40.5T386-400Zm268 0h136q5-20 7.5-39.5T800-480q0-21-2.5-40.5T790-560H654q3 20 4.5 39.5T660-480q0 21-1.5 40.5T654-400Zm-16-240h118q-29-50-72.5-87T584-782q18 33 31.5 68.5T638-640Zm-234 0h152q-12-44-31-83t-45-75q-26 36-45 75t-31 83Zm-200 0h118q9-38 22.5-73.5T376-782q-56 18-99.5 55T204-640Z',
+  error: 'M480,-280q17,0 28.5,-11.5T520,-320q0,-17 -11.5,-28.5T480,-360q-17,0 -28.5,11.5T440,-320q0,17 11.5,28.5T480,-280Zm0,-160q17,0 28.5,-11.5T520,-480v-160q0,-17 -11.5,-28.5T480,-680q-17,0 -28.5,11.5T440,-640v160q0,17 11.5,28.5T480,-440Zm0,360q-83,0 -156,-31.5T197,-197q-54,-54 -85.5,-127T80,-480q0,-83 31.5,-156T197,-763q54,-54 127,-85.5T480,-880q83,0 156,31.5T763,-763q54,54 85.5,127T880,-480q0,83 -31.5,156T763,-197q-54,54 -127,85.5T480,-80Zm0,-80q134,0 227,-93t93,-227q0,-134 -93,-227t-227,-93q-134,0 -227,93t-93,227q0,134 93,227t227,93Zm0,-320Z',
+};
+function symbol(name) { return '<svg viewBox="0 -960 960 960" aria-hidden="true"><path d="' + SYMBOL[name] + '"/></svg>'; }
+
 let info = null;
 let port = null;
 let viewer = {};
@@ -138,15 +170,48 @@ function onRange(msg) {
 
 function status(text) {
   const s = $('#status');
+  keepStatus(s);
   s.hidden = false;
   s.classList.remove('problem');
   $('#statustext').textContent = text;
 }
 
-function ready() { $('#status').hidden = true; }
+// The loading screen fades out over the page instead of snapping away.
+let statusTimer = 0;
+function ready() {
+  const s = $('#status');
+  if (s.hidden || s.classList.contains('leaving')) { return; }
+  s.classList.add('leaving');
+  statusTimer = setTimeout(() => { s.hidden = true; s.classList.remove('leaving'); }, 150);
+}
+
+/** Something more to say on the status screen: a fade-out under way stops. */
+function keepStatus(s) {
+  clearTimeout(statusTimer);
+  s.classList.remove('leaving');
+}
+
+/** The status screen has gone (or is fading out). */
+function statusGone() {
+  const s = $('#status');
+  return s.hidden || s.classList.contains('leaving');
+}
+
+/** What closes fades away: a copy of it, while the real one is hidden at once, so nothing waits for it. */
+function hide(el) {
+  if (el.hidden) { return; }
+  const copy = el.cloneNode(true);
+  copy.classList.add('going');
+  copy.setAttribute('aria-hidden', 'true');
+  document.body.appendChild(copy);
+  copy.scrollTop = el.scrollTop;
+  el.hidden = true;
+  setTimeout(() => copy.remove(), 200);
+}
 
 function problem(text, actions) {
   const s = $('#status');
+  keepStatus(s);
   s.hidden = false;
   s.classList.add('problem');
   $('#statustext').textContent = text;
@@ -179,7 +244,7 @@ function toast(text, ms) {
   t.textContent = text;
   t.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { t.hidden = true; }, ms || 3000);
+  toastTimer = setTimeout(() => hide(t), ms || 3000);
 }
 
 function dark() { return matchMedia('(prefers-color-scheme: dark)').matches; }
@@ -245,10 +310,9 @@ async function start(msg) {
   if (accent) { document.documentElement.style.setProperty('--accent', accent); }
   // Swift's own colours (2.6), so the viewer looks like the rest of the app.
   const colors = dark() ? info.colorsDark : info.colorsLight;
-  if (colors) {
-    const map = { bg: '--bg', surface: '--surface', text: '--text', muted: '--muted', line: '--line', accent: '--accent', onAccent: '--on-accent' };
-    for (const k in map) { if (colors[k]) { document.documentElement.style.setProperty(map[k], colors[k]); } }
-  }
+  applyDocColors(colors);
+  // For the next document's first paint (fonts/swift-font.js).
+  keepDocColors(info.colorsLight, info.colorsDark);
   status('Opening…');
   try {
     if (info.kind === 'pdf') {
@@ -266,6 +330,7 @@ async function start(msg) {
     }
     restoreSize();
     showButtons();
+    document.documentElement.classList.toggle('paper', !!document.querySelector('.docx-wrapper, #slides, .oo-wrap'));
   } catch (e) {
     console.error(e);
     if (/password|encrypt/i.test(String(e && e.message))) {
@@ -544,7 +609,7 @@ $('#pagepill').addEventListener('click', () => { if (viewer.goTo) { viewer.goTo(
 
 // The fast-scroll handle: long documents, dragged along the right edge.
 function scrollerEl() { return viewer.scroller || document.scrollingElement; }
-const trackTop = () => (reading ? 12 : 60);
+const trackTop = () => (reading ? 12 : 64);
 const trackRoom = () => Math.max(40, innerHeight - trackTop() - 48 - (document.body.classList.contains('sheet') && !reading ? 60 : 20));
 let dragging = null;
 
@@ -1221,18 +1286,23 @@ function slideshow(slides, notes, at) {
   show.appendChild(notesBox);
   const bar = document.createElement('div');
   bar.className = 'bar';
-  const button = (label, run) => {
+  const button = (label, run, icon) => {
     const b = document.createElement('button');
-    b.textContent = label;
+    if (icon) {
+      b.innerHTML = symbol(icon);
+      b.setAttribute('aria-label', label);
+    } else {
+      b.textContent = label;
+    }
     b.addEventListener('click', e => { e.stopPropagation(); run(); wake(); });
     bar.appendChild(b);
     return b;
   };
   button('Exit', close);
-  button('‹', () => go(at - 1));
+  button('Previous', () => go(at - 1), 'prev');
   const counter = document.createElement('span');
   bar.appendChild(counter);
-  button('›', () => go(at + 1));
+  button('Next', () => go(at + 1), 'next');
   const notesButton = button('Notes', () => { notesOn = !notesOn; render(); });
   show.appendChild(bar);
   let notesOn = false;
@@ -1270,6 +1340,8 @@ function slideshow(slides, notes, at) {
     if (i < 0 || i >= slides.length) { return; }
     at = i;
     render();
+    // A new slide comes in softly (not when it is only drawn again for a new screen size).
+    if (stage.firstElementChild) { stage.firstElementChild.classList.add('turned'); }
   }
   function end() {
     removeEventListener('resize', render);
@@ -1566,9 +1638,9 @@ function stylePanel(style, apply) {
   const done = document.createElement('button');
   done.className = 'done';
   done.textContent = 'Done';
-  const panelOverlay = () => { panel.hidden = true; };
+  const panelOverlay = () => hide(panel);
   done.addEventListener('click', () => {
-    panel.hidden = true;
+    hide(panel);
     closed(panelOverlay);
     if (JSON.stringify(st) !== JSON.stringify(style)) { apply(st); }
   });
@@ -2280,7 +2352,8 @@ async function openPdf(given) {
     for (const [label, mode] of [['Highlight', T.HIGHLIGHT], ['Sign', T.INK], ['Text', T.FREETEXT]]) {
       add(label, () => setMode(pdfViewer.annotationEditorMode === mode ? T.NONE : mode), mode);
     }
-    add('Undo', () => eventBus.dispatch('editingaction', { source: null, name: 'undo' }));
+    // The tools, a gap, then what acts on them.
+    add('Undo', () => eventBus.dispatch('editingaction', { source: null, name: 'undo' })).classList.add('apart');
     add('Save', saveFilled).className = 'main';
     const finish = () => {
       setMode(T.NONE);
@@ -2378,7 +2451,7 @@ function pagePreviews(pdf, pdfViewer) {
   const close = document.createElement('button');
   close.className = 'icon';
   close.setAttribute('aria-label', 'Close');
-  close.innerHTML = '<svg viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>';
+  close.innerHTML = symbol('close');
   head.append(title, close);
   const remove = () => { io.disconnect(); far.disconnect(); wrap.remove(); head.remove(); };
   const done = () => { remove(); closed(remove); };
@@ -2481,7 +2554,7 @@ $('#find').addEventListener('click', () => {
   $('#findtext').focus();
 });
 function endFind() {
-  $('#findbar').hidden = true;
+  hide($('#findbar'));
   document.body.classList.remove('finding');
   setFindCount('');
   if (viewer.closeFind) { viewer.closeFind(); }
@@ -2513,29 +2586,45 @@ $('#play').addEventListener('click', () => { if (viewer.slideshow) { viewer.slid
 
 // ------------------------------------------------------------------ the more menu
 
-const menuOverlay = () => { $('#menu').hidden = true; };
+const menuOverlay = () => hide($('#menu'));
 function hideMenu() {
   if ($('#menu').hidden) { return; }
-  $('#menu').hidden = true;
+  hide($('#menu'));
   closed(menuOverlay);
 }
 
 function openMenu() {
   const menu = $('#menu');
   menu.textContent = '';
-  const item = (label, run, hint) => {
+  let newGroup = false;
+  // A menu item: its icon, its name and a line saying more. A new group starts with a small gap.
+  const item = (label, run, hint, icon) => {
+    if (newGroup && menu.lastChild) {
+      const gap = document.createElement('div');
+      gap.className = 'gap';
+      menu.appendChild(gap);
+    }
+    newGroup = false;
     const b = document.createElement('button');
-    b.textContent = label;
+    if (icon) {
+      const i = document.createElement('span');
+      i.className = 'mi';
+      i.innerHTML = symbol(icon);
+      b.appendChild(i);
+    }
+    const name = document.createElement('span');
+    name.textContent = label;
+    b.appendChild(name);
     if (hint) {
       const h = document.createElement('span');
       h.className = 'hint';
       h.textContent = hint;
-      b.appendChild(h);
+      name.appendChild(h);
     }
     b.addEventListener('click', () => { run(); hideMenu(); });
     menu.appendChild(b);
   };
-  const shown = info && $('#status').hidden;
+  const shown = info && statusGone();
   // 2.8: on a narrow screen of its own, zoom and Listen sit here (the bar keeps room for the name).
   if (shown && ownScreen && innerWidth < 600) {
     const row = document.createElement('div');
@@ -2551,27 +2640,33 @@ function openMenu() {
     }
     if (row.childNodes.length) { menu.appendChild(row); }
   }
-  if (shown && viewer.goTo) { item('Go to page…', viewer.goTo); }
-  if (shown && viewer.chapters) { item(viewer.chaptersTitle || 'Chapters', showChapters); }
-  if (shown && viewer.pages) { item('Pages', viewer.pages); }
-  if (shown && viewer.slideshow) { item('Slideshow', viewer.slideshow); }
-  if (shown && viewer.style) { item('Text style', viewer.style); }
-  if (shown && viewer.edit) { item('Fill & sign', viewer.edit); }
+  // Going to a place in the document.
+  if (shown && viewer.goTo) { item('Go to page…', viewer.goTo, null, 'goto'); }
+  if (shown && viewer.chapters) { item(viewer.chaptersTitle || 'Chapters', showChapters, null, 'chapters'); }
+  if (shown && viewer.pages) { item('Pages', viewer.pages, null, 'pages'); }
+  if (shown && viewer.slideshow) { item('Slideshow', viewer.slideshow, null, 'play'); }
+  // Changing how it reads, or the document.
+  newGroup = true;
+  if (shown && viewer.style) { item('Text style', viewer.style, null, 'style'); }
+  if (shown && viewer.edit) { item('Fill & sign', viewer.edit, null, 'edit'); }
   if (info && info.kind === 'word' && lastBuf) {
-    item(pageLayout ? 'Reading view' : 'Page view', () => { pageLayout = !pageLayout; renderWord(); });
+    item(pageLayout ? 'Reading view' : 'Page view', () => { pageLayout = !pageLayout; renderWord(); }, null, 'reader');
   }
-  item('Share', () => action('share'));
-  item('Open with another app', () => action('open-with'));
-  if (info && info.copy) { item('Save a copy', () => (viewer.saveCopy ? viewer.saveCopy() : action('save-copy'))); }
-  if (shown && info.kind !== 'pdf' && info.kind !== 'epub' && info.kind !== 'zip') { item('Save as PDF', () => printOut('save-pdf')); }
-  if (shown && info.kind !== 'epub' && info.kind !== 'zip') { item('Print', () => printOut('print')); }
+  // Sharing and saving.
+  newGroup = true;
+  item('Share', () => action('share'), null, 'share');
+  item('Open with another app', () => action('open-with'), null, 'open');
+  if (info && info.copy) { item('Save a copy', () => (viewer.saveCopy ? viewer.saveCopy() : action('save-copy')), null, 'download'); }
+  if (shown && info.kind !== 'pdf' && info.kind !== 'epub' && info.kind !== 'zip') { item('Save as PDF', () => printOut('save-pdf'), null, 'pdf'); }
+  if (shown && info.kind !== 'epub' && info.kind !== 'zip') { item('Print', () => printOut('print'), null, 'print'); }
   if (info && info.web && ['word', 'sheet', 'slides', 'oldword', 'oldslides'].includes(info.kind)) {
     // 3.0: it says what it does: the file's web address goes to Microsoft, whose viewer shows it.
-    item('Exact view online', () => action('exact'), "Sends this file's web address to Microsoft's online viewer");
+    item('Exact view online', () => action('exact'), "Sends this file's web address to Microsoft's online viewer", 'web');
   }
-  if (info) { item('Add to home screen', () => action('shortcut')); }
-  // 3.0: in the page (alert() showed nothing on the viewer's own screen).
-  if (info) { item('Details', showDetails); }
+  if (info) { item('Add to home screen', () => action('shortcut'), null, 'home'); }
+  // Details. 3.0: in the page (alert() showed nothing on the viewer's own screen).
+  newGroup = true;
+  if (info) { item('Details', showDetails, null, 'info'); }
   menu.style.maxHeight = '';
   menu.hidden = false;
   opened(menuOverlay);
@@ -2603,9 +2698,9 @@ function showDetails() {
   const done = document.createElement('button');
   done.className = 'done';
   done.textContent = 'Done';
-  const panelOverlay = () => { panel.hidden = true; };
+  const panelOverlay = () => hide(panel);
   done.addEventListener('click', () => {
-    panel.hidden = true;
+    hide(panel);
     closed(panelOverlay);
   });
   panel.appendChild(done);
@@ -2722,7 +2817,7 @@ function onTts(st) {
     marked = els[st.index];
     marked.classList.add('speaking');
     const r = marked.getBoundingClientRect();
-    if (r.top < 60 || r.bottom > innerHeight - 90) { marked.scrollIntoView({ block: 'center', behavior: 'smooth' }); }
+    if (r.top < 64 || r.bottom > innerHeight - 90) { marked.scrollIntoView({ block: 'center', behavior: 'smooth' }); }
   }
 }
 

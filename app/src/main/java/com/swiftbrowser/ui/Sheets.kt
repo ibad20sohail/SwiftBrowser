@@ -61,10 +61,12 @@ object Sheets {
 
     /**
      * Every sheet: a handle to drag it by, then [content] (scrolling when long). It opens fully and
-     * its rows come in one after another.
+     * its first rows come in one after another. [footer]: what stays in sight at its end however
+     * long the content is (its main button).
      */
-    fun sheet(ctx: Context, content: View, expand: Boolean = true): BottomSheetDialog {
+    fun sheet(ctx: Context, content: View, expand: Boolean = true, footer: View? = null): BottomSheetDialog {
         Palette.paint(content)
+        footer?.let { Palette.paint(it) }
         val dialog = BottomSheetDialog(ctx)
         // 2.9: a NestedScrollView, which tells the sheet it is scrolled (a plain ScrollView let the
         // sheet take the drag and close mid-list).
@@ -95,14 +97,16 @@ object Sheets {
                 topMargin = ctx.dp(10)
                 bottomMargin = ctx.dp(4)
             })
-            addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            // With a footer the list gives way first when there isn't room for both.
+            addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, if (footer != null) 0 else ViewGroup.LayoutParams.WRAP_CONTENT, if (footer != null) 1f else 0f))
+            if (footer != null) addView(footer)
         }
         dialog.setContentView(box)
         if (expand) {
             dialog.behavior.state = BottomSheetBehavior.STATE_EXPANDED
             dialog.behavior.skipCollapsed = true
         }
-        (content as? ViewGroup)?.takeIf { it !is RecyclerView && it.childCount in 2..14 }?.let { group ->
+        (content as? ViewGroup)?.takeIf { it !is RecyclerView && it.childCount >= 2 }?.let { group ->
             dialog.setOnShowListener { Motion.stagger(group) }
         }
         return dialog
@@ -141,10 +145,11 @@ object Sheets {
         setPadding(0, ctx.dp(4), 0, ctx.dp(16))
     }
 
-    fun header(ctx: Context, text: String, sub: String? = null): View = LinearLayout(ctx).apply {
+    /** [lines]: at most this many lines for the title (a file's name); 0 for all of it. */
+    fun header(ctx: Context, text: String, sub: String? = null, lines: Int = 0): View = LinearLayout(ctx).apply {
         orientation = LinearLayout.VERTICAL
         setPadding(ctx.dp(24), ctx.dp(10), ctx.dp(24), ctx.dp(12))
-        addView(Ui.text(ctx, Ui.Type.TITLE, text))
+        addView(Ui.text(ctx, Ui.Type.TITLE, text, lines = lines))
         if (!sub.isNullOrBlank()) {
             addView(Ui.text(ctx, Ui.Type.BODY_SECONDARY, sub).apply { setPadding(0, ctx.dp(4), 0, 0) })
         }
@@ -163,7 +168,7 @@ object Sheets {
         this.text = text
         Ui.style(this, Ui.Type.BODY, if (danger) Ui.danger(ctx) else null)
         layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-        minHeight = ctx.dp(52)
+        minHeight = ctx.dp(Ui.ROW_ONE_LINE)
         gravity = Gravity.CENTER_VERTICAL
         setPadding(ctx.dp(24), ctx.dp(10), ctx.dp(24), ctx.dp(10))
         compoundDrawablePadding = ctx.dp(20)
@@ -172,8 +177,32 @@ object Sheets {
         setOnClickListener { onClick() }
     }
 
-    /** [sideDp] (3.0.5): how far in from the side the chips begin (sheets 20, full-width screens Ui.MARGIN). */
-    fun chips(ctx: Context, labels: List<String>, selected: Int, sideDp: Int = 20, onSelect: (Int) -> Unit): ChipGroup =
+    /**
+     * The one full-width button of a sheet: 48 dp tall, 24 dp from the sides, where its text starts.
+     * [danger]: red, for what can't be undone; [outlined]: the lesser of two.
+     */
+    fun wideButton(ctx: Context, text: String, danger: Boolean = false, outlined: Boolean = false, onClick: () -> Unit): MaterialButton =
+        (if (outlined) MaterialButton(ctx, null, com.google.android.material.R.attr.materialButtonOutlinedStyle) else MaterialButton(ctx)).apply {
+            this.text = text
+            insetTop = 0
+            insetBottom = 0
+            minHeight = ctx.dp(48)
+            if (danger) {
+                backgroundTintList = ColorStateList.valueOf(Ui.danger(ctx))
+                // White on the light look's strong red; on the dark look's paler red, its dark partner (4.8:1).
+                setTextColor(if (Palette.isNight(ctx)) ctx.color(R.color.danger_container) else android.graphics.Color.WHITE)
+            }
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ctx.dp(48)).apply {
+                marginStart = ctx.dp(24)
+                marginEnd = ctx.dp(24)
+                topMargin = ctx.dp(8)
+                bottomMargin = ctx.dp(8)
+            }
+            setOnClickListener { onClick() }
+        }
+
+    /** [sideDp] (3.0.5): how far in from the side the chips begin (sheets 24, full-width screens Ui.MARGIN). */
+    fun chips(ctx: Context, labels: List<String>, selected: Int, sideDp: Int = 24, onSelect: (Int) -> Unit): ChipGroup =
         ChipGroup(ctx).apply {
             isSingleSelection = true
             isSelectionRequired = true
@@ -202,7 +231,8 @@ object Sheets {
                     val off = ctx.color(R.color.surface_alt)
                     setOnCheckedChangeListener { chip, checked ->
                         android.animation.ValueAnimator.ofArgb(if (checked) off else on, if (checked) on else off).apply {
-                            duration = 150
+                            duration = Motion.SHORT
+                            interpolator = Motion.standard
                             addUpdateListener { (chip as Chip).chipBackgroundColor = ColorStateList.valueOf(it.animatedValue as Int) }
                             addListener(object : android.animation.AnimatorListenerAdapter() {
                                 override fun onAnimationEnd(animation: android.animation.Animator) {
@@ -211,14 +241,14 @@ object Sheets {
                             })
                         }.start()
                     }
-                    Ui.pressable(this, 0.94f)
+                    Ui.pressable(this, Motion.PRESS_BUTTON)
                     setOnClickListener { if (isChecked) onSelect(i) }
                 })
             }
         }
 
     /** [chips] in one row that scrolls sideways when it doesn't fit (2.6: they wrapped onto two lines). */
-    fun chipRow(ctx: Context, labels: List<String>, selected: Int, sideDp: Int = 20, onSelect: (Int) -> Unit): View =
+    fun chipRow(ctx: Context, labels: List<String>, selected: Int, sideDp: Int = 24, onSelect: (Int) -> Unit): View =
         android.widget.HorizontalScrollView(ctx).apply {
             isHorizontalScrollBarEnabled = false
             overScrollMode = View.OVER_SCROLL_NEVER
@@ -294,17 +324,17 @@ object Sheets {
                 orientation = LinearLayout.VERTICAL
                 gravity = Gravity.CENTER_HORIZONTAL
                 setPadding(0, ctx.dp(6), 0, ctx.dp(6))
-                background = Ui.ripple(ctx, null, 16)
+                background = Ui.ripple(ctx, null, Ui.R_MEDIUM)
                 contentDescription = action.label
                 isClickable = true
                 isFocusable = true
-                Ui.pressable(this, 0.93f)
+                Ui.pressable(this, Motion.PRESS_BUTTON)
                 addView(ImageView(ctx).apply {
                     setImageDrawable(Ui.icon(ctx, action.icon, tint))
-                    background = Ui.shape(ctx, fill, 18)
+                    background = Ui.shape(ctx, fill, Ui.R_MEDIUM)
                     scaleType = ImageView.ScaleType.CENTER
                     importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-                }, LinearLayout.LayoutParams(ctx.dp(56), ctx.dp(52)))
+                }, LinearLayout.LayoutParams(ctx.dp(48), ctx.dp(44)))
                 addView(Ui.text(ctx, Ui.Type.CAPTION, action.label, ctx.color(R.color.text_primary), lines = 2).apply {
                     gravity = Gravity.CENTER
                     importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
@@ -330,10 +360,11 @@ object Sheets {
      * Things to do with a link, a picture, a shortcut or the address, as a sheet that slides up:
      * what it is about at the top (a small picture or the site's icon, a title and the site's name;
      * tapping it shows the whole address), then the main actions as big buttons and the others as
-     * rows. [preview] is a picture's address, shown small when it can be loaded quickly.
+     * rows. [preview] is a picture's address, shown small when it can be loaded quickly. [look]: what
+     * the sheet is made with, if not [from] (the picture viewer's are dark in both looks).
      */
     fun actions(
-        a: android.app.Activity,
+        from: android.app.Activity,
         title: String?,
         subtitle: String?,
         actions: List<Action>,
@@ -341,7 +372,9 @@ object Sheets {
         fullAddress: String? = null,
         preview: String? = null,
         iconRes: Int? = null,
+        look: Context = from,
     ) {
+        val a = look
         val col = column(a)
         lateinit var dialog: BottomSheetDialog
         if (!title.isNullOrBlank() || !subtitle.isNullOrBlank()) {
@@ -352,28 +385,27 @@ object Sheets {
             }
             val picture = ImageView(a).apply {
                 scaleType = ImageView.ScaleType.CENTER_CROP
-                // 3.0.5: corners the site icon inside (10 dp in, about 6 dp corners) nests in.
-                background = Ui.shape(a, a.color(R.color.surface_alt), Ui.R_MEDIUM)
+                background = Ui.shape(a, a.color(R.color.surface_alt), Ui.R_SMALL)
                 clipToOutline = true
                 importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
                 if (icon != null) {
                     setImageBitmap(icon)
                     scaleType = ImageView.ScaleType.FIT_CENTER
-                    val p = a.dp(10)
+                    val p = a.dp(8)
                     setPadding(p, p, p, p)
                 } else {
                     setImageDrawable(Ui.icon(a, iconRes ?: if (preview != null) R.drawable.ic_image else R.drawable.ic_globe, a.color(R.color.text_secondary)))
                     scaleType = ImageView.ScaleType.CENTER
                 }
             }
-            val size = a.dp(if (preview != null) 56 else 44)
+            val size = a.dp(if (preview != null) 56 else Ui.ICON_BOX)
             head.addView(picture, LinearLayout.LayoutParams(size, size).apply { marginEnd = a.dp(14) })
-            if (preview != null) PreviewLoader.load(a, preview, a.dp(112)) { bmp ->
+            if (preview != null) PreviewLoader.load(from, preview, a.dp(112)) { bmp ->
                 picture.setPadding(0, 0, 0, 0)
                 picture.scaleType = ImageView.ScaleType.CENTER_CROP
                 picture.setImageBitmap(bmp)
                 picture.alpha = 0f
-                picture.animate().alpha(1f).setDuration(Motion.NORMAL).start()
+                Motion.anim(picture, Motion.NORMAL).alpha(1f).start()
             }
             val texts = LinearLayout(a).apply { orientation = LinearLayout.VERTICAL }
             if (!title.isNullOrBlank()) texts.addView(Ui.text(a, Ui.Type.SUBTITLE, title, lines = 2))
@@ -386,6 +418,10 @@ object Sheets {
                     head.background = Ui.ripple(a, null, 0)
                     head.setOnClickListener {
                         full = !full
+                        // The sheet grows with it, at the pace of a section opening, with nothing laid out on the way.
+                        (dialog.findViewById<View>(com.google.android.material.R.id.design_bottom_sheet)?.parent as? ViewGroup)?.let { root ->
+                            android.transition.TransitionManager.beginDelayedTransition(root, android.transition.ChangeBounds().setDuration(Motion.SMALL).setInterpolator(Motion.standard))
+                        }
                         sub.text = if (full) fullAddress else subtitle
                         sub.maxLines = if (full) 6 else 1
                     }
@@ -494,9 +530,12 @@ object Sheets {
         val levels = AdLevel.entries
         col.addView(label(a, "All sites"))
         val globalDesc = note(a, AdBlock.global.summary)
-        col.addView(chipRow(a, levels.map { it.label }, levels.indexOf(AdBlock.global)) { i ->
+        col.addView(Segmented(a, levels.map { it.label }, levels.indexOf(AdBlock.global)) { i ->
             AdBlock.setGlobal(levels[i])
-            globalDesc.text = levels[i].summary
+            Motion.swapText(globalDesc, levels[i].summary)
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, a.dp(44)).apply {
+            marginStart = a.dp(24)
+            marginEnd = a.dp(24)
         })
         col.addView(globalDesc)
 
@@ -508,7 +547,7 @@ object Sheets {
             col.addView(chipRow(a, options, if (override == null) 0 else levels.indexOf(override) + 1) { i ->
                 val level = if (i == 0) null else levels[i - 1]
                 AdBlock.setOverride(site, level, tab.incognito)
-                siteDesc.text = siteLevelNote(level)
+                Motion.swapText(siteDesc, siteLevelNote(level))
             })
             col.addView(siteDesc)
             col.addView(note(a, "Changes apply when the page reloads."))
@@ -516,28 +555,19 @@ object Sheets {
             if (tab.incognito) col.addView(note(a, INCOGNITO_LEVEL_NOTE))
         }
 
-        val buttons = LinearLayout(a).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(a.dp(16), a.dp(8), a.dp(16), 0)
-        }
-        fun button(text: String, onClick: () -> Unit) {
-            buttons.addView(MaterialButton(a, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
-                this.text = text
-                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-                setOnClickListener {
-                    dialog.dismiss()
-                    onClick()
-                }
+        fun doing(icon: Int, text: String, onClick: () -> Unit) {
+            col.addView(row(a, icon, text) {
+                dialog.dismiss()
+                onClick()
             })
         }
-        if (!tab.isBlank) button("Reload page") { TabManager.reload(tab) }
-        tab.uboAction?.let { action -> button("uBlock Origin's own panel") { action.click() } }
-        AdBlock.extension?.metaData?.optionsPageUrl?.let { url -> button("Advanced ad blocking") { TabManager.newTab(url, incognito = false) } }
-        button("Update the block lists now") {
+        if (!tab.isBlank) doing(R.drawable.ic_refresh, "Reload page") { TabManager.reload(tab) }
+        tab.uboAction?.let { action -> doing(R.drawable.ic_shield, "uBlock Origin's own panel") { action.click() } }
+        AdBlock.extension?.metaData?.optionsPageUrl?.let { url -> doing(R.drawable.ic_tune, "Advanced ad blocking") { TabManager.newTab(url, incognito = false) } }
+        doing(R.drawable.ic_update, "Update the block lists now") {
             AdBlock.updateFilterLists()
             a.snack("Updating the block lists…")
         }
-        col.addView(buttons)
         dialog = sheet(a, col)
         dialog.showImmersive()
     }
@@ -654,7 +684,9 @@ object Sheets {
             selectAll()
         }
         val box = LinearLayout(ctx).apply {
-            setPadding(ctx.dp(20), ctx.dp(8), ctx.dp(20), 0)
+            // Starts where the title does.
+            setPadding(ctx.dp(24), ctx.dp(8), ctx.dp(24), 0)
+            Ui.field(input)
             addView(input, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         }
         val dialog = MaterialAlertDialogBuilder(ctx)
@@ -1009,7 +1041,7 @@ object Sheets {
             dialog.dismiss()
             TabManager.ungroup(group)
         })
-        col.addView(row(a, R.drawable.ic_close, "Close group") {
+        col.addView(row(a, R.drawable.ic_close, "Close group", danger = true) {
             dialog.dismiss()
             TabManager.closeGroup(group)
         })
@@ -1040,6 +1072,7 @@ object Sheets {
                         background = dot(i, i == selected)
                         setOnClickListener {
                             dots.forEachIndexed { j, d -> d.background = dot(j, j == i) }
+                            Motion.bump(this, 1.1f)
                             onPick(i)
                         }
                     }
@@ -1075,14 +1108,7 @@ object Sheets {
                     else DateUtils.getRelativeTimeSpanString(r.closedAt, now, DateUtils.MINUTE_IN_MILLIS)
                     h.set(R.drawable.ic_globe, r.title.ifBlank { UrlUtils.display(r.url) }, if (host.isEmpty()) ago else "$host · $ago")
                     h.icon.imageTintList = ColorStateList.valueOf(a.color(R.color.text_secondary))
-                    Favicons.load(r.url) { bmp ->
-                        if (bmp != null && h.bindingAdapterPosition >= 0) {
-                            h.icon.imageTintList = null
-                            h.icon.setImageBitmap(bmp)
-                            // 3.0.5: a little dimmer in the dark look.
-                            SoftPictures.apply(h.icon)
-                        }
-                    }
+                    h.setFavicon(r.url)
                 },
                 onClick = { r ->
                     dialog.dismiss()
@@ -1097,7 +1123,7 @@ object Sheets {
             adapter.items = rows
             list.adapter = adapter
             col.addView(list)
-            col.addView(row(a, R.drawable.ic_delete, "Clear this list") {
+            col.addView(row(a, R.drawable.ic_delete, "Clear this list", danger = true) {
                 dialog.dismiss()
                 Dialogs.confirm(a, "Clear recently closed tabs?", "They can't be opened again from here.", "Clear", danger = true) {
                     TabManager.clearRecentlyClosed(pid)
@@ -1117,8 +1143,9 @@ object Sheets {
         return LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            minimumHeight = ctx.dp(60)
-            setPadding(ctx.dp(20), ctx.dp(8), ctx.dp(14), ctx.dp(8))
+            minimumHeight = ctx.dp(Ui.ROW_TWO_LINES)
+            // The switch's 34 dp sit 6 dp inside its place: 24 dp from the edge, as the text is on the left.
+            setPadding(ctx.dp(24), ctx.dp(8), ctx.dp(18), ctx.dp(8))
             setBackgroundResource(RowHolder.selectableBackground(ctx))
             addView(android.widget.ImageView(ctx).apply {
                 setImageResource(icon)
@@ -1206,42 +1233,25 @@ object Sheets {
         col.addView(chipRow(ctx, listOf("Same as all sites") + levels.map { it.label }, if (override == null) 0 else levels.indexOf(override) + 1) { i ->
             val level = if (i == 0) null else levels[i - 1]
             AdBlock.setOverride(site, level, incognito)
-            levelNote.text = siteLevelNote(level)
+            Motion.swapText(levelNote, siteLevelNote(level))
             onChanged?.invoke()
         })
         col.addView(levelNote)
         if (onThisSite) col.addView(note(ctx, "Changes apply when the page reloads."))
 
-        val buttons = LinearLayout(ctx).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(ctx.dp(16), ctx.dp(10), ctx.dp(16), 0)
-        }
-        fun button(text: String, onClick: () -> Unit) {
-            buttons.addView(MaterialButton(ctx, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
-                this.text = text
-                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-                setOnClickListener {
-                    dialog.dismiss()
-                    onClick()
-                }
-            })
-        }
-        button("Clear cookies and data of this site") {
-            MaterialAlertDialogBuilder(ctx)
-                .setTitle("Clear $site's data?")
-                // 3.0.1: said as it is: the engine clears a site for every profile at once.
-                .setMessage("Its cookies and stored data are deleted in every profile and in incognito, so you're signed out of it everywhere. Passwords Swift saved for it stay.")
-                .setPositiveButton("Clear") { _, _ ->
-                    Engine.runtime.storageController.clearDataFromBaseDomain(site, org.mozilla.geckoview.StorageController.ClearFlags.ALL)
-                    // In every profile: signed out of Google in all of them (3.0).
-                    if (GoogleAccounts.isGoogleHost(site)) GoogleAccounts.forgetAll()
-                    if (onThisSite && tab != null) TabManager.reload(tab)
-                }
-                .setNegativeButton(android.R.string.cancel, null)
-                .showImmersive()
-        }
+        col.addView(row(ctx, R.drawable.ic_delete, "Clear cookies and data of this site", danger = true) {
+            dialog.dismiss()
+            // 3.0.1: said as it is: the engine clears a site for every profile at once.
+            Dialogs.confirm(ctx, "Clear $site's data?", "Its cookies and stored data are deleted in every profile and in incognito, so you're signed out of it everywhere. Passwords Swift saved for it stay.", "Clear", danger = true) {
+                Engine.runtime.storageController.clearDataFromBaseDomain(site, org.mozilla.geckoview.StorageController.ClearFlags.ALL)
+                // In every profile: signed out of Google in all of them (3.0).
+                if (GoogleAccounts.isGoogleHost(site)) GoogleAccounts.forgetAll()
+                if (onThisSite && tab != null) TabManager.reload(tab)
+            }
+        })
         if (SiteSettings.hasSettings(site, incognito)) {
-            button("Reset this site's settings") {
+            col.addView(row(ctx, R.drawable.ic_reset, "Reset this site's settings") {
+                dialog.dismiss()
                 val wasDesktop = SiteSettings.desktop(site, incognito)
                 val saved = SiteSettings.save(site, incognito)
                 SiteSettings.reset(site, incognito)
@@ -1254,9 +1264,8 @@ object Sheets {
                         onChanged?.invoke()
                     }
                 }
-            }
+            })
         }
-        col.addView(buttons)
         dialog = sheet(ctx, col)
         dialog.showImmersive()
     }

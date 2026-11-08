@@ -7,6 +7,7 @@ import android.view.ViewGroup
 import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.TextView
+import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.RecyclerView
 import com.swiftbrowser.R
 
@@ -28,6 +29,10 @@ class RowHolder(view: View) : RecyclerView.ViewHolder(view) {
     /** The subtitle shows two lines (3.0, see setSubtitleLines); binds are counted so a late fit is dropped. */
     private var twoLines = false
     private var binds = 0
+
+    init {
+        Ui.pressable(action, Motion.PRESS_ICON, morph = false)
+    }
 
     fun set(iconRes: Int, title: CharSequence, subtitle: CharSequence?) {
         binds++
@@ -150,11 +155,25 @@ class RowAdapter<T>(
     private val onLongClick: ((T) -> Unit)? = null,
     private val groupOf: ((T) -> Any)? = null,
 ) : RecyclerView.Adapter<RowHolder>() {
-    var items: List<T> = emptyList()
+    private var rows: List<T> = emptyList()
+
+    var items: List<T>
+        get() = rows
         set(value) {
-            field = value
+            rows = value
             notifyDataSetChanged()
         }
+
+    /**
+     * The list after rows went or came back (a removal, an Undo): only those rows move, and the ones
+     * left get their corners again. [same]: whether two items are the same row. A screen asks for
+     * this; setting [items] is as it always was.
+     */
+    fun submit(list: RecyclerView, newItems: List<T>, same: (T, T) -> Boolean) {
+        val old = rows
+        rows = newItems
+        ListChanges.dispatch(list, this, old.size, newItems.size, { o, n -> same(old[o], newItems[n]) })
+    }
 
     /** The group of the item at a position (made once, not on every bind). */
     private val groupAt: (Int) -> Any? = { i -> groupOf?.invoke(items[i]) }
@@ -182,5 +201,51 @@ class RowAdapter<T>(
         } else {
             holder.itemView.setOnLongClickListener(null)
         }
+    }
+
+    override fun onBindViewHolder(holder: RowHolder, position: Int, payloads: MutableList<Any>) {
+        if (payloads.isNotEmpty() && payloads.all { it == ListChanges.CORNERS }) {
+            if (groupOf != null) GroupedRows.place(holder.itemView, position, rows.size, groupAt)
+        } else {
+            onBindViewHolder(holder, position)
+        }
+    }
+}
+
+/** A list told exactly which rows went or came back, so that only they animate (Motion.listAnimator). */
+object ListChanges {
+    /** The payload for rows that stayed: who is first or last may have changed, so their corners and gaps are set again. */
+    const val CORNERS = "corners"
+
+    /**
+     * Tells [adapter] of [list], whose items have just changed from [oldSize] to [newSize]. [same]
+     * and [sameContent] take a position in the old list and one in the new; rows the same in both
+     * are only redrawn if [sameContent] says they changed.
+     */
+    fun dispatch(
+        list: RecyclerView, adapter: RecyclerView.Adapter<*>, oldSize: Int, newSize: Int,
+        same: (Int, Int) -> Boolean, sameContent: (Int, Int) -> Boolean = { _, _ -> true },
+    ) {
+        val atTop = !list.canScrollVertically(-1)
+        DiffUtil.calculateDiff(object : DiffUtil.Callback() {
+            override fun getOldListSize() = oldSize
+            override fun getNewListSize() = newSize
+            override fun areItemsTheSame(o: Int, n: Int) = same(o, n)
+            override fun areContentsTheSame(o: Int, n: Int) = sameContent(o, n)
+        }, false).dispatchUpdatesTo(adapter)
+        if (newSize > 0) adapter.notifyItemRangeChanged(0, newSize, CORNERS)
+        // A row that comes in above the first one would otherwise stay out of sight, over the list's top.
+        if (atTop) list.scrollToPosition(0)
+    }
+}
+
+/** [text] with the search word [query] in bold and [color]: only how it looks (the text itself is unchanged). */
+fun markedText(text: String, query: String, color: Int): CharSequence {
+    if (query.isEmpty()) return text
+    val i = text.indexOf(query, ignoreCase = true)
+    if (i < 0) return text
+    return android.text.SpannableString(text).apply {
+        setSpan(android.text.style.StyleSpan(android.graphics.Typeface.BOLD), i, i + query.length, 0)
+        setSpan(android.text.style.ForegroundColorSpan(color), i, i + query.length, 0)
     }
 }

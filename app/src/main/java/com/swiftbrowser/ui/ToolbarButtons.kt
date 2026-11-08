@@ -255,6 +255,7 @@ class ToolbarEditor(private val a: Activity) : FrameLayout(a) {
         v.contentDescription = b.label
         v.isClickable = true
         v.background = Ui.ripple(a, null, 22)
+        Ui.pressable(v, Motion.PRESS_ICON, morph = false)
         v.visibility = if (key == dragKey) View.INVISIBLE else View.VISIBLE
         v.setOnClickListener { barSheet(key) }
         views[key] = v
@@ -284,6 +285,7 @@ class ToolbarEditor(private val a: Activity) : FrameLayout(a) {
             compoundDrawablePadding = dp(6)
             setCompoundDrawablesRelativeWithIntrinsicBounds(null, icon, null, null)
             background = Ui.ripple(a, null, 12)
+            Ui.pressable(this, Motion.PRESS_ICON, morph = false)
             contentDescription = "Add ${b.label}"
             visibility = if (key == dragKey) View.INVISIBLE else View.VISIBLE
             setOnClickListener { add(key) }

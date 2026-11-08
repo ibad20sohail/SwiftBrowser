@@ -84,8 +84,10 @@ object SecurityStatus {
         return out
     }
 
+    /** What the words mean. */
+    const val LEGEND = "Checked: Swift has seen it working. On: set, but not something Swift can check from here."
+
     /** The whole status as text, and what the words mean. */
     fun text(lines: List<Line>): String =
-        lines.joinToString("\n\n") { "${it.name}: ${it.state.word}. ${it.detail}" } +
-            "\n\nChecked: Swift has seen it working. On: set, but not something Swift can check from here."
+        lines.joinToString("\n\n") { "${it.name}: ${it.state.word}. ${it.detail}" } + "\n\n" + LEGEND
 }

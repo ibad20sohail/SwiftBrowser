@@ -8,14 +8,13 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.content.res.ColorStateList
 import android.graphics.Bitmap
 import android.graphics.BitmapRegionDecoder
 import android.graphics.Color
+import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
-import android.graphics.drawable.RippleDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -98,6 +97,9 @@ class MediaViewerActivity : AppCompatActivity(), Messages.DarkScreen {
     private lateinit var strip: RecyclerView
     private lateinit var title: TextView
     private lateinit var count: TextView
+
+    /** Shown when the picture on screen takes a while to read (see [updateSpinner]). */
+    private lateinit var spinner: LoadingIndicator
     private val handler = Handler(Looper.getMainLooper())
     private var barsShown = true
 
@@ -249,10 +251,17 @@ class MediaViewerActivity : AppCompatActivity(), Messages.DarkScreen {
 
     private fun buildPager() {
         val lm = LinearLayoutManager(this, LinearLayoutManager.HORIZONTAL, false)
+        // A gap between pictures while they are swiped: each page is as wide as the screen, the pager wider.
+        val halfGap = Ui.dp(this, 8)
         pager = RecyclerView(this).apply {
             layoutManager = lm
             setHasFixedSize(true)
             itemAnimator = null
+            addItemDecoration(object : RecyclerView.ItemDecoration() {
+                override fun getItemOffsets(outRect: Rect, view: View, parent: RecyclerView, state: RecyclerView.State) {
+                    outRect.set(halfGap, 0, halfGap, 0)
+                }
+            })
             // 3.0.5: the glow at the first and last picture in the accent chosen.
             Palette.glow(this)
             adapter = pagerAdapter
@@ -270,7 +279,16 @@ class MediaViewerActivity : AppCompatActivity(), Messages.DarkScreen {
                 }
             }
         })
-        root.addView(pager, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        root.addView(pager, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT).apply {
+            leftMargin = -halfGap
+            rightMargin = -halfGap
+        })
+        spinner = LoadingIndicator(this).apply {
+            colour = Color.WHITE
+            container = OverPicture.FILL_SPINNER
+            visibility = View.GONE
+        }
+        root.addView(spinner, FrameLayout.LayoutParams(Ui.dp(this, 48), Ui.dp(this, 48), Gravity.CENTER))
     }
 
     private inner class PagerAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
@@ -297,6 +315,8 @@ class MediaViewerActivity : AppCompatActivity(), Messages.DarkScreen {
         override fun onViewRecycled(holder: RecyclerView.ViewHolder) {
             val v = holder.itemView as PictureView
             v.tag = null
+            v.animate().cancel()
+            v.alpha = 1f
             v.setPicture(null, 0, 0)
         }
     }
@@ -306,6 +326,8 @@ class MediaViewerActivity : AppCompatActivity(), Messages.DarkScreen {
         if (v.tag === p && v.hasPicture && !again) return
         val keep = v.tag === p && v.hasPicture
         v.tag = p
+        v.animate().cancel()
+        v.alpha = 1f
         val cached = bitmaps.get(p.key)
         val info = p.info
         if (cached != null && info != null) {
@@ -318,15 +340,41 @@ class MediaViewerActivity : AppCompatActivity(), Messages.DarkScreen {
         if (p.failed) return
         load(p) { bmp ->
             val i = p.info
+            updateSpinner()
             if (v.tag !== p) return@load
             if (bmp == null || i == null) {
                 v.setPicture(null, 0, 0)
                 v.message = CANT_SHOW
             } else {
                 v.setPicture(bmp, i.width, i.height)
+                // After a wait the picture on screen fades in (one that stays until the new one is ready doesn't).
+                if (!keep && p === current()) {
+                    v.alpha = 0f
+                    Motion.anim(v, OverPicture.QUICK_MS, Motion.enter).alpha(1f).withLayer().start()
+                }
                 shown(v, p)
             }
         }
+        updateSpinner()
+    }
+
+    private val showSpinner = Runnable { if (loadingOnScreen()) spinner.visibility = View.VISIBLE }
+
+    /** The picture on screen is being read and there is nothing of it to see yet. */
+    private fun loadingOnScreen(): Boolean {
+        val p = pics.getOrNull(index) ?: return false
+        if (p.failed || !waiting.containsKey(p.key)) return false
+        for (i in 0 until pager.childCount) {
+            val v = pager.getChildAt(i) as? PictureView ?: continue
+            if (v.tag === p && v.hasPicture) return false
+        }
+        return true
+    }
+
+    /** The loading indicator, as in the player: only for a wait worth seeing (quick ones show nothing). */
+    private fun updateSpinner() {
+        handler.removeCallbacks(showSpinner)
+        if (loadingOnScreen()) handler.postDelayed(showSpinner, OverPicture.SPINNER_WAIT_MS) else spinner.visibility = View.GONE
     }
 
     /** A picture is ready on its page: the one on screen plays (a GIF), gets its detail and its neighbours. */
@@ -343,6 +391,7 @@ class MediaViewerActivity : AppCompatActivity(), Messages.DarkScreen {
         focus = index
         updateTitle()
         markStrip(smooth = true)
+        updateSpinner()
         pager.post { settleViews() }
         prefetch()
     }
@@ -492,13 +541,12 @@ class MediaViewerActivity : AppCompatActivity(), Messages.DarkScreen {
 
     // ------------------------------------------------------------------ the bars
 
-    private fun whiteRipple() = RippleDrawable(ColorStateList.valueOf(0x40FFFFFF), null, null)
-
     private fun buildTopBar() {
         val white = Color.WHITE
         title = TextView(this).apply {
             setTextColor(white)
-            Ui.size(this, Ui.Type.SUBTITLE)
+            Ui.size(this, Ui.Type.HEADING)
+            typeface = Ui.medium(Ui.Type.HEADING)
             isSingleLine = true
             ellipsize = android.text.TextUtils.TruncateAt.END
         }
@@ -513,12 +561,14 @@ class MediaViewerActivity : AppCompatActivity(), Messages.DarkScreen {
         topBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(Ui.dp(this@MediaViewerActivity, 4), 0, Ui.dp(this@MediaViewerActivity, 12), 0)
-            background = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(0x99000000.toInt(), 0x00000000))
+            // The buttons at the top; the rest of the height is for the shade to fade out.
+            setPadding(Ui.dp(this@MediaViewerActivity, 4), Ui.dp(this@MediaViewerActivity, 8), Ui.dp(this@MediaViewerActivity, 12), Ui.dp(this@MediaViewerActivity, 32))
+            background = OverPicture.shadeTop()
             addView(ImageButton(this@MediaViewerActivity, null, 0, R.style.Swift_ToolbarButton).apply {
                 setImageDrawable(Ui.icon(this@MediaViewerActivity, R.drawable.ic_back, white))
                 contentDescription = "Back"
-                background = whiteRipple()
+                background = Ui.rippleBorderless(this@MediaViewerActivity, Ui.RIPPLE_ON_DARK)
+                Ui.pressable(this, Motion.PRESS_ICON, morph = false)
                 setOnClickListener { finish() }
             }, LinearLayout.LayoutParams(size, size))
             addView(LinearLayout(this@MediaViewerActivity).apply {
@@ -528,7 +578,7 @@ class MediaViewerActivity : AppCompatActivity(), Messages.DarkScreen {
                 addView(count)
             }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         }
-        root.addView(topBar, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(this, 64), Gravity.TOP))
+        root.addView(topBar, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(this, 88), Gravity.TOP))
     }
 
     /** The strip of small pictures and the bar of buttons, at the bottom. */
@@ -565,7 +615,7 @@ class MediaViewerActivity : AppCompatActivity(), Messages.DarkScreen {
         bottom = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(0, Ui.dp(this@MediaViewerActivity, 24), 0, 0)
-            background = GradientDrawable(GradientDrawable.Orientation.BOTTOM_TOP, intArrayOf(0xB3000000.toInt(), 0x00000000))
+            background = OverPicture.shadeBottom()
             addView(strip, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(this@MediaViewerActivity, 56)))
             addView(bar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         }
@@ -576,7 +626,7 @@ class MediaViewerActivity : AppCompatActivity(), Messages.DarkScreen {
     private fun barButton(icon: Int, label: String, click: () -> Unit) = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
         gravity = Gravity.CENTER
-        background = whiteRipple()
+        background = Ui.rippleBorderless(this@MediaViewerActivity, Ui.RIPPLE_ON_DARK)
         contentDescription = label
         isClickable = true
         isFocusable = true
@@ -586,7 +636,7 @@ class MediaViewerActivity : AppCompatActivity(), Messages.DarkScreen {
         }, LinearLayout.LayoutParams(Ui.dp(this@MediaViewerActivity, 24), Ui.dp(this@MediaViewerActivity, 24)))
         androidx.appcompat.widget.TooltipCompat.setTooltipText(this, label)
         // 3.0.3: a press springs.
-        Ui.pressable(this, 0.9f)
+        Ui.pressable(this, Motion.PRESS_ICON, morph = false)
         setOnClickListener { click() }
     }
 
@@ -603,13 +653,7 @@ class MediaViewerActivity : AppCompatActivity(), Messages.DarkScreen {
     /** A tap shows or hides the bars and the strip (the picture has the whole screen without them). */
     private fun toggleBars(show: Boolean = !barsShown) {
         barsShown = show
-        for (v in listOf<View>(topBar, bottom)) {
-            v.animate().cancel()
-            if (show) v.visibility = View.VISIBLE
-            v.animate().alpha(if (show) 1f else 0f).setDuration(Motion.SHORT).withEndAction {
-                v.visibility = if (barsShown) View.VISIBLE else View.INVISIBLE
-            }.start()
-        }
+        OverPicture.bars(topBar, bottom, show)
     }
 
     /** A message above the bottom bar while it shows. */
@@ -646,8 +690,9 @@ class MediaViewerActivity : AppCompatActivity(), Messages.DarkScreen {
                     topMargin = Ui.dp(this@MediaViewerActivity, 6)
                 }
                 scaleType = ImageView.ScaleType.CENTER_CROP
-                background = Ui.shape(this@MediaViewerActivity, 0x33FFFFFF, 8)
+                background = Ui.shape(this@MediaViewerActivity, OverPicture.TINT_CHIP, Ui.R_XSMALL)
                 clipToOutline = true
+                Ui.pressable(this, Motion.PRESS_BUTTON, morph = false)
             }
             val h = StripHolder(iv)
             iv.setOnClickListener {
@@ -658,7 +703,7 @@ class MediaViewerActivity : AppCompatActivity(), Messages.DarkScreen {
         }
 
         override fun onBindViewHolder(holder: StripHolder, position: Int, payloads: MutableList<Any>) {
-            if (payloads.contains(MARK)) mark(holder, position) else onBindViewHolder(holder, position)
+            if (payloads.contains(MARK)) mark(holder, position, animate = true) else onBindViewHolder(holder, position)
         }
 
         override fun onBindViewHolder(holder: StripHolder, position: Int) {
@@ -680,13 +725,16 @@ class MediaViewerActivity : AppCompatActivity(), Messages.DarkScreen {
             holder.request = null
         }
 
-        private fun mark(h: StripHolder, position: Int) {
+        private fun mark(h: StripHolder, position: Int, animate: Boolean = false) {
             val on = position == index
-            h.image.alpha = if (on) 1f else 0.55f
+            val look = if (on) 1f else 0.55f
+            h.image.animate().cancel()
+            if (animate) Motion.anim(h.image, Motion.SHORT).alpha(look).start() else h.image.alpha = look
             h.image.foreground = if (on) {
                 GradientDrawable().apply {
-                    cornerRadius = Ui.dpf(this@MediaViewerActivity, 8f)
-                    setStroke(Ui.dp(this@MediaViewerActivity, 2), Ui.accent(this@MediaViewerActivity))
+                    cornerRadius = Ui.dpf(this@MediaViewerActivity, Ui.R_XSMALL.toFloat())
+                    // The dark look's accent: the strip is on black in both looks.
+                    setStroke(Ui.dp(this@MediaViewerActivity, 2), Palette.colorFor(this@MediaViewerActivity, true, Looks.accent.primary))
                 }
             } else {
                 null
@@ -765,7 +813,8 @@ class MediaViewerActivity : AppCompatActivity(), Messages.DarkScreen {
             }
         }
         val sub = listOfNotNull(p.size.takeIf { it >= 0 }?.let { UrlUtils.formatBytes(it) }, p.file?.parent).joinToString(" · ")
-        Sheets.actions(this, p.name, sub, list, iconRes = R.drawable.ic_image)
+        // Dark also in the light look: this screen is black, and its messages are dark too.
+        Sheets.actions(this, p.name, sub, list, iconRes = R.drawable.ic_image, look = PlayerPanel.dark(this))
     }
 
     private fun showInfo() {
@@ -816,6 +865,9 @@ class MediaViewerActivity : AppCompatActivity(), Messages.DarkScreen {
         marked = -1
         if (pics.size < 2) strip.visibility = View.GONE
         goTo(index)
+        // The next picture fades in where the one deleted was; nothing waits for it.
+        pager.alpha = 0f
+        Motion.anim(pager, Motion.SHORT, Motion.enter).alpha(1f).withLayer().start()
         say("Deleted “${p.name}”")
     }
 

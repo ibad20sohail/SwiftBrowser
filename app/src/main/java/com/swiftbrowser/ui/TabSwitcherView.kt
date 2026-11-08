@@ -5,6 +5,7 @@ import android.content.res.ColorStateList
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Rect
+import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.StateListDrawable
 import android.os.SystemClock
@@ -23,6 +24,7 @@ import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.TextView
 import androidx.core.content.ContextCompat
+import androidx.core.view.doOnNextLayout
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.ItemTouchHelper
@@ -98,6 +100,9 @@ class TabSwitcherView @JvmOverloads constructor(
     private val normalCount: TextView
     private val incognitoIcon: ImageView
     private val adapter = GridAdapter()
+
+    /** How cards come and go; off for the one refresh a page move replaces it ([skipListMotion]). */
+    private val listMotion = Motion.listAnimator()
     private val slop = ViewConfiguration.get(context).scaledTouchSlop
 
     // Dragging a card.
@@ -127,7 +132,7 @@ class TabSwitcherView @JvmOverloads constructor(
         subAction = findViewById(R.id.sub_action)
         newTab = findViewById(R.id.switcher_new)
         // 3.0.3: a press springs, as the toolbar's buttons do.
-        Ui.pressable(newTab, 0.94f)
+        Ui.pressable(newTab, Motion.PRESS_BUTTON)
         searchButton = findViewById(R.id.switcher_search)
         layoutButton = findViewById(R.id.switcher_layout)
         toggle = findViewById(R.id.switcher_toggle)
@@ -143,7 +148,7 @@ class TabSwitcherView @JvmOverloads constructor(
         grid.layoutManager = layout
         grid.adapter = adapter
         // 3.0: a card that changed is redrawn in place, without the cross-fade of a new copy over it.
-        (grid.itemAnimator as? androidx.recyclerview.widget.SimpleItemAnimator)?.supportsChangeAnimations = false
+        grid.itemAnimator = listMotion
         ItemTouchHelper(DragAndSwipe()).attachToRecyclerView(grid)
         grid.addOnScrollListener(object : RecyclerView.OnScrollListener() {
             override fun onScrollStateChanged(rv: RecyclerView, newState: Int) {
@@ -158,13 +163,14 @@ class TabSwitcherView @JvmOverloads constructor(
         toggleIncognito.setOnClickListener { setPage(true) }
         // 3.0.3: they spring when pressed, and holding the icon-only ones shows their names.
         for (v in listOf(toggleNormal, toggleIncognito, searchButton, layoutButton)) {
-            Ui.pressable(v, 0.92f)
+            Ui.pressable(v, Motion.PRESS_ICON)
             v.contentDescription?.let { androidx.appcompat.widget.TooltipCompat.setTooltipText(v, it) }
         }
         showLayoutButton()
         findViewById<View>(R.id.switcher_empty_new).setOnClickListener {
             if (mode == Mode.SEARCH) back() else listener?.onNewTab(showingIncognito)
         }
+        for (v in listOf(subBack, subAdd, subMore, subAction)) Ui.pressable(v, Motion.PRESS_ICON, morph = false)
         subBack.setOnClickListener { back() }
         subTitle.setOnClickListener { openGroup?.let { renameGroup(it) } }
         subAdd.setOnClickListener { openGroup?.let { listener?.onNewTabInGroup(it) } }
@@ -212,7 +218,7 @@ class TabSwitcherView @JvmOverloads constructor(
         for (i in 0 until childCount) getChildAt(i).let { v ->
             if (v === zoomView) return@let
             v.alpha = 0f
-            v.animate().alpha(1f).setDuration(ZOOM_MS).withLayer().start()
+            Motion.anim(v, ZOOM_MS).alpha(1f).withLayer().start()
         }
         val tab = TabManager.current
         if (page != null && tab != null) post { zoom(tab, page, intoCard = true) }
@@ -231,7 +237,7 @@ class TabSwitcherView @JvmOverloads constructor(
         fading.forEach { it.animate().cancel() }
         if (zoomed) fadeBackground(255, 0)
         fading.forEachIndexed { i, v ->
-            v.animate().alpha(0f).setDuration(if (zoomed) ZOOM_MS else 140).withLayer().withEndAction(if (i > 0) null else Runnable {
+            Motion.anim(v, if (zoomed) ZOOM_MS else Motion.SHORT).alpha(0f).withLayer().withEndAction(if (i > 0) null else Runnable {
                 visibility = View.GONE
                 fading.forEach { it.alpha = 1f }
                 alpha = 1f
@@ -249,6 +255,14 @@ class TabSwitcherView @JvmOverloads constructor(
     private var zoomSpring: androidx.dynamicanimation.animation.SpringAnimation? = null
     private var zoomHidden: View? = null
 
+    /** The moving picture's corners now (px): square on the page, its place's own in the grid. */
+    private var zoomCorners = 0f
+    private val zoomOutline = object : android.view.ViewOutlineProvider() {
+        override fun getOutline(view: View, outline: android.graphics.Outline) {
+            outline.setRoundRect(0, 0, view.width, view.height, zoomCorners)
+        }
+    }
+
     /** Moves [tab]'s picture between [page] and its card; false when its card isn't on screen. */
     private fun zoom(tab: Tab, page: Rect, intoCard: Boolean): Boolean {
         val idx = adapter.items.indexOfFirst {
@@ -257,9 +271,15 @@ class TabSwitcherView @JvmOverloads constructor(
         val holder = if (idx >= 0) grid.findViewHolderForAdapterPosition(idx) else null
         val box = when (holder) {
             is CardHolder -> holder.thumbBox
+            is RowHolder -> holder.thumbBox
             is GroupHolder -> holder.mosaic
             else -> null
         } ?: return false
+        val boxCorners = Ui.dpf(context, when (holder) {
+            is RowHolder -> Corners.nested(ROW_RADIUS, ROW_GAP)
+            is GroupHolder -> Corners.nested(CARD_RADIUS, MOSAIC_MARGIN)
+            else -> Corners.nested(CARD_RADIUS, CARD_GAP)
+        }.toFloat())
         val card = Rect()
         box.getDrawingRect(card)
         offsetDescendantRectToMyCoords(box, card)
@@ -270,6 +290,8 @@ class TabSwitcherView @JvmOverloads constructor(
         stopZoom()
         val v = zoomView ?: TopCropImageView(context).also {
             it.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            it.outlineProvider = zoomOutline
+            it.clipToOutline = true
             addView(it, LayoutParams(0, 0))
             zoomView = it
         }
@@ -278,16 +300,21 @@ class TabSwitcherView @JvmOverloads constructor(
         if (!tab.isHome) Thumbnails.load(tab) { bmp -> if (zoomView === v && bmp != null) v.setImageBitmap(bmp) }
         v.visibility = View.VISIBLE
         v.bringToFront()
-        // The card stays empty while its picture is on the way in or out.
-        val cardView = holder!!.itemView
-        cardView.alpha = 0f
-        zoomHidden = cardView
+        // The picture's place stays empty while it is on the way in or out; the card's title and ring stay.
+        box.alpha = 0f
+        zoomHidden = box
         val from = moving ?: if (intoCard) Rect(page) else card
         val to = if (intoCard) card else Rect(page)
+        val cornersFrom = if (moving != null) zoomCorners else if (intoCard) 0f else boxCorners
+        val cornersTo = if (intoCard) boxCorners else 0f
+        zoomCorners = cornersFrom
         v.layout(from.left, from.top, from.right, from.bottom)
+        v.invalidateOutline()
         // 3.0.4 (spring motion): on a spring, quick and settling without a bounce.
         if (!Motion.enabled(context)) {
+            zoomCorners = cornersTo
             v.layout(to.left, to.top, to.right, to.bottom)
+            v.invalidateOutline()
             if (intoCard) stopZoom()
             return true
         }
@@ -295,10 +322,12 @@ class TabSwitcherView @JvmOverloads constructor(
             spring = androidx.dynamicanimation.animation.SpringForce(1f).setStiffness(ZOOM_STIFFNESS).setDampingRatio(1f)
             minimumVisibleChange = androidx.dynamicanimation.animation.DynamicAnimation.MIN_VISIBLE_CHANGE_SCALE
             addUpdateListener { _, f, _ ->
+                zoomCorners = cornersFrom + (cornersTo - cornersFrom) * f
                 v.layout(
                     lerp(from.left, to.left, f), lerp(from.top, to.top, f),
                     lerp(from.right, to.right, f), lerp(from.bottom, to.bottom, f),
                 )
+                v.invalidateOutline()
             }
         }
         spring.addEndListener { a, canceled, _, _ ->
@@ -321,7 +350,19 @@ class TabSwitcherView @JvmOverloads constructor(
         bg.alpha = from
         backgroundAnim = android.animation.ValueAnimator.ofInt(from, to).apply {
             duration = ZOOM_MS
+            interpolator = Motion.standard
             addUpdateListener { bg.alpha = it.animatedValue as Int }
+            start()
+        }
+    }
+
+    /** The page's colour going from [from] to [to], over the same time as the page's own move. */
+    private fun fadePageColour(from: Int, to: Int) {
+        backgroundAnim?.cancel()
+        backgroundAnim = android.animation.ValueAnimator.ofArgb(from, to).apply {
+            duration = Motion.PAGE_MS
+            interpolator = Motion.page
+            addUpdateListener { setBackgroundColor(it.animatedValue as Int) }
             start()
         }
     }
@@ -371,11 +412,12 @@ class TabSwitcherView @JvmOverloads constructor(
         adapter.notifyDataSetChanged()
         val idx = adapter.items.indexOfFirst { (it is Item.TabCard && it.current) || (it is Item.GroupCard && it.current) }
         if (idx >= 0) grid.scrollToPosition(idx)
+        if (grid.visibility == View.VISIBLE) Motion.fadeIn(grid, fromDy = 0, duration = Motion.SHORT)
     }
 
     /** The button shows what it switches to. */
     private fun showLayoutButton() {
-        layoutButton.setImageResource(if (asList) R.drawable.ic_grid_view else R.drawable.ic_view_list)
+        Motion.swapIcon(layoutButton, if (asList) R.drawable.ic_grid_view else R.drawable.ic_view_list)
         layoutButton.contentDescription = if (asList) "Grid of tabs" else "List of tabs"
         androidx.appcompat.widget.TooltipCompat.setTooltipText(layoutButton, layoutButton.contentDescription)
     }
@@ -392,8 +434,12 @@ class TabSwitcherView @JvmOverloads constructor(
         showingIncognito = incognito
         mode = Mode.GRID
         openGroup = null
+        val colourBefore = (background as? ColorDrawable)?.color
         applyPage()
         refresh(scrollToCurrent = true)
+        Motion.pageIn(grid, if (incognito) Motion.FORWARD else Motion.BACK)
+        val colourNow = (background as? ColorDrawable)?.color
+        if (colourBefore != null && colourNow != null) fadePageColour(colourBefore, colourNow)
     }
 
     private fun setMode(m: Mode, group: TabGroup? = null) {
@@ -406,6 +452,7 @@ class TabSwitcherView @JvmOverloads constructor(
             subSearch.setText("")
         }
         applyMode()
+        skipListMotion()
         refresh(scrollToCurrent = m == Mode.GRID && leftGroup == null)
         if (m != Mode.GRID) {
             grid.scrollToPosition(0)
@@ -413,6 +460,8 @@ class TabSwitcherView @JvmOverloads constructor(
             val idx = adapter.items.indexOfFirst { it is Item.GroupCard && it.group === leftGroup }
             if (idx >= 0) grid.scrollToPosition(idx)
         }
+        Motion.pageIn(grid, if (m == Mode.GRID) Motion.BACK else Motion.FORWARD)
+        Motion.fadeIn(if (mode == Mode.GRID) header else subheader, fromDy = 0, duration = Motion.SHORT)
         if (m == Mode.SEARCH) {
             subSearch.requestFocus()
             subSearch.post {
@@ -420,6 +469,13 @@ class TabSwitcherView @JvmOverloads constructor(
                 imm.showSoftInput(subSearch, InputMethodManager.SHOW_IMPLICIT)
             }
         }
+    }
+
+    /** The next refresh has the whole list move as a page: the cards' own motion is off until it is laid out. */
+    private fun skipListMotion() {
+        if (grid.itemAnimator == null) return
+        grid.itemAnimator = null
+        grid.doOnNextLayout { grid.itemAnimator = listMotion }
     }
 
     /** Updates the grid after tabs were opened, closed, moved or changed. */
@@ -478,12 +534,12 @@ class TabSwitcherView @JvmOverloads constructor(
             if (idx >= 0) grid.scrollToPosition(idx)
         }
         val n = TabManager.profileTabs().size
-        normalCount.text = if (n > 99) ":D" else n.toString()
+        Motion.swapText(normalCount, if (n > 99) ":D" else n.toString())
         if (mode == Mode.GROUP) openGroup?.let { subTitle.text = TabManager.groupTitle(it) }
         showEmpty(items.none { it !is Item.Banner })
     }
 
-    private fun tabCard(t: Tab, current: Tab?) = Item.TabCard(t, t.displayTitle, t.url, t === current, t.pinned, TabRules.sound(t.playing, t.muted))
+    private fun tabCard(t: Tab, current: Tab?) = Item.TabCard(t, t.displayTitle, t.url, t === current, t.pinned, TabRules.sound(t.playing, t.muted), if (mode == Mode.SEARCH) query.trim() else "")
 
     /** 3.0.4: [tab]'s sound started or stopped, or it was muted or unmuted: only its speaker is drawn again. */
     fun refreshSound(tab: Tab) {
@@ -498,9 +554,13 @@ class TabSwitcherView @JvmOverloads constructor(
     }
 
     private fun showEmpty(isEmpty: Boolean) {
-        empty.visibility = if (isEmpty) View.VISIBLE else View.GONE
-        grid.visibility = if (isEmpty && mode != Mode.SEARCH) View.GONE else View.VISIBLE
-        if (!isEmpty) return
+        // With no cards at all the list stays under it, so its last card's fade plays out (it has
+        // nothing to draw after that); a banner with no cards to go with it is hidden, as ever.
+        grid.visibility = if (isEmpty && mode != Mode.SEARCH && adapter.items.isNotEmpty()) View.GONE else View.VISIBLE
+        if (!isEmpty) {
+            empty.visibility = View.GONE
+            return
+        }
         val incognito = showingIncognito
         val searching = mode == Mode.SEARCH
         val soft = color(if (incognito) R.color.incognito_url else Looks.accent.container)
@@ -546,6 +606,7 @@ class TabSwitcherView @JvmOverloads constructor(
             text = if (searching) "Show all tabs" else if (incognito) "New incognito tab" else "New tab"
             visibility = if (searching && query.isBlank()) View.GONE else View.VISIBLE
         }
+        if (empty.visibility != View.VISIBLE) Motion.fadeIn(empty, fromDy = 12)
     }
 
     /**
@@ -600,21 +661,26 @@ class TabSwitcherView @JvmOverloads constructor(
 
     private fun applyPage() {
         val dark = showingIncognito
+        backgroundAnim?.cancel()
         setBackgroundColor(color(if (dark) R.color.incognito_bg else R.color.switcher_bg))
         val text = color(if (dark) R.color.incognito_text else R.color.text_primary)
         // "New tab" is a tonal pill button.
         val pillText = color(if (dark) R.color.incognito_text else Looks.accent.onContainer)
         newTab.setTextColor(pillText)
-        newTab.background = android.graphics.drawable.RippleDrawable(
-            ColorStateList.valueOf(0x22000000),
+        newTab.background = Ui.ripple(
+            context,
             GradientDrawable().apply {
                 cornerRadius = dp(20).toFloat()
                 setColor(color(if (dark) R.color.incognito_url else Looks.accent.container))
             },
-            null,
+            20,
+            if (dark) Ui.RIPPLE_ON_DARK else null,
         )
-        val plus = ContextCompat.getDrawable(context, R.drawable.ic_add)?.mutate()?.also { it.setTint(pillText) }
-        newTab.setCompoundDrawablesRelativeWithIntrinsicBounds(plus, null, null, null)
+        val plus = ContextCompat.getDrawable(context, R.drawable.ic_add)?.mutate()?.also {
+            it.setTint(pillText)
+            it.setBounds(0, 0, dp(20), dp(20))
+        }
+        newTab.setCompoundDrawablesRelative(plus, null, null, null)
         toggle.background = GradientDrawable().apply {
             cornerRadius = dp(20).toFloat()
             setColor(color(if (dark) R.color.incognito_url else R.color.surface_alt))
@@ -626,7 +692,8 @@ class TabSwitcherView @JvmOverloads constructor(
         toggleIncognito.isSelected = dark
         normalCount.setTextColor(text)
         normalCount.background = MainActivity.tabCountBackground(context, text)
-        incognitoIcon.imageTintList = ColorStateList.valueOf(text)
+        // On incognito's own page it sits on the chosen pill: the page's dark colour reads there.
+        incognitoIcon.imageTintList = ColorStateList.valueOf(if (dark) color(R.color.incognito_bg) else text)
         val icons = ColorStateList.valueOf(color(if (dark) R.color.incognito_hint else R.color.text_secondary))
         searchButton.imageTintList = icons
         layoutButton.imageTintList = icons
@@ -638,6 +705,7 @@ class TabSwitcherView @JvmOverloads constructor(
         // 3.0.5: the one search box of every screen, in the colour of the cards around it.
         Ui.searchBox(subSearch, fill = color(if (dark) R.color.incognito_url else R.color.tab_card_bg), ink = text, soft = color(if (dark) R.color.incognito_hint else R.color.text_secondary))
         subAction.setTextColor(color(if (dark) R.color.incognito_text else Looks.accent.primary))
+        subAction.background = Ui.ripple(context, null, Ui.R_SMALL, if (dark) Ui.RIPPLE_ON_DARK else null)
         adapter.notifyDataSetChanged()
     }
 
@@ -667,8 +735,8 @@ class TabSwitcherView @JvmOverloads constructor(
     /** Pill behind the chosen page of the toggle. */
     private fun toggleBackground(selected: Int) = StateListDrawable().apply {
         // 3.0.3: Normal and Incognito cross-fade as you switch, instead of jumping.
-        setEnterFadeDuration(150)
-        setExitFadeDuration(150)
+        setEnterFadeDuration(Motion.SHORT.toInt())
+        setExitFadeDuration(Motion.SHORT.toInt())
         addState(intArrayOf(android.R.attr.state_selected), GradientDrawable().apply {
             cornerRadius = dp(17).toFloat()
             setColor(selected)
@@ -737,7 +805,7 @@ class TabSwitcherView @JvmOverloads constructor(
                     Sheets.Action(R.drawable.ic_layers, "Ungroup (the tabs stay open)") { TabManager.ungroup(group) },
                     Sheets.Action(R.drawable.ic_close, "Close group", danger = true) { TabManager.closeGroup(group) },
                 )
-                Sheets.actions(activity, item.title, null, actions)
+                Sheets.actions(activity, item.title, null, actions, iconRes = R.drawable.ic_layers)
             }
             is Item.Banner -> return
         }
@@ -806,19 +874,18 @@ class TabSwitcherView @JvmOverloads constructor(
     private fun setMergeTarget(holder: RecyclerView.ViewHolder?) {
         if (holder === mergeHolder) return
         mergeHolder?.itemView?.let { v ->
-            v.animate().scaleX(1f).scaleY(1f).setDuration(120).start()
+            Motion.anim(v, Motion.SHORT).scaleX(1f).scaleY(1f).start()
             v.findViewById<View>(R.id.card_selected)?.visibility = View.GONE
             v.findViewById<View>(R.id.group_selected)?.visibility = View.GONE
             v.findViewById<View>(R.id.row_selected)?.visibility = View.GONE
         }
         mergeHolder = holder
         draggedHolder?.itemView?.let { d ->
-            d.alpha = if (holder != null) 0.55f else 1f
             val scale = if (holder != null) 0.9f else 1.05f
-            d.animate().scaleX(scale).scaleY(scale).setDuration(120).start()
+            Motion.anim(d, Motion.SHORT).alpha(if (holder != null) 0.55f else 1f).scaleX(scale).scaleY(scale).start()
         }
         holder?.itemView?.let { v ->
-            v.animate().scaleX(0.92f).scaleY(0.92f).setDuration(120).start()
+            Motion.anim(v, Motion.SHORT).scaleX(0.92f).scaleY(0.92f).start()
             v.findViewById<View>(R.id.card_selected)?.visibility = View.VISIBLE
             v.findViewById<View>(R.id.group_selected)?.visibility = View.VISIBLE
             v.findViewById<View>(R.id.row_selected)?.visibility = View.VISIBLE
@@ -881,7 +948,13 @@ class TabSwitcherView @JvmOverloads constructor(
                 maxDrag = 0f
                 mergeCandidate = null
                 Haptics.hold(vh.itemView)
-                vh.itemView.animate().scaleX(1.05f).scaleY(1.05f).setDuration(120).start()
+                // A press and this lift would both move its scale: it has no press while it is held.
+                vh.itemView.stateListAnimator = null
+                // Over the other cards, for as long as it is held.
+                Motion.anim(vh.itemView, Motion.SHORT).scaleX(1.05f).scaleY(1.05f).translationZ(Ui.dpf(context, DRAG_RAISE_DP)).start()
+            } else if (actionState == ItemTouchHelper.ACTION_STATE_SWIPE && vh != null) {
+                // Its fade (onChildDraw) from one layer, not a copy of everything in it on every frame.
+                vh.itemView.setLayerType(View.LAYER_TYPE_HARDWARE, null)
             }
         }
 
@@ -899,8 +972,13 @@ class TabSwitcherView @JvmOverloads constructor(
 
         override fun clearView(rv: RecyclerView, vh: RecyclerView.ViewHolder) {
             super.clearView(rv, vh)
-            vh.itemView.alpha = 1f
-            vh.itemView.animate().scaleX(1f).scaleY(1f).setDuration(120).start()
+            val v = vh.itemView
+            v.setLayerType(View.LAYER_TYPE_NONE, null)
+            // A fade still running on it (over another card) would otherwise end after this.
+            v.animate().cancel()
+            v.alpha = 1f
+            // Its press comes back once it has settled: given back now, it would fight this.
+            Motion.anim(v, Motion.SHORT).scaleX(1f).scaleY(1f).translationZ(0f).withEndAction { givePressBack(vh) }.start()
             if (!dragging) return
             dragging = false
             draggedHolder = null
@@ -932,6 +1010,8 @@ class TabSwitcherView @JvmOverloads constructor(
         data class TabCard(
             val tab: Tab, val title: String, val url: String, val current: Boolean,
             val pinned: Boolean = false, val sound: TabRules.Sound = TabRules.Sound.NONE,
+            /** The search word marked in its title (a search only). */
+            val mark: String = "",
         ) : Item()
 
         data class GroupCard(
@@ -972,10 +1052,8 @@ class TabSwitcherView @JvmOverloads constructor(
             placeholderName.translationY = Ui.dp(view.context, 38).toFloat()
             // The page's picture has its own rounded corners inside the card.
             thumbBox.clipToOutline = true
-            // The touch ripple stays inside the card's rounded corners.
-            view.clipToOutline = true
-            Ui.pressable(close, 0.85f)
-            Ui.pressable(sound, 0.85f)
+            Ui.pressable(close, Motion.PRESS_ICON)
+            Ui.pressable(sound, Motion.PRESS_ICON)
             // 3.0: a finger-sized place to close it; the 40 dp button fits its title row.
             Ui.touchArea(close, view as ViewGroup)
         }
@@ -995,11 +1073,10 @@ class TabSwitcherView @JvmOverloads constructor(
         var group: TabGroup? = null
 
         init {
-            // The small picture has its own rounded corners, and the ripple stays inside the row's.
+            // The small picture has its own rounded corners.
             thumbBox.clipToOutline = true
-            view.clipToOutline = true
-            Ui.pressable(close, 0.85f)
-            Ui.pressable(sound, 0.85f)
+            Ui.pressable(close, Motion.PRESS_ICON)
+            Ui.pressable(sound, Motion.PRESS_ICON)
         }
     }
 
@@ -1017,8 +1094,7 @@ class TabSwitcherView @JvmOverloads constructor(
         var group: TabGroup? = null
 
         init {
-            view.clipToOutline = true
-            Ui.pressable(close, 0.85f)
+            Ui.pressable(close, Motion.PRESS_ICON)
             // 3.0: as on a tab's card (the button was 36 dp).
             Ui.touchArea(close, view as ViewGroup)
         }
@@ -1042,6 +1118,13 @@ class TabSwitcherView @JvmOverloads constructor(
                 override fun getNewListSize() = newItems.size
                 override fun areItemsTheSame(o: Int, n: Int) = sameItem(old[o], newItems[n])
                 override fun areContentsTheSame(o: Int, n: Int) = old[o] == newItems[n]
+
+                // Only the search word changed (typing): just the title is drawn again.
+                override fun getChangePayload(o: Int, n: Int): Any? {
+                    val a = old[o]
+                    val b = newItems[n]
+                    return if (a is Item.TabCard && b is Item.TabCard && a.copy(mark = b.mark) == b) CHANGED_TITLE else null
+                }
             })
             items = ArrayList(newItems)
             diff.dispatchUpdatesTo(this)
@@ -1095,12 +1178,10 @@ class TabSwitcherView @JvmOverloads constructor(
             return when (viewType) {
                 TYPE_TAB -> {
                     val v = Palette.paint(inflater.inflate(R.layout.item_tab_card, parent, false))
-                    v.clipToOutline = true
                     CardHolder(v).also { h -> v.setOnLongClickListener { heldInList(h) } }
                 }
                 TYPE_GROUP -> {
                     val v = Palette.paint(inflater.inflate(R.layout.item_group_card, parent, false))
-                    v.clipToOutline = true
                     GroupHolder(v).also { h -> v.setOnLongClickListener { heldInList(h) } }
                 }
                 // 3.0.4: the list's rows, for tabs and groups alike.
@@ -1174,6 +1255,13 @@ class TabSwitcherView @JvmOverloads constructor(
                 shape.filled = fill
                 shape.setColor(fill)
             }
+            // The touch ripple inside the card's own corners, and light on incognito's dark cards.
+            if (shape.rippleDark != dark) {
+                shape.rippleDark = dark
+                v.foreground = Ui.ripple(context, null, radius, if (dark) Ui.RIPPLE_ON_DARK else null)
+                // Its small buttons' ripples stay in their own round place: a free one spread past the card's corner.
+                for (id in CARD_BUTTONS) v.findViewById<View>(id)?.background = Ui.ripple(context, null, 20, if (dark) Ui.RIPPLE_ON_DARK else null)
+            }
         }
 
         private fun bindTab(h: CardHolder, card: Item.TabCard) {
@@ -1188,6 +1276,7 @@ class TabSwitcherView @JvmOverloads constructor(
             setCard(h.itemView, dark)
             h.itemView.scaleX = 1f
             h.itemView.scaleY = 1f
+            givePressBack(h)
             h.title.setTextColor(color(if (dark) R.color.incognito_text else R.color.text_primary))
             // 3.0.3: a rounded background, not a plain colour: the picture is clipped to it, so its
             // corners stay inside the card's rounded border and the open tab's ring (3.0.5: nesting them).
@@ -1196,6 +1285,8 @@ class TabSwitcherView @JvmOverloads constructor(
             if (card.current) h.selected.background = ring()
             bindTitle(h, card, icon = true)
             bindKept(h.title, tab)
+            h.thumb.animate().cancel()
+            h.thumb.alpha = 1f
             h.thumb.setImageDrawable(null)
             h.placeholder.visibility = View.VISIBLE
             bindPicture(h, card)
@@ -1206,10 +1297,14 @@ class TabSwitcherView @JvmOverloads constructor(
 
         /** The card's title; a document's mark goes with it (its kind comes from its name). */
         private fun bindTitle(h: CardHolder, card: Item.TabCard, icon: Boolean = com.swiftbrowser.docs.Docs.isViewerUrl(card.url)) {
-            h.title.text = card.title
+            h.title.text = titleOf(card)
             h.itemView.contentDescription = describe(card)
             if (icon) bindIcon(h, card)
         }
+
+        /** Its title, with the word searched for marked (incognito's cards keep their own colour, so bold only). */
+        private fun titleOf(card: Item.TabCard): CharSequence =
+            markedText(card.title, card.mark, if (showingIncognito) color(R.color.incognito_text) else Ui.accent(context))
 
         /** What screen readers hear for a tab: its title, then (3.0.4) pinned, kept loaded and its sound. */
         private fun describe(card: Item.TabCard): String {
@@ -1247,8 +1342,9 @@ class TabSwitcherView @JvmOverloads constructor(
             }
             val tab = card.tab
             val muted = card.sound == TabRules.Sound.MUTED
+            // Before it shows: a speaker just coming into view has nothing to change from.
+            Motion.swapIcon(v, if (muted) R.drawable.ic_volume_off else R.drawable.ic_volume)
             v.visibility = View.VISIBLE
-            v.setImageResource(if (muted) R.drawable.ic_volume_off else R.drawable.ic_volume)
             v.imageTintList = ColorStateList.valueOf(color(if (showingIncognito) R.color.incognito_hint else R.color.text_secondary))
             v.contentDescription = if (muted) "Unmute tab" else "Mute tab"
             androidx.appcompat.widget.TooltipCompat.setTooltipText(v, v.contentDescription)
@@ -1332,14 +1428,22 @@ class TabSwitcherView @JvmOverloads constructor(
                     }
                 }
             }
+            var binding = true
             Thumbnails.load(tab) { bmp ->
                 if (bmp != null && h.tab === tab) {
+                    val late = !binding && h.thumb.drawable == null
                     h.thumb.setImageBitmap(bmp)
                     h.placeholder.visibility = View.GONE
                     h.placeholderName.visibility = View.GONE
                     pictureShown(tab, bmp)
+                    // Its view's alpha: the picture's own stays SoftPictures' dimming.
+                    if (late && Motion.enabled(context)) {
+                        h.thumb.alpha = 0f
+                        Motion.anim(h.thumb, Motion.ICON).alpha(1f).start()
+                    }
                 }
             }
+            binding = false
         }
 
         // ------------------------------------------------------------------ 3.0.4: the list
@@ -1370,7 +1474,7 @@ class TabSwitcherView @JvmOverloads constructor(
         }
 
         private fun bindRowTitle(h: RowHolder, card: Item.TabCard) {
-            h.title.text = card.title
+            h.title.text = titleOf(card)
             bindKept(h.title, card.tab)
             val site = rowSite(card.tab, card.url)
             h.host.text = site
@@ -1436,13 +1540,7 @@ class TabSwitcherView @JvmOverloads constructor(
             h.placeholder.imageTintList = ColorStateList.valueOf(groupColor)
             h.title.text = card.title
             h.title.setTextColor(color(if (dark) R.color.incognito_text else R.color.text_primary))
-            val dot = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                setColor(groupColor)
-                setBounds(0, 0, dp(10), dp(10))
-            }
-            h.title.setCompoundDrawablesRelative(dot, null, null, null)
-            h.title.compoundDrawablePadding = dp(8)
+            h.title.setCompoundDrawablesRelative(null, null, null, null)
             val count = if (card.count == 1) "1 tab" else "${card.count} tabs"
             // A group without a name is called by its number of tabs: its sites say more below it.
             h.host.text = if (group.name.isBlank()) {
@@ -1472,6 +1570,7 @@ class TabSwitcherView @JvmOverloads constructor(
             setCard(h.itemView, dark)
             h.itemView.scaleX = 1f
             h.itemView.scaleY = 1f
+            givePressBack(h)
             val groupColor = color(TabGroup.colorRes(card.color))
             h.dot.backgroundTintList = ColorStateList.valueOf(groupColor)
             h.title.text = card.title
@@ -1507,7 +1606,8 @@ class TabSwitcherView @JvmOverloads constructor(
                 SoftPictures.apply(view, softPictures())
                 val id = card.tabIds.getOrNull(i)
                 val tab = id?.let { tid -> TabManager.tabs.firstOrNull { it.id == tid } }
-                view.background = if (tab == null) null else GradientDrawable().apply {
+                // An empty place has the same fill as a taken one, so the mosaic doesn't look half-built.
+                view.background = GradientDrawable().apply {
                     cornerRadius = radius
                     setColor(color(if (dark) R.color.incognito_bg else R.color.tab_thumb_bg))
                 }
@@ -1557,6 +1657,20 @@ class TabSwitcherView @JvmOverloads constructor(
     /** 3.0.5: a card's background, made once and only recoloured (setCard). */
     private class CardShape : GradientDrawable() {
         var filled = 0
+
+        /** Which ripple its card has (the page's look it was made for), null before the first. */
+        var rippleDark: Boolean? = null
+    }
+
+    /**
+     * [h]'s press, unless it is a list row (a ripple is enough there) or is being dragged right now.
+     * A card gets it when first bound; a drag takes it away (onSelectedChanged) and it comes back as
+     * the card settles, or at its next bind if that was cut short.
+     */
+    private fun givePressBack(h: RecyclerView.ViewHolder) {
+        if ((h is CardHolder || h is GroupHolder) && h !== draggedHolder && h.itemView.stateListAnimator == null) {
+            Ui.pressable(h.itemView, Motion.PRESS_CARD, morph = false)
+        }
     }
 
     private companion object {
@@ -1572,6 +1686,12 @@ class TabSwitcherView @JvmOverloads constructor(
         /** A card picture's height for its width (the top of the page is shown). */
         const val CARD_ASPECT = 1.02f
         const val CARD_ASPECT_WIDE = 0.72f
+
+        /** How far a dragged card rises over the others (dp). */
+        const val DRAG_RAISE_DP = 6f
+
+        /** The buttons on a card or a row of the list. */
+        val CARD_BUTTONS = intArrayOf(R.id.card_close, R.id.card_sound, R.id.row_close, R.id.row_sound, R.id.group_close)
 
         /** How long a dragged tab rests over another card before letting go groups them. */
         const val MERGE_HOLD_MS = 350L

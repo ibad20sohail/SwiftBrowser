@@ -2,6 +2,8 @@
 <resources>
     <!-- Motion.pop: the view is on its way out. -->
     <item name="motion_hiding" type="id" />
+    <item name="motion_reveal" type="id" />
+    <item name="motion_picture" type="id" />
     <!-- Motion.swapIcon: the icon the view shows. -->
     <item name="motion_icon" type="id" />
     <!-- Motion.swapText: the text on its way in. -->

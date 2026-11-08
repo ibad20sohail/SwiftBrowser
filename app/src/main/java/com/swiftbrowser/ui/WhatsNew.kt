@@ -28,6 +28,9 @@ object WhatsNew {
         Item(R.drawable.ic_news, "News with pictures", "News stories on the home page now come with their pictures, as cards. With Data saver on mobile data they stay text only.", version = 27),
         Item(R.drawable.ic_tune, "Settings in plain words", "Every setting now says what it does for you, and each is where you'd look for it. Videos & music, Downloads and Files have their own topics, and nothing is folded away under Advanced.", version = 27),
         Item(R.drawable.ic_palette, "One calm look", "The same cards, bars, margins, icons and spacing on every screen, clearer cards and softer pictures in the dark look, rounded site icons, and small drawings on empty screens.", version = 27),
+        Item(R.drawable.ic_upload, "Upload from Swift's Files", "A website's upload button now opens Swift's own Files. You can go back to your phone's file picker in Settings → Files.", version = 27),
+        Item(R.drawable.ic_image, "How clear your home picture is", "Settings → Home & news → Background of the home page has a slider, from soft to the picture exactly as it is. The picture now runs behind the address bar too, and the text and buttons on it pick the colour that reads.", version = 27),
+        Item(R.drawable.ic_speed, "Everything moves the same way", "Buttons, dialogs, sheets, lists and screens now respond with the same short, light motion. Dialogs and sheets open twice as fast, and the player, Downloads, Files and the document viewer have been tidied up to match.", version = 27),
         Item(R.drawable.ic_storage, "More room for the web cache", "Swift no longer limits its web cache to 20 MB, so sites you visit often load faster. It's still emptied by itself when your phone is almost full.", version = 27),
         Item(R.drawable.ic_pin, "Pin, mute and list your tabs", "Hold a tab to pin it: pinned tabs come first and stay open when you close all. A tab playing sound has a speaker to mute it, also in the ≡ menu. The button next to search shows your tabs as a compact list.", version = 26),
         Item(R.drawable.ic_tab, "A group's tabs by the address bar", "On a tab in a group, its other tabs sit in a strip by the address bar: tap one to switch, + opens another in the group (Settings → Browsing & tabs).", version = 26),
@@ -125,7 +128,8 @@ object WhatsNew {
             col.addView(LinearLayout(a).apply {
                 orientation = LinearLayout.HORIZONTAL
                 setPadding(Ui.dp(a, 24), Ui.dp(a, 10), Ui.dp(a, 24), Ui.dp(a, 10))
-                addView(Ui.iconBadge(a, item.icon, 40), LinearLayout.LayoutParams(Ui.dp(a, 40), Ui.dp(a, 40)).apply { marginEnd = Ui.dp(a, 16) })
+                // Neutral: up to 55 of them, and the words are what to read.
+                addView(Ui.iconBadge(a, item.icon, 40, tint = Ui.text(a), fill = Ui.color(a, R.color.surface_alt)), LinearLayout.LayoutParams(Ui.dp(a, 40), Ui.dp(a, 40)).apply { marginEnd = Ui.dp(a, 16) })
                 addView(LinearLayout(a).apply {
                     orientation = LinearLayout.VERTICAL
                     addView(Ui.text(a, Ui.Type.SUBTITLE, item.title))
@@ -134,13 +138,7 @@ object WhatsNew {
             })
         }
         lateinit var dialog: com.google.android.material.bottomsheet.BottomSheetDialog
-        col.addView(MaterialButton(a).apply {
-            text = "Got it"
-            setOnClickListener { dialog.dismiss() }
-        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(a, 52)).apply {
-            setMargins(Ui.dp(a, 24), Ui.dp(a, 16), Ui.dp(a, 24), Ui.dp(a, 8))
-        })
-        dialog = Sheets.sheet(a, col)
+        dialog = Sheets.sheet(a, col, footer = Sheets.wideButton(a, "Got it") { dialog.dismiss() })
         dialog.showImmersive()
     }
 
@@ -181,8 +179,9 @@ object WhatsNew {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
         }
-        repeat(WELCOME.size) {
-            dots.addView(View(a), LinearLayout.LayoutParams(Ui.dp(a, 8), Ui.dp(a, 8)).apply { setMargins(Ui.dp(a, 4), 0, Ui.dp(a, 4), 0) })
+        val dotColours = IntArray(WELCOME.size) { Ui.color(a, R.color.outline) }
+        repeat(WELCOME.size) { i ->
+            dots.addView(View(a).apply { background = Ui.circle(dotColours[i]) }, LinearLayout.LayoutParams(Ui.dp(a, 8), Ui.dp(a, 8)).apply { setMargins(Ui.dp(a, 4), 0, Ui.dp(a, 4), 0) })
         }
         val skip = TextView(a).apply {
             this.text = "Skip"
@@ -191,7 +190,8 @@ object WhatsNew {
             setPadding(Ui.dp(a, 20), 0, Ui.dp(a, 20), 0)
             background = Ui.ripple(a, null, 24)
         }
-        val next = MaterialButton(a)
+        // Wide enough for its longest words, so it doesn't jump when they change.
+        val next = MaterialButton(a).apply { minWidth = Ui.dp(a, 140) }
         val buttons = LinearLayout(a).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -226,17 +226,36 @@ object WhatsNew {
             if (animate == 0) {
                 set()
             } else {
-                card.animate().alpha(0f).translationX(-animate * Ui.dpf(a, 40f)).setDuration(Motion.SHORT).setInterpolator(Motion.exit).withEndAction {
+                Motion.pageOut(card) {
                     set()
-                    card.translationX = animate * Ui.dpf(a, 40f)
-                    card.animate().alpha(1f).translationX(0f).setDuration(Motion.NORMAL).setInterpolator(Motion.enter).start()
-                }.start()
+                    Motion.pageIn(card, if (animate > 0) Motion.FORWARD else Motion.BACK)
+                }
             }
             for (i in 0 until dots.childCount) {
-                dots.getChildAt(i).background = Ui.circle(if (i == index) Ui.accent(a) else Ui.color(a, R.color.outline))
+                val colour = if (i == index) Ui.accent(a) else Ui.color(a, R.color.outline)
+                val from = dotColours[i]
+                if (from == colour) continue
+                dotColours[i] = colour
+                val dot = dots.getChildAt(i).background as android.graphics.drawable.GradientDrawable
+                if (animate == 0) {
+                    dot.setColor(colour)
+                } else {
+                    android.animation.ValueAnimator.ofArgb(from, colour).apply {
+                        duration = Motion.SHORT
+                        interpolator = Motion.standard
+                        addUpdateListener { dot.setColor(it.animatedValue as Int) }
+                        start()
+                    }
+                }
             }
-            next.text = if (index == WELCOME.size - 1) "Start browsing" else "Next"
-            skip.visibility = if (index == WELCOME.size - 1) View.INVISIBLE else View.VISIBLE
+            val last = index == WELCOME.size - 1
+            next.text = if (last) "Start browsing" else "Next"
+            when {
+                animate == 0 -> skip.visibility = if (last) View.INVISIBLE else View.VISIBLE
+                last -> if (skip.visibility == View.VISIBLE) Motion.fadeOut(skip, toDy = 0, gone = false)
+                // Also when it was on its way out.
+                skip.visibility != View.VISIBLE || skip.alpha < 1f -> Motion.fadeIn(skip, fromDy = 0, duration = Motion.SHORT)
+            }
         }
 
         var back: androidx.activity.OnBackPressedCallback? = null
@@ -244,7 +263,7 @@ object WhatsNew {
         fun finish() {
             SwiftApp.prefs.welcomeDone = true
             back?.remove()
-            overlay.animate().alpha(0f).setDuration(Motion.NORMAL).withEndAction { root.removeView(overlay) }.start()
+            Motion.fadeOut(overlay, toDy = 0, duration = Motion.NORMAL) { root.removeView(overlay) }
         }
 
         fun go(step: Int) {

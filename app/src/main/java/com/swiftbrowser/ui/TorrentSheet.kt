@@ -12,9 +12,11 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.core.view.AccessibilityDelegateCompat
 import androidx.core.view.ViewCompat
+import androidx.core.view.doOnNextLayout
 import androidx.core.view.accessibility.AccessibilityNodeInfoCompat
 import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.google.android.material.button.MaterialButton
+import com.swiftbrowser.R
 import com.swiftbrowser.core.UrlUtils
 import com.swiftbrowser.download.Downloads
 import com.swiftbrowser.torrent.TorrentFiles
@@ -31,6 +33,9 @@ import java.io.File
 object TorrentSheet {
     /** Most rows a panel lists: in a huge pack the files after these keep their choice. */
     private const val MAX_ROWS = 400
+
+    /** From this many rows, "All files" sets the tick boxes at once instead of animating every one. */
+    private const val MANY_ROWS = 12
 
     /**
      * A magnet link: its file list is asked for first (not while Swift's VPN is on). 3.0: only after
@@ -71,6 +76,7 @@ object TorrentSheet {
             body.removeAllViews()
             if (incognito) body.addView(incognitoWarning(a))
             lookUp(a, link, dialog, head, body, { open }, incognito, added)
+            fadeInBody(body)
         })
         dialog.showImmersive()
     }
@@ -86,7 +92,17 @@ object TorrentSheet {
             body.removeAllViews()
             if (incognito) body.addView(incognitoWarning(a))
             showFetched(a, link, bytes, dialog, head, body, added)
+            fadeInBody(body)
         }
+    }
+
+    /**
+     * What is in [body] now comes in with a fade once it is laid out: only then is its height known,
+     * and a list taller than the screen must not go through a layer (the GPU can't hold one that big).
+     */
+    private fun fadeInBody(body: View) {
+        body.alpha = 0f
+        body.doOnNextLayout { Motion.fadeIn(it, fromDy = 8) }
     }
 
     private fun showFetched(
@@ -133,7 +149,7 @@ object TorrentSheet {
      * 3.0: torrents take hours and go on after Swift restarts, so one from an incognito tab is kept
      * like any other download: said before it is added, not found out afterwards.
      */
-    private fun incognitoWarning(a: Activity): TextView =
+    private fun incognitoWarning(a: Activity): View =
         warning(a, "This tab is incognito, but torrents aren't: this one stays in your Downloads list until you remove it.")
 
     /** Another choice of files for [item] (Files, in its menu in Downloads). */
@@ -244,7 +260,10 @@ object TorrentSheet {
                 if (quiet) return@row
                 if (on) entries.forEach { ticked += it.index } else ticked.clear()
                 quiet = true
-                boxes.forEach { (e, b) -> b.isChecked = e.index in ticked }
+                boxes.forEach { (e, b) ->
+                    b.isChecked = e.index in ticked
+                    if (boxes.size >= MANY_ROWS) b.jumpDrawablesToCurrentState()
+                }
                 quiet = false
                 refresh()
             }.also { allBox = it.second }.first)
@@ -319,8 +338,10 @@ object TorrentSheet {
         return view to box
     }
 
-    private fun warning(a: Activity, text: String): TextView = Ui.text(a, Ui.Type.BODY_SECONDARY, text, Ui.danger(a)).apply {
-        setPadding(Ui.dp(a, 24), Ui.dp(a, 6), Ui.dp(a, 24), Ui.dp(a, 6))
+    private fun warning(a: Activity, text: String): View = Ui.noteBox(a, R.drawable.ic_error, text, Palette.color(a, R.color.danger_container), Ui.danger(a)).apply {
+        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            setMargins(Ui.dp(a, 24), Ui.dp(a, 6), Ui.dp(a, 24), Ui.dp(a, 6))
+        }
     }
 
     private fun progressRow(a: Activity, text: String): View = LinearLayout(a).apply {
@@ -333,11 +354,5 @@ object TorrentSheet {
     }
 
     /** The wide button at the bottom. */
-    private fun button(a: Activity, text: String, onClick: () -> Unit) = MaterialButton(a).apply {
-        this.text = text
-        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(a, 52)).apply {
-            setMargins(Ui.dp(a, 20), Ui.dp(a, 12), Ui.dp(a, 20), 0)
-        }
-        setOnClickListener { onClick() }
-    }
+    private fun button(a: Activity, text: String, onClick: () -> Unit): MaterialButton = Sheets.wideButton(a, text, onClick = onClick)
 }

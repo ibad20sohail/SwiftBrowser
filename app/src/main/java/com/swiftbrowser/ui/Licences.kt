@@ -1,7 +1,6 @@
 package com.swiftbrowser.ui
 
 import android.app.Activity
-import android.graphics.Typeface
 import android.text.SpannableString
 import android.text.Spanned
 import android.text.method.LinkMovementMethod
@@ -39,25 +38,25 @@ object Licences {
         orientation = LinearLayout.VERTICAL
         setPadding(Ui.dp(a, 24), Ui.dp(a, 12), Ui.dp(a, 24), Ui.dp(a, 12))
         addView(Ui.text(a, Ui.Type.BODY, listOf(c.name, c.version).filter { it.isNotBlank() }.joinToString(" ")).apply {
-            setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL))
+            setTypeface(Ui.medium(Ui.Type.BODY))
         })
         addView(link(a, c.licence, "Licence: ${c.licence}") { go(c.licenceUrl) })
         addView(link(a, c.home.substringAfter("://").trimEnd('/'), "Home page of ${c.name}") { go(c.home) })
         c.note?.let { addView(withLinks(a, it, go)) }
         c.notice?.let { notice ->
             val text = Ui.text(a, Ui.Type.CAPTION, notice).apply {
-                typeface = Typeface.MONOSPACE
-                Ui.size(this, Ui.Type.SMALL, keepFont = true)
+                Ui.size(this, Ui.Type.SMALL)
                 visibility = View.GONE
                 background = Ui.shape(a, Palette.color(a, R.color.surface_alt), 12)
                 val p = Ui.dp(a, 10)
                 setPadding(p, p, p, p)
             }
             val toggle = link(a, "Show its notice", "Show the notice of ${c.name}") {}
+            var open = false
             toggle.setOnClickListener {
-                val showing = text.visibility == View.VISIBLE
-                if (showing) Motion.collapse(text) { text.visibility = View.GONE } else Motion.expand(text)
-                toggle.text = if (showing) "Show its notice" else "Hide its notice"
+                open = !open
+                Motion.reveal(text, open)
+                Motion.swapText(toggle, if (open) "Hide its notice" else "Show its notice")
             }
             addView(toggle)
             addView(text, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = Ui.dp(a, 4) })
@@ -67,7 +66,7 @@ object Licences {
     /** Words in the accent colour that do something when tapped (48 dp high, for fingers). */
     private fun link(a: Activity, text: String, description: String, onClick: () -> Unit): TextView =
         Ui.text(a, Ui.Type.BODY_SECONDARY, text, Ui.accent(a)).apply {
-            minHeight = Ui.dp(a, 40)
+            minHeight = Ui.dp(a, 48)
             gravity = android.view.Gravity.CENTER_VERTICAL
             background = Ui.ripple(a, null, 8)
             contentDescription = "$description, opens in a new tab"

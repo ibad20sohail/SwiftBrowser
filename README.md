@@ -5,9 +5,16 @@ ad-heavy sites on older phones, and runs on Android 7 and newer.
 
 ## Download
 
-**[Download Swift 3.0.5 (APK)](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v3.0.5/Swift-3.0.5.apk)**
-for Android 7 and newer (32-bit ARM, about 172 MB). It installs over an earlier Swift and keeps
-tabs and settings. Swift can also update itself: Settings → About Swift → Check for updates.
+Swift 3.0.6 for Android 7 and newer comes in two files:
+
+- **[Swift-64bit-3.0.6.apk](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v3.0.6/Swift-64bit-3.0.6.apk)**
+  (64-bit ARM, about 202 MB): for newer phones, and for any phone that says Swift "isn't compatible
+  with the latest version of Android".
+- **[Swift-3.0.6.apk](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v3.0.6/Swift-3.0.6.apk)**
+  (32-bit ARM, about 165 MB): for older phones, such as those with 2 GB of memory.
+
+Either installs over an earlier Swift and keeps tabs and settings. Swift can also update itself
+(Settings → About Swift → Check for updates); from 3.0.6 on it picks the right file for the phone.
 
 Older versions: [all releases](https://github.com/ibad20sohail/SwiftBrowser/releases). The APKs
 are attached to the releases because GitHub doesn't accept files over 100 MB in the repository.
@@ -254,8 +261,8 @@ VPN. Only Swift's traffic goes through it; other apps keep their own connection.
 
 ## Requirements
 
-- Android 7 or newer on 32-bit ARM phones (`phone` build), or x86_64 for the Android emulator
-  (`emu` build).
+- Android 7 or newer on ARM phones: 32-bit (`phone` build) or 64-bit (`phone64` build), or x86_64
+  for the Android emulator (`emu` build).
 
 ## Build
 
@@ -266,8 +273,9 @@ To build it you need:
 - A signing key in `keystore/` (not in git, see below)
 
 ```sh
-./gradlew :app:assemblePhoneRelease   # 32-bit ARM APK for the phone
-./gradlew :app:assembleEmuDebug       # x86_64 APK for the Android emulator
+./gradlew :app:assemblePhoneRelease     # 32-bit ARM APK (Swift-<version>.apk)
+./gradlew :app:assemblePhone64Release   # 64-bit ARM APK (Swift-64bit-<version>.apk)
+./gradlew :app:assembleEmuRelease       # x86_64 APK for the Android emulator
 ```
 
 Outputs are in `app/build/outputs/apk/`.

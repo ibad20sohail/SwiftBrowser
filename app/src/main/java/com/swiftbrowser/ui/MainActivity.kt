@@ -3613,8 +3613,13 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     fun withStorage(action: () -> Unit) {
         if (Downloads.hasStoragePermission(this)) {
             action()
+            NotificationAccess.askOnce(this)
         } else {
-            requestAndroidPermissions(arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE)) { action() }
+            requestAndroidPermissions(arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE)) {
+                action()
+                // 3.0.6: a download's progress and "Downloaded" are notifications (Android 13+ asks first).
+                NotificationAccess.askOnce(this)
+            }
         }
     }
 

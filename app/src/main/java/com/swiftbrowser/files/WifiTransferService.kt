@@ -151,6 +151,19 @@ class WifiTransferService : Service() {
         super.onDestroy()
     }
 
+    /**
+     * 3.0.6: Android 15 and later allow 6 hours a day of transfers in the background, then call this:
+     * the service must stop within seconds or Android closes Swift. The transfer stops as after two
+     * quiet minutes; opening Wi-Fi transfer starts it again.
+     */
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        L.w("Wi-Fi transfer: Android's 6 hours a day in the background are used up, stopped")
+        wanted = false
+        handler.removeCallbacks(tick)
+        WifiTransfer.stop(this, fromService = true)
+        stopSelf()
+    }
+
     /** Two quiet minutes: the server stops; otherwise the notification says what moves. */
     private fun update() {
         val s = WifiTransfer.server

@@ -21,16 +21,24 @@ android {
         applicationId = "com.swiftbrowser.app"
         minSdk = 24
         targetSdk = 35
-        versionCode = 27
-        versionName = "3.0.5"
+        versionCode = 28
+        versionName = "3.0.6"
     }
 
     flavorDimensions += "abi"
     productFlavors {
-        // Older phones run 32-bit ARM apps whether their userspace is 32- or 64-bit.
+        // Older phones run 32-bit ARM apps whether their userspace is 32- or 64-bit: the Moto E4's
+        // Swift, released as Swift-<version>.apk.
         create("phone") {
             dimension = "abi"
             ndk { abiFilters += listOf("armeabi-v7a") }
+        }
+        // 3.0.6: newer phones, released as Swift-64bit-<version>.apk. Android 14 and later warn that a
+        // 32-bit-only app "isn't compatible with the latest version of Android", and phones with only
+        // 64-bit support can't install one at all. The same app, the same engine, 64-bit.
+        create("phone64") {
+            dimension = "abi"
+            ndk { abiFilters += listOf("arm64-v8a") }
         }
         // Same app for the x86_64 Android emulator on the PC, used for testing.
         create("emu") {
@@ -118,6 +126,7 @@ dependencies {
     // Firefox engine. 143 is the last release that supports Android 7.
     val geckoview = "143.0.20251003115653"
     "phoneImplementation"("org.mozilla.geckoview:geckoview-armeabi-v7a:$geckoview")
+    "phone64Implementation"("org.mozilla.geckoview:geckoview-arm64-v8a:$geckoview")
     "emuImplementation"("org.mozilla.geckoview:geckoview-x86_64:$geckoview")
 
     implementation("androidx.core:core-ktx:1.16.0")
@@ -170,6 +179,7 @@ dependencies {
     val libtorrent4j = "2.1.0-38"
     implementation("org.libtorrent4j:libtorrent4j:$libtorrent4j")
     "phoneImplementation"("org.libtorrent4j:libtorrent4j-android-arm:$libtorrent4j")
+    "phone64Implementation"("org.libtorrent4j:libtorrent4j-android-arm64:$libtorrent4j")
     "emuImplementation"("org.libtorrent4j:libtorrent4j-android-x86_64:$libtorrent4j")
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
     // 3.0: pictures' EXIF (orientation, details) read the same way on every Android version, with

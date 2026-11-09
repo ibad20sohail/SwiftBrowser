@@ -10,6 +10,7 @@ import android.service.quicksettings.TileService
 import com.swiftbrowser.R
 import com.swiftbrowser.core.L
 import com.swiftbrowser.ui.MainActivity
+import com.swiftbrowser.ui.openAndCollapse
 
 /**
  * The "Swift VPN" quick settings tile (2.3): turns Swift's VPN on or off from the notification
@@ -40,8 +41,10 @@ class VpnTileService : TileService() {
                 val loc = Vpn.current()
                 if (loc == null || permission != null) {
                     // A location to add, or Android's permission to give: Swift's VPN sheet does both.
-                    startActivityAndCollapse(
+                    // 3.0.6: through openAndCollapse, which Android 14+ accepts.
+                    openAndCollapse(
                         Intent(this, MainActivity::class.java).setAction(MainActivity.ACTION_VPN).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                        4311,
                     )
                     return
                 }

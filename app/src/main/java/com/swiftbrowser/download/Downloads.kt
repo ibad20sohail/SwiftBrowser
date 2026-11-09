@@ -294,6 +294,34 @@ object Downloads {
         synchronized(items) { items.values.filter { it.status == RUNNING || it.status == QUEUED }.map { it.id } }.forEach { pause(it) }
     }
 
+    /**
+     * 3.0.6: Android 15 and later give an app 6 hours a day of downloading in the background; when
+     * they are up, everything downloading or waiting pauses, marked, so it goes on by itself the next
+     * time Swift is on screen ([resumeAfterAndroidLimit]). Returns how many paused.
+     */
+    fun pauseForAndroidLimit(): Int {
+        if (!::app.isInitialized) return 0
+        val ids = synchronized(items) { items.values.filter { it.status == RUNNING || it.status == QUEUED }.map { it.id } }
+        for (id in ids) {
+            get(id)?.extra?.put(ANDROID_LIMIT, true)
+            pause(id)
+        }
+        return ids.size
+    }
+
+    /** 3.0.6: Swift is on screen again: what Android's limit paused goes on. */
+    fun resumeAfterAndroidLimit() {
+        if (!::app.isInitialized) return
+        val ids = synchronized(items) { items.values.filter { it.status == PAUSED && it.extra.optBoolean(ANDROID_LIMIT) }.map { it.id } }
+        if (ids.isEmpty()) return
+        L.d("Resuming ${ids.size} downloads paused by Android's background limit")
+        ids.forEach { resume(it) }
+        DownloadService.cancelPausedByAndroid(app)
+    }
+
+    /** 3.0.6: the mark of a download paused by Android's 6 hours a day (not by the user). */
+    private const val ANDROID_LIMIT = "androidLimit"
+
     fun addListener(l: () -> Unit) {
         listeners.add(l)
     }
@@ -321,8 +349,17 @@ object Downloads {
 
     // ------------------------------------------------------------------ starting downloads
 
+    /**
+     * Swift may save into the phone's shared folders (Download/Swift). Android 7 to 10 ask for storage
+     * access first (Android 10 keeps the old way of storage for Swift, requestLegacyExternalStorage).
+     * 3.0.6: from Android 11 any app may save into Download without asking. The old check took that
+     * as "no access": on newer phones downloads stayed inside Swift, out of sight of other apps and
+     * deleted with Swift, Settings offered access Android could never give, and documents couldn't
+     * be saved to Downloads at all.
+     */
     fun hasStoragePermission(ctx: Context): Boolean =
-        ContextCompat.checkSelfPermission(ctx, Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+        android.os.Build.VERSION.SDK_INT >= 30 ||
+            ContextCompat.checkSelfPermission(ctx, Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
 
     /** Where downloads go unless chosen otherwise: Download/Swift on the phone's storage. */
     fun defaultDirectory(): File = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "Swift")
@@ -333,12 +370,14 @@ object Downloads {
      */
     fun directory(): File {
         val chosen = prefs.downloadFolder.takeIf { it.isNotBlank() }?.let { File(it) }
+        val own = { app.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: File(app.filesDir, "downloads") }
         val dir = when {
             // Swift's own folder on an SD card needs no permission.
             chosen != null && chosen.path.contains("/Android/data/") && usable(chosen) -> chosen
-            !hasStoragePermission(app) -> app.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: File(app.filesDir, "downloads")
+            !hasStoragePermission(app) -> own()
             chosen != null && usable(chosen) -> chosen
-            else -> defaultDirectory()
+            // 3.0.6: Download/Swift, unless it can't be written (then Swift's own folder, as without access).
+            else -> defaultDirectory().takeIf { usable(it) } ?: own()
         }
         dir.mkdirs()
         return dir
@@ -540,6 +579,8 @@ object Downloads {
         item.extra.remove("retryAt")
         // 3.0: a torrent no one shared starts its tries again (Torrents).
         item.extra.remove("idle")
+        // 3.0.6: resumed, it is no longer one that Android's limit paused.
+        item.extra.remove(ANDROID_LIMIT)
         persist(item)
         changed(immediate = true)
         schedule()

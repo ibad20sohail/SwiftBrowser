@@ -78,8 +78,10 @@ class SearchWidget : AppWidgetProvider() {
 /** The "New tab" quick settings tile (2.6): opens Swift on a new tab, ready to type. */
 class NewTabTileService : TileService() {
     override fun onClick() {
-        startActivityAndCollapse(
+        // 3.0.6: through openAndCollapse, which Android 14+ accepts (the tile did nothing there).
+        openAndCollapse(
             Intent(this, MainActivity::class.java).setAction(MainActivity.ACTION_SEARCH).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            4310,
         )
     }
 }

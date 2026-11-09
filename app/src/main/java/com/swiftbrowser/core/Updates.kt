@@ -117,16 +117,29 @@ object Updates {
         val version = json.optString("tag_name").removePrefix("v").trim()
         val assets = json.optJSONArray("assets")
         if (assets != null) {
-            for (i in 0 until assets.length()) {
-                val a = assets.optJSONObject(i) ?: continue
-                val name = a.optString("name")
-                if (name.endsWith(".apk", ignoreCase = true)) {
-                    return Check(Release(version, a.optString("browser_download_url"), name, a.optLong("size", -1), json.optString("body")), version, null)
-                }
+            val files = (0 until assets.length()).mapNotNull { assets.optJSONObject(it) }
+            // 3.0.6: a release has a 32-bit and a 64-bit app file; this phone's is the one to get.
+            val name = PhoneSize.pickApk(files.map { it.optString("name") }, wants64Bit(), can64Bit())
+            val a = files.firstOrNull { it.optString("name") == name }
+            if (name != null && a != null) {
+                return Check(Release(version, a.optString("browser_download_url"), name, a.optLong("size", -1), json.optString("body")), version, null)
             }
         }
         // A release whose file isn't up yet (it is added after the release is made).
         return Check(null, version, if (version.isNotEmpty() && isNewer(version, BuildConfig.VERSION_NAME)) "Swift $version is out, but its app file isn't ready yet. Try again in a while." else null)
+    }
+
+    /** 3.0.6: the phone can run 64-bit ARM apps. */
+    private fun can64Bit(): Boolean = "arm64-v8a" in Build.SUPPORTED_64_BIT_ABIS
+
+    /**
+     * 3.0.6: this phone should get the 64-bit Swift: it runs it already, or it can and has more memory
+     * than a 2 GB phone (which keeps the 32-bit Swift it was tuned with).
+     */
+    private fun wants64Bit(): Boolean {
+        val runs64 = android.os.Process.is64Bit()
+        val memory = SwiftApp.instance?.let { PhoneSize.totalMemory(it) } ?: 0L
+        return PhoneSize.wants64Bit(runs64, can64Bit(), memory)
     }
 
     /**
@@ -191,8 +204,8 @@ object Updates {
 
     private const val RELEASE_DOWNLOADS = "https://github.com/ibad20sohail/SwiftBrowser/releases/download/"
 
-    /** "Swift-3.0.apk", or "Swift-3.0 (1).apk" when downloaded twice. */
-    private val APK_NAME = Regex("^Swift-([0-9.]+)(?: \\(\\d+\\))?\\.apk$", RegexOption.IGNORE_CASE)
+    /** "Swift-3.0.apk", or "Swift-3.0 (1).apk" when downloaded twice; 3.0.6: also "Swift-64bit-3.0.6.apk". */
+    private val APK_NAME = Regex("^Swift-(?:64bit-)?([0-9.]+)(?: \\(\\d+\\))?\\.apk$", RegexOption.IGNORE_CASE)
 
     /**
      * Blocking: deletes update APKs of this version or older (they were installed, or are of no use

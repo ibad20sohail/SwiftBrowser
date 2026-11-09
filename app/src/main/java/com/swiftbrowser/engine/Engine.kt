@@ -150,8 +150,9 @@ object Engine {
             SetGeckoPreference.setBoolPref("browser.cache.disk.smart_size.enabled", true, BRANCH),
             // Keep one previous page ready for an instant Back; each kept page holds its memory.
             SetGeckoPreference.setIntPref("browser.sessionhistory.max_total_viewers", 1, BRANCH),
-            // Decoded images held in memory per process: 48 MB is plenty for a 720p screen.
-            SetGeckoPreference.setIntPref("image.mem.surfacecache.max_size_kb", 48 * 1024, BRANCH),
+            // Decoded images held in memory per process: 48 MB is plenty for a 720p screen. 3.0.6: more
+            // on sharper screens (PhoneSize), where 48 MB left pictures of big sites empty.
+            SetGeckoPreference.setIntPref("image.mem.surfacecache.max_size_kb", pictureMemoryKb(), BRANCH),
             // No guessing and prefetching of pages that may never be opened.
             SetGeckoPreference.setBoolPref("network.predictor.enabled", false, BRANCH),
             SetGeckoPreference.setBoolPref("network.prefetch-next", false, BRANCH),
@@ -190,6 +191,16 @@ object Engine {
     }
 
     private const val SOFTWARE_RENDERING_PREF = "gfx.webrender.software"
+
+    /** 3.0.6: the room for decoded pictures on this phone (48 MB on the Moto E4, as before). */
+    private fun pictureMemoryKb(): Int {
+        val kb = com.swiftbrowser.core.PhoneSize.pictureMemoryKb(
+            com.swiftbrowser.core.PhoneSize.totalMemory(app),
+            com.swiftbrowser.core.PhoneSize.screenPixels(app),
+        )
+        L.d("Picture memory: ${kb / 1024} MB")
+        return kb
+    }
 
     /**
      * Settings the engine must have before it starts, such as the drawing method: it is fixed when

@@ -24,6 +24,13 @@ object WhatsNew {
     private class Item(val icon: Int, val title: String, val text: String, val version: Int = 19)
 
     private val NEW = listOf(
+        Item(R.drawable.ic_speed, "Made for newer phones too", "Swift now comes in 64-bit for newer phones, so Android 14 and later no longer say it isn't compatible. Phones like the Moto E4 keep the 32-bit Swift, unchanged, and Swift's update check gets each phone its own.", version = 28),
+        Item(R.drawable.ic_settings, "Between the phone's bars", "On Android 15 and later the address bar no longer sits under the clock and battery, and pages no longer run under the navigation bar.", version = 28),
+        Item(R.drawable.ic_image, "Pictures on big sites", "On sharper screens, pictures on big sites like apple.com no longer stay empty: Swift gives pictures room in proportion to the screen.", version = 28),
+        Item(R.drawable.ic_swap, "Links to other apps", "Phone numbers, messages, the Play Store and links to apps open their app again on Android 11 and later, instead of \"No app on your phone can open this link\".", version = 28),
+        Item(R.drawable.ic_folder, "Downloads in your Download folder", "On Android 11 and later, downloads go to your Download folder (Download/Swift) as on older phones, where your gallery and other apps see them, and documents can be saved to Downloads again. Before, they stayed inside Swift.", version = 28),
+        Item(R.drawable.ic_tab, "Quick settings tiles", "The New tab and Swift VPN tiles in your phone's quick settings open Swift again on Android 14 and later.", version = 28),
+        Item(R.drawable.ic_download, "Download notifications", "On Android 13 and later Swift asks once, at your first download, to show its notifications: progress and \"Downloaded\". Downloads Android stops after 6 hours in the background go on when you open Swift.", version = 28),
         Item(R.drawable.ic_speed, "A start that says what it's doing", "When Swift has something to load, its start screen stays with a loader and says what's happening: the browser, the ad blocker, the VPN, then your page. No more blurry picture or blank flash.", version = 27),
         Item(R.drawable.ic_news, "News with pictures", "News stories on the home page now come with their pictures, as cards. With Data saver on mobile data they stay text only.", version = 27),
         Item(R.drawable.ic_tune, "Settings in plain words", "Every setting now says what it does for you, and each is where you'd look for it. Videos & music, Downloads and Files have their own topics, and nothing is folded away under Advanced.", version = 27),

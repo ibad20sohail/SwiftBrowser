@@ -34,7 +34,8 @@ internal object LicencesData {
             licenceUrl = "https://www.mozilla.org/MPL/2.0/",
             home = "https://mozilla.github.io/geckoview/",
             note = "Firefox's engine. It includes code from many other projects, listed on the page " +
-                "about:license. Parts used: geckoview-armeabi-v7a, and geckoview-exoplayer2 (Mozilla's " +
+                "about:license. Parts used: geckoview-armeabi-v7a (geckoview-arm64-v8a in the 64-bit " +
+                "Swift), and geckoview-exoplayer2 (Mozilla's " +
                 "copy of Google's ExoPlayer video player, Apache License 2.0). Source code of this " +
                 "release: " +
                 "https://hg.mozilla.org/releases/mozilla-release/rev/08388fb6b18c61dbb3d0baa9bee4e7440b85f671",
@@ -468,7 +469,8 @@ internal object LicencesData {
             licenceUrl = "https://github.com/aldenml/libtorrent4j/blob/master/LICENSE.md",
             home = "https://github.com/aldenml/libtorrent4j",
             note = "Torrents: libtorrent, the engine of qBittorrent and Deluge, for Java. Parts used: " +
-                "libtorrent4j and its native library, libtorrent4j-android-arm. The native library " +
+                "libtorrent4j and its native library, libtorrent4j-android-arm (libtorrent4j-android-arm64 " +
+                "in the 64-bit Swift). The native library " +
                 "includes libtorrent 2.1.0 (BSD 3-Clause License, with a few small parts under the zlib " +
                 "licence or in the public domain), Boost 1.89 (Boost Software License 1.0), OpenSSL 3.5.2 " +
                 "(Apache License 2.0) and, for WebTorrent, libdatachannel and libjuice (Mozilla Public " +

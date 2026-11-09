@@ -100,6 +100,21 @@ class DownloadService : Service() {
         super.onDestroy()
     }
 
+    /**
+     * 3.0.6: Android 15 and later let an app download in the background for 6 hours a day. When they
+     * are up, Android calls this and the service must stop within seconds, or Android closes Swift.
+     * The downloads pause and a notification says why; they go on by themselves the next time Swift is
+     * opened (Downloads.resumeAfterAndroidLimit), when Android starts counting again.
+     */
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        val paused = Downloads.pauseForAndroidLimit()
+        L.w("Android's 6 hours a day of background downloading are used up: $paused paused until Swift is opened")
+        keepAwake(false)
+        ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+        stopSelf()
+        if (paused > 0) notifyPausedByAndroid(this, paused)
+    }
+
     private fun keepAwake(on: Boolean) {
         if (!on) {
             // Each let go of on its own: one failing never keeps the other.
@@ -228,6 +243,9 @@ class DownloadService : Service() {
         /** 3.0: the quiet notification of downloads that only wait. */
         private const val WAITING_ID = 2
 
+        /** 3.0.6: the notification of downloads Android's background limit paused. */
+        private const val PAUSED_ID = 3
+
         /** 3.0: finished downloads' notifications have this tag, their download's number as id (no clash with others). */
         private const val TAG_DONE = "download"
         private const val ACTION_PAUSE_ALL = "com.swiftbrowser.PAUSE_ALL_DOWNLOADS"
@@ -312,6 +330,29 @@ class DownloadService : Service() {
 
         private fun cancelWaiting(ctx: Context) {
             runCatching { NotificationManagerCompat.from(ctx).cancel(WAITING_ID) }
+        }
+
+        /** 3.0.6: Android's 6 hours a day of background downloading are up (DownloadService.onTimeout). */
+        private fun notifyPausedByAndroid(ctx: Context, count: Int) {
+            ensureChannels(ctx)
+            val n = NotificationCompat.Builder(ctx, CHANNEL_DONE)
+                .setSmallIcon(R.drawable.ic_notify)
+                .setContentTitle(if (count == 1) "A download is paused" else "$count downloads are paused")
+                .setContentText("Open Swift to go on")
+                .setStyle(
+                    NotificationCompat.BigTextStyle().bigText(
+                        "Android lets apps download in the background for 6 hours a day. Open Swift and they go on by themselves.",
+                    ),
+                )
+                .setAutoCancel(true)
+                .setContentIntent(openDownloads(ctx))
+                .build()
+            post(ctx, null, PAUSED_ID, n)
+        }
+
+        /** 3.0.6: Swift is open again and those downloads go on: the notification about them goes. */
+        fun cancelPausedByAndroid(ctx: Context) {
+            runCatching { NotificationManagerCompat.from(ctx).cancel(PAUSED_ID) }
         }
 
         /**

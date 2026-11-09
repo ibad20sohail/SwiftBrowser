@@ -11,9 +11,11 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <!-- 3.0.6: up to Android 10 (it was 9): Android 10 keeps the old way of storage for Swift
+         (requestLegacyExternalStorage below), so Download/Swift works there as on Android 9. -->
     <uses-permission
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"
-        android:maxSdkVersion="28" />
+        android:maxSdkVersion="29" />
     <!-- 2.4: the Documents screen lists the phone's PDFs, Office files and e-books (asked the first time). -->
     <uses-permission
         android:name="android.permission.READ_EXTERNAL_STORAGE"
@@ -29,6 +31,12 @@
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <!-- "Add to home screen" on Android 7 launchers. -->
     <uses-permission android:name="com.android.launcher.permission.INSTALL_SHORTCUT" />
+    <!-- 3.0.6: from Android 11 an app sees only some of the other apps on the phone, so Swift said "No app
+         on your phone can open this link" for phone numbers, Play Store and app links. A browser has to
+         know which app opens a link (Chrome and Firefox ask for this too); Swift never lists the apps. -->
+    <uses-permission
+        android:name="android.permission.QUERY_ALL_PACKAGES"
+        tools:ignore="QueryAllPackagesPermission" />
 
     <!-- Voice search: find the phone's speech recogniser (normally the Google app); read aloud: its voices. -->
     <queries>
@@ -47,6 +55,7 @@
         android:icon="@drawable/ic_launcher"
         android:label="@string/app_name"
         android:largeHeap="true"
+        android:requestLegacyExternalStorage="true"
         android:roundIcon="@drawable/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.Swift">
@@ -302,10 +311,13 @@
                 android:resource="@xml/widget_search" />
         </receiver>
 
-        <!-- Notes engine crashes for the problem report; in its own process so it survives them. -->
+        <!-- Notes engine crashes for the problem report; in its own process so it survives them.
+             3.0.6: with its kind of work said, as Android 14 and later require of a service that shows
+             a notification (without it Android refused it and the notes were lost). -->
         <service
             android:name=".engine.CrashReportService"
             android:exported="false"
+            android:foregroundServiceType="dataSync"
             android:process=":crashreport" />
 
         <provider

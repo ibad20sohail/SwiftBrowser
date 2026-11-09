@@ -62,6 +62,18 @@ class FileJobService : Service() {
         super.onDestroy()
     }
 
+    /**
+     * 3.0.6: Android 15 and later allow 6 hours a day of such work in the background, then call this:
+     * the service must stop within seconds or Android closes Swift. The job itself goes on while
+     * Swift runs, as when Android refuses the notification (onStartCommand).
+     */
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        L.w("Android's background time for file jobs is used up: the job goes on without its notification")
+        handler.removeCallbacks(updateLater)
+        ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+        stopSelf()
+    }
+
     /** At most once a second, and only when what it shows changed. */
     private fun update() {
         handler.removeCallbacks(updateLater)

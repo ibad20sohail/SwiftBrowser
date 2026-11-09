@@ -70,7 +70,12 @@ class SwiftApp : Application() {
             private var started = 0
 
             override fun onActivityStarted(activity: Activity) {
-                if (started++ == 0) TabManager.inSight(true)
+                if (started++ == 0) {
+                    TabManager.inSight(true)
+                    // 3.0.6: downloads Android stopped after its 6 hours a day in the background go on
+                    // (Android counts them again from the moment Swift is on screen).
+                    Downloads.resumeAfterAndroidLimit()
+                }
                 // The screen comes in softly if the look has just changed.
                 com.swiftbrowser.ui.Looks.fadeInAfterChange(activity)
             }
@@ -158,10 +163,7 @@ class SwiftApp : Application() {
         }
     }
 
-    private fun totalMemory(): Long {
-        val am = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
-        return ActivityManager.MemoryInfo().also { am.getMemoryInfo(it) }.totalMem
-    }
+    private fun totalMemory(): Long = com.swiftbrowser.core.PhoneSize.totalMemory(this)
 
     private fun isMainProcess(): Boolean {
         val name = try {

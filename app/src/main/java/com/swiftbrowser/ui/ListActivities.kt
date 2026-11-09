@@ -1118,6 +1118,8 @@ class DownloadsActivity : ListActivity() {
         buildTop()
         // 2.9.2: a magnet link or .torrent file opened with Swift from another app.
         if (savedInstanceState == null) openTorrent(intent)
+        // 3.0.6: downloads say how they're going in notifications, which Android 13+ asks about first.
+        if (savedInstanceState == null) NotificationAccess.askOnce(this)
         // Finished, failed and paused downloads can be swiped off the list (the file stays).
         enableSwipe({ vh ->
             val d = adapter.items.getOrNull(vh.bindingAdapterPosition)

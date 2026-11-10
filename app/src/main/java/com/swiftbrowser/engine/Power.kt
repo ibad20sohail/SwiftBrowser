@@ -79,6 +79,11 @@ object Power {
         saving = now
         L.d("Battery saver ${if (now) "on" else "off"}")
         Helper.sendLook()
+        // 3.0.7: Lite mode at least Medium meanwhile, the engine's parts too.
+        try {
+            Engine.refreshLite()
+        } catch (_: UninitializedPropertyAccessException) {
+        }
         DataSaver.apply()
         if (now) TabManager.trimLiveSessions()
         listener?.invoke(now)

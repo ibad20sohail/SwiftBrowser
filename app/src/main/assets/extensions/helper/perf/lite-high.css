@@ -1,0 +1,8 @@
+/*
+ * Swift Lite mode, High and Extreme (3.0.7): no part of a page asks for a graphics layer of its own
+ * ahead of time. Each such layer holds a copy of that part in graphics memory, which runs out on
+ * slow phones during long videos; animations are already off from Medium.
+ */
+*, *::before, *::after {
+  will-change: auto !important;
+}

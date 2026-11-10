@@ -355,6 +355,9 @@ object Backup {
             }
             count++
         }
+        // 3.0.7: a backup from before Lite mode's levels: its Lite mode and "Show sites as designed"
+        // choose the level (Prefs.liteLevel), not the one this phone had.
+        if (!settings.has(Prefs.LITE_LEVEL) && (settings.has(Prefs.LITE_MODE) || settings.has(Prefs.SITES_AS_DESIGNED))) edit.remove(Prefs.LITE_LEVEL)
         edit.commit()
         return count
     }

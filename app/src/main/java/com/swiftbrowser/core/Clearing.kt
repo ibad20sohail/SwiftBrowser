@@ -102,7 +102,7 @@ object Clearing {
             val hosts = if (!all) db.historyHostsSince(profileId, since, until) else emptySet()
             // Whole sites (example.com with www. and the rest): cookies are often set for all of it.
             val sites = hosts.map { UrlUtils.siteOfHost(it) }.toSet()
-            val storage = Engine.runtime.storageController
+            val storage = Engine.storage
             // What the engine is asked to clear, waited for at the end (Quit closes Swift right after).
             val asked = ArrayList<org.mozilla.geckoview.GeckoResult<Void>>()
             if (What.COOKIES in what) {

@@ -1328,7 +1328,7 @@ object TabManager {
         }
         groups.removeAll { !it.incognito && it.profileId == id }
         if (hadPinned) savePinned()
-        Engine.runtime.storageController.clearDataForSessionContext(Profiles.contextId(id))
+        Engine.storage.clearDataForSessionContext(Profiles.contextId(id))
         // 3.0: its rows (a long history, its bookmarks) are deleted off the main thread; Swift moves
         // to another profile first, as Profiles.delete would.
         if (Profiles.currentId == id) Profiles.all().firstOrNull { it.id != id }?.let { Profiles.setCurrent(it.id) }

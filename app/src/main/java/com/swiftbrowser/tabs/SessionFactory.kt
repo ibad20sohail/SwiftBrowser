@@ -502,11 +502,18 @@ class TabDelegates(private val tab: Tab) :
 
     // ------------------------------------------------------------------ permissions
 
+    /** 3.0.7: the page at [uri] is at Lite mode [level] or above (its site's own level, or all sites'). */
+    private fun liteAtLeast(uri: String?, level: com.swiftbrowser.core.LiteLevel): Boolean =
+        com.swiftbrowser.core.LiteLevel.effective(
+            SwiftApp.prefs.liteLevel, SiteSettings.liteLevel(UrlUtils.site(uri)), com.swiftbrowser.engine.Power.saving,
+        ).atLeast(level)
+
     override fun onContentPermissionRequest(session: GeckoSession, perm: ContentPermission): GeckoResult<Int>? {
         return when (perm.permission) {
             // Silent videos that start by themselves (e.g. YouTube feed previews while scrolling).
+            // 3.0.7: never on a site at Lite mode High or Extreme (videos start only when tapped).
             GeckoSession.PermissionDelegate.PERMISSION_AUTOPLAY_INAUDIBLE -> GeckoResult.fromValue(
-                if (SwiftApp.prefs.autoplayMuted) ContentPermission.VALUE_ALLOW else ContentPermission.VALUE_DENY,
+                if (SwiftApp.prefs.autoplayMuted && !liteAtLeast(perm.uri, com.swiftbrowser.core.LiteLevel.HIGH)) ContentPermission.VALUE_ALLOW else ContentPermission.VALUE_DENY,
             )
             // Protected films and series (DRM).
             GeckoSession.PermissionDelegate.PERMISSION_MEDIA_KEY_SYSTEM_ACCESS -> GeckoResult.fromValue(ContentPermission.VALUE_ALLOW)

@@ -65,6 +65,7 @@ class SwiftApp : Application() {
         // 2.9.2: torrents, run with the rules above (the VPN, mobile data, the battery).
         com.swiftbrowser.torrent.Torrents.init(this)
         com.swiftbrowser.core.Health.init(this)
+        com.swiftbrowser.core.Storage.trimOwnCache(this)
         // 3.0.2: whether any of Swift's screens shows (the browser, Settings, Files, the player...).
         registerActivityLifecycleCallbacks(object : Application.ActivityLifecycleCallbacks {
             private var started = 0
@@ -82,7 +83,11 @@ class SwiftApp : Application() {
 
             override fun onActivityStopped(activity: Activity) {
                 started = (started - 1).coerceAtLeast(0)
-                if (started == 0) TabManager.inSight(false)
+                if (started == 0) {
+                    TabManager.inSight(false)
+                    // 3.0.7: Swift's own temporary files keep to their share of the cache size.
+                    com.swiftbrowser.core.Storage.trimOwnCache(this@SwiftApp)
+                }
             }
 
             override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) {}
@@ -95,8 +100,8 @@ class SwiftApp : Application() {
             "Swift ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) started on ${android.os.Build.MANUFACTURER} " +
                 "${android.os.Build.MODEL}, Android ${android.os.Build.VERSION.RELEASE}, ${android.os.Build.SUPPORTED_ABIS.joinToString()}; " +
                 "graphics chip ${GpuInfo.renderer(this).ifBlank { "unknown" }}; ${Diagnostics.memoryText()}; " +
-                "tabs kept loaded ${prefs.maxLiveTabs}, ad blocking ${AdBlock.global.label}, Lite mode ${prefs.liteMode}, " +
-                "sites as designed ${prefs.sitesAsDesigned}, keep playing ${prefs.keepPlaying}, full screen ${prefs.fullScreen}, " +
+                "tabs kept loaded ${prefs.maxLiveTabs}, ad blocking ${AdBlock.global.label}, Lite mode ${prefs.liteLevel.label}, " +
+                "cache ${prefs.cacheLimitMb} MB, keep playing ${prefs.keepPlaying}, full screen ${prefs.fullScreen}, " +
                 "data saver ${prefs.dataSaver}, VPN ${com.swiftbrowser.vpn.Vpn.wanted}",
         )
         if (Diagnostics.problem != null) com.swiftbrowser.core.Health.logEndOfPreviousRun()

@@ -294,7 +294,7 @@ object Diagnostics {
         val prefs = SwiftApp.prefs
         val tabs = TabManager.tabs
         return "Settings: tabs kept in memory ${prefs.maxLiveTabs}, graphics chip ${com.swiftbrowser.engine.GpuInfo.renderer(activity).ifBlank { "unknown" }}, " +
-            "ad blocking ${AdBlock.global.label}, Lite mode ${prefs.liteMode}, saving battery ${com.swiftbrowser.engine.Power.saving}, sites as designed ${prefs.sitesAsDesigned}, full screen ${prefs.fullScreen}, " +
+            "ad blocking ${AdBlock.global.label}, Lite mode ${prefs.liteLevel.label}, saving battery ${com.swiftbrowser.engine.Power.saving}, cache ${prefs.cacheLimitMb} MB, full screen ${prefs.fullScreen}, " +
             "keep playing ${prefs.keepPlaying}, text size ${(prefs.textScale * 100).toInt()}%\n" +
             "Tabs: ${tabs.size} open, ${tabs.count { it.session != null }} loaded; current site: " +
             // An incognito tab's site stays private, even in a problem report (2.6).

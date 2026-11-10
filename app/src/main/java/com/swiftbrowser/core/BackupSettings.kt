@@ -51,6 +51,8 @@ object BackupSettings {
         "ad_level" to STRING, "hide_cookie_notices" to BOOLEAN,
         // Speed & memory
         "lite_mode" to BOOLEAN, "lite_sites" to SET, "sites_as_designed" to BOOLEAN, "max_live_tabs" to STRING,
+        // 3.0.7: Lite mode's level (lite_mode and sites_as_designed stay for older backups).
+        "lite_level" to STRING,
         "data_saver" to BOOLEAN, "battery_saver" to BOOLEAN, "battery_saver_level" to INT, "show_draw_speed" to BOOLEAN,
         // Video & downloads
         "keep_playing" to BOOLEAN, "continue_watching" to BOOLEAN, "video_taps" to BOOLEAN, "video_gestures" to BOOLEAN,
@@ -81,8 +83,12 @@ object BackupSettings {
         // Per-site settings (lists of sites; text sizes as "site=size")
         "site_desktop" to SET, "site_autoplay" to SET, "site_location_allow" to SET, "site_location_block" to SET,
         "site_no_lite" to SET, "site_reader" to SET, "site_dark" to SET, "site_text_scale" to SET,
+        // 3.0.7: sites' own Lite mode levels ("site=level").
+        "site_lite_level" to SET,
         // Storage & data
         "quit_clear" to SET, "auto_backup" to BOOLEAN,
+        // 3.0.7: the cache size.
+        "cache_limit_mb" to INT,
     )
 
     /** Settings of one profile, their key ending in the profile's id ("pinned_tiles_3"), and their kind. */

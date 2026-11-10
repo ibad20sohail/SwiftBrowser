@@ -482,6 +482,73 @@ object Sheets {
         Looks.setMode(if (on) Looks.DARK else Looks.LIGHT)
     }
 
+    // ------------------------------------------------------------------ Lite mode (3.0.7)
+
+    /** What a site's own Lite level means, under its choice. */
+    private fun liteSiteNote(level: com.swiftbrowser.core.LiteLevel?): String = when (level) {
+        null -> "Uses the level chosen for all sites (${SwiftApp.prefs.liteLevel.label})."
+        // Frosted glass and "less motion" are the engine's, for all sites: Off here can't bring them back.
+        com.swiftbrowser.core.LiteLevel.OFF -> "Off on this site: its animations, shadows and effects as designed."
+        else -> "${level.label} on this site. ${level.summary}"
+    }
+
+    /**
+     * 3.0.7: Lite mode's levels, like Ad blocking's: one for all sites and one for the site on screen
+     * ("Same as all sites" first). The page loads again with its new level when the sheet closes;
+     * crossing Off offers a restart (frosted glass and "less motion" are the engine's from its start).
+     */
+    fun lite(a: MainActivity) {
+        val tab = TabManager.current ?: return
+        val site = UrlUtils.site(tab.url)
+        val prefs = SwiftApp.prefs
+        val col = column(a)
+        val startAll = prefs.liteLevel
+        val startSite = SiteSettings.liteLevel(site)
+        col.addView(header(a, "Lite mode", "Lighter sites scroll and play more smoothly. Each level adds to the one before."))
+
+        val levels = com.swiftbrowser.core.LiteLevel.entries
+        col.addView(label(a, "All sites"))
+        val globalDesc = note(a, startAll.summary)
+        col.addView(Segmented(a, levels.map { it.label }, levels.indexOf(startAll)) { i ->
+            PageActions.setLiteLevel(levels[i])
+            Motion.swapText(globalDesc, levels[i].summary)
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, a.dp(44)).apply {
+            marginStart = a.dp(24)
+            marginEnd = a.dp(24)
+        })
+        col.addView(globalDesc)
+        if (com.swiftbrowser.engine.Power.saving) col.addView(note(a, "Saving battery: at least Medium until your phone charges."))
+
+        if (site != null && UrlUtils.isHttp(tab.url)) {
+            col.addView(label(a, "This site: $site", top = 16))
+            val options = listOf("Same as all sites") + levels.map { it.label }
+            val siteDesc = note(a, liteSiteNote(startSite))
+            col.addView(chipRow(a, options, if (startSite == null) 0 else levels.indexOf(startSite) + 1) { i ->
+                val level = if (i == 0) null else levels[i - 1]
+                SiteSettings.setLiteLevel(site, level, tab.incognito)
+                com.swiftbrowser.engine.Engine.refreshLite()
+                Motion.swapText(siteDesc, liteSiteNote(level))
+            })
+            col.addView(siteDesc)
+            if (tab.incognito) col.addView(note(a, INCOGNITO_LEVEL_NOTE))
+        }
+        col.addView(note(a, "The page loads again with its new level when you close this."))
+        val dialog = sheet(a, col)
+        dialog.setOnDismissListener {
+            val now = prefs.liteLevel
+            if (now != startAll || SiteSettings.liteLevel(site) != startSite) PageActions.reloadCurrent(a)
+            if ((startAll == com.swiftbrowser.core.LiteLevel.OFF) != (now == com.swiftbrowser.core.LiteLevel.OFF)) {
+                Dialogs.confirm(
+                    a, "Restart Swift?",
+                    (if (now == com.swiftbrowser.core.LiteLevel.OFF) "Frosted glass and all motion come back on sites" else "Frosted glass goes from sites") +
+                        " after Swift restarts. Your tabs stay open.",
+                    "Restart now", cancel = "Later",
+                ) { SwiftApp.restart(a) }
+            }
+        }
+        dialog.showImmersive()
+    }
+
     // ------------------------------------------------------------------ ad blocking
 
     /**
@@ -648,7 +715,7 @@ object Sheets {
         }
         list += Action(R.drawable.ic_cookie, "Sign out of all sites", danger = true) {
             Dialogs.confirm(a, "Sign out of all sites?", "Cookies and everything sites stored in ${p.name} are deleted.", "Sign out", danger = true) {
-                Engine.runtime.storageController.clearDataForSessionContext(Profiles.contextId(p.id))
+                Engine.storage.clearDataForSessionContext(Profiles.contextId(p.id))
                 // Out of Google too, so the profile stops showing its account (3.0).
                 GoogleAccounts.forget(p.id)
                 a.snack("Signed out of all sites in ${p.name}")
@@ -1203,11 +1270,6 @@ object Sheets {
             SiteSettings.setAutoplay(site, on, incognito)
             onChanged?.invoke()
         })
-        col.addView(switchRow(ctx, R.drawable.ic_lite, "Lite mode on this site", "Turn off if the site looks broken with Lite mode", !SiteSettings.noLite(site, incognito)) { on ->
-            SiteSettings.setNoLite(site, !on, incognito)
-            if (onThisSite && tab != null && SwiftApp.prefs.liteMode) TabManager.reload(tab)
-            onChanged?.invoke()
-        })
         col.addView(switchRow(ctx, R.drawable.ic_reader, "Open articles in reader view", "Pages with an article open as a clean read by themselves", SiteSettings.autoReader(site, incognito)) { on ->
             SiteSettings.setAutoReader(site, on, incognito)
             onChanged?.invoke()
@@ -1237,13 +1299,26 @@ object Sheets {
             onChanged?.invoke()
         })
         col.addView(levelNote)
+        // 3.0.7: Lite mode's level for this site (it was a switch).
+        col.addView(label(ctx, "Lite mode", top = 16))
+        val lites = com.swiftbrowser.core.LiteLevel.entries
+        val liteNow = SiteSettings.liteLevel(site)
+        val liteNote = note(ctx, liteSiteNote(liteNow))
+        col.addView(chipRow(ctx, listOf("Same as all sites") + lites.map { it.label }, if (liteNow == null) 0 else lites.indexOf(liteNow) + 1) { i ->
+            val level = if (i == 0) null else lites[i - 1]
+            SiteSettings.setLiteLevel(site, level, incognito)
+            Engine.refreshLite()
+            Motion.swapText(liteNote, liteSiteNote(level))
+            onChanged?.invoke()
+        })
+        col.addView(liteNote)
         if (onThisSite) col.addView(note(ctx, "Changes apply when the page reloads."))
 
         col.addView(row(ctx, R.drawable.ic_delete, "Clear cookies and data of this site", danger = true) {
             dialog.dismiss()
             // 3.0.1: said as it is: the engine clears a site for every profile at once.
             Dialogs.confirm(ctx, "Clear $site's data?", "Its cookies and stored data are deleted in every profile and in incognito, so you're signed out of it everywhere. Passwords Swift saved for it stay.", "Clear", danger = true) {
-                Engine.runtime.storageController.clearDataFromBaseDomain(site, org.mozilla.geckoview.StorageController.ClearFlags.ALL)
+                Engine.storage.clearDataFromBaseDomain(site, org.mozilla.geckoview.StorageController.ClearFlags.ALL)
                 // In every profile: signed out of Google in all of them (3.0).
                 if (GoogleAccounts.isGoogleHost(site)) GoogleAccounts.forgetAll()
                 if (onThisSite && tab != null) TabManager.reload(tab)

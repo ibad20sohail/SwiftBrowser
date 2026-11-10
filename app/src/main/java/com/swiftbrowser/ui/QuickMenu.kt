@@ -77,8 +77,9 @@ object MenuButtons {
         Button("quit", R.drawable.ic_quit, "Quit"),
     )
 
-    /** The switches (they were tiles above the buttons until 2.2): tapping one leaves the menu open. */
-    val switches = setOf("lite", "dark", "desktop", "fullscreen")
+    /** The switches (they were tiles above the buttons until 2.2): tapping one leaves the menu open.
+     *  3.0.7: Lite mode left them: it opens its levels, as Ad blocker does. */
+    val switches = setOf("dark", "desktop", "fullscreen")
 
     const val COLUMNS = 4
     const val ROWS = 2
@@ -146,7 +147,7 @@ object MenuButtons {
  *  - the page it is about (with its site settings, copy and Settings buttons), and the most used
  *    page actions as a row of icons,
  *  - the buttons, in pages of 2 rows of 4 swiped sideways (or picked with the dots). The switches
- *    among them (Lite mode, dark mode, desktop site, full screen) leave the menu open.
+ *    among them (dark mode, desktop site, full screen) leave the menu open.
  * Holding a button a moment lifts it (2.3): drag it to another place, to the menu's edge for the
  * next page, or onto the "hide" strip that takes the header's place; it stays where it's let go.
  * Hidden buttons wait behind the "Hidden" tile on the last page. Swiping the menu down (or tapping
@@ -379,7 +380,7 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
             "downloads" -> a.openDownloads()
             "reader" -> PageActions.reader(a, tab)
             "save" -> PageActions.savePage(a, tab)
-            "lite" -> PageActions.setLite(a, !prefs.liteMode)
+            "lite" -> Sheets.lite(a)
             // The screen restarts in the other theme; MainActivity opens the menu again.
             "dark" -> Sheets.setDarkMode(!prefs.darkMode)
             "desktop" -> TabManager.setDesktop(tab, !tab.desktop)
@@ -573,7 +574,10 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
         androidx.appcompat.widget.TooltipCompat.setTooltipText(mute.view, mute.view.contentDescription)
 
         val prefs = SwiftApp.prefs
-        items["lite"]?.set(R.drawable.ic_lite, "Lite mode", active = prefs.liteMode)
+        // 3.0.7: lit with its level (this site's, or all sites') while not Off.
+        val lite = com.swiftbrowser.core.LiteLevel.effective(prefs.liteLevel, com.swiftbrowser.core.SiteSettings.liteLevel(UrlUtils.site(tab.url)), com.swiftbrowser.engine.Power.saving)
+        val liteOn = lite != com.swiftbrowser.core.LiteLevel.OFF
+        items["lite"]?.set(R.drawable.ic_lite, if (liteOn) "Lite · ${lite.label}" else "Lite mode", active = liteOn)
         items["dark"]?.set(R.drawable.ic_dark, "Dark mode", active = prefs.darkMode)
         items["desktop"]?.set(R.drawable.ic_desktop, "Desktop", active = tab.desktop, enabled = !tab.isHome)
         items["fullscreen"]?.set(R.drawable.ic_fullscreen, "Full screen", active = prefs.fullScreen)
@@ -592,6 +596,7 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
                 level == AdLevel.OFF -> "Ads allowed"
                 else -> "Ad blocker"
             },
+            active = level != AdLevel.OFF,
             description = if (unfiltered) "Reload to block ads. This page loaded before the ad blocker was ready." else null,
         )
         items["speed"]?.set(R.drawable.ic_speed, "Speed ${a.formatSpeed(tab.speed)}", active = tab.speed.toDouble() != 1.0)

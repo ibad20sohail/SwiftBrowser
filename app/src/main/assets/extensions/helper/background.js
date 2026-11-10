@@ -62,9 +62,8 @@ function onNative(msg) {
   } else if (msg.type === 'look') {
     lookFromApp = true;
     setLook({
-      lite: msg.lite === true,
-      fixes: msg.fixes !== false,
-      liteExcept: Array.isArray(msg.liteExcept) ? msg.liteExcept : [],
+      // 3.0.7: where each of Lite mode's styles goes, by level and site (the app works it out).
+      layers: layersOf(msg.layers),
       darkSites: sites(msg.darkSites),
       keepPlaying: msg.keepPlaying === true,
       readerFont: msg.readerFont === 'sans' ? 'sans' : 'serif',
@@ -78,7 +77,7 @@ function onNative(msg) {
       swiftFont: msg.swiftFont !== false,
     }, {
       // 3.0.1: the same lists without what incognito tabs chose: only these are written down.
-      liteExcept: Array.isArray(msg.liteExceptKeep) ? msg.liteExceptKeep : null,
+      layers: msg.layersKeep ? layersOf(msg.layersKeep) : null,
       darkSites: Array.isArray(msg.darkSitesKeep) ? sites(msg.darkSitesKeep) : null,
     });
   } else if (msg.type === 'clear-articles') {
@@ -134,16 +133,16 @@ function colours(c) {
 
 // ---------------------------------------------------------------- how sites look
 
-// Styles pages get from their first byte on:
-//  - lite: Lite mode, every page without animations, shadows or blur (but the sites the user
-//    left out of it);
-//  - youtube, theflixer: lighter versions of these two sites (no big blurs), unless the app
-//    shows sites as designed;
+// Styles pages get from their first byte on (3.0.7: Lite mode's by level, all sites or one):
+//  - youtube, theflixer: lighter versions of these two sites (no big blurs), from Low;
+//  - lite: no animations, shadows, blur or filters, from Medium;
+//  - litehigh: no graphics layers asked for ahead of time, from High;
 //  - dark: the sites the user turned dark (Site settings, 2.6).
 // The last choice is kept, so pages loading before the app has said it again look the same.
 // It also holds keepPlaying, which content scripts read (see content.js).
 const STYLES = {
   lite: { matches: ['http://*/*', 'https://*/*'], css: [{ file: '/perf/lite.css' }], allFrames: true },
+  litehigh: { matches: ['http://*/*', 'https://*/*'], css: [{ file: '/perf/lite-high.css' }], allFrames: true },
   youtube: { matches: ['*://*.youtube.com/*'], css: [{ file: '/perf/youtube.css' }] },
   theflixer: {
     matches: ['http://*/*', 'https://*/*'],
@@ -191,16 +190,45 @@ function setStyle(name, on, exclude, only) {
   });
 }
 
+// 3.0.7: one style's reach as the app sends it ({on, exclude, only}), anything odd left out.
+function reachOf(r, onByDefault) {
+  if (!r || typeof r !== 'object') { return { on: onByDefault, exclude: [], only: null }; }
+  return { on: r.on === true, exclude: sites(r.exclude), only: Array.isArray(r.only) ? sites(r.only) : null };
+}
+
+function layersOf(l) {
+  const x = (l && typeof l === 'object') ? l : {};
+  return { fixes: reachOf(x.fixes, true), lite: reachOf(x.lite, false), litehigh: reachOf(x.litehigh, false) };
+}
+
+// What a look kept by a version before 3.0.7 meant: Lite mode on (but its excepted sites) and the
+// lighter YouTube and TheFlixer unless sites were shown as designed.
+function oldLayers(look) {
+  return {
+    fixes: { on: look.fixes !== false, exclude: [], only: null },
+    lite: { on: look.lite === true, exclude: sites(look.liteExcept), only: null },
+    litehigh: { on: false, exclude: [], only: null },
+  };
+}
+
+// The lighter YouTube or TheFlixer: with only some sites at Low or above, on when one of them is
+// [isSite]; their own addresses stay theirs.
+function setFix(name, reach, isSite) {
+  if (reach.only) { setStyle(name, reach.only.some(isSite)); } else { setStyle(name, reach.on, reach.exclude); }
+}
+
 // [kept]: the site lists to write down instead of the ones in use (3.0.1: what incognito tabs chose
 // is used, never kept).
 function setLook(look, kept) {
-  setStyle('lite', look.lite, look.liteExcept);
-  setStyle('youtube', look.fixes);
-  setStyle('theflixer', look.fixes);
+  const layers = look.layers || layersOf(null);
+  setFix('youtube', layers.fixes, s => s === 'youtube.com');
+  setFix('theflixer', layers.fixes, s => s.startsWith('theflixer.'));
+  setStyle('lite', layers.lite.on, layers.lite.exclude, layers.lite.only);
+  setStyle('litehigh', layers.litehigh.on, layers.litehigh.exclude, layers.litehigh.only);
   const dark = look.darkSites || [];
   setStyle('dark', dark.length > 0, null, dark);
   const stored = Object.assign({}, look);
-  if (kept && kept.liteExcept) { stored.liteExcept = kept.liteExcept; }
+  if (kept && kept.layers) { stored.layers = kept.layers; }
   if (kept && kept.darkSites) { stored.darkSites = kept.darkSites; }
   browser.storage.local.set({ look: stored }).catch(() => { });
 }
@@ -209,9 +237,7 @@ browser.storage.local.get('look').then(r => {
   const look = (r && r.look) || {};
   if (!lookFromApp) {
     setLook({
-      lite: look.lite === true,
-      fixes: look.fixes !== false,
-      liteExcept: Array.isArray(look.liteExcept) ? look.liteExcept : [],
+      layers: look.layers ? layersOf(look.layers) : oldLayers(look),
       darkSites: sites(look.darkSites),
       keepPlaying: look.keepPlaying === true,
       readerFont: look.readerFont === 'sans' ? 'sans' : 'serif',
@@ -223,7 +249,7 @@ browser.storage.local.get('look').then(r => {
     });
   }
 }, () => {
-  if (!lookFromApp) { setLook({ lite: false, fixes: true, liteExcept: [], keepPlaying: false }); }
+  if (!lookFromApp) { setLook({ layers: layersOf(null), keepPlaying: false }); }
 });
 
 // ---------------------------------------------------------------- reader view

@@ -119,23 +119,23 @@ object ClearData {
         lateinit var clearButton: com.google.android.material.button.MaterialButton
         lateinit var filesRow: SizedRow
 
-        fun showTotal() {
-            // The bytes of what is ticked; the lists add no bytes. Nothing yet while a ticked one is being worked out.
+        /** The bytes of what is ticked ("about …"), or null while a ticked one is being worked out; the lists add no bytes. */
+        fun total(): String? {
             var total = 0L
             var about = false
             for (w in BYTES) {
                 if (w.name !in ticked) continue
-                val m = sizes[w]
-                if (m == null) {
-                    Motion.swapText(clearButton, "Clear")
-                    return
-                }
+                val m = sizes[w] ?: return null
                 total += m.bytes
                 about = about || m.about
             }
             val f = files
             if (deleteFiles && f != null) total += f.bytes
-            Motion.swapText(clearButton, if (total > 0) "Clear " + (if (about) "about " else "") + UrlUtils.formatBytes(total) else "Clear")
+            return if (total > 0) (if (about) "about " else "") + UrlUtils.formatBytes(total) else null
+        }
+
+        fun showTotal() {
+            Motion.swapText(clearButton, total()?.let { "Clear $it" } ?: "Clear")
         }
 
         fun showSize(w: Clearing.What) {
@@ -200,6 +200,8 @@ object ClearData {
             val chosen = choice
             val d = days
             val f = files?.takeIf { deleteFiles && Clearing.What.DOWNLOADS in what }
+            // 3.0.7: the room it gave back, as the button said it.
+            val freed = total()
             val go = {
                 sheet.dismiss()
                 // What was ticked is remembered for next time, unless the list came preset (History).
@@ -214,7 +216,7 @@ object ClearData {
                         else -> ": " + Clearing.Range.entries[chosen].label.lowercase()
                     }
                     val n = f?.ids?.size ?: 0
-                    Messages.show(a, "Cleared$time" + if (n == 1) ". 1 file deleted" else if (n > 1) ". ${number(n)} files deleted" else "")
+                    Messages.show(a, "Cleared$time" + (freed?.let { " · $it freed" } ?: "") + if (n == 1) ". 1 file deleted" else if (n > 1) ". ${number(n)} files deleted" else "")
                     done?.invoke()
                 }
             }

@@ -138,7 +138,12 @@ object VpnUi {
         } else {
             (Vpn.error ?: "Not connected.") + if (Vpn.wanted && Vpn.pauseWhenDown) "\nPages are paused until it connects or you turn it off." else ""
         }
-        Vpn.State.OFF -> if (Vpn.locations().isEmpty()) "No locations yet. Add a free Proton VPN location to start." else "Off. Sites see your own connection."
+        Vpn.State.OFF -> when {
+            Vpn.locations().isEmpty() -> "No locations yet. Add a free Proton VPN location to start."
+            // 3.0.7: it turned itself off (no internet, or no location answered): why.
+            Vpn.error != null -> Vpn.error!!
+            else -> "Off. Sites see your own connection."
+        }
     }
 
     /**

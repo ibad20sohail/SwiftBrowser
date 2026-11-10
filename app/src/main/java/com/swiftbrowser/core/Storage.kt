@@ -128,9 +128,44 @@ object Storage {
         val cache = sizeOf(ctx.cacheDir)
         if (cache < 2L * 1024 * 1024) return 0
         prefs.lastLowSpaceCleanup = System.currentTimeMillis()
-        Engine.runtime.storageController.clearData(StorageController.ClearFlags.ALL_CACHES)
+        Engine.storage.clearData(StorageController.ClearFlags.ALL_CACHES)
         L.d("Phone almost full (${free / (1024 * 1024)} MB free): cache cleared")
         return cache
+    }
+
+    /**
+     * 3.0.7: Swift's own temporary folders in the cache (the engine's, cache/<profile>/cache2, keeps to
+     * its own size, see CacheBudget): files opened from the web or archives, copies for sharing,
+     * document pictures, picture edits, torrent lists, the engine's temporary files moved aside.
+     */
+    private val OWN_TEMP = listOf("docs", "doc_thumbs", "edit", "torrent-fetch", "gecko_temp_old")
+
+    private val trimmer by lazy { Background.single("cache-trim") }
+
+    /**
+     * 3.0.7: Swift's own temporary files keep to their share of the cache size (CacheBudget.OWN_MB),
+     * the oldest going first; anything from the last day stays (a document open now). Off the main
+     * thread; when Swift starts and when it leaves the screen.
+     */
+    fun trimOwnCache(ctx: Context) {
+        val app = ctx.applicationContext
+        trimmer.execute {
+            try {
+                val files = OWN_TEMP.flatMap { name ->
+                    File(app.cacheDir, name).walkTopDown().filter { it.isFile }.map { Triple(it.path, it.length(), it.lastModified()) }.toList()
+                }
+                val gone = CacheBudget.toDelete(files, CacheBudget.OWN_MB * 1024L * 1024, System.currentTimeMillis() - 24L * 3600 * 1000)
+                var freed = 0L
+                for (path in gone) {
+                    val f = File(path)
+                    val n = f.length()
+                    if (f.delete()) freed += n
+                }
+                if (gone.isNotEmpty()) L.d("Cache: ${gone.size} of Swift's own temporary files deleted (${freed / 1024} KB)")
+            } catch (e: Exception) {
+                L.w("Couldn't trim Swift's temporary files", e)
+            }
+        }
     }
 
     /** Blocking: sites that stored something, the biggest first. */
@@ -149,7 +184,7 @@ object Storage {
 
     /** A site's stored data and cached files; its cookies stay, so you stay signed in. */
     fun clearSite(site: String) {
-        Engine.runtime.storageController.clearDataFromBaseDomain(
+        Engine.storage.clearDataFromBaseDomain(
             site, StorageController.ClearFlags.DOM_STORAGES or StorageController.ClearFlags.ALL_CACHES,
         )
     }
@@ -158,7 +193,7 @@ object Storage {
     fun clearUnused(ctx: Context, days: Int, open: Set<String>): Int {
         val limit = System.currentTimeMillis() - days * 86_400_000L
         val old = sites(ctx).filter { it.lastVisit < limit && it.site !in open }
-        for (s in old) Engine.runtime.storageController.clearDataFromBaseDomain(s.site, StorageController.ClearFlags.ALL)
+        for (s in old) Engine.storage.clearDataFromBaseDomain(s.site, StorageController.ClearFlags.ALL)
         return old.size
     }
 

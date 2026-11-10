@@ -24,6 +24,11 @@ object WhatsNew {
     private class Item(val icon: Int, val title: String, val text: String, val version: Int = 19)
 
     private val NEW = listOf(
+        Item(R.drawable.ic_lite, "Lite mode in 5 levels", "Lite mode now has levels like the ad blocker: Off, Low, Medium, High and Extreme, for all sites and for each site, from Lite in the ≡ menu. The button shows the level. \"Show sites as designed\" is Lite mode Off.", version = 29),
+        Item(R.drawable.ic_storage, "A cache that stays small", "Swift's cache stays under 100 MB (it could grow to 200 MB in a few hours). Choose 50, 100 or 200 MB in Settings → Storage & data.", version = 29),
+        Item(R.drawable.ic_delete, "Clearing data", "Clearing data from all time no longer closes Swift, and it says how much space was freed.", version = 29),
+        Item(R.drawable.ic_vpn, "VPN turns itself off", "With no internet, or when none of your locations answers, the VPN turns itself off and says why, instead of holding pages back.", version = 29),
+        Item(R.drawable.ic_shield, "Ad blocker button", "The Ad blocker button in the ≡ menu lights up while ads are blocked on the site.", version = 29),
         Item(R.drawable.ic_speed, "Made for newer phones too", "Swift now comes in 64-bit for newer phones, so Android 14 and later no longer say it isn't compatible. Phones like the Moto E4 keep the 32-bit Swift, unchanged, and Swift's update check gets each phone its own.", version = 28),
         Item(R.drawable.ic_settings, "Between the phone's bars", "On Android 15 and later the address bar no longer sits under the clock and battery, and pages no longer run under the navigation bar.", version = 28),
         Item(R.drawable.ic_image, "Pictures on big sites", "On sharper screens, pictures on big sites like apple.com no longer stay empty: Swift gives pictures room in proportion to the screen.", version = 28),
@@ -96,7 +101,7 @@ object WhatsNew {
     private val WELCOME = listOf(
         Card(R.drawable.ic_shield, "Ads blocked on every site", "Swift's ad blocker stops ads, pop-ups and trackers. Choose how strict it is from ≡ → Ad blocking."),
         Card(R.drawable.ic_headphones, "Music and videos keep playing", "They go on when you switch tabs, open another app or turn the screen off. Set a sleep timer from the notification."),
-        Card(R.drawable.ic_lite, "Smooth on your phone", "If a site feels slow, turn on Lite mode in the ≡ menu for the smoothest scrolling."),
+        Card(R.drawable.ic_lite, "Smooth on your phone", "If a site feels slow, raise Lite mode in the ≡ menu: Medium or higher scrolls the smoothest."),
     )
 
     /** At start: the welcome on a new install, what's new after an update. */

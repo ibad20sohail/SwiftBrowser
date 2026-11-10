@@ -261,13 +261,17 @@ object Vpn {
                 val text = String(Secret.open(readSealed(app, target)))
                 val config = Config.parse(onlySwift(text, app.packageName).byteInputStream())
                 val b = backend ?: GoBackend(app).also { backend = it }
+                val started = android.os.SystemClock.elapsedRealtime()
                 b.setState(tunnel, Tunnel.State.UP, config)
                 // WireGuard counts as up straight away: the server has only answered once a handshake is done.
                 if (!waitForHandshake(b, config, attempt)) {
                     if (attempt != attempts) return@execute
+                    // 3.0.7: what the phone's own connection was doing, and whether anything came back.
+                    L.w("VPN: no answer from ${target.server} in ${HANDSHAKE_WAIT_MS / 1000} s; ${traffic(b, config)}; phone: ${network(app).text}")
                     b.setState(tunnel, Tunnel.State.DOWN, null)
                     throw NoAnswer(target.server)
                 }
+                L.d("VPN: ${target.server} answered in ${android.os.SystemClock.elapsedRealtime() - started} ms; phone: ${network(app).text}")
                 main.post {
                     if (attempt != attempts) return@post
                     state = State.ON
@@ -286,13 +290,15 @@ object Vpn {
                 main.post {
                     if (attempt != attempts) return@post
                     if (e is Unreadable) unreadable += target.id
-                    if (e is NoAnswer && switchAway(app, target)) return@post
-                    state = State.FAILED
-                    val reason = if (e is NoAnswer && failedInChain.size > 1) {
-                        "None of your locations answered. Check your connection, or try again in a while."
-                    } else {
-                        describe(e, target)
+                    // 3.0.7: no internet, or no location answers: it turns itself off (pages waited
+                    // meanwhile), instead of staying "not connected" with pages paused.
+                    if (e is NoAnswer) {
+                        if (!network(app).internet) return@post giveUp(NO_INTERNET)
+                        if (switchAway(app, target)) return@post
+                        return@post giveUp(if (failedInChain.size > 1) NONE_ANSWERED else "${target.server} didn't answer. Free servers are sometimes full.")
                     }
+                    state = State.FAILED
+                    val reason = describe(e, target)
                     // 3.0: coming back on at start, the message says what can be done (the VPN sheet
                     // offers Try again and Continue without VPN, and gives the reason).
                     if (resuming) {
@@ -344,6 +350,57 @@ object Vpn {
             Thread.sleep(pollMs)
         }
         return false
+    }
+
+    /**
+     * 3.0.7: the phone has no internet, or no location answers: the VPN turns itself off (before, it
+     * stayed "not connected" and pages stayed paused), and says why ([error], shown once by the
+     * browser screen and in the VPN sheet until it is turned on again).
+     */
+    private fun giveUp(reason: String) {
+        L.w("VPN turned itself off: $reason")
+        turnOff()
+        // turnOff's listeners run after this (posted), so they see the reason.
+        error = "$reason The VPN turned off, so sites see your own connection."
+    }
+
+    /** 3.0.7: the phone's own connection (never a VPN's): for the log, and whether Android found internet on it. */
+    private class Network(val internet: Boolean, val text: String)
+
+    private fun network(ctx: Context): Network = try {
+        val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+        val found = cm.allNetworks.mapNotNull { cm.getNetworkCapabilities(it) }.filter {
+            !it.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN) &&
+                it.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)
+        }
+        if (found.isEmpty()) {
+            Network(false, "no connection")
+        } else {
+            Network(
+                found.any { it.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED) },
+                found.joinToString(", ") { c ->
+                    val kind = when {
+                        c.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) -> "Wi-Fi"
+                        c.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR) -> "mobile data"
+                        c.hasTransport(android.net.NetworkCapabilities.TRANSPORT_ETHERNET) -> "Ethernet"
+                        else -> "other"
+                    }
+                    kind + if (c.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED)) " (internet works)" else " (no internet)"
+                },
+            )
+        }
+    } catch (e: Exception) {
+        // Not known: as if there were internet (the locations are tried as before).
+        Network(true, "not known")
+    }
+
+    /** 3.0.7: bytes sent to and received from the server on this attempt, for the log. */
+    private fun traffic(b: GoBackend, config: Config): String = try {
+        val peer = config.peers.firstOrNull()?.publicKey
+        val st = peer?.let { b.getStatistics(tunnel).peer(it) }
+        if (st == null) "nothing counted" else "sent ${st.txBytes()} bytes, received ${st.rxBytes()}"
+    } catch (_: Exception) {
+        "nothing counted"
     }
 
     fun turnOff() {
@@ -479,13 +536,13 @@ object Vpn {
                         if (attempt != attempts || state != State.ON) return@post
                         if (last > 0L && System.currentTimeMillis() - last > SILENT_MS) {
                             val loc = current() ?: return@post
-                            L.w("VPN: no handshake with ${loc.server} for ${(System.currentTimeMillis() - last) / 1000} s")
-                            if (!switchAway(ctx, loc, stopped = true)) {
-                                state = State.FAILED
-                                error = "${loc.server} stopped answering. Try another location, or again in a while."
-                                seenAs = null
-                                applyBlock()
-                                changed()
+                            val net = network(ctx)
+                            L.w("VPN: no handshake with ${loc.server} for ${(System.currentTimeMillis() - last) / 1000} s; phone: ${net.text}")
+                            // 3.0.7: off by itself, as when turning on.
+                            if (!net.internet) {
+                                giveUp(NO_INTERNET)
+                            } else if (!switchAway(ctx, loc, stopped = true)) {
+                                giveUp(if (failedInChain.size > 1) NONE_ANSWERED else "${loc.server} stopped answering.")
                             }
                         } else {
                             main.postDelayed(self, WATCH_MS)
@@ -622,18 +679,13 @@ object Vpn {
                 if (passesNothing) {
                     val loc = current()
                     val app = SwiftApp.instance
+                    // 3.0.7: off by itself, as when turning on.
+                    if (app != null && !network(app).internet) return@post giveUp(NO_INTERNET)
                     if (loc != null && app != null && switchAway(app, loc, stopped = true)) return@post
-                    state = State.FAILED
-                    error = if (failedInChain.size > 1) {
-                        "None of your locations answered. Check your connection, or try again in a while."
-                    } else {
-                        "${loc?.server ?: "The server"} connects but passes nothing (its file may have expired or been revoked at Proton). Try another location."
-                    }
-                    failedInChain.clear()
-                    seenAs = null
-                    applyBlock()
-                    changed()
-                    return@post
+                    return@post giveUp(
+                        if (failedInChain.size > 1) NONE_ANSWERED
+                        else "${loc?.server ?: "The server"} connects but passes nothing (its file may have expired or been revoked at Proton).",
+                    )
                 }
                 // It works: earlier failures no longer matter for automatic switching.
                 failedInChain.clear()
@@ -667,6 +719,10 @@ object Vpn {
             else -> "Couldn't connect. Check your internet connection, or try another location."
         }
     }
+
+    /** 3.0.7: why the VPN turned itself off ([giveUp]). */
+    private const val NO_INTERNET = "Your phone has no internet connection."
+    private const val NONE_ANSWERED = "None of your locations answered."
 
     /** [seenAs] when nothing came back through the VPN (the server took the key but passes nothing). */
     const val CHECK_FAILED = "not known (the address service didn't answer)"

@@ -61,34 +61,20 @@ object PageActions {
     // ------------------------------------------------------------------ how sites look
 
     /**
-     * Lite mode on all sites (no animations, shadows or blur), or off. Turning it on also turns off
-     * "Show sites as designed". Reloads the open page when [a] is given.
+     * 3.0.7: Lite mode's level for all sites (it took over Lite mode's switch and "Show sites as
+     * designed"). True when the change crosses Off: frosted glass and "less motion" then change at
+     * the engine's next start.
      */
-    fun setLite(a: MainActivity?, on: Boolean) {
+    fun setLiteLevel(level: com.swiftbrowser.core.LiteLevel): Boolean {
         val prefs = SwiftApp.prefs
-        prefs.liteMode = on
-        if (on && prefs.sitesAsDesigned) {
-            prefs.sitesAsDesigned = false
-            Engine.applySitesAsDesigned()
-        }
-        Helper.sendLook()
-        reloadCurrent(a)
+        val before = prefs.liteLevel
+        if (before == level) return false
+        prefs.liteLevel = level
+        Engine.applyLiteLevel()
+        return (before == com.swiftbrowser.core.LiteLevel.OFF) != (level == com.swiftbrowser.core.LiteLevel.OFF)
     }
 
-    /**
-     * Sites exactly as designed (glass blur, animations, no lighter YouTube/TheFlixer), for fast
-     * phones. Turning it on turns Lite mode off.
-     */
-    fun setSitesAsDesigned(a: MainActivity?, on: Boolean) {
-        val prefs = SwiftApp.prefs
-        prefs.sitesAsDesigned = on
-        if (on) prefs.liteMode = false
-        Engine.applySitesAsDesigned()
-        Helper.sendLook()
-        reloadCurrent(a)
-    }
-
-    private fun reloadCurrent(a: MainActivity?) {
+    fun reloadCurrent(a: MainActivity?) {
         val tab = TabManager.current ?: return
         if (a == null || !UrlUtils.isHttp(tab.url)) return
         // The extension registers its styles asynchronously; give it a moment before reloading.

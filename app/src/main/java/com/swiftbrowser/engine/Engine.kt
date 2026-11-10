@@ -43,6 +43,13 @@ object Engine {
 
     val executor: GeckoWebExecutor by lazy { GeckoWebExecutor(runtime) }
 
+    /**
+     * 3.0.7: the engine's data clearing (cookies, caches, site data). Its clear calls work from any
+     * thread, and their answers can be waited for (poll) off the main thread.
+     */
+    lateinit var storage: org.mozilla.geckoview.StorageController
+        private set
+
     /** Lets the UI start activities for Gecko (used by passkeys / WebAuthn). */
     var activityDelegate: GeckoRuntime.ActivityDelegate? = null
 
@@ -84,6 +91,9 @@ object Engine {
             .forceUserScalableEnabled(prefs.forceZoom)
             .build()
         runtime = GeckoRuntime.create(app, settings)
+        // 3.0.7: taken here, on the main thread, the only one the engine hands it out on. Clearing
+        // data asked for it on its own thread and Swift crashed ("Expected thread 1 (main)").
+        storage = runtime.storageController
         shownTextScale = prefs.textScale
         // The builder's colour scheme doesn't reach pages after a restart: set it again (2.2).
         setDark(prefs.darkMode)
@@ -144,10 +154,6 @@ object Engine {
      */
     private fun applyPerformancePrefs(prefs: Prefs) {
         val list = listOf<SetGeckoPreference<*>>(
-            // 3.0.5: no limit of Swift's on the web cache (it was 20 MB): the engine sizes it from
-            // the free space. Said outright, because the old limit is saved in the engine's profile
-            // and would stay otherwise. When the phone is almost full, Swift empties it (Storage).
-            SetGeckoPreference.setBoolPref("browser.cache.disk.smart_size.enabled", true, BRANCH),
             // Keep one previous page ready for an instant Back; each kept page holds its memory.
             SetGeckoPreference.setIntPref("browser.sessionhistory.max_total_viewers", 1, BRANCH),
             // Decoded images held in memory per process: 48 MB is plenty for a 720p screen. 3.0.6: more
@@ -180,7 +186,7 @@ object Engine {
             SetGeckoPreference.setStringPref("gfx.webrender.debug.profiler-ui", DRAW_SPEED_UI, BRANCH),
             SetGeckoPreference.setBoolPref("gfx.webrender.debug.profiler", prefs.showDrawSpeed, BRANCH),
             SetGeckoPreference.setBoolPref("gfx.webrender.debug.gpu-time-queries", prefs.showDrawSpeed, BRANCH),
-        ) + lookPrefs(prefs.sitesAsDesigned) + privacyPrefs(prefs)
+        ) + cachePrefs(prefs.cacheLimitMb) + lookPrefs(prefs.liteLevel == com.swiftbrowser.core.LiteLevel.OFF) + privacyPrefs(prefs)
         GeckoPreferenceController.setGeckoPrefs(list).accept({ result ->
             val failed = result?.filterValues { !it }?.keys.orEmpty()
             if (failed.isNotEmpty()) L.w("Engine prefs not set: $failed")
@@ -191,6 +197,25 @@ object Engine {
     }
 
     private const val SOFTWARE_RENDERING_PREF = "gfx.webrender.software"
+
+    /**
+     * 3.0.7: the web cache within the cache size chosen (CacheBudget). 3.0.5 let the engine size it
+     * from the free space: it took hundreds of MB, filled within hours by the pieces of video that
+     * video sites stream. A smaller size empties the oldest files on its own.
+     */
+    private fun cachePrefs(limitMb: Int) = listOf<SetGeckoPreference<*>>(
+        SetGeckoPreference.setBoolPref("browser.cache.disk.smart_size.enabled", false, BRANCH),
+        SetGeckoPreference.setIntPref("browser.cache.disk.capacity", com.swiftbrowser.core.CacheBudget.engineKb(limitMb), BRANCH),
+        SetGeckoPreference.setIntPref("browser.cache.disk.max_entry_size", com.swiftbrowser.core.CacheBudget.maxFileKb(limitMb), BRANCH),
+    )
+
+    /** 3.0.7: the cache size changed in Settings. */
+    fun applyCacheLimit() {
+        GeckoPreferenceController.setGeckoPrefs(cachePrefs(prefs.cacheLimitMb)).accept({ result ->
+            val failed = result?.filterValues { !it }?.keys.orEmpty()
+            if (failed.isNotEmpty()) L.w("Cache prefs not set: $failed")
+        }, { e -> L.w("Cache prefs failed", e) })
+    }
 
     /** 3.0.6: the room for decoded pictures on this phone (48 MB on the Moto E4, as before). */
     private fun pictureMemoryKb(): Int {
@@ -212,7 +237,8 @@ object Engine {
             append("prefs:\n")
             // Always with the graphics chip (2.7): on older phones it was the faster one on heavy sites.
             append("  $SOFTWARE_RENDERING_PREF: false\n")
-            if (!prefs.sitesAsDesigned) {
+            // 3.0.7: Lite mode Low and up (before, "Show sites as designed" off).
+            if (prefs.liteLevel != com.swiftbrowser.core.LiteLevel.OFF) {
                 // Frosted glass (backdrop-filter, e.g. YouTube's bottom bar and the badges on every
                 // thumbnail) blurs whatever scrolls under it on every frame: far too slow on this
                 // phone, on the GPU and the CPU alike. Sites show their plain see-through colour.
@@ -289,14 +315,63 @@ object Engine {
         SetGeckoPreference.setIntPref(REDUCED_MOTION_PREF, if (asDesigned) 0 else 1, BRANCH),
     )
 
-    /** Prefs.sitesAsDesigned changed. */
-    fun applySitesAsDesigned() {
+    /**
+     * 3.0.7: Lite mode's level for all sites changed (Prefs.liteLevel): frosted glass and "less
+     * motion" (Off or not) are the engine's for every page, from its next start; the page styles
+     * (Helper.sendLook) and the parts that follow the site on screen ([showLiteFor]) change now.
+     */
+    fun applyLiteLevel() {
         writeStartupConfig()
-        GeckoPreferenceController.setGeckoPrefs(lookPrefs(prefs.sitesAsDesigned)).accept({ result ->
+        GeckoPreferenceController.setGeckoPrefs(lookPrefs(prefs.liteLevel == com.swiftbrowser.core.LiteLevel.OFF)).accept({ result ->
             val failed = result?.filterValues { !it }?.keys.orEmpty()
             if (failed.isNotEmpty()) L.w("Look prefs not set: $failed")
         }, { e -> L.w("Look prefs failed", e) })
+        com.swiftbrowser.media.Helper.sendLook()
+        showLiteFor(shownLiteSite, force = true)
     }
+
+    /** The level [showLiteFor] last set the engine to, and for which site. */
+    private var shownLite: com.swiftbrowser.core.LiteLevel? = null
+    private var shownLiteSite: String? = null
+
+    /**
+     * 3.0.7: Lite mode's parts the engine has once for every page (GIFs, waiting for a site's font)
+     * follow the site on screen: its own level, or the one for all sites (at least Medium while
+     * saving battery). High: GIFs play once; Extreme: they stay still, and text shows at once in a
+     * plain font while the site's own loads. Below High the engine's own defaults.
+     */
+    fun showLiteFor(site: String?, force: Boolean = false) {
+        val level = com.swiftbrowser.core.LiteLevel.effective(prefs.liteLevel, SiteSettings.liteLevel(site), Power.saving)
+        shownLiteSite = site
+        if (!force && level == shownLite) return
+        shownLite = level
+        val list = ArrayList<SetGeckoPreference<*>>()
+        val clear = ArrayList<String>()
+        when {
+            level.atLeast(com.swiftbrowser.core.LiteLevel.EXTREME) -> list += SetGeckoPreference.setStringPref(GIF_PREF, "none", BRANCH)
+            level.atLeast(com.swiftbrowser.core.LiteLevel.HIGH) -> list += SetGeckoPreference.setStringPref(GIF_PREF, "once", BRANCH)
+            else -> clear += GIF_PREF
+        }
+        if (level.atLeast(com.swiftbrowser.core.LiteLevel.EXTREME)) {
+            list += SetGeckoPreference.setIntPref(FONT_WAIT_PREF, 0, BRANCH)
+            list += SetGeckoPreference.setIntPref(FONT_WAIT_SHORT_PREF, 0, BRANCH)
+        } else {
+            clear += FONT_WAIT_PREF
+            clear += FONT_WAIT_SHORT_PREF
+        }
+        if (list.isNotEmpty()) GeckoPreferenceController.setGeckoPrefs(list)
+        for (name in clear) GeckoPreferenceController.clearGeckoUserPref(name)
+    }
+
+    /** 3.0.7: a site's own level or battery saving changed: the site on screen again. */
+    fun refreshLite() = showLiteFor(shownLiteSite, force = true)
+
+    /** How GIFs (and other animated pictures) play: normal, once or none. */
+    private const val GIF_PREF = "image.animation_mode"
+
+    /** How long text waits for a site's own font before showing in a plain one (ms). */
+    private const val FONT_WAIT_PREF = "gfx.downloadable_fonts.fallback_delay"
+    private const val FONT_WAIT_SHORT_PREF = "gfx.downloadable_fonts.fallback_delay_short"
 
     /** Frames per second, the time each frame takes and what it was spent on. */
     private const val DRAW_SPEED_UI =

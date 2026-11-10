@@ -350,12 +350,27 @@ class Prefs(ctx: Context) {
         get() = sp.getStringSet(LITE_SITES, emptySet())?.toSet() ?: emptySet()
 
     /**
-     * Lite mode on every site: no animations, shadows or blur. Whoever used it on a site in 1.4
-     * (when it was per site) has it on.
+     * Before 3.0.7: Lite mode on every site (no animations, shadows or blur); whoever used it on a site
+     * in 1.4 (when it was per site) had it on. Read once into [liteLevel].
      */
-    var liteMode: Boolean
+    private val oldLiteMode: Boolean
         get() = if (sp.contains(LITE_MODE)) sp.getBoolean(LITE_MODE, false) else liteSites.isNotEmpty()
-        set(v) = sp.edit { putBoolean(LITE_MODE, v) }
+
+    /**
+     * 3.0.7: Lite mode's level for all sites (≡ menu → Lite). Until one is chosen, what the old
+     * switches said (Lite mode, "Show sites as designed", see LiteLevel.migrated), so a fast phone
+     * that never chose stays Off and others Low.
+     */
+    var liteLevel: LiteLevel
+        get() = LiteLevel.fromKey(sp.getString(LITE_LEVEL, null)) ?: LiteLevel.migrated(
+            oldLiteMode, if (sp.contains(SITES_AS_DESIGNED)) sp.getBoolean(SITES_AS_DESIGNED, false) else null, autoSitesAsDesigned,
+        )
+        set(v) = sp.edit { putString(LITE_LEVEL, v.key) }
+
+    /** 3.0.7: the most the cache may hold, in MB (Settings → Storage & data), see CacheBudget. */
+    var cacheLimitMb: Int
+        get() = CacheBudget.valid(sp.getInt(CACHE_LIMIT, CacheBudget.DEFAULT_MB))
+        set(v) = sp.edit { putInt(CACHE_LIMIT, CacheBudget.valid(v)) }
 
     /** Browsing without Android's status and navigation bars (a swipe from the edge shows them). */
     var fullScreen: Boolean
@@ -370,16 +385,11 @@ class Prefs(ctx: Context) {
         get() = sp.getInt(INACTIVE_DAYS, 14)
         set(v) = sp.edit { putInt(INACTIVE_DAYS, v) }
 
-    /** Set at start-up: the phone has plenty of memory and a graphics chip that draws fast. */
-    var autoSitesAsDesigned = false
-
     /**
-     * Sites look exactly as designed: Swift's changes for slow phones (no glass blur, fewer
-     * animations, lighter YouTube and TheFlixer) are off. Automatic until changed.
+     * Set at start-up: the phone has plenty of memory and a graphics chip that draws fast. 3.0.7: such
+     * a phone starts with Lite mode Off (sites exactly as designed), others with Low.
      */
-    var sitesAsDesigned: Boolean
-        get() = if (sp.contains(SITES_AS_DESIGNED)) sp.getBoolean(SITES_AS_DESIGNED, false) else autoSitesAsDesigned
-        set(v) = sp.edit { putBoolean(SITES_AS_DESIGNED, v) }
+    var autoSitesAsDesigned = false
 
     /** uBlock Origin's cookie-notice lists hide "Accept cookies" pop-ups (always on in Extreme). */
     var hideCookieNotices: Boolean
@@ -547,6 +557,8 @@ class Prefs(ctx: Context) {
         const val UPDATE_FILES = "update_files"
         const val INACTIVE_DAYS = "inactive_days"
         const val SITES_AS_DESIGNED = "sites_as_designed"
+        const val CACHE_LIMIT = "cache_limit_mb"
+        const val LITE_LEVEL = "lite_level"
         const val HIDE_COOKIE_NOTICES = "hide_cookie_notices"
         const val CONTINUE_WATCHING = "continue_watching"
         const val VIDEO_TAPS = "video_taps"

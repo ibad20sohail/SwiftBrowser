@@ -23,7 +23,7 @@ object GpuInfo {
     }
 
     /**
-     * Old, slow chips (Adreno 3xx): "Show sites as designed" stays off on them. Pages are drawn with
+     * Old, slow chips (Adreno 3xx): Lite mode starts at Low on them, never Off (3.0.7; before, "Show sites as designed" stayed off). Pages are drawn with
      * the chip on every phone (2.7).
      */
     fun isSlowChip(renderer: String): Boolean = renderer.startsWith("Adreno (TM) 3")

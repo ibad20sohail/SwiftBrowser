@@ -1,5 +1,5 @@
 /*
- * Swift Lite mode (a switch in the menu, for all sites): no motion, shadows or filters, the parts
+ * Swift Lite mode, Medium and up (3.0.7; the old Lite mode): no motion, shadows or filters, the parts
  * of a page that cost the most to draw on a slow phone. Animations jump to their end instead of
  * being removed, so content that fades or slides in still shows up.
  */

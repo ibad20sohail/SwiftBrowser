@@ -6,7 +6,7 @@ import com.swiftbrowser.adblock.AdBlock
 
 /**
  * What the user chose for one site (by its registrable domain, see UrlUtils.site): desktop
- * version, sound that starts by itself, location, left out of Lite mode. The ad-blocking level per site is kept by
+ * version, sound that starts by itself, location, its own Lite mode level. The ad-blocking level per site is kept by
  * AdBlock; together they make the site settings page.
  *
  * 3.0.1: what is chosen from an incognito tab (the `incognito` arguments) is kept in memory only and
@@ -29,18 +29,22 @@ object SiteSettings {
 
     /** "site=scale" entries: the site's own text size (2.3). */
     private const val TEXT_SCALE = "site_text_scale"
+
+    /** 3.0.7: "site=level" entries: the site's own Lite mode level (NO_LITE's sites count as Off). */
+    private const val LITE_LEVELS = "site_lite_level"
     private val KEYS = listOf(DESKTOP, AUTOPLAY, LOCATION_ALLOW, LOCATION_BLOCK, NO_LITE, READER, DARK)
 
     /** The on/off settings (location has three choices). */
-    private val SWITCHES = listOf(DESKTOP, AUTOPLAY, NO_LITE, READER, DARK)
+    private val SWITCHES = listOf(DESKTOP, AUTOPLAY, READER, DARK)
 
-    /** Settings the helper's page styles carry for every tab alike (3.0.1). */
-    private val FOR_ALL_TABS = setOf(NO_LITE, DARK)
+    /** Settings the helper's page styles carry for every tab alike (3.0.1; Lite levels too, 3.0.7). */
+    private val FOR_ALL_TABS = setOf(DARK)
 
     /** What incognito tabs chose (3.0.1), on the main thread. */
     private val incognitoSwitches = SWITCHES.associateWith { IncognitoChoices<Boolean>() }
     private val incognitoLocation = IncognitoChoices<Location>()
     private val incognitoScale = IncognitoChoices<Float>()
+    private val incognitoLite = IncognitoChoices<LiteLevel>()
 
     private val sp get() = SwiftApp.prefs.sp
 
@@ -84,19 +88,44 @@ object SiteSettings {
         return if (incognito) incognitoLocation.get(site, saved) ?: Location.ASK else saved
     }
 
-    /** Lite mode leaves the site as it is (for a site that looks broken with it). */
-    fun noLite(site: String?, incognito: Boolean = false): Boolean = isOn(NO_LITE, site, incognito)
-
-    fun setNoLite(site: String, on: Boolean, incognito: Boolean = false) {
-        put(NO_LITE, site, on, incognito)
-        com.swiftbrowser.media.Helper.sendLook()
+    /**
+     * 3.0.7: the sites' own Lite mode levels, saved (never what incognito tabs chose). Sites left out
+     * of the old Lite mode (NO_LITE) are Off.
+     */
+    fun liteLevelsKept(): Map<String, LiteLevel> {
+        val out = LinkedHashMap<String, LiteLevel>()
+        for (site in set(NO_LITE)) out[site] = LiteLevel.OFF
+        for (entry in set(LITE_LEVELS)) {
+            val level = LiteLevel.fromKey(entry.substringAfter('=', "")) ?: continue
+            out[entry.substringBefore('=')] = level
+        }
+        return out
     }
 
-    /** The sites left out of Lite mode now, with the ones chosen from incognito tabs. */
-    fun liteExceptions(): List<String> = incognitoSwitches.getValue(NO_LITE).sitesOn(set(NO_LITE)).sorted()
+    /** The levels in use now: the saved ones with incognito's choices on top (they count for every tab). */
+    fun liteLevels(): Map<String, LiteLevel> = incognitoLite.applyTo(liteLevelsKept())
 
-    /** The saved ones only: what the helper may write down. */
-    fun liteExceptionsKept(): List<String> = set(NO_LITE).sorted()
+    /** [site]'s own Lite mode level, or null: the one for all sites. */
+    fun liteLevel(site: String?): LiteLevel? = site?.let { incognitoLite.get(it, liteLevelsKept()[it]) }
+
+    /** The saved one only (Undo in a normal tab). */
+    fun savedLiteLevel(site: String?): LiteLevel? = site?.let { liteLevelsKept()[it] }
+
+    /** 3.0.7: [site]'s own level ([level] null: the one for all sites). From incognito, until it ends. */
+    fun setLiteLevel(site: String, level: LiteLevel?, incognito: Boolean = false) {
+        if (incognito) {
+            incognitoLite.set(site, level)
+        } else {
+            incognitoLite.drop(site)
+            val prefix = "$site="
+            val others = set(LITE_LEVELS).filterNot { it.startsWith(prefix) }.toSet()
+            sp.edit {
+                putStringSet(LITE_LEVELS, if (level == null) others else others + "$prefix${level.key}")
+                putStringSet(NO_LITE, set(NO_LITE) - site)
+            }
+        }
+        com.swiftbrowser.media.Helper.sendLook()
+    }
 
     /** The site's articles open in reader view by themselves (2.3). */
     fun autoReader(site: String?, incognito: Boolean = false): Boolean = isOn(READER, site, incognito)
@@ -151,7 +180,10 @@ object SiteSettings {
 
     /** Sites with anything saved, for the list in Settings (never what incognito tabs chose). */
     fun sites(): List<String> =
-        (KEYS.flatMap { set(it) } + set(TEXT_SCALE).map { it.substringBefore('=') } + AdBlock.overrides().keys).toSortedSet().toList()
+        (
+            KEYS.flatMap { set(it) } + set(TEXT_SCALE).map { it.substringBefore('=') } + set(LITE_LEVELS).map { it.substringBefore('=') } +
+                AdBlock.overrides().keys
+            ).toSortedSet().toList()
 
     /** Whether [site] has anything set; [incognito]: as incognito tabs see it. */
     fun hasSettings(site: String, incognito: Boolean = false): Boolean =
@@ -159,37 +191,39 @@ object SiteSettings {
             site in sites()
         } else {
             SWITCHES.any { isOn(it, site, true) } || location(site, true) != Location.ASK ||
-                textScale(site, true) != null || AdBlock.overrideFor(site) != null
+                textScale(site, true) != null || AdBlock.overrideFor(site) != null || liteLevel(site) != null
         }
 
     fun reset(site: String, incognito: Boolean = false) {
-        val look = noLite(site) || darkPage(site)
+        val look = darkPage(site)
         if (incognito) {
             for (key in SWITCHES) put(key, site, false, incognito = true)
             setLocation(site, Location.ASK, incognito = true)
             setTextScale(site, null, incognito = true)
             AdBlock.setOverride(site, null, incognito = true)
+            if (liteLevel(site) != null) setLiteLevel(site, null, incognito = true)
         } else {
             for (key in KEYS) put(key, site, false)
             incognitoLocation.drop(site)
             setTextScale(site, null)
             AdBlock.setOverride(site, null)
+            if (liteLevel(site) != null) setLiteLevel(site, null)
         }
         if (look) com.swiftbrowser.media.Helper.sendLook()
     }
 
-    /** What [site] has set, to put back with Undo (2.6). */
-    class Saved(val site: String, val keys: List<String>, val scale: Float?, val level: com.swiftbrowser.adblock.AdLevel?)
+    /** What [site] has set, to put back with Undo (2.6; its Lite level, 3.0.7). */
+    class Saved(val site: String, val keys: List<String>, val scale: Float?, val level: com.swiftbrowser.adblock.AdLevel?, val lite: LiteLevel? = null)
 
     /** [incognito]: what incognito tabs see, to put back as incognito choices. */
     fun save(site: String, incognito: Boolean = false): Saved {
-        if (!incognito) return Saved(site, KEYS.filter { site in set(it) }, textScale(site), AdBlock.savedOverrideFor(site))
+        if (!incognito) return Saved(site, KEYS.filter { site in set(it) && it != NO_LITE }, textScale(site), AdBlock.savedOverrideFor(site), savedLiteLevel(site))
         val place = when (location(site, true)) {
             Location.ALLOW -> listOf(LOCATION_ALLOW)
             Location.BLOCK -> listOf(LOCATION_BLOCK)
             Location.ASK -> emptyList()
         }
-        return Saved(site, SWITCHES.filter { isOn(it, site, true) } + place, textScale(site, true), AdBlock.overrideFor(site))
+        return Saved(site, SWITCHES.filter { isOn(it, site, true) } + place, textScale(site, true), AdBlock.overrideFor(site), liteLevel(site))
     }
 
     fun restore(s: Saved, incognito: Boolean = false) {
@@ -202,6 +236,7 @@ object SiteSettings {
         }
         setTextScale(s.site, s.scale, incognito)
         AdBlock.setOverride(s.site, s.level, incognito)
+        if (s.lite != null) setLiteLevel(s.site, s.lite, incognito)
         com.swiftbrowser.media.Helper.sendLook()
     }
 
@@ -209,6 +244,7 @@ object SiteSettings {
     fun onIncognitoEnded() {
         var look = false
         for ((key, choices) in incognitoSwitches) if (choices.clear() && key in FOR_ALL_TABS) look = true
+        if (incognitoLite.clear()) look = true
         incognitoLocation.clear()
         incognitoScale.clear()
         AdBlock.onIncognitoEnded()

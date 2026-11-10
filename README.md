@@ -5,12 +5,12 @@ ad-heavy sites on older phones, and runs on Android 7 and newer.
 
 ## Download
 
-Swift 3.0.6 for Android 7 and newer comes in two files:
+Swift 3.0.7 for Android 7 and newer comes in two files:
 
-- **[Swift-64bit-3.0.6.apk](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v3.0.6/Swift-64bit-3.0.6.apk)**
+- **[Swift-64bit-3.0.7.apk](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v3.0.7/Swift-64bit-3.0.7.apk)**
   (64-bit ARM, about 202 MB): for newer phones, and for any phone that says Swift "isn't compatible
   with the latest version of Android".
-- **[Swift-3.0.6.apk](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v3.0.6/Swift-3.0.6.apk)**
+- **[Swift-3.0.7.apk](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v3.0.7/Swift-3.0.7.apk)**
   (32-bit ARM, about 165 MB): for older phones, such as those with 2 GB of memory.
 
 Either installs over an earlier Swift and keeps tabs and settings. Swift can also update itself
@@ -212,6 +212,8 @@ VPN. Only Swift's traffic goes through it; other apps keep their own connection.
   when it reconnects.
 - **Switch to another location** by itself when one stops working. **Test the locations** shows
   which answer and how fast.
+- With no internet, or when none of the locations answers, it turns itself off and says why, so
+  pages don't stay paused.
 - It comes back by itself after an update or a restart, and can turn on every time Swift starts.
 - Reminders before a free file stops working, and a quick settings tile; hold the VPN mark in the
   address bar to switch country.
@@ -231,19 +233,20 @@ VPN. Only Swift's traffic goes through it; other apps keep their own connection.
 
 ### Speed on older phones
 
-- **Lite mode**: all sites without animations, shadows or frosted glass, for the smoothest
-  scrolling.
-- **Lighter pages** by default: no frosted glass, fewer decorative animations, and lighter YouTube
-  and TheFlixer. **Show sites as designed** turns this off, and is on by itself on phones with 4 GB
-  of memory or more.
+- **Lite mode** in five levels, for all sites and for each site (≡ menu → Lite), each adding to
+  the one before: **Off** (sites exactly as designed; where phones with 4 GB of memory or more
+  start), **Low** (no frosted glass, less motion, lighter YouTube and TheFlixer; where other phones
+  start), **Medium** (no animations, shadows, blur or filters), **High** (GIFs play once, videos
+  start only when tapped, fewer graphics layers) and **Extreme** (GIFs stay still, text shows at
+  once while a site's font loads).
 - **Battery saver**: below a level you choose, or with your phone's battery saver, Swift uses Lite
-  mode, keeps only the open tab loaded and loads no pictures on mobile data.
+  mode Medium or higher, keeps only the open tab loaded and loads no pictures on mobile data.
 - **Data saver**: on mobile data, pages load without pictures. **Data used** shows each day.
 - **Memory**: one engine process for all tabs, decoded pictures capped at 48 MB, and when memory
   runs low, or a minute after Swift goes to the background, only the open or playing tab and those
   you keep loaded stay. **Right now** shows free memory, Swift's own, loaded tabs and recent crashes.
-- The web cache is sized by the engine from the free space, and Swift empties it by itself when
-  the phone is low on space.
+- The cache stays under 100 MB (or 50 or 200, in Settings → Storage & data → Cache size), no
+  single file over 10 MB, and Swift empties it by itself when the phone is low on space.
 - Pages that stop responding offer Stop, and a crashed page loads again by itself once.
 
 ### Settings and backup

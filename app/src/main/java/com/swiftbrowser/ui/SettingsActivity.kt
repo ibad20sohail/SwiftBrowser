@@ -499,11 +499,8 @@ class SettingsActivity : AppCompatActivity() {
         }
         Topic.SPEED -> listOfNotNull(
             if (Power.saving) "Saving battery now" else null,
-            when {
-                prefs.liteMode || Power.saving -> "Lite mode"
-                prefs.sitesAsDesigned -> "Sites as designed"
-                else -> "Lighter sites"
-            },
+            // 3.0.7: Lite mode's level (chosen in the ≡ menu).
+            "Lite mode ${com.swiftbrowser.core.LiteLevel.effective(prefs.liteLevel, null, Power.saving).label}",
             if (prefs.maxLiveTabs == 1 || Power.saving) "1 tab ready to open" else "${prefs.maxLiveTabs} tabs ready to open",
         ).joinToString(" · ")
         Topic.VIDEO -> listOfNotNull(
@@ -875,29 +872,6 @@ class SettingsActivity : AppCompatActivity() {
                 Engine.setDrawSpeedMeter(it)
             }
         }
-        def(Topic.SPEED, "How sites look", "Show sites as designed", "blur glass transparency animations new phone quality") {
-            switch(
-                R.drawable.ic_glass, "Show sites as designed",
-                { "Every effect and animation, as each site made it (for newer phones)" },
-                details = "To keep scrolling smooth on older phones, Swift changes some sites a little: no frosted glass behind " +
-                    "see-through bars and badges, fewer decorative animations, and lighter YouTube and TheFlixer.\n\n" +
-                    "Turn this on to see every site exactly as it was designed. It's on by itself on phones with 4 GB of " +
-                    "memory or more; on phones with less, it's best left off.\n\nTurning it on turns Lite mode off.",
-                checked = { prefs.sitesAsDesigned },
-            ) {
-                PageActions.setSitesAsDesigned(null, it)
-                // Pages keep styles they have already read until the engine starts again.
-                confirmRestart(if (it) "Sites show exactly as designed after Swift restarts." else "Sites are lighter again after Swift restarts.")
-            }
-        }
-        def(Topic.SPEED, "How sites look", "Lite mode", "smooth scrolling fast animations shadows blur") {
-            switch(
-                R.drawable.ic_lite, "Lite mode", { if (Power.saving && !prefs.liteMode) "On for now: saving battery" else "Plainer sites that scroll the smoothest" },
-                details = "The smoothest scrolling on your phone: all sites without animations, shadows or frosted glass. " +
-                    "Some sites look plainer. Stays on until you turn it off; also in the ≡ menu.",
-                checked = { prefs.liteMode },
-            ) { PageActions.setLite(null, it) }
-        }
         def(Topic.SPEED, "Data", "Data saver", "mobile data images cellular save") {
             switch(
                 R.drawable.ic_image, "Data saver",
@@ -920,7 +894,7 @@ class SettingsActivity : AppCompatActivity() {
                 when {
                     !prefs.batterySaver -> "Off"
                     Power.saving -> "Saving battery now, until you charge"
-                    else -> "Below ${prefs.batterySaverLevel}% battery: Lite mode, one tab ready to open"
+                    else -> "Below ${prefs.batterySaverLevel}% battery: Lite mode Medium or higher, one tab ready to open"
                 }
             }) { chooseBatterySaver() }
         }
@@ -1303,6 +1277,10 @@ class SettingsActivity : AppCompatActivity() {
         def(Topic.STORAGE, "Free up space", "Clear the cache", "cache files space pictures") {
             action(R.drawable.ic_delete, "Clear the cache", { usage?.let { "${UrlUtils.formatBytes(it.cache)}: copies of pages' pictures and files" } }) { clearCache() }
         }
+        // 3.0.7: the cache's room (it grew to 200 MB in hours with the engine choosing it).
+        def(Topic.STORAGE, "Free up space", "Cache size", "cache size limit megabytes mb space 50 100 200") {
+            action(R.drawable.ic_storage, "Cache size", { "Up to ${prefs.cacheLimitMb} MB, the oldest copies go first" }) { chooseCacheSize() }
+        }
         def(Topic.STORAGE, "Free up space", "Data saved by sites", "site storage sites space clear data sites stored") {
             action(R.drawable.ic_globe, "Data saved by sites", { usage?.let { "${UrlUtils.formatBytes(it.sites)} · see and clear each site" } }) { showSiteStorage() }
         }
@@ -1635,7 +1613,7 @@ class SettingsActivity : AppCompatActivity() {
         val labels = arrayOf("Off") + levels.map { "Below $it% battery" }
         val checked = if (!prefs.batterySaver) 0 else levels.indexOf(prefs.batterySaverLevel).coerceAtLeast(1) + 1
         choose("Battery saver", labels.toList(), checked, then = { which ->
-            if (which > 0) snack("Lite mode, one tab ready to open and no pictures on mobile data below ${levels[which - 1]}%, or with your phone's battery saver")
+            if (which > 0) snack("Lite mode Medium or higher, one tab ready to open and no pictures on mobile data below ${levels[which - 1]}%, or with your phone's battery saver")
         }) { which ->
             prefs.batterySaver = which > 0
             if (which > 0) prefs.batterySaverLevel = levels[which - 1]
@@ -3108,8 +3086,20 @@ class SettingsActivity : AppCompatActivity() {
                 "Pages load them again when needed; sign-ins and settings stay.",
             "Clear", danger = true,
         ) {
-            Engine.runtime.storageController.clearData(StorageController.ClearFlags.ALL_CACHES)
-            snack("Cache cleared")
+            Engine.storage.clearData(StorageController.ClearFlags.ALL_CACHES)
+            val freed = usage?.cache ?: 0
+            snack(if (freed > 0) "Cache cleared · ${UrlUtils.formatBytes(freed)} freed" else "Cache cleared")
+            remeasureSoon()
+        }
+    }
+
+    /** 3.0.7: 50, 100 or 200 MB in all: the engine's cache and Swift's own temporary files. */
+    private fun chooseCacheSize() {
+        val sizes = com.swiftbrowser.core.CacheBudget.CHOICES_MB
+        choose("Cache size", sizes.map { if (it == com.swiftbrowser.core.CacheBudget.DEFAULT_MB) "$it MB (best for most phones)" else "$it MB" }, sizes.indexOf(prefs.cacheLimitMb)) { which ->
+            prefs.cacheLimitMb = sizes[which]
+            Engine.applyCacheLimit()
+            com.swiftbrowser.core.Storage.trimOwnCache(this)
             remeasureSoon()
         }
     }

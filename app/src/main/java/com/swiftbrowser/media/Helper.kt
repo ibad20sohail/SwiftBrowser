@@ -317,20 +317,40 @@ object Helper {
         url != null && url.startsWith("moz-extension://") && url.contains("/reader/view.html")
 
     /**
-     * Tells the extension which styles pages get from their first byte on: Lite mode (but not on
-     * the sites left out of it), and the lighter YouTube and TheFlixer (unless sites are shown as
-     * designed); and whether playing pages are kept playing out of view.
+     * 3.0.7: where each of Lite mode's page styles applies, from the level for all sites and the
+     * sites' own [levels] (saving battery: at least Medium): "fixes" (lighter YouTube and TheFlixer)
+     * from Low, "lite" (no animations, shadows, blur or filters) from Medium, "litehigh" (fewer
+     * graphics layers) from High.
+     */
+    private fun liteLayers(levels: Map<String, com.swiftbrowser.core.LiteLevel>): JSONObject {
+        val saving = com.swiftbrowser.engine.Power.saving
+        val all = com.swiftbrowser.core.LiteLevel.effective(SwiftApp.prefs.liteLevel, null, saving)
+        val sites = levels.mapValues { com.swiftbrowser.core.LiteLevel.effective(all, it.value, saving) }
+        fun reach(min: com.swiftbrowser.core.LiteLevel): JSONObject {
+            val r = com.swiftbrowser.core.LiteReach.of(min, all, sites)
+            return JSONObject().put("on", r.on).put("exclude", org.json.JSONArray(r.exclude))
+                .put("only", r.only?.let { org.json.JSONArray(it) } ?: JSONObject.NULL)
+        }
+        return JSONObject()
+            .put("fixes", reach(com.swiftbrowser.core.LiteLevel.LOW))
+            .put("lite", reach(com.swiftbrowser.core.LiteLevel.MEDIUM))
+            .put("litehigh", reach(com.swiftbrowser.core.LiteLevel.HIGH))
+    }
+
+    /**
+     * Tells the extension which styles pages get from their first byte on: Lite mode's, by level and
+     * site (3.0.7, [liteLayers]), and Dark page's; and whether playing pages are kept playing out of view.
      */
     fun sendLook() {
         val port = backgroundPort ?: return
         val prefs = SwiftApp.prefs
         try {
             port.postMessage(
-                JSONObject().put("type", "look").put("lite", prefs.liteMode || com.swiftbrowser.engine.Power.saving).put("fixes", !prefs.sitesAsDesigned)
-                    .put("liteExcept", org.json.JSONArray(com.swiftbrowser.core.SiteSettings.liteExceptions()))
+                JSONObject().put("type", "look")
+                    .put("layers", liteLayers(com.swiftbrowser.core.SiteSettings.liteLevels()))
                     .put("darkSites", org.json.JSONArray(com.swiftbrowser.core.SiteSettings.darkPages()))
                     // 3.0.1: what the helper may write down: the same without incognito tabs' choices.
-                    .put("liteExceptKeep", org.json.JSONArray(com.swiftbrowser.core.SiteSettings.liteExceptionsKept()))
+                    .put("layersKeep", liteLayers(com.swiftbrowser.core.SiteSettings.liteLevelsKept()))
                     .put("darkSitesKeep", org.json.JSONArray(com.swiftbrowser.core.SiteSettings.darkPagesKept()))
                     .put("keepPlaying", prefs.keepPlaying)
                     .put("readerFont", prefs.readerFont).put("readerSpacing", prefs.readerSpacing)

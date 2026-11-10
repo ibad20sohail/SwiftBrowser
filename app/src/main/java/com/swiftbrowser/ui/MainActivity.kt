@@ -842,6 +842,17 @@ class MainActivity : AppCompatActivity(), BrowserUi {
                     snack(vpn.error ?: "The VPN isn't connected", "VPN") { showVpnSheet() }
                 }
             }
+            // 3.0.7: it turned itself off (no internet, or no location answered): why, once; pages
+            // that waited for it load now.
+            com.swiftbrowser.vpn.Vpn.State.OFF -> vpn.error?.let { why ->
+                TabManager.onOnline()
+                val spare = if (vpn.autoSwitch) null else vpn.spareFor(vpn.current())
+                if (spare != null) {
+                    snack(why, "Try ${spare.server}", long = true) { VpnUi.turnOn(this, vpnPermission, spare) }
+                } else {
+                    snack(why, "VPN", long = true) { showVpnSheet() }
+                }
+            }
             else -> Unit
         }
     }
@@ -2576,6 +2587,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         // What this tab's page asked while it wasn't on screen (an alert, a sign-in) shows now (2.6).
         tab.session?.let { s -> root.post { if (current === tab) com.swiftbrowser.tabs.SessionFactory.prompts.showWaiting(s) } }
         Engine.showTextScaleFor(UrlUtils.site(tab.url), tab.incognito)
+        // 3.0.7: Lite mode's engine-wide parts (GIFs, fonts) as the site on screen has it.
+        Engine.showLiteFor(UrlUtils.site(tab.url))
         val isNew = seenTabs.add(tab.id)
         // 3.0.4: its group strip, or none: the bar's height for its page is known before the page is shown.
         updateGroupStrip()
@@ -2707,6 +2720,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             }
         }
         Engine.showTextScaleFor(UrlUtils.site(tab.url), tab.incognito)
+        // 3.0.7: Lite mode's engine-wide parts (GIFs, fonts) as the site on screen has it.
+        Engine.showLiteFor(UrlUtils.site(tab.url))
         if (tab.loading != shownLoading || pageStarted) {
             com.swiftbrowser.engine.DataSaver.onSiteShown(UrlUtils.site(tab.url))
             if (!tab.loading) offerImages(tab)

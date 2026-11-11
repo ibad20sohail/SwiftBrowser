@@ -19,7 +19,9 @@ import java.util.Locale
  * Backup and restore (Settings → Privacy & storage): one JSON file in the download folder with the
  * settings, profiles, bookmarks, history, open tabs and groups, and per-site settings. Restoring adds
  * to what is there (nothing is deleted), the backup's settings replace these, and then Swift restarts.
- * Passwords and cookies aren't in it: sign in again after restoring on a new phone.
+ * Passwords and cookies aren't in it: sign in again after restoring on a new phone. 3.0.8: unless the
+ * user chose to add them, locked with the backup password ("locked", BackupLock); and the backup in
+ * the Google account (GoogleBackup) holds the same contents, all of it locked.
  *
  * 3.0: only the user's own settings go in (BackupSettings), never secrets or what only the phone
  * knows. A backup is read as something that may be broken or made by someone else: every item is
@@ -53,7 +55,18 @@ object Backup {
      * settings said nothing was changed although the data was in). [settings]: how many settings were
      * taken from the backup, -1 when they couldn't be put in (they stay as they were).
      */
-    class Restored(val profiles: Int, val bookmarks: Int, val history: Int, val tabs: Int, val siteLevels: Int, val settings: Int)
+    class Restored(
+        val profiles: Int, val bookmarks: Int, val history: Int, val tabs: Int, val siteLevels: Int, val settings: Int,
+        /** 3.0.8: the backup's profile ids → this phone's, for its passwords and sign-ins. */
+        val profileIds: Map<Long, Long> = emptyMap(),
+    ) {
+        /** 3.0.8: saved passwords added, and sign-ins to sites put back at the next start. */
+        var passwords = 0
+        var signIns = 0
+    }
+
+    /** 3.0.8: backup files also carry the passwords and sign-ins, locked with the backup password. */
+    const val FILES_LOCKED = "backup_files_locked"
 
     /** Blocking: writes the backup and returns its file. */
     fun write(ctx: Context): File = write(ctx, automatic = false)
@@ -81,6 +94,31 @@ object Backup {
     }
 
     private fun write(ctx: Context, automatic: Boolean): File {
+        // The automatic backup (a file in the Download folder, made by itself) leaves history out
+        // (2.6): only a backup made on purpose carries it.
+        val root = contents(ctx, history = !automatic)
+        // 3.0.8: the passwords and sign-ins, locked with the backup password, if the user chose so.
+        if (SwiftApp.prefs.sp.getBoolean(FILES_LOCKED, false)) {
+            BackupLock.lockBox(BackupSecrets.forFile(ctx))?.let { root.put("locked", it) }
+                ?: L.w("Backup: passwords and sign-ins left out (the backup password needs setting again)")
+        }
+        val day = SimpleDateFormat("yyyy-MM-dd", Locale.ROOT).format(Date())
+        val dir = Downloads.directory()
+        val base = if (automatic) "$AUTO_PREFIX $day" else "Swift backup $day"
+        var file = File(dir, "$base.json")
+        var n = 2
+        while (file.exists()) file = File(dir, "$base ($n).json").also { n++ }
+        file.writeText(root.toString())
+        // So file managers and other apps see it straight away.
+        android.media.MediaScannerConnection.scanFile(ctx.applicationContext, arrayOf(file.path), null, null)
+        return file
+    }
+
+    /**
+     * Blocking: what a backup holds (3.0.8: also the Google backup's, GoogleBackup): the settings,
+     * profiles with their bookmarks, [history] if wanted, groups and open tabs, and sites' levels.
+     */
+    fun contents(ctx: Context, history: Boolean): JSONObject {
         val db = SwiftApp.db
         val root = JSONObject()
             .put("app", "Swift")
@@ -104,12 +142,10 @@ object Backup {
             for (b in db.bookmarks(p.id)) {
                 bookmarks.put(JSONObject().put("url", b.url).put("title", b.title).put("created", b.created).put("folder", b.folder))
             }
-            // The automatic backup (a file in the Download folder, made by itself) leaves history out
-            // (2.6): only a backup made on purpose carries it.
-            val history = JSONArray()
-            if (!automatic) {
+            val visited = JSONArray()
+            if (history) {
                 for (h in db.history(p.id, null, HISTORY_LIMIT)) {
-                    history.put(JSONObject().put("url", h.url).put("title", h.title).put("last", h.lastVisit).put("visits", h.visits))
+                    visited.put(JSONObject().put("url", h.url).put("title", h.title).put("last", h.lastVisit).put("visits", h.visits))
                 }
             }
             val groups = JSONArray()
@@ -120,7 +156,7 @@ object Backup {
             }
             profiles.put(
                 JSONObject().put("id", p.id).put("name", p.name).put("color", p.color)
-                    .put("bookmarks", bookmarks).put("history", history).put("groups", groups).put("tabs", tabs),
+                    .put("bookmarks", bookmarks).put("history", visited).put("groups", groups).put("tabs", tabs),
             )
         }
         root.put("profiles", profiles)
@@ -128,17 +164,7 @@ object Backup {
         val levels = JSONObject()
         for ((site, level) in AdBlock.overrides()) levels.put(site, level.key)
         root.put("siteLevels", levels)
-
-        val day = SimpleDateFormat("yyyy-MM-dd", Locale.ROOT).format(Date())
-        val dir = Downloads.directory()
-        val base = if (automatic) "$AUTO_PREFIX $day" else "Swift backup $day"
-        var file = File(dir, "$base.json")
-        var n = 2
-        while (file.exists()) file = File(dir, "$base ($n).json").also { n++ }
-        file.writeText(root.toString())
-        // So file managers and other apps see it straight away.
-        android.media.MediaScannerConnection.scanFile(ctx.applicationContext, arrayOf(file.path), null, null)
-        return file
+        return root
     }
 
     /** Blocking: backups in the download folders, newest first. */
@@ -280,7 +306,7 @@ object Backup {
             -1
         }
         L.d("Backup restored: ${profiles.length()} profiles, $bookmarks bookmarks, $history history, $tabs tabs, $settings settings")
-        return Restored(newProfiles, bookmarks, history, tabs, siteLevels, settings)
+        return Restored(newProfiles, bookmarks, history, tabs, siteLevels, settings, ids)
     }
 
     /** The message after a restore (3.0.1): exactly what went in. */
@@ -292,6 +318,8 @@ object Backup {
             n(r.history, "history entry", "history entries").takeIf { r.history > 0 },
             n(r.tabs, "tab", "tabs").takeIf { r.tabs > 0 },
             n(r.siteLevels, "site's ad blocking level", "sites' ad blocking levels").takeIf { r.siteLevels > 0 },
+            n(r.passwords, "saved password", "saved passwords").takeIf { r.passwords > 0 },
+            n(r.signIns, "sign-in to sites", "sign-ins to sites").takeIf { r.signIns > 0 },
         )
         val data = when (added.size) {
             0 -> "Nothing in it was new for your phone."
@@ -368,7 +396,7 @@ object Backup {
      * Runs [restore] after the app's pending database writes; [done] on the main thread with what
      * was added, or null when nothing was changed.
      */
-    fun restoreThen(ctx: Context, root: JSONObject, done: (Restored?) -> Unit) {
+    fun restoreThen(ctx: Context, root: JSONObject, secrets: JSONObject? = null, done: (Restored?) -> Unit) {
         val app = ctx.applicationContext
         TabManager.flushSaves()
         TabManager.io.execute {
@@ -377,6 +405,16 @@ object Backup {
             } catch (e: Exception) {
                 L.w("Restoring a backup failed", e)
                 null
+            }
+            // 3.0.8: then the passwords and sign-ins (an opened locked part), into the profiles they have here.
+            if (restored != null && secrets != null) {
+                try {
+                    val (passwords, signIns) = BackupSecrets.restore(app, secrets, restored.profileIds)
+                    restored.passwords = passwords
+                    restored.signIns = signIns
+                } catch (e: Exception) {
+                    L.w("Restoring a backup's passwords and sign-ins failed", e)
+                }
             }
             android.os.Handler(android.os.Looper.getMainLooper()).post { done(restored) }
         }

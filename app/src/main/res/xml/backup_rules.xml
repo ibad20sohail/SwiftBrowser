@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  3.0.8: Android's backup to the user's Google account (Android 6 to 11; data_extraction_rules.xml
+  from 12) takes this one file and nothing else: Swift's own copy, written only when the user turns
+  "Back up to your Google account" on, and locked with their backup password (GoogleBackup).
+  Everything else stays on the phone: the engine's data, the VPN, the Private folder, the settings.
+-->
+<full-backup-content>
+    <include domain="file" path="google-backup/swift-backup.bin" />
+</full-backup-content>

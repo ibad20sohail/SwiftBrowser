@@ -1288,7 +1288,10 @@ class SettingsActivity : AppCompatActivity() {
             action(R.drawable.ic_history, "Clear sites you don't visit", { "Everything of sites not visited for 30 days" }) { clearUnusedSites() }
         }
         def(Topic.STORAGE, "Backup", "Back up", "export save copy backup") {
-            action(R.drawable.ic_download, "Back up", { "Settings, bookmarks, history, open tabs and site settings, to one file" }) { backUp() }
+            action(R.drawable.ic_download, "Back up", {
+                "Settings, bookmarks, history, open tabs and site settings, to one file" +
+                    if (prefs.sp.getBoolean(Backup.FILES_LOCKED, false)) ", with passwords and sign-ins locked" else ""
+            }) { backUp() }
         }
         def(Topic.STORAGE, "Backup", "Back up every week", "automatic backup weekly") {
             switch(
@@ -1301,6 +1304,26 @@ class SettingsActivity : AppCompatActivity() {
             action(R.drawable.ic_restore_backup, "Restore from a backup", { "Adds a backup's contents to your phone, then restarts Swift" }) {
                 chooseBackup()
             }
+        }
+        // 3.0.8: Android's backup to the user's Google account, all of it locked with the backup password.
+        def(Topic.STORAGE, "Backup", "Back up to your Google account", "google account drive cloud backup new phone password sync") {
+            action(R.drawable.ic_google_g, "Back up to your Google account", { BackupUi.googleSummary(this@SettingsActivity) }) {
+                BackupUi.google(this@SettingsActivity) { refreshAll() }
+            }
+        }
+        def(Topic.STORAGE, "Backup", "Restore from your Google backup", "google restore new phone backup reinstall") {
+            action(R.drawable.ic_restore_backup, "Restore from your Google backup", { BackupUi.foundSummary(this@SettingsActivity) }) {
+                BackupUi.restoreFromSettings(this@SettingsActivity)
+            }
+        }
+        def(Topic.STORAGE, "Backup", "Backup password", "backup password lock hint encrypt") {
+            action(R.drawable.ic_key, "Backup password", { BackupUi.passwordSummary() }) { BackupUi.password(this@SettingsActivity) { refreshAll() } }
+        }
+        def(Topic.STORAGE, "Backup", "Passwords and sign-ins in backup files", "backup passwords sign-ins cookies logins file lock") {
+            switch(
+                R.drawable.ic_password, "Passwords and sign-ins in backup files", { BackupUi.filesSummary() },
+                checked = { prefs.sp.getBoolean(Backup.FILES_LOCKED, false) },
+            ) { on -> BackupUi.filesLocked(this@SettingsActivity, on) { refreshAll() } }
         }
 
         // About
@@ -2597,34 +2620,47 @@ class SettingsActivity : AppCompatActivity() {
                 return@launch
             }
             val s = Backup.summary(root)
+            // 3.0.8: its saved passwords and sign-ins, locked with a backup password.
+            val locked = root.optJSONObject("locked")
             val d = MaterialAlertDialogBuilder(this@SettingsActivity)
                 .setTitle("Restore this backup?")
                 .setMessage(
                     "Made on ${s.created}: ${s.profiles} ${if (s.profiles == 1) "profile" else "profiles"}, ${s.bookmarks} ${if (s.bookmarks == 1) "bookmark" else "bookmarks"}, " +
                         "${s.tabs} ${if (s.tabs == 1) "tab" else "tabs"} and ${s.history} ${if (s.history == 1) "history entry" else "history entries"}.\n\nThey are added to what is on your phone, its settings " +
-                        "replace these, and Swift restarts. Passwords, the VPN and the Private folder are never in backups.",
+                        "replace these, and Swift restarts. " +
+                        if (locked != null) "It also holds saved passwords and sign-ins, locked with a backup password. The VPN and the Private folder are never in backups."
+                        else "Passwords, the VPN and the Private folder are never in backups.",
                 )
                 .setPositiveButton("Restore") { _, _ ->
-                    // 3.0: a backup that can't be restored changes nothing, and says so. 3.0.1: one
-                    // that was says exactly what went in, then Swift restarts to load it.
-                    Backup.restoreThen(this@SettingsActivity, root) { restored ->
-                        if (isFinishing || isDestroyed) {
-                            if (restored != null) SwiftApp.restart(this@SettingsActivity)
-                        } else if (restored == null) {
-                            Messages.show(this@SettingsActivity, "That backup couldn't be restored. Nothing on your phone was changed.", long = true)
-                        } else {
-                            MaterialAlertDialogBuilder(this@SettingsActivity)
-                                .setTitle("Backup restored")
-                                .setMessage(Backup.restoredText(restored) + "\n\nSwift restarts to load it.")
-                                .setPositiveButton("Restart Swift") { _, _ -> SwiftApp.restart(this@SettingsActivity) }
-                                .setCancelable(false)
-                                .showImmersive()
-                        }
+                    if (locked != null) {
+                        BackupUi.openLocked(this@SettingsActivity, locked, then = { secrets -> restoreNow(root, secrets) })
+                    } else {
+                        restoreNow(root, null)
                     }
                 }
                 .setNegativeButton(android.R.string.cancel, null)
                 .showImmersive()
             d.setCanceledOnTouchOutside(false)
+        }
+    }
+
+    /** 3.0.8: the restore itself, with the locked part's passwords and sign-ins if it was opened. */
+    private fun restoreNow(root: org.json.JSONObject, secrets: org.json.JSONObject?) {
+        // 3.0: a backup that can't be restored changes nothing, and says so. 3.0.1: one
+        // that was says exactly what went in, then Swift restarts to load it.
+        Backup.restoreThen(this@SettingsActivity, root, secrets) { restored ->
+            if (isFinishing || isDestroyed) {
+                if (restored != null) SwiftApp.restart(this@SettingsActivity)
+            } else if (restored == null) {
+                Messages.show(this@SettingsActivity, "That backup couldn't be restored. Nothing on your phone was changed.", long = true)
+            } else {
+                MaterialAlertDialogBuilder(this@SettingsActivity)
+                    .setTitle("Backup restored")
+                    .setMessage(Backup.restoredText(restored) + "\n\nSwift restarts to load it.")
+                    .setPositiveButton("Restart Swift") { _, _ -> SwiftApp.restart(this@SettingsActivity) }
+                    .setCancelable(false)
+                    .showImmersive()
+            }
         }
     }
 

@@ -103,7 +103,10 @@ object Health {
             val used = if (mine.isEmpty()) emptyArray() else am.getProcessMemoryInfo(mine.map { it.pid }.toIntArray())
             val parts = mine.indices.joinToString(", ") { i ->
                 val name = mine[i].processName.substringAfter(':', "main")
-                "$name ${used.getOrNull(i)?.totalPss?.div(1024) ?: 0} MB"
+                // 3.0.8: and the graphics memory it holds (as Android counts it, where the phone tells),
+                // to see which process fills it before Android's drawing runs out.
+                val graphics = used.getOrNull(i)?.getMemoryStat("summary.graphics")?.toLongOrNull()?.div(1024) ?: 0L
+                "$name ${used.getOrNull(i)?.totalPss?.div(1024) ?: 0} MB" + if (graphics > 0) " (graphics $graphics)" else ""
             }
             val text = "Memory: ${mi.availMem / MB} MB free of ${mi.totalMem / MB} MB${if (mi.lowMemory) " (low)" else ""}; Swift: $parts"
             main.post {
@@ -182,22 +185,44 @@ object Health {
         return Triple(level, line.substring(2, open).trim(), line.substring(colon + 3))
     }
 
+    /** 3.0.8: the previous run ended with Android's drawing out of graphics memory (see [logEndOfPreviousRun]). */
+    @Volatile var endedOutOfGraphicsMemory = false
+        private set
+
+    private val endOfRunRead = java.util.concurrent.CountDownLatch(1)
+
+    /** 3.0.8: blocking, at most [ms]: until [logEndOfPreviousRun] has read Android's log. */
+    fun awaitEndOfPreviousRun(ms: Long) {
+        try {
+            endOfRunRead.await(ms, java.util.concurrent.TimeUnit.MILLISECONDS)
+        } catch (_: InterruptedException) {
+        }
+    }
+
     /**
      * After a run that ended badly: the engine's errors from the end of that run, which Android's
-     * log still has (until the phone restarts), go into today's file.
+     * log still has (until the phone restarts), go into today's file. 3.0.8: only that run's lines
+     * (Android keeps its crash log for days: a crash fixed long ago came back after every bad end),
+     * and whether its drawing ran out of graphics memory, for the message about it.
      */
     fun logEndOfPreviousRun() {
+        val since = Diagnostics.previousRunStart
+        val until = Diagnostics.thisRunStart
         Thread({
             try {
                 val p = ProcessBuilder("logcat", "-d", "-v", "time", "*:E").redirectErrorStream(true).start()
-                val lines = p.inputStream.bufferedReader().readLines()
+                val all = p.inputStream.bufferedReader().readLines()
                     .filter { l -> !l.contains("JavaScript") && !l.contains("eglCodecCommon") && !l.contains("/Swift(") }
-                    .takeLast(120)
+                val lines = (if (since > 0) LogLines.between(all, since, until, System.currentTimeMillis()) else all).takeLast(120)
                 if (lines.isEmpty()) return@Thread
+                endedOutOfGraphicsMemory = LogLines.graphicsOutOfMemory(lines)
                 L.w("Engine errors before the last run ended (${lines.size} lines):")
                 lines.forEach { L.engine("E", URL.replace(it, "$1/…")) }
+                if (endedOutOfGraphicsMemory) L.w("The last run ended with Android's drawing out of graphics memory")
             } catch (e: Exception) {
                 L.w("The engine's errors of the last run can't be read", e)
+            } finally {
+                endOfRunRead.countDown()
             }
         }, "engine-log-previous").apply { isDaemon = true }.start()
     }

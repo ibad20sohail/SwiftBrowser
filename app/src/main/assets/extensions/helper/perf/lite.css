@@ -2,12 +2,15 @@
  * Swift Lite mode, Medium and up (3.0.7; the old Lite mode): no motion, shadows or filters, the parts
  * of a page that cost the most to draw on a slow phone. Animations jump to their end instead of
  * being removed, so content that fades or slides in still shows up.
+ * 3.0.8: they take 0.01 ms, not 0 s. A 0 s transition never runs, so a page never hears that it
+ * ended (transitionend), and menus that wait for that got stuck: apple.com's opened, but its items,
+ * scrolling and its X did nothing. 0.01 ms looks the same and the page hears the end.
  */
 *, *::before, *::after {
-  animation-duration: 0s !important;
+  animation-duration: 0.01ms !important;
   animation-delay: 0s !important;
   animation-iteration-count: 1 !important;
-  transition-duration: 0s !important;
+  transition-duration: 0.01ms !important;
   transition-delay: 0s !important;
   box-shadow: none !important;
   text-shadow: none !important;

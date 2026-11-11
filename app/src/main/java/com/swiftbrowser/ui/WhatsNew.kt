@@ -24,6 +24,11 @@ object WhatsNew {
     private class Item(val icon: Int, val title: String, val text: String, val version: Int = 19)
 
     private val NEW = listOf(
+        Item(R.drawable.ic_key, "Back up to your Google account", "Swift can keep your bookmarks, history, open tabs, settings, saved passwords and sign-ins in your Google account, locked with a backup password only you know, and bring them back on a new phone. Turn it on in Settings → Storage & data.", version = 30),
+        Item(R.drawable.ic_documents, "Documents", "Pinching a Word document zooms the document, not the bar above it. + and − in the menu keep it open, the menu opens at once, and the bar no longer comes and goes by itself while you scroll a PDF.", version = 30),
+        Item(R.drawable.ic_home, "Home page", "Scroll the home page and the search bar comes up in the address bar; a small button takes you back to the top. The drag handle on long pages is gone.", version = 30),
+        Item(R.drawable.ic_lite, "Site menus in Lite mode", "At Lite mode Medium and higher, menus on sites like apple.com no longer get stuck: animations stay off, and sites now learn that they have ended.", version = 30),
+        Item(R.drawable.ic_report, "Clearer problem reports", "After a crash, the report shows only that run's errors (not old ones again), how much graphics memory Swift used, and the sites with their own Lite level. When Swift ran out of graphics memory, it says so.", version = 30),
         Item(R.drawable.ic_lite, "Lite mode in 5 levels", "Lite mode now has levels like the ad blocker: Off, Low, Medium, High and Extreme, for all sites and for each site, from Lite in the ≡ menu. The button shows the level. \"Show sites as designed\" is Lite mode Off.", version = 29),
         Item(R.drawable.ic_storage, "A cache that stays small", "Swift's cache stays under 100 MB (it could grow to 200 MB in a few hours). Choose 50, 100 or 200 MB in Settings → Storage & data.", version = 29),
         Item(R.drawable.ic_delete, "Clearing data", "Clearing data from all time no longer closes Swift, and it says how much space was freed.", version = 29),

@@ -22,7 +22,7 @@ object DocRules {
      */
     private val FROM_PAGES = setOf(
         "hello", "click", "icon", "playing", "video-pos", "video-start", "media-ended", "media-error", "media-waiting",
-        "google-account", "page-size", "theme-color",
+        "google-account", "theme-color",
     )
 
     /** 3.0.4: reader view's own: where it was read to, and its Aa button (Swift's panel for its look). */

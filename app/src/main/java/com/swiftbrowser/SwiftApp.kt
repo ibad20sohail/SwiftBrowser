@@ -56,6 +56,8 @@ class SwiftApp : Application() {
         Thumbnails.cleanup(TabManager.tabs.map { it.id }.toSet())
         // Phones with plenty of memory and a graphics chip that draws fast show sites as designed.
         prefs.autoSitesAsDesigned = !GpuInfo.isSlowChip(GpuInfo.renderer(this)) && totalMemory() >= 3_500_000_000L
+        // 3.0.8: sign-ins to sites a restored backup brought, into the engine's file before it reads it.
+        com.swiftbrowser.core.BackupSecrets.importAtStart(this)
         Engine.init(this, prefs)
         com.swiftbrowser.engine.DataSaver.init(this)
         com.swiftbrowser.engine.DataUsage.init()
@@ -87,6 +89,8 @@ class SwiftApp : Application() {
                     TabManager.inSight(false)
                     // 3.0.7: Swift's own temporary files keep to their share of the cache size.
                     com.swiftbrowser.core.Storage.trimOwnCache(this@SwiftApp)
+                    // 3.0.8: the copy for the Google backup, at most every 12 hours, if it's on.
+                    com.swiftbrowser.core.GoogleBackup.refreshIfDue(this@SwiftApp)
                 }
             }
 

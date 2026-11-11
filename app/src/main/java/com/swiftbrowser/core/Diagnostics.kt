@@ -42,6 +42,13 @@ object Diagnostics {
     private lateinit var app: Context
     private val io = Background.single("diagnostics")
     private var runStart = 0L
+
+    /** 3.0.8: when the previous run began (0: not known), for reading only its lines of Android's log. */
+    var previousRunStart = 0L
+        private set
+
+    /** 3.0.8: when this run began (Swift's start). */
+    val thisRunStart: Long get() = runStart
     private val time = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
 
     /** Main process only, early in Application.onCreate. */
@@ -52,6 +59,7 @@ object Diagnostics {
         try {
             val old = File(dir, STATE).takeIf { it.exists() }?.readLines().orEmpty()
             val oldStart = old.getOrNull(0)?.toLongOrNull() ?: 0L
+            previousRunStart = oldStart
             val wasOnScreen = old.getOrNull(1) == "fg"
             // The phone was switched off (or its battery ran out), or Swift was updated or installed
             // again: Android didn't close it for lack of memory, so there is nothing to tell.
@@ -296,9 +304,21 @@ object Diagnostics {
         return "Settings: tabs kept in memory ${prefs.maxLiveTabs}, graphics chip ${com.swiftbrowser.engine.GpuInfo.renderer(activity).ifBlank { "unknown" }}, " +
             "ad blocking ${AdBlock.global.label}, Lite mode ${prefs.liteLevel.label}, saving battery ${com.swiftbrowser.engine.Power.saving}, cache ${prefs.cacheLimitMb} MB, full screen ${prefs.fullScreen}, " +
             "keep playing ${prefs.keepPlaying}, text size ${(prefs.textScale * 100).toInt()}%\n" +
+            siteLevelsLine() +
             "Tabs: ${tabs.size} open, ${tabs.count { it.session != null }} loaded; current site: " +
             // An incognito tab's site stays private, even in a problem report (2.6).
             (TabManager.current?.let { if (it.incognito) "(incognito)" else UrlUtils.siteName(it.url) } ?: "")
+    }
+
+    /**
+     * 3.0.8: the sites with their own Lite mode level, so a problem on one site can be matched to it.
+     * The saved ones only (never what incognito tabs chose); like every site name in the report, they
+     * become "a site" unless the user lets sites in.
+     */
+    private fun siteLevelsLine(): String {
+        val levels = com.swiftbrowser.core.SiteSettings.liteLevelsKept()
+        if (levels.isEmpty()) return ""
+        return "Sites with their own Lite level: " + levels.entries.sortedBy { it.key }.joinToString(", ") { "${it.key} ${it.value.label}" } + "\n"
     }
 
     /**

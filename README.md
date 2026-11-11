@@ -5,12 +5,12 @@ ad-heavy sites on older phones, and runs on Android 7 and newer.
 
 ## Download
 
-Swift 3.0.7 for Android 7 and newer comes in two files:
+Swift 3.0.8 for Android 7 and newer comes in two files:
 
-- **[Swift-64bit-3.0.7.apk](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v3.0.7/Swift-64bit-3.0.7.apk)**
+- **[Swift-64bit-3.0.8.apk](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v3.0.8/Swift-64bit-3.0.8.apk)**
   (64-bit ARM, about 202 MB): for newer phones, and for any phone that says Swift "isn't compatible
   with the latest version of Android".
-- **[Swift-3.0.7.apk](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v3.0.7/Swift-3.0.7.apk)**
+- **[Swift-3.0.8.apk](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v3.0.8/Swift-3.0.8.apk)**
   (32-bit ARM, about 165 MB): for older phones, such as those with 2 GB of memory.
 
 Either installs over an earlier Swift and keeps tabs and settings. Swift can also update itself
@@ -38,7 +38,8 @@ are attached to the releases because GitHub doesn't accept files over 100 MB in 
 - **Home page**: a search box (with voice search and QR codes) that slides into the address bar,
   up to 15 shortcuts you can arrange, what you left half-way, and the news, in the order you choose
   and over a soft gradient or a picture of your own, with a slider for how clear the picture is. The picture runs behind a see-through address bar, and the text and buttons on it take whichever colour reads.
-  Colours can be taken from that picture.
+  Colours can be taken from that picture. Once you scroll past the search box it moves up into the
+  address bar, and an ↑ button brings you back to the top.
 - **News** on the home page: headlines from Google News for your country as cards with their
   pictures, topics, more stories as you scroll, and news sites you add yourself. Hold a story to
   open it in a new or incognito tab, share it or hide that site. It's fetched at most once an hour,
@@ -192,8 +193,8 @@ app's "Open with".
 - **Security status**: what is on, and what Swift has actually checked.
 - **Safer browsing**: closes a common way older browsers are attacked, as the engine no longer
   gets security fixes.
-- **Saved passwords**, kept on the phone only and locked by Android, each profile with its own,
-  never in backups, and shown only after your screen lock.
+- **Saved passwords**, locked by Android, each profile with its own, and shown only after your
+  screen lock. They go into backups only when locked with your backup password.
 - **Address bar safety**: it can't be faked by pages posing as a search engine, lookalike names
   show as they really are, and QR codes show where they lead first.
 - **Clear browsing data** by time or by dates, seeing how much each thing takes. **Quit** can
@@ -254,13 +255,16 @@ VPN. Only Swift's traffic goes through it; other apps keep their own connection.
 - **Settings** in plain words, in twelve topics that show what is set in each, with a search box
   that understands everyday words ("battery", "ads", "music").
 - **Back up and restore** settings, profiles, bookmarks, history, open tabs and groups, and site
-  settings in one file, also by itself every week. Passwords, cookies, the VPN and the Private
-  folder are never in it.
+  settings in one file, also by itself every week. Saved passwords and sign-ins to sites can be
+  added, locked with your backup password; the VPN and the Private folder are never in it.
+- **Google backup**: Android's own backup to your Google account keeps a copy of all of this, with
+  history, saved passwords and sign-ins, locked with a backup password only you know (with a hint
+  you choose). It's off until you turn it on, and Swift on a new phone offers to restore it.
 - **Storage**: what Swift keeps on the phone, part by part, the sites that stored data (clear each
   one) and clearing sites you haven't visited for 30 days.
 - **Updates**: Swift checks and installs its own updates, signed by Swift, and shows what's new.
 - **Problem reports**: crashes and freezes with Swift's log of the last 3 days, shown to you before
-  they are sent.
+  they are sent. When Android ran out of graphics memory, the report says so.
 
 ## Requirements
 

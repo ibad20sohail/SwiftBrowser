@@ -456,7 +456,16 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         handler.postDelayed({
             if (!isFinishing) Updates.checkNow(prefs, force = false) { r -> offerUpdate(r) }
         }, 15_000)
-        if (savedInstanceState == null) whenStarted { if (!isFinishing) WhatsNew.showOnStart(this) }
+        if (savedInstanceState == null) whenStarted {
+            if (isFinishing) return@whenStarted
+            // 3.0.8: a Google backup Android put back (Swift installed again, a new phone) is offered
+            // first; what's new waits for the next start.
+            lifecycleScope.launch {
+                val found = withContext(Dispatchers.IO) { com.swiftbrowser.core.GoogleBackup.toOffer(this@MainActivity) }
+                if (isFinishing) return@launch
+                if (found != null) BackupUi.offerOnStart(this@MainActivity, found) else WhatsNew.showOnStart(this@MainActivity)
+            }
+        }
         // Housekeeping once the app has settled: the weekly backup, and the cache when the phone is
         // almost full.
         handler.postDelayed({ if (!isFinishing) startupChores() }, 20_000)
@@ -1438,6 +1447,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             else -> UrlUtils.searchQuery(tab.url) ?: tab.url
         }
         urlBox.visibility = View.VISIBLE
+        // 3.0.8: never half faded in (it may have been coming in as the home page scrolled).
+        urlBox.alpha = 1f
         // 3.0.5: the whole address plainly while typing: no fading at its end.
         Ui.fadeTextEnd(urlEdit, on = false)
         completing = true
@@ -1688,7 +1699,10 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     private fun updateUrlBar() {
         if (editing) return
         val tab = current
-        val url = tab?.url
+        // 3.0.8: over the home page the bar stands in for its search box: the search hint and engine,
+        // not the address of the page under it.
+        val onHome = tab?.showsHome == true
+        val url = if (onHome) null else tab?.url
         val query = UrlUtils.searchQuery(url)
         val reader = Helper.isReaderUrl(url)
         val document = Docs.isViewerUrl(url)
@@ -1710,7 +1724,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             // 3.0.5: text too long for the bar fades out at its end (its own check; nothing changes while it fits).
             Ui.fadeTextEnd(urlEdit, on = true)
         }
-        val page = tab != null && !tab.isBlank && query == null && !reader && !saved && !blocked && !document
+        val page = tab != null && !onHome && !tab.isBlank && query == null && !reader && !saved && !blocked && !document
         // A secure site shows its own icon; only a site that isn't secure gets a warning.
         val favicon = if (page && tab!!.secure) com.swiftbrowser.core.Favicons.cached(url) else null
         if (favicon != null) {
@@ -2125,6 +2139,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
             override fun onHomeBarChanged() = updateBarColours(animate = true)
 
+            override fun onHomeSearchAway(away: Boolean) = homeSearchAway(away)
+
             override fun onNewsSettings() {
                 openUrlLauncher.launch(Intent(this@MainActivity, SettingsActivity::class.java).putExtra(SettingsActivity.EXTRA_TOPIC, "NEWS"))
             }
@@ -2323,12 +2339,40 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             home.visibility = View.GONE
             homeShownFor = null
         }
-        val urlVisibility = if (show && !editing) View.INVISIBLE else View.VISIBLE
-        if (urlBox.visibility != urlVisibility) urlBox.visibility = urlVisibility
+        // 3.0.8: on the home page the address bar shows only once its search box has scrolled away.
+        val urlVisibility = if (show && !editing && !home.searchAway) View.INVISIBLE else View.VISIBLE
+        if (urlBox.visibility != urlVisibility) {
+            urlBox.animate().cancel()
+            urlBox.alpha = 1f
+            urlBox.visibility = urlVisibility
+        }
         // 3.0.4: the group strip goes with the page (not over the home page).
         showGroupStrip()
         // 3.0.4: and so does a website's colour (the home page has Swift's).
         updateBarColours(animate = true)
+    }
+
+    /**
+     * 3.0.8: the home page's search box scrolled out of sight ([away]) or back: the address bar comes in
+     * with a short fade in its place (and goes again), so searching stays one tap away.
+     */
+    private fun homeSearchAway(away: Boolean) {
+        val tab = current ?: return
+        if (!tab.showsHome || editing || fullscreenTab != null) return
+        refreshToolbarNow()
+        urlBox.animate().cancel()
+        if (away) {
+            if (urlBox.visibility != View.VISIBLE) {
+                urlBox.alpha = 0f
+                urlBox.visibility = View.VISIBLE
+            }
+            Motion.anim(urlBox, Motion.SHORT).alpha(1f).start()
+        } else if (urlBox.visibility == View.VISIBLE) {
+            Motion.anim(urlBox, Motion.SHORT).alpha(0f).withEndAction {
+                if (!editing && current?.showsHome == true && !home.searchAway) urlBox.visibility = View.INVISIBLE
+                urlBox.alpha = 1f
+            }.start()
+        }
     }
 
     /** The home button: the home page over the tab's page; Back returns to the page. */
@@ -3053,7 +3097,6 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
     override fun onPageScroll(tab: Tab, scrollY: Float, byUser: Boolean) {
         if (tab !== current || fullscreenTab != null) return
-        placeScrollHandle(tab, show = byUser)
         if (byUser) lastUserScrollAt = SystemClock.uptimeMillis()
         val last = lastScrollY
         lastScrollY = scrollY
@@ -4621,114 +4664,6 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         }
     }
 
-    // ------------------------------------------------------------------ 3.0.3: the fast scroll handle
-
-    /**
-     * On a long page (over [LONG_PAGE_SCREENS] screens), a small handle at the right edge while you
-     * scroll: dragging it moves through the page as far down as the finger is down the screen. It
-     * fades a moment after scrolling stops. Above the page's gesture layer, so a drag on it is never
-     * an edge swipe or a pull to reload.
-     */
-    private val scrollHandle: FrameLayout by lazy {
-        val pill = View(this).apply {
-            background = Ui.shape(this@MainActivity, Ui.accent(this@MainActivity), 4, android.graphics.Color.WHITE, 1.5f)
-            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-        }
-        FrameLayout(this).apply {
-            visibility = View.GONE
-            contentDescription = "Drag to move through the page"
-            addView(pill, FrameLayout.LayoutParams(dp(7), dp(52), android.view.Gravity.END or android.view.Gravity.CENTER_VERTICAL).apply { marginEnd = dp(4) })
-            setOnTouchListener { _, ev -> dragScrollHandle(ev) }
-        }.also {
-            // The screen's page area (not the new view's own children).
-            this@MainActivity.findViewById<FrameLayout>(R.id.content).addView(it, FrameLayout.LayoutParams(dp(36), dp(64), android.view.Gravity.END or android.view.Gravity.TOP))
-        }
-    }
-    private var handleDragging = false
-    private var handleGrabY = 0f
-    private var handleScrolledAt = 0L
-    private var handleMovedAt = 0L
-    private var handleFadingIn = false
-    private val hideScrollHandle = Runnable {
-        handleFadingIn = false
-        if (!handleDragging) scrollHandle.animate().alpha(0f).setDuration(200).withEndAction { if (!handleDragging) scrollHandle.visibility = View.GONE }
-    }
-
-    override fun onPageSize(tab: Tab) {
-        if (tab === current) placeScrollHandle(tab, show = false)
-    }
-
-    /** Where the handle is along the page's right edge (and [show]: brought up while scrolling). */
-    private fun placeScrollHandle(tab: Tab, show: Boolean) {
-        if (!built || handleDragging) return
-        val long = tab.pageViewHeight > 0f && tab.pageScrollMax > LONG_PAGE_SCREENS * tab.pageViewHeight
-        if (!long || tab.showsHome || editing || switcherOpen || findBar.visibility == View.VISIBLE) {
-            if (scrollHandle.visibility == View.VISIBLE) hideScrollHandle.run()
-            return
-        }
-        if (!show && scrollHandle.visibility != View.VISIBLE) return
-        // 3.0.5: at most about 15 times a second: every move has Android redraw Swift's window, which a
-        // slow graphics chip does alongside the page.
-        val now = SystemClock.uptimeMillis()
-        if (now - handleMovedAt >= HANDLE_MOVE_MS || scrollHandle.visibility != View.VISIBLE) {
-            handleMovedAt = now
-            val content = scrollHandle.parent as View
-            val track = (content.height - scrollHandle.height - 2 * dp(8)).coerceAtLeast(1)
-            scrollHandle.translationY = dp(8) + track * (tab.pageY / tab.pageScrollMax).coerceIn(0f, 1f)
-        }
-        if (show) {
-            if (scrollHandle.visibility != View.VISIBLE) {
-                scrollHandle.alpha = 0f
-                scrollHandle.visibility = View.VISIBLE
-            }
-            // 3.0.5: one fade-in (it was a new animation for every update of the scroll).
-            if (scrollHandle.alpha < 1f && !handleFadingIn) {
-                handleFadingIn = true
-                scrollHandle.animate().cancel()
-                scrollHandle.animate().alpha(1f).setDuration(120).withEndAction { handleFadingIn = false }.start()
-            }
-            handler.removeCallbacks(hideScrollHandle)
-            handler.postDelayed(hideScrollHandle, 1500)
-        }
-    }
-
-    private fun dragScrollHandle(ev: MotionEvent): Boolean {
-        val tab = current ?: return false
-        val content = scrollHandle.parent as View
-        val track = (content.height - scrollHandle.height - 2 * dp(8)).coerceAtLeast(1)
-        when (ev.actionMasked) {
-            MotionEvent.ACTION_DOWN -> {
-                handleDragging = true
-                handleGrabY = ev.rawY - scrollHandle.translationY
-                handler.removeCallbacks(hideScrollHandle)
-                handleFadingIn = false
-                scrollHandle.animate().cancel()
-                scrollHandle.alpha = 1f
-                Haptics.tick(scrollHandle)
-            }
-            MotionEvent.ACTION_MOVE -> {
-                val y = (ev.rawY - handleGrabY).coerceIn(dp(8).toFloat(), (dp(8) + track).toFloat())
-                scrollHandle.translationY = y
-                val now = SystemClock.uptimeMillis()
-                // About 30 moves a second is plenty for the page to follow.
-                if (now - handleScrolledAt >= 32 && tab.pageViewHeight > 0f) {
-                    handleScrolledAt = now
-                    val f = (y - dp(8)) / track
-                    tab.session?.panZoomController?.scrollTo(
-                        org.mozilla.geckoview.ScreenLength.zero(),
-                        org.mozilla.geckoview.ScreenLength.fromVisualViewportHeight((f * tab.pageScrollMax / tab.pageViewHeight).toDouble()),
-                        org.mozilla.geckoview.PanZoomController.SCROLL_BEHAVIOR_AUTO,
-                    )
-                }
-            }
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                handleDragging = false
-                handler.postDelayed(hideScrollHandle, 1500)
-            }
-        }
-        return true
-    }
-
     private val updateDownloadListener: () -> Unit = {
         if (Updates.downloadId >= 0 && updateBar != null) showUpdateProgress()
         val id = Updates.downloadId
@@ -4859,13 +4794,27 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         val problem = Diagnostics.problem ?: return
         val detail = Diagnostics.problemDetail
         Diagnostics.clearProblem()
+        // 3.0.8: once Android's log of that run's end is read (a moment at most), which can tell that
+        // its drawing ran out of graphics memory; the crash's own notes only said "abort in libc.so".
+        lifecycleScope.launch {
+            withContext(Dispatchers.IO) { com.swiftbrowser.core.Health.awaitEndOfPreviousRun(3000) }
+            if (!isFinishing && !isDestroyed) showProblem(problem, detail, com.swiftbrowser.core.Health.endedOutOfGraphicsMemory)
+        }
+    }
+
+    private fun showProblem(problem: Diagnostics.Problem, detail: String?, outOfGraphicsMemory: Boolean) {
+        val reason = if (outOfGraphicsMemory) {
+            "It ran out of graphics memory (Android's drawing), most likely with a long or heavy video and little memory left."
+        } else {
+            Diagnostics.plainReason(detail)
+        }
         val (title, text) = when (problem) {
             Diagnostics.Problem.CLOSED_BY_ANDROID -> "Swift was closed while you used it" to
                 "Android closed Swift while it was on screen. On a phone with little memory that almost always means it ran out of memory " +
                 "(very heavy pages such as Google's AI answers can do that).\n\nTo make it less likely: keep fewer tabs in memory " +
                 "(Settings → Speed, data & battery), close tabs you don't need, and close other apps.\n\nIf it keeps happening, send a report."
             Diagnostics.Problem.ENGINE_CRASH -> "Swift's engine crashed" to
-                "The Firefox engine inside Swift crashed last time. " + (Diagnostics.plainReason(detail)?.let { "$it\n\n" } ?: "\n\n") +
+                "The Firefox engine inside Swift crashed last time. " + (reason?.let { "$it\n\n" } ?: "\n\n") +
                 (detail?.let { "Details: $it\n\n" } ?: "") + "Sending a report (with the last 3 days' logs) helps find out why."
         }
         MaterialAlertDialogBuilder(this)
@@ -4890,9 +4839,6 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     }
 
     companion object {
-        /** 3.0.3: a page this many screens longer than the screen gets the fast scroll handle. */
-        private const val LONG_PAGE_SCREENS = 4f
-
         /** 3.0.3: how long a tap on the tab button waits for a second one (Android's own double-tap time). */
         private const val TAB_DOUBLE_TAP_MS = 300L
 
@@ -4909,9 +4855,6 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
         /** 3.0.5: how long the start-up screen waits for a page that is loading before it lets go of it. */
         private const val START_PAGE_LIMIT_MS = 12_000L
-
-        /** 3.0.5: the scroll handle moves at most this often. */
-        private const val HANDLE_MOVE_MS = 66L
 
         /** 3.0.5: how long after a page finished without being drawn the start-up screen waits (see startupPageStopped). */
         private const val START_PAGE_STOPPED_MS = 800L

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  3.0.8: on Android 12 and later, the backup to the user's Google account and a phone-to-phone
+  transfer take this one file and nothing else (see backup_rules.xml and GoogleBackup).
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <include domain="file" path="google-backup/swift-backup.bin" />
+    </cloud-backup>
+    <device-transfer>
+        <include domain="file" path="google-backup/swift-backup.bin" />
+    </device-transfer>
+</data-extraction-rules>

@@ -59,4 +59,40 @@ class LogLinesTest {
         assertTrue(LogLines.trimAddress("Tab 3 loading example.com").contains("example.com"))
         assertFalse(LogLines.trimAddress("https://a.com/private/path").contains("private"))
     }
+
+    private fun at(year: Int, month: Int, day: Int, h: Int, min: Int, s: Int = 0, ms: Int = 0): Long =
+        java.util.Calendar.getInstance().apply {
+            clear()
+            set(year, month - 1, day, h, min, s)
+            set(java.util.Calendar.MILLISECOND, ms)
+        }.timeInMillis
+
+    @Test
+    fun androidLogTimes() {
+        val now = at(2026, 11, 11, 3, 26)
+        assertEquals(at(2026, 11, 10, 4, 26, 44, 525), LogLines.logcatTime("11-10 04:26:44.525 E/AndroidRuntime(10809): FATAL EXCEPTION: clearing", now))
+        assertNull(LogLines.logcatTime("--------- beginning of crash", now))
+        // In January, a December line is last year's.
+        assertEquals(at(2026, 12, 31, 23, 59, 59), LogLines.logcatTime("12-31 23:59:59.000 E/Tag( 1): x", at(2027, 1, 1, 0, 5)))
+    }
+
+    @Test
+    fun onlyTheLastRunsEndIsKept() {
+        // From swift-report (2): the clear-data crash of 11-10 came back after every bad end on 11-11.
+        val lines = listOf(
+            "--------- beginning of crash",
+            "11-10 04:26:44.525 E/AndroidRuntime(10809): FATAL EXCEPTION: clearing",
+            "--------- beginning of main",
+            "11-11 05:46:19.080 E/Adreno-GSL(21477): <gsl_memory_alloc_pure:2125>: GSL MEM ERROR: kgsl_sharedmem_alloc ioctl failed.",
+            "11-11 05:46:19.086 E/OpenGLRenderer(21477): GL error:  Out of memory!",
+            // The new run's own start, after it began: not about how the last one ended.
+            "11-11 05:46:24.100 E/GeckoLibLoad(24001): Load sqlite start",
+        )
+        val lastRunStart = at(2026, 11, 11, 3, 26)
+        val thisRunStart = at(2026, 11, 11, 5, 46, 24)
+        val kept = LogLines.between(lines, lastRunStart, thisRunStart, at(2026, 11, 11, 5, 46, 25))
+        assertEquals(lines.subList(3, 5), kept)
+        assertTrue(LogLines.graphicsOutOfMemory(kept))
+        assertFalse(LogLines.graphicsOutOfMemory(lines.take(3)))
+    }
 }

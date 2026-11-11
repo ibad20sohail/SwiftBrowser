@@ -201,14 +201,6 @@ object Helper {
                 TabManager.ui?.onPlayingChanged(tab)
             }
             "video-pos" -> WatchPositions.onPosition(tab, msg)
-            "page-size" -> {
-                val vh = msg.optDouble("vh", 0.0).toFloat()
-                if (vh > 0f) {
-                    tab.pageViewHeight = vh
-                    tab.pageScrollMax = (msg.optDouble("h", 0.0).toFloat() - vh).coerceAtLeast(0f)
-                    TabManager.ui?.onPageSize(tab)
-                }
-            }
             "reader-place" -> Unfinished.onReaderPlace(tab, msg)
             // 3.0.4: the colour the page asks for (its theme-color), for the address bar: from the top
             // frame, and never kept for an incognito tab (it keeps its own colours).

@@ -227,6 +227,42 @@ object LogLines {
         }
     }
 
+    /** Android's log as `logcat -v time` writes it: "11-10 04:26:44.525 E/Tag( 123): message". */
+    private val LOGCAT_TIME = Regex("^(\\d{2})-(\\d{2}) (\\d{2}):(\\d{2}):(\\d{2})\\.(\\d{3}) ")
+
+    /**
+     * 3.0.8: when a line of Android's log was written ([now]'s year; a date ahead of [now] was last
+     * year's), or null for a line without one ("--------- beginning of crash").
+     */
+    fun logcatTime(line: String, now: Long): Long? {
+        val m = LOGCAT_TIME.find(line) ?: return null
+        val (mo, d, h, min, s, ms) = m.destructured
+        val c = java.util.Calendar.getInstance().apply {
+            timeInMillis = now
+            set(get(java.util.Calendar.YEAR), mo.toInt() - 1, d.toInt(), h.toInt(), min.toInt(), s.toInt())
+            set(java.util.Calendar.MILLISECOND, ms.toInt())
+        }
+        if (c.timeInMillis > now + 86_400_000L) c.add(java.util.Calendar.YEAR, -1)
+        return c.timeInMillis
+    }
+
+    /**
+     * 3.0.8: the lines of Android's log written from [start] (the run that ended badly began then)
+     * until [end] (this run began; its own lines aren't about that end). Android keeps its crash log
+     * for days, so a crash fixed long ago came back in every report.
+     */
+    fun between(lines: List<String>, start: Long, end: Long, now: Long): List<String> =
+        lines.filter { line -> logcatTime(line, now)?.let { it in start until end } ?: false }
+
+    /**
+     * 3.0.8: Android's drawing ran out of graphics memory (HWUI stops the app on purpose then): the
+     * driver couldn't give memory ("kgsl_sharedmem_alloc ioctl failed") or "GL error: Out of memory".
+     */
+    fun graphicsOutOfMemory(lines: List<String>): Boolean = lines.any { line ->
+        line.contains("kgsl_sharedmem_alloc") ||
+            (line.contains("OpenGLRenderer") && (line.contains("Out of memory", ignoreCase = true) || line.contains("GL errors!")))
+    }
+
     /** Web addresses: the whole of each, for [withoutSites]; [trimAddress] keeps their site. */
     private val ADDRESS = Regex("\\b(?:https?|wss?)://[^\\s\"'<>()]+", RegexOption.IGNORE_CASE)
     private val ADDRESS_PATH = Regex("((?:https?|wss?)://[^/\\s\"'<>]+)[^\\s\"'<>]*", RegexOption.IGNORE_CASE)

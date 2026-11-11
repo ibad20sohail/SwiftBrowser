@@ -502,6 +502,9 @@ let reading = false;
 function setReading(on, auto) {
   if (reading === on) { return; }
   reading = on;
+  // 3.0.8: what moves next is the bars' doing, not the user's (see scrolledByUser).
+  settleUntil = Date.now() + 600;
+  run = 0;
   // A box that grows under the hidden bar (PDF, sheets) scrolls along, so the page stays still.
   const box = viewer.scroller;
   const before = box ? box.getBoundingClientRect().top : 0;
@@ -565,11 +568,29 @@ function onTap(x, y) {
 // Scrolling: down hides the bars, up brings them back; the page counter and fast-scroll handle show.
 let lastTop = null;
 let run = 0;
+// 3.0.8: only the user's own scrolling moves the bars: a finger on the page (one; two pinch), or a
+// fling just after. When the bars come or go, the page moves by itself (Swift's toolbar too); that
+// read as scrolling, and the bars came and went again and again (PDFs).
+let fingers = 0;
+let flingUntil = 0;
+let settleUntil = 0;
+const countFingers = e => {
+  fingers = e.touches.length;
+  if (e.type !== 'touchstart' && !fingers) { flingUntil = Date.now() + 1500; }
+};
+addEventListener('touchstart', countFingers, { passive: true, capture: true });
+addEventListener('touchend', countFingers, { passive: true, capture: true });
+addEventListener('touchcancel', countFingers, { passive: true, capture: true });
+function scrolledByUser() {
+  const now = Date.now();
+  return now > settleUntil && (fingers === 1 || (fingers === 0 && now < flingUntil));
+}
 function watchScroll(el) {
   const target = el || window;
   target.addEventListener('scroll', () => {
     const top = (el || document.scrollingElement).scrollTop;
-    if (lastTop !== null && !dragging) {
+    if (!scrolledByUser()) { run = 0; }
+    else if (lastTop !== null && !dragging) {
       const d = top - lastTop;
       if (d !== 0 && (d > 0) !== (run > 0)) { run = 0; }
       run += d;
@@ -653,6 +674,7 @@ function flowDone(box, selector) {
     savePlace((scrollY / Math.max(1, h)).toFixed(4), room > 0 ? (scrollY + innerHeight) / h : 1);
   }, { passive: true });
   watchScroll(null);
+  watchPinch();
   viewer.pageLabel = () => {
     const room = document.documentElement.scrollHeight - innerHeight;
     return room > innerHeight ? Math.round(Math.min(1, scrollY / room) * 100) + '%' : null;
@@ -663,6 +685,52 @@ function flowDone(box, selector) {
       .filter(e => e.textContent.trim() !== '' && !e.querySelector('p, li') && !e.closest('.notes'));
     return { texts: els.map(e => e.textContent.replace(/\s+/g, ' ').trim()), els, from: firstVisible(els) };
   };
+}
+
+/**
+ * 3.0.8: two fingers on a flowing document (Word, text, old Office files) make it bigger or smaller,
+ * as + and − do, instead of the browser's zoom, which zoomed the whole screen with the bar on it. While
+ * the fingers move the document is only stretched (quick); when they lift it is laid out at its new
+ * size, with the place under the fingers kept where it was.
+ */
+let pinchWatched = false;
+function watchPinch() {
+  if (pinchWatched) { return; }
+  pinchWatched = true;
+  document.documentElement.classList.add('flowdoc');
+  let p = null;
+  const spread = t => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+  docEl.addEventListener('touchstart', e => {
+    if (e.touches.length !== 2 || !viewer.size || !info || info.kind === 'pdf') { return; }
+    const t = e.touches;
+    const x = (t[0].clientX + t[1].clientX) / 2;
+    const y = (t[0].clientY + t[1].clientY) / 2;
+    const r = docEl.getBoundingClientRect();
+    p = { d: spread(t), x, y, f: 1, fy: (y - r.top) / Math.max(1, r.height), fx: (docEl.scrollLeft + x - r.left) / Math.max(1, docEl.scrollWidth) };
+    docEl.style.transformOrigin = (x - r.left) + 'px ' + (y - r.top) + 'px';
+  }, { passive: true });
+  docEl.addEventListener('touchmove', e => {
+    if (!p || e.touches.length !== 2) { return; }
+    e.preventDefault();
+    const want = Math.max(0.6, Math.min(2.5, scale * spread(e.touches) / p.d));
+    p.f = want / scale;
+    docEl.style.transform = 'scale(' + p.f.toFixed(3) + ')';
+  }, { passive: false });
+  const end = e => {
+    if (!p || e.touches.length >= 2) { return; }
+    const { f, x, y, fx, fy } = p;
+    p = null;
+    docEl.style.transform = '';
+    docEl.style.transformOrigin = '';
+    if (Math.abs(f - 1) < 0.03) { return; }
+    zoom(f);
+    // The place that was under the fingers stays there.
+    const r = docEl.getBoundingClientRect();
+    scrollBy(0, r.top + fy * r.height - y);
+    if (docEl.scrollWidth > docEl.clientWidth) { docEl.scrollLeft = fx * docEl.scrollWidth - (x - r.left); }
+  };
+  docEl.addEventListener('touchend', end, { passive: true });
+  docEl.addEventListener('touchcancel', end, { passive: true });
 }
 
 function firstVisible(els) {
@@ -742,17 +810,21 @@ async function renderWord() {
     renderEndnotes: true,
   });
   fixBullets();
+  // Real pages, shrunk to the screen's width (pinch to look closer). 3.0.8: + and − (and pinching)
+  // start from that size; they set the size itself and the pages jumped to full size.
+  let fit = 1;
   if (pageLayout) {
-    // Real pages, shrunk to the screen's width (pinch to look closer).
     const page = box.querySelector('section.docx');
-    if (page && page.offsetWidth > innerWidth) { box.style.zoom = ((innerWidth - 8) / page.offsetWidth).toFixed(3); }
+    if (page && page.offsetWidth > innerWidth) { fit = (innerWidth - 8) / page.offsetWidth; }
   }
+  box.style.zoom = (fit * scale).toFixed(3);
   if (!wordFlowSet) {
     wordFlowSet = true;
     flowDone(box);
+    viewer.size = f => { box.style.zoom = (fit * f).toFixed(3); };
   } else {
     // Switching layouts: the listeners stay, the box is new.
-    viewer.size = f => { box.style.zoom = f; };
+    viewer.size = f => { box.style.zoom = (fit * f).toFixed(3); };
     const texts = viewer.texts;
     viewer.texts = () => {
       const els = Array.from(box.querySelectorAll('p, li, h1, h2, h3, h4, h5, h6, pre'))
@@ -2586,10 +2658,12 @@ $('#play').addEventListener('click', () => { if (viewer.slideshow) { viewer.slid
 
 // ------------------------------------------------------------------ the more menu
 
-const menuOverlay = () => hide($('#menu'));
+// 3.0.8: the menu comes and goes at once (no fade): on a slow phone its fading copy over a long
+// document was drawn again on every frame.
+const menuOverlay = () => { $('#menu').hidden = true; };
 function hideMenu() {
   if ($('#menu').hidden) { return; }
-  hide($('#menu'));
+  $('#menu').hidden = true;
   closed(menuOverlay);
 }
 
@@ -2634,8 +2708,12 @@ function openMenu() {
       if (src.hidden) { continue; }
       const b = src.cloneNode(true);
       b.removeAttribute('id');
-      // Zooming keeps the menu open (a few taps in a row); Listen closes it.
-      b.addEventListener('click', () => { src.click(); if (key === 'listen') { hideMenu(); } });
+      // Zooming keeps the menu open (a few taps in a row); Listen closes it. 3.0.8: the size is changed
+      // here, not by clicking the bar's own button: that click, outside the menu, closed it.
+      b.addEventListener('click', e => {
+        e.stopPropagation();
+        if (key === 'smaller') { zoom(1 / 1.15); } else if (key === 'bigger') { zoom(1.15); } else { src.click(); hideMenu(); }
+      });
       row.appendChild(b);
     }
     if (row.childNodes.length) { menu.appendChild(row); }

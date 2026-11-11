@@ -46,6 +46,9 @@ class HomeView @JvmOverloads constructor(
 
         /** 3.0.5: what the address bar should show changed: the page's picture, or whether the page is at its top. */
         fun onHomeBarChanged()
+
+        /** 3.0.8: the search box scrolled out of sight ([away]), or back: the address bar stands in for it. */
+        fun onHomeSearchAway(away: Boolean) {}
     }
 
     var listener: Listener? = null
@@ -123,6 +126,15 @@ class HomeView @JvmOverloads constructor(
     /** The page is at its top: only then does the address bar let the picture through. */
     var atTop = true
         private set
+
+    /** 3.0.8: the search box has scrolled up out of sight; the address bar shows instead. */
+    var searchAway = false
+        private set
+
+    private val searchRect = android.graphics.Rect()
+
+    /** 3.0.8: a small button back to the top, once the page is scrolled down a little. */
+    private val toTop: ImageView
 
     /** The address bar stands in this much room above or below the page. */
     fun setBarReach(above: Int, below: Int) {
@@ -205,6 +217,7 @@ class HomeView @JvmOverloads constructor(
                 updateBottomFade()
                 listener?.onHomeBarChanged()
             }
+            onScrolled(y)
         }
         pullIndicator = ImageView(context).apply {
             setImageDrawable(Ui.icon(context, R.drawable.ic_refresh, Ui.accent(context)))
@@ -217,6 +230,25 @@ class HomeView @JvmOverloads constructor(
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }
         addView(pullIndicator, LayoutParams(dp(40), dp(40), android.view.Gravity.TOP or android.view.Gravity.CENTER_HORIZONTAL))
+        toTop = ImageView(context).apply {
+            setImageDrawable(Ui.icon(context, R.drawable.ic_up, Ui.accent(context)))
+            // The same small circle as the pull to refresh.
+            setBackgroundResource(R.drawable.bg_ptr)
+            Palette.paint(this)
+            elevation = dp(4).toFloat()
+            scaleType = ImageView.ScaleType.CENTER
+            visibility = View.GONE
+            contentDescription = "Back to the top"
+            setOnClickListener {
+                Haptics.tick(this)
+                scroll.smoothScrollTo(0, 0)
+            }
+            Ui.pressable(this, Motion.PRESS_ICON)
+        }
+        addView(toTop, LayoutParams(dp(40), dp(40), android.view.Gravity.BOTTOM or android.view.Gravity.END).apply {
+            marginEnd = dp(16)
+            bottomMargin = dp(20)
+        })
         continueRow = ContinueRow(context, ContinueRow.Part.BROWSER, { listener?.onContinueClicked(it) }, { listener?.onContinueLongClicked(it) })
         val column = findViewById<LinearLayout>(R.id.home_column)
         // The row reaches into the column's side padding (it would be cut off there otherwise).
@@ -509,6 +541,40 @@ class HomeView @JvmOverloads constructor(
 
     fun scrollToTop() {
         findViewById<View>(R.id.home_scroll).scrollTo(0, 0)
+        onScrolled(0)
+    }
+
+    /**
+     * 3.0.8: as the page scrolls: once the search box is mostly out of sight, the address bar shows
+     * instead (MainActivity), and half a screen down, the button back to the top comes in.
+     */
+    private fun onScrolled(y: Int) {
+        val content = scroll.getChildAt(0) as? ViewGroup
+        val away = if (content != null && search.isLaidOut && search.visibility == View.VISIBLE) {
+            searchRect.set(0, 0, search.width, search.height)
+            content.offsetDescendantRectToMyCoords(search, searchRect)
+            searchRect.bottom - y < search.height / 3
+        } else {
+            false
+        }
+        if (away != searchAway) {
+            searchAway = away
+            listener?.onHomeSearchAway(away)
+        }
+        val down = y > height / 2 && height > 0
+        if (down && toTop.visibility != View.VISIBLE) {
+            toTop.visibility = View.VISIBLE
+            toTop.alpha = 0f
+            toTop.scaleX = 0.6f
+            toTop.scaleY = 0.6f
+            Motion.anim(toTop, Motion.SHORT).alpha(1f).scaleX(1f).scaleY(1f).start()
+        } else if (!down && toTop.visibility == View.VISIBLE && toTop.tag != HIDING) {
+            toTop.tag = HIDING
+            Motion.anim(toTop, Motion.SHORT).alpha(0f).scaleX(0.6f).scaleY(0.6f).withEndAction {
+                toTop.tag = null
+                if (scroll.scrollY <= height / 2) toTop.visibility = View.GONE
+            }.start()
+        }
     }
 
     /** What the shortcuts shown were worked out for, and when (2.6). */
@@ -860,6 +926,9 @@ class HomeView @JvmOverloads constructor(
     private companion object {
         /** How far from the top still counts as the page's top, and how long the fade at the page's end is (dp). */
         const val AT_TOP_DP = 2
+
+        /** 3.0.8: the button back to the top is on its way out. */
+        private const val HIDING = "hiding"
         const val BOTTOM_FADE_DP = 40
 
         /** Shortcuts to a row (2.7: five, smaller). */

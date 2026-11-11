@@ -145,12 +145,7 @@ class Tab(
     /** A video (not just sound) has played on the page since it loaded: the screen stays on while it plays. */
     var videoPlaying = false
 
-    /**
-     * 3.0.3: the page's height less one screen, and the screen's height, in CSS pixels (0 until the
-     * helper says), and where it is scrolled to: for the fast scroll handle on long pages.
-     */
-    var pageScrollMax = 0f
-    var pageViewHeight = 0f
+    /** Where the page is scrolled to, in CSS pixels (3.0.8: the fast scroll handle that used it is gone). */
     var pageY = 0f
 
     /**
@@ -240,9 +235,6 @@ interface BrowserUi {
 
     /** The page scrolled; [scrollY] is in screen pixels, [byUser] when the user scrolled it. */
     fun onPageScroll(tab: Tab, scrollY: Float, byUser: Boolean)
-
-    /** 3.0.3: the page said how tall it is ([Tab.pageScrollMax]). */
-    fun onPageSize(tab: Tab) {}
 
     /** 3.0.4: [tab]'s page said its colour, or that it has none ([Tab.siteColour]): the address bar follows. */
     fun onSiteColour(tab: Tab) {}

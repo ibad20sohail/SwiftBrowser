@@ -331,6 +331,11 @@ class HomeView @JvmOverloads constructor(
         updateNews()
     }
 
+    /** 3.0.10: fading away for a site opened from it: taps go nowhere meanwhile. */
+    var leaving = false
+
+    override fun dispatchTouchEvent(ev: android.view.MotionEvent): Boolean = if (leaving) true else super.dispatchTouchEvent(ev)
+
     override fun onInterceptTouchEvent(ev: android.view.MotionEvent): Boolean {
         if (!newsOn || news == null) return false
         when (ev.actionMasked) {

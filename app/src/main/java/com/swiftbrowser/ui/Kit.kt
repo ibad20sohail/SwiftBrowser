@@ -155,8 +155,14 @@ object Looks {
      * o'clock). Open screens redraw in the new colours; pages that support dark mode follow.
      */
     fun sync() {
-        val prefs = SwiftApp.prefs
         val dark = wantsDark()
+        if (dark == SwiftApp.prefs.darkMode) return
+        // 3.0.10: a picture of the screen first, which fades into it made again in the new colours.
+        ThemeFade.takeThen { switchTo(dark) }
+    }
+
+    private fun switchTo(dark: Boolean) {
+        val prefs = SwiftApp.prefs
         if (dark == prefs.darkMode) return
         prefs.darkMode = dark
         changedAt = android.os.SystemClock.uptimeMillis()
@@ -237,6 +243,12 @@ object Looks {
      */
     fun fadeInAfterChange(activity: Activity) {
         if (changedAt == 0L || android.os.SystemClock.uptimeMillis() - changedAt > CHANGE_WINDOW_MS || !Motion.enabled(activity)) return
+        // 3.0.10: the screen as it was, fading into its new colours (ThemeFade); the flat cover is for
+        // screens that weren't on show.
+        ThemeFade.claim(activity)?.let { picture ->
+            ThemeFade.fadeOver(activity, picture)
+            return
+        }
         val decor = activity.window.decorView
         val dm = activity.resources.displayMetrics
         val side = 2 * maxOf(dm.widthPixels, dm.heightPixels)
@@ -262,13 +274,16 @@ object Looks {
     }
 
     private fun colorsChanged(activity: Activity) {
-        changedAt = android.os.SystemClock.uptimeMillis()
-        Palette.invalidate()
-        // Reader view's links follow too.
-        com.swiftbrowser.media.Helper.sendReaderStyle()
-        // 3.0.4: and the home screen widget.
-        SearchWidget.refresh(activity)
-        activity.recreate()
+        // 3.0.10: new colours cross-fade too (ThemeFade), from a picture of the screen as it was.
+        ThemeFade.takeThen {
+            changedAt = android.os.SystemClock.uptimeMillis()
+            Palette.invalidate()
+            // Reader view's links follow too.
+            com.swiftbrowser.media.Helper.sendReaderStyle()
+            // 3.0.4: and the home screen widget.
+            SearchWidget.refresh(activity)
+            if (!activity.isFinishing) activity.recreate()
+        }
     }
 
     private val handler = Handler(Looper.getMainLooper())

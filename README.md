@@ -5,12 +5,12 @@ ad-heavy sites on older phones, and runs on Android 7 and newer.
 
 ## Download
 
-Swift 3.0.9 for Android 7 and newer comes in two files:
+Swift 3.0.10 for Android 7 and newer comes in two files:
 
-- **[Swift-64bit-3.0.9.apk](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v3.0.9/Swift-64bit-3.0.9.apk)**
+- **[Swift-64bit-3.0.10.apk](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v3.0.10/Swift-64bit-3.0.10.apk)**
   (64-bit ARM, about 202 MB): for newer phones, and for any phone that says Swift "isn't compatible
   with the latest version of Android".
-- **[Swift-3.0.9.apk](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v3.0.9/Swift-3.0.9.apk)**
+- **[Swift-3.0.10.apk](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v3.0.10/Swift-3.0.10.apk)**
   (32-bit ARM, about 165 MB): for older phones, such as those with 2 GB of memory.
 
 Either installs over an earlier Swift and keeps tabs and settings. Swift can also update itself
@@ -223,8 +223,8 @@ VPN. Only Swift's traffic goes through it; other apps keep their own connection.
 
 - **Google Sans Flex** for all of Swift's own text, and one icon style, Google's Material Symbols
   Rounded: outlined, filled when something is on.
-- **Light, dark, or dark at night** (7 pm to 7 am). Sites that support dark mode follow it, and a
-  dark page can be turned on for those that don't.
+- **Light, dark, or dark at night** (7 pm to 7 am), changing with a smooth fade. Sites that support
+  dark mode follow it, and a dark page can be turned on for those that don't.
 - **Colours**: 12 accent colours or your own, the main colour of each mode, ready-made mixes, and
   colours taken from your home page's picture or your wallpaper.
 - **Night light**: a warm layer over Swift, pages and videos too.
@@ -254,7 +254,7 @@ VPN. Only Swift's traffic goes through it; other apps keep their own connection.
 ### Settings and backup
 
 - **Settings** in plain words, in twelve topics that show what is set in each, with a search box
-  that understands everyday words ("battery", "ads", "music").
+  that understands everyday words ("battery", "ads", "music") and marks the words you typed.
 - **Back up and restore** settings, profiles, bookmarks, history, open tabs and groups, and site
   settings in one file. Saved passwords and sign-ins to sites can be
   added, locked with your backup password; the VPN and the Private folder are never in it.

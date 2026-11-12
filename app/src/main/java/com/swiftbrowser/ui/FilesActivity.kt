@@ -4545,7 +4545,9 @@ class FilesActivity : ListActivity() {
 
     private fun bind(owner: Pane, h: FileHolder, r: Row) {
         h.boundKey = r.key
-        h.title.text = r.name
+        // 3.0.10: the words searched for marked, as History, Bookmarks and Downloads have them.
+        val q = owner.query.trim()
+        h.title.text = if (q.isEmpty()) r.name else markedText(r.name, q, Ui.accent(this))
         h.subtitle?.let { s ->
             // The bin's rows say where things were on a second line.
             val lines = if (owner.inBin) 2 else 1

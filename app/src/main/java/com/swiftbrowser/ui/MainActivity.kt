@@ -142,7 +142,11 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     private lateinit var tabSwipe: TabSwipe
 
     /** The ⋮ menu; built once, when the app is idle after starting. */
-    private val quickMenu by lazy { QuickMenu(this, root) }
+    private val quickMenuLazy = lazy { QuickMenu(this, root) }
+    private val quickMenu by quickMenuLazy
+
+    /** The menu is made and open (asked without making it). */
+    private val menuOpen: Boolean get() = quickMenuLazy.isInitialized() && quickMenu.isOpen
 
     private val handler = Handler(Looper.getMainLooper())
     private val suggestionAdapter = SuggestionAdapter({ bottomBar }, ::onSuggestion, ::fillSuggestion)
@@ -410,6 +414,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             current?.let {
                 if (!it.isHome && UrlUtils.isHttp(it.url) && !it.playing && !it.videoPlaying && !it.fullscreen) {
                     TabManager.reload(it)
+                    themeReloading = true
                     if (UrlUtils.site(it.url)?.startsWith("google.") == true) themeReloadTab = it
                 }
             }
@@ -2316,6 +2321,15 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     private fun updateHome(tab: Tab) {
         val show = tab.showsHome && fullscreenTab == null
         if (show) {
+            // 3.0.10: back on it while it was leaving: it stays.
+            val wasLeaving = homeLeaving != null || home.leaving
+            if (wasLeaving) {
+                handler.removeCallbacks(homeLeaveTimeout)
+                homeLeaving = null
+                home.leaving = false
+                home.animate().cancel()
+                home.alpha = 1f
+            }
             if (home.visibility != View.VISIBLE || homeShownFor !== tab) {
                 home.show(tab.incognito)
                 home.scrollToTop()
@@ -2326,10 +2340,20 @@ class MainActivity : AppCompatActivity(), BrowserUi {
                 }
             }
             home.visibility = View.VISIBLE
-        } else {
-            if (home.visibility == View.VISIBLE) home.releasePictures()
-            home.visibility = View.GONE
+        } else if (home.visibility == View.VISIBLE && homeLeaving == null && !home.leaving) {
             homeShownFor = null
+            if (built && tab === current && Motion.enabled(this) && !switcherOpen) {
+                // 3.0.10: a site opened from it: the home page stays until the site has drawn something
+                // (it vanished at once, leaving a white page while the site loaded), then fades.
+                homeLeaving = tab
+                home.leaving = true
+                // A site just asked for (the tab may not count as loading yet: its session is made first);
+                // Back to a page already there fades at once.
+                val opening = tab.loading || System.currentTimeMillis() - tab.userNavAt < 2000
+                if (opening) handler.postDelayed(homeLeaveTimeout, HOME_LEAVE_MAX_MS) else fadeHomeAway()
+            } else {
+                hideHomeNow()
+            }
         }
         // 3.0.8: on the home page the address bar shows only once its search box has scrolled away.
         val urlVisibility = if (show && !editing && !home.searchAway) View.INVISIBLE else View.VISIBLE
@@ -2620,6 +2644,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         selectionMenu.dismiss()
         // 3.0.9: a woken tab's picture, waiting for its page, doesn't stay over another tab's.
         tabSwipe.onTabShown(tab)
+        // 3.0.10: the menu stays open under its sheets, but not over another tab (one reopened from a sheet).
+        if (menuOpen && quickMenu.openedFor !== tab) quickMenu.close()
         updateSitePlayerChip()
         if (resumeChipFor != null && resumeChipFor !== tab) hideResumeChip(null)
         // What this tab's page asked while it wasn't on screen (an alert, a sign-in) shows now (2.6).
@@ -3420,6 +3446,32 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         }
     }
 
+    /** 3.0.10: the tab whose site, opened from the home page, the home page waits for before fading. */
+    private var homeLeaving: Tab? = null
+    private val homeLeaveTimeout = Runnable { fadeHomeAway() }
+
+    private fun fadeHomeAway() {
+        handler.removeCallbacks(homeLeaveTimeout)
+        if (homeLeaving == null) return
+        homeLeaving = null
+        home.animate().cancel()
+        Motion.anim(home, Motion.PAGE_MS, Motion.exit).alpha(0f).withEndAction {
+            if (home.leaving && homeLeaving == null) hideHomeNow()
+        }.start()
+    }
+
+    private fun hideHomeNow() {
+        handler.removeCallbacks(homeLeaveTimeout)
+        homeLeaving = null
+        home.animate().cancel()
+        if (home.visibility == View.VISIBLE) home.releasePictures()
+        home.visibility = View.GONE
+        home.alpha = 1f
+        home.leaving = false
+        // The line under the bar comes back with the page.
+        showGroupStrip()
+    }
+
     /** 3.0: the new tab's cover fades once the tab left has its picture (see [animateNewTab]). */
     private var coverWaitsForLeaving = false
 
@@ -3793,6 +3845,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     }
 
     private fun enterFullscreen(tab: Tab) {
+        val portrait = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_PORTRAIT
+        coverFullscreenSwitch(turns = prefs.autoLandscape && portrait)
         quickMenu.close()
         stopEditing()
         cancelPullRefresh()
@@ -3816,6 +3870,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     private fun exitFullscreen() {
         handler.removeCallbacks(fullscreenBackFallback)
         if (fullscreenTab == null) return
+        coverFullscreenSwitch(turns = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE)
         fullscreenTab = null
         appBar.visibility = View.VISIBLE
         // 3.0.4: with the group strip's room again when the tab is in a group (it shows with updateAll, below).
@@ -3834,6 +3889,99 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         hud.visibility = View.GONE
         updateKeepScreenOn()
         updateAll()
+    }
+
+    // ------------------------------------------------------------------ 3.0.10: full screen through black
+
+    // A view in the page's own box (where the new tab's cover is), not over the window: with the
+    // page's surface filling the screen, neither a drawing over the window nor a view added to it showed.
+    private var fullscreenCover: View? = null
+    private var coveredSize = 0L
+    private val liftFullscreenCover = Runnable { fadeFullscreenCover() }
+    private val fullscreenSizeWatch = View.OnLayoutChangeListener { v, _, _, _, _, _, _, _, _ ->
+        val size = (v.width.toLong() shl 32) or v.height.toLong()
+        if (size != coveredSize) {
+            coveredSize = size
+            // The window has its new size: the page gets a moment to draw in it.
+            handler.removeCallbacks(liftFullscreenCover)
+            handler.postDelayed(liftFullscreenCover, (FULLSCREEN_SETTLE_MS * animationScale()).toLong())
+        }
+    }
+
+    /**
+     * Into or out of full screen: black over the screen while the phone turns and the page lays
+     * itself out again at the new size (that jumped in view), then the video fades in.
+     */
+    private fun coverFullscreenSwitch(turns: Boolean) {
+        if (!Motion.enabled(this) || !built) return
+        val decor = window.decorView
+        val host = pageCover.parent as? android.view.ViewGroup ?: return
+        val cover = fullscreenCover ?: View(this).apply {
+            setBackgroundColor(android.graphics.Color.BLACK)
+            alpha = 0f
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }.also {
+            host.addView(it, android.view.ViewGroup.LayoutParams(android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.MATCH_PARENT))
+            fullscreenCover = it
+        }
+        cover.animate().cancel()
+        cover.animate().alpha(1f).setDuration(90).start()
+        coveredSize = (decor.width.toLong() shl 32) or decor.height.toLong()
+        decor.removeOnLayoutChangeListener(fullscreenSizeWatch)
+        decor.addOnLayoutChangeListener(fullscreenSizeWatch)
+        handler.removeCallbacks(liftFullscreenCover)
+        // Lifted after the new size (above), or after this long at most (shorter when the phone doesn't turn).
+        val most = if (turns) FULLSCREEN_COVER_MAX_MS else FULLSCREEN_COVER_STILL_MS
+        handler.postDelayed(liftFullscreenCover, (most * animationScale()).toLong())
+    }
+
+    /** The phone's animation speed (1: normal), so the cover's waits keep step with its fades. */
+    private fun animationScale(): Float =
+        android.provider.Settings.Global.getFloat(contentResolver, android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, 1f).coerceIn(0f, 10f)
+
+    private fun fadeFullscreenCover() {
+        handler.removeCallbacks(liftFullscreenCover)
+        window.decorView.removeOnLayoutChangeListener(fullscreenSizeWatch)
+        val cover = fullscreenCover ?: return
+        cover.animate().cancel()
+        cover.animate().alpha(0f).setDuration(220).setInterpolator(Motion.standard).withEndAction {
+            if (fullscreenCover === cover) {
+                (cover.parent as? android.view.ViewGroup)?.removeView(cover)
+                fullscreenCover = null
+            }
+        }.start()
+    }
+
+    // ------------------------------------------------------------------ 3.0.10: the dark/light picture
+
+    /** The page reloads in the new colours (onCreate after a dark/light switch): the picture waits for it. */
+    private var themeReloading = false
+    private var themePictureFade: (() -> Unit)? = null
+    private val themePictureTimeout = Runnable { releaseThemePicture() }
+
+    /** The page view and where it is in the window, for the picture taken before a switch (null: no page in sight). */
+    fun pageForPicture(): Pair<SwiftGeckoView, android.graphics.Rect>? {
+        if (!::gecko.isInitialized || gecko.session == null || home.visibility == View.VISIBLE || gecko.visibility != View.VISIBLE) return null
+        if (gecko.width <= 0 || gecko.height <= 0) return null
+        val at = IntArray(2)
+        gecko.getLocationInWindow(at)
+        return gecko to android.graphics.Rect(at[0], at[1], at[0] + gecko.width, at[1] + gecko.height)
+    }
+
+    /** ThemeFade's picture fades once the reloaded page is drawn (or after a moment); false: no reload to wait for. */
+    fun afterPageRedrawn(fade: () -> Unit): Boolean {
+        if (!themeReloading) return false
+        themeReloading = false
+        themePictureFade = fade
+        handler.postDelayed(themePictureTimeout, THEME_PICTURE_MAX_MS)
+        return true
+    }
+
+    private fun releaseThemePicture() {
+        handler.removeCallbacks(themePictureTimeout)
+        val fade = themePictureFade ?: return
+        themePictureFade = null
+        fade()
     }
 
     private fun hideSystemBars() {
@@ -3860,6 +4008,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         // Also follows a change made in Settings.
         if (!hasFocus) return
         if (fullscreenTab != null) hideSystemBars() else applySystemBars()
+        // 3.0.10: back from a sheet opened from the menu (it stays open under them).
+        if (menuOpen) quickMenu.refresh()
     }
 
     override fun onVideoFullscreen(tab: Tab, width: Long, height: Long) {
@@ -4515,6 +4665,10 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
     override fun onPageDrawn(tab: Tab, contentful: Boolean) {
         if (tab === current) tabSwipe.onPageDrawn(tab, contentful)
+        // 3.0.10: the site opened from the home page has something on screen: the home page fades now.
+        if (contentful && tab === homeLeaving) fadeHomeAway()
+        // 3.0.10: the page reloaded in the new colours is there: the picture of the old screen fades.
+        if (contentful && tab === current) releaseThemePicture()
         // 3.0.5: the page the start-up screen waited for is really there now.
         if (contentful && tab === startupPage) liftStartupCover(tab)
     }
@@ -4865,6 +5019,17 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             }, "suggest")
         }.asCoroutineDispatcher()
         private const val STATE_MENU_OPEN = "menu_open"
+
+        /** 3.0.10: full screen's black: kept this long after the window's new size, this long at most. */
+        private const val FULLSCREEN_SETTLE_MS = 250L
+        private const val FULLSCREEN_COVER_MAX_MS = 900L
+        private const val FULLSCREEN_COVER_STILL_MS = 350L
+
+        /** 3.0.10: the old screen's picture waits this long at most for the page reloaded in the new colours. */
+        private const val THEME_PICTURE_MAX_MS = 1500L
+
+        /** 3.0.10: the home page waits this long at most for the site opened from it to draw. */
+        private const val HOME_LEAVE_MAX_MS = 1500L
 
         const val EXTRA_URL = "url"
         const val EXTRA_NEW_TAB = "new_tab"

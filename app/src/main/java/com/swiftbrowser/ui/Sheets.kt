@@ -1191,8 +1191,9 @@ object Sheets {
             list.adapter = adapter
             col.addView(list)
             col.addView(row(a, R.drawable.ic_delete, "Clear this list", danger = true) {
-                dialog.dismiss()
+                // 3.0.10: the sheet stays behind the question, so Cancel brings you back to it.
                 Dialogs.confirm(a, "Clear recently closed tabs?", "They can't be opened again from here.", "Clear", danger = true) {
+                    dialog.dismiss()
                     TabManager.clearRecentlyClosed(pid)
                     a.snack("Recently closed tabs cleared")
                 }
@@ -1315,9 +1316,10 @@ object Sheets {
         if (onThisSite) col.addView(note(ctx, "Changes apply when the page reloads."))
 
         col.addView(row(ctx, R.drawable.ic_delete, "Clear cookies and data of this site", danger = true) {
-            dialog.dismiss()
-            // 3.0.1: said as it is: the engine clears a site for every profile at once.
+            // 3.0.1: said as it is: the engine clears a site for every profile at once. 3.0.10: the
+            // sheet stays behind the question, so Cancel brings you back to it.
             Dialogs.confirm(ctx, "Clear $site's data?", "Its cookies and stored data are deleted in every profile and in incognito, so you're signed out of it everywhere. Passwords Swift saved for it stay.", "Clear", danger = true) {
+                dialog.dismiss()
                 Engine.storage.clearDataFromBaseDomain(site, org.mozilla.geckoview.StorageController.ClearFlags.ALL)
                 // In every profile: signed out of Google in all of them (3.0).
                 if (GoogleAccounts.isGoogleHost(site)) GoogleAccounts.forgetAll()

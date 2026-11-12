@@ -403,10 +403,21 @@ class SettingsActivity : AppCompatActivity() {
     /** The settings the results show now; null with no results up. */
     private var shownResults: List<Def>? = null
 
+    /** 3.0.10: the words searched for, marked in the results' titles and lines (resultTexts). */
+    private var markQuery = ""
+    private var buildingResults = false
+    private val resultTexts = java.util.WeakHashMap<TextView, String>()
+
+    /** [text] for [tv], with the words searched for marked when [tv] is in the results. */
+    private fun marked(tv: TextView, text: String): CharSequence =
+        if (markQuery.isBlank() || !resultTexts.containsKey(tv)) text else markedRanges(text, SettingsSearch.marks(text, markQuery), Ui.accent(this))
+
     private fun showResults(results: LinearLayout, query: String) {
+        markQuery = query
         if (query.isEmpty()) {
             results.removeAllViews()
             resultRefreshers.clear()
+            resultTexts.clear()
             shownResults = null
             return
         }
@@ -415,12 +426,17 @@ class SettingsActivity : AppCompatActivity() {
         val found = defs.filter { d -> SettingsSearch.matches(query, SettingsSearch.Entry(d.title, rowTexts[d].orEmpty(), d.keywords, d.topic.title)) }
         // Another letter that finds the same settings changes nothing (the colours panel and the ad
         // bars aren't made again, and nothing blinks).
-        if (found.isNotEmpty() && found == shownResults) return
+        if (found.isNotEmpty() && found == shownResults) {
+            // Only the marks follow the new letters.
+            for ((tv, text) in resultTexts) tv.text = marked(tv, text)
+            return
+        }
         // "Nothing found" again: only its words change.
         val quiet = found.isEmpty() && shownResults?.isEmpty() == true
         shownResults = found
         results.removeAllViews()
         resultRefreshers.clear()
+        resultTexts.clear()
         // Each new word brings its results in with a short fade (2.3). No layer: the list can be
         // taller than the GPU's biggest picture.
         if (!quiet) {
@@ -437,7 +453,12 @@ class SettingsActivity : AppCompatActivity() {
             results.addView(label(t.title).apply { if (results.childCount == 0) setPadding(paddingLeft, dp(4), paddingRight, paddingBottom) })
             val card = card()
             val section = Section(card, resultRefreshers)
-            items.forEach { it.build(section) }
+            buildingResults = true
+            try {
+                items.forEach { it.build(section) }
+            } finally {
+                buildingResults = false
+            }
             results.addView(card)
         }
     }
@@ -1490,7 +1511,10 @@ class SettingsActivity : AppCompatActivity() {
     private fun setSummary(sub: TextView, text: String?) {
         // A line that goes or comes changes at once (hidden, swapText doesn't fade); one that stays cross-fades.
         if (text.isNullOrEmpty()) sub.visibility = View.GONE
-        Motion.swapText(sub, text.orEmpty())
+        // 3.0.10: in the search results, with the words searched for marked (a change of marks alone doesn't fade).
+        if (buildingResults || resultTexts.containsKey(sub)) resultTexts[sub] = text.orEmpty()
+        val shown = marked(sub, text.orEmpty())
+        if (sub.text.toString() == text.orEmpty()) sub.text = shown else Motion.swapText(sub, shown)
         if (!text.isNullOrEmpty()) sub.visibility = View.VISIBLE
         // 3.0.5: the one row rhythm: a row with a summary is at least a two-line row, one without a one-line row.
         val row = sub.parent?.parent as? View ?: return
@@ -1520,7 +1544,9 @@ class SettingsActivity : AppCompatActivity() {
             setPadding(dp(14), 0, dp(8), 0)
         }
         texts.addView(TextView(this).apply {
-            text = title
+            // 3.0.10: in the search results, with the words searched for marked.
+            if (buildingResults) resultTexts[this] = title
+            text = marked(this, title)
             // The regular weight, as the lists' row titles, in Swift's own font on every Android.
             Ui.size(this, Ui.Type.SUBTITLE, keepFont = true)
             typeface = Ui.typeface(Ui.Type.BODY)

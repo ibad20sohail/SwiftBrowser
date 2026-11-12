@@ -24,6 +24,11 @@ object WhatsNew {
     private class Item(val icon: Int, val title: String, val text: String, val version: Int = 19)
 
     private val NEW = listOf(
+        Item(R.drawable.ic_dark, "Dark and light, smoothly", "Switching between dark and light (or to new colours) fades from the old colours to the new ones, and the page waits until it is drawn again.", version = 32),
+        Item(R.drawable.ic_menu, "The menu stays open", "Ad blocker, Lite, Text size and the menu's other sheets open over it, and you're back in the menu when you close them.", version = 32),
+        Item(R.drawable.ic_play, "Smooth movement", "The bar of videos and music moves smoothly as they play, full-screen video fades through black instead of jumping, and the home page stays until the site you open from it has something to show.", version = 32),
+        Item(R.drawable.ic_search, "Search marks your words", "Settings and Files mark the words you searched for, as History and Downloads do.", version = 32),
+        Item(R.drawable.ic_delete, "Cancel keeps the sheet", "Closed tabs' \"Clear this list\" and Site settings' \"Clear cookies and data\" no longer close their sheet when you tap Cancel.", version = 32),
         Item(R.drawable.ic_lite, "Lite mode High and Extreme", "A site's GIFs that are really silent videos (Reddit, X, Giphy and others) now play once at High and stay still at Extreme until you touch one; before, one tap on the page let them loop for ever. A preview you hold or swipe on plays at both levels, and at Extreme moving drawings stand still too.", version = 31),
         Item(R.drawable.ic_update, "Updates when Swift starts", "When a newer Swift is out, a window tells you as Swift starts, with what's new, and comes back at each start until you update.", version = 31),
         Item(R.drawable.ic_settings, "Simpler Settings", "Each switch says in one sentence what it does, on or off. \"Bar follows your finger\", \"Arrange the menu\" (hold a button in the menu instead) and \"Back up every week\" are gone, and Clear browsing data is only in Storage & data.", version = 31),

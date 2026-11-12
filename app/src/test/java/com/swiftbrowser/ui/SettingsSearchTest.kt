@@ -1,5 +1,6 @@
 package com.swiftbrowser.ui
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -70,5 +71,20 @@ class SettingsSearchTest {
         assertFalse(finds("", clearData))
         assertFalse(finds("   ", clearData))
         assertFalse(finds("zebra", clearData))
+    }
+
+    @Test
+    fun theWordsSearchedForAreMarked() {
+        // 3.0.10: whole words, in any order and case.
+        assertEquals(listOf(0..3, 5..11), SettingsSearch.marks("Keep deleted files", "deleted KEEP"))
+        // A plural finds its singular, and is marked whole.
+        assertEquals(listOf(0..1), SettingsSearch.marks("Ad blocking", "ads"))
+        // The start of a longer word is marked as far as it was typed ("cookie" in "cookies").
+        assertEquals(listOf(6..11), SettingsSearch.marks("Clear cookies and data of this site", "cookie"))
+        // The word being typed: only the letters typed so far.
+        assertEquals(listOf(0..2), SettingsSearch.marks("Dark mode", "dar"))
+        // Found through an everyday word, which isn't in the text: nothing to mark.
+        assertEquals(emptyList<IntRange>(), SettingsSearch.marks("Lite mode", "battery"))
+        assertEquals(emptyList<IntRange>(), SettingsSearch.marks("Lite mode", "  "))
     }
 }

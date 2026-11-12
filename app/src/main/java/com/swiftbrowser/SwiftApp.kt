@@ -95,8 +95,15 @@ class SwiftApp : Application() {
             }
 
             override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) {}
-            override fun onActivityResumed(activity: Activity) {}
-            override fun onActivityPaused(activity: Activity) {}
+
+            // 3.0.10: the screen on show, whose picture fades into its new colours (ThemeFade).
+            override fun onActivityResumed(activity: Activity) {
+                com.swiftbrowser.ui.ThemeFade.shown = java.lang.ref.WeakReference(activity)
+            }
+
+            override fun onActivityPaused(activity: Activity) {
+                if (com.swiftbrowser.ui.ThemeFade.shown?.get() === activity) com.swiftbrowser.ui.ThemeFade.shown = null
+            }
             override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) {}
             override fun onActivityDestroyed(activity: Activity) {}
         })

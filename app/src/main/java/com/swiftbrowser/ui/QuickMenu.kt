@@ -81,6 +81,15 @@ object MenuButtons {
      *  3.0.7: Lite mode left them: it opens its levels, as Ad blocker does. */
     val switches = setOf("dark", "desktop", "fullscreen")
 
+    /**
+     * 3.0.10: buttons that open a sheet (or a question) over the menu: it stays open under it, and is
+     * there again when the sheet closes. The others take you somewhere else and close it.
+     */
+    val sheets = setOf(
+        "lite", "ad_blocker", "text_size", "speed", "sleep", "group", "recent", "vpn", "translate", "page_qr",
+        "clear_data", "close_all",
+    )
+
     const val COLUMNS = 4
     const val ROWS = 2
     const val PER_PAGE = COLUMNS * ROWS
@@ -185,7 +194,7 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
         setOnClickListener {
             val tab = TabManager.current ?: return@setOnClickListener
             val site = UrlUtils.site(tab.url) ?: return@setOnClickListener
-            close()
+            // 3.0.10: over the menu, which is there again when the sheet closes.
             Sheets.siteSettings(a, site, tab)
         }
     }
@@ -324,7 +333,7 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
             })
 
         // Pages of buttons, swiped sideways.
-        for (b in MenuButtons.all) items[b.key] = item(b.key, b.icon, b.label, closes = b.key !in MenuButtons.switches)
+        for (b in MenuButtons.all) items[b.key] = item(b.key, b.icon, b.label, closes = b.key !in MenuButtons.switches && b.key !in MenuButtons.sheets)
         hiddenTile = TextView(a).apply {
             gravity = Gravity.CENTER_HORIZONTAL
             setPadding(dp(2), dp(8), dp(2), dp(6))
@@ -395,7 +404,12 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
             "text_size" -> Sheets.textSize(a, tab)
             "home_screen" -> PageActions.addToHomeScreen(a, tab)
             // 3.0: the page loaded before the ad blocker was ready: the button reloads it, now filtered.
-            "ad_blocker" -> if (unfiltered(tab)) TabManager.reload(tab) else Sheets.shield(a)
+            "ad_blocker" -> if (unfiltered(tab)) {
+                close()
+                TabManager.reload(tab)
+            } else {
+                Sheets.shield(a)
+            }
             "speed" -> Sheets.speed(a, tab)
             "sleep" -> Sheets.sleepTimer(a)
             "group" -> Sheets.chooseGroup(a, tab)
@@ -451,10 +465,20 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
     }
 
     /** [animate] false: shown at once, as when the screen restarts in the other theme. */
+    /** 3.0.10: the tab the menu was opened on: shown another (a closed tab reopened from its sheet), it closes. */
+    var openedFor: Tab? = null
+        private set
+
+    /** 3.0.10: back from a sheet opened from the menu: its buttons say what the sheet changed ("Lite · High"). */
+    fun refresh() {
+        if (isOpen) TabManager.current?.let { update(it) }
+    }
+
     fun open(animate: Boolean = true) {
         val tab = TabManager.current ?: return
         if (isOpen) return
         isOpen = true
+        openedFor = tab
         // Arranged in another window of the app, or reset in Settings.
         val saved = MenuButtons.layout()
         if (saved.encode() != layout.encode() || saved.hidden != layout.hidden) {

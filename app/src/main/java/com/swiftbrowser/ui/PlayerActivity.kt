@@ -1477,6 +1477,7 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         playIcon.show(playing, animate && LocalPlayback.screenVisible && playButton.isShown)
         playButton.contentDescription = if (playing) "Pause" else "Play"
         updateWave()
+        followBarIfDue()
         // The screen stays on while a video plays (music lets it turn off).
         if (videoMode && playing) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         if (playing) {
@@ -1555,8 +1556,51 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
                 updateProgress()
                 updateChips()
             }
+            followBarIfDue()
             handler.postDelayed(this, 500)
         }
+    }
+
+    // 3.0.10: while it plays and the bar is in sight, the bar moves every frame. It moved twice a
+    // second: on the music screen the wave flowed and the handle jumped.
+
+    private var barFramePosted = false
+    private var barShownPx = -1
+
+    private val barFrame = object : Runnable {
+        override fun run() {
+            barFramePosted = false
+            if (!barFollows()) return
+            followBar()
+            barFramePosted = true
+            seek.postOnAnimation(this)
+        }
+    }
+
+    private fun barFollows(): Boolean {
+        val p = player ?: return false
+        return LocalPlayback.screenVisible && p.isPlaying && !scrubbing && seek.isShown && (controlsShown || !videoMode)
+    }
+
+    /** Starts the bar following when it should (playing starts, the controls show, the ticker). */
+    private fun followBarIfDue() {
+        if (barFramePosted || !::seek.isInitialized || !barFollows()) return
+        barFramePosted = true
+        seek.postOnAnimation(barFrame)
+    }
+
+    /** The bar at the playing position, redrawn only when its handle moves a whole pixel. */
+    private fun followBar() {
+        val p = player ?: return
+        val max = seek.max
+        if (max <= 0) return
+        val pos = p.currentPosition.coerceIn(0L, max.toLong())
+        val track = seek.width - seek.paddingLeft - seek.paddingRight
+        val px = if (track > 0) (track * pos / max).toInt() else -1
+        if (px >= 0 && px == barShownPx) return
+        barShownPx = px
+        seek.progress = pos.toInt()
+        setIfChanged(elapsed, time(pos))
     }
 
     private val showSpinner = Runnable { spinner.visibility = View.VISIBLE }

@@ -126,6 +126,33 @@ object SettingsSearch {
             stem || sameWord(word, k) || (prefix && word.length >= 3 && k.startsWith(word))
         }.values.flatten().map { words(it) }
 
+    private val WORD = Regex("[\\p{L}\\p{N}]+")
+
+    /**
+     * 3.0.10: where [text] has the words searched for, to mark them in the results: whole words (and
+     * their plural or singular), and the start of a word for the one being typed. Words a search finds
+     * through everyday words ("battery" finding Lite mode) aren't in the text, so nothing is marked.
+     */
+    fun marks(text: String, query: String): List<IntRange> {
+        val q = queryWords(query)
+        if (q.isEmpty()) return emptyList()
+        val out = ArrayList<IntRange>()
+        for (m in WORD.findAll(text)) {
+            val word = m.value.lowercase(Locale.ROOT)
+            for ((i, w) in q.withIndex()) {
+                if (sameWord(word, w)) {
+                    out += m.range
+                    break
+                }
+                if (i == q.lastIndex && word.startsWith(w)) {
+                    out += m.range.first until m.range.first + w.length
+                    break
+                }
+            }
+        }
+        return out
+    }
+
     /** Whether [e] is found by [query]: every word of it is in the setting's words, or stands for some of them. */
     fun matches(query: String, e: Entry, synonyms: Map<String, List<String>> = SYNONYMS): Boolean {
         val q = queryWords(query)

@@ -239,6 +239,17 @@ object ListChanges {
     }
 }
 
+/** 3.0.10: [text] with the parts [ranges] in bold and [color] (Settings search's words). */
+fun markedRanges(text: String, ranges: List<IntRange>, color: Int): CharSequence {
+    if (ranges.isEmpty()) return text
+    return android.text.SpannableString(text).apply {
+        for (r in ranges) {
+            setSpan(android.text.style.StyleSpan(android.graphics.Typeface.BOLD), r.first, r.last + 1, 0)
+            setSpan(android.text.style.ForegroundColorSpan(color), r.first, r.last + 1, 0)
+        }
+    }
+}
+
 /** [text] with the search word [query] in bold and [color]: only how it looks (the text itself is unchanged). */
 fun markedText(text: String, query: String, color: Int): CharSequence {
     if (query.isEmpty()) return text

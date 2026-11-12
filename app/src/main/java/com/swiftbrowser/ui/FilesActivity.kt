@@ -1528,7 +1528,7 @@ class FilesActivity : ListActivity() {
                 index != null -> archiveRows()
                 home -> homeItems()
                 // 2.9: a line at the top of the bin and of Private says how they work.
-                inBin && rows.isNotEmpty() -> listOf(Hint("Things you delete stay here for ${FilesSettings.binDays} days, then go for good. Tap one to restore it.")) + rows
+                inBin && rows.isNotEmpty() -> listOf(Hint("Things you delete stay here for ${com.swiftbrowser.files.BinClock.daysText(FilesSettings.binDays)}, then go for good. Tap one to restore it.")) + rows
                 inPrivate && dir.path == PrivateFolder.root(this).path && rows.isNotEmpty() -> listOf(Hint(PRIVATE_HINT)) + rows
                 category == FileIndex.Category.DOCUMENTS && rows.isNotEmpty() -> documentRows()
                 else -> rows
@@ -1573,7 +1573,7 @@ class FilesActivity : ListActivity() {
             )
             index != null -> showEmpty(shown.isEmpty(), "Nothing in here", null, R.drawable.ic_archive)
             home -> empty.visibility = View.GONE
-            inBin -> showEmpty(shown.isEmpty(), "The recycle bin is empty", "Files you delete in Files stay here for ${FilesSettings.binDays} days, so you can bring them back.", R.drawable.ic_files_bin, EmptyArt.BIN)
+            inBin -> showEmpty(shown.isEmpty(), "The recycle bin is empty", "Files you delete in Files stay here for ${com.swiftbrowser.files.BinClock.daysText(FilesSettings.binDays)}, so you can bring them back.", R.drawable.ic_files_bin, EmptyArt.BIN)
             inPrivate && dir.path == PrivateFolder.root(this).path -> showEmpty(
                 shown.isEmpty(), "Nothing in Private yet",
                 "Select files or folders anywhere in Files, then tap More → Move to Private. Only you can open them here.\n\n" + PrivateLock.UNINSTALL_TEXT,
@@ -2025,7 +2025,7 @@ class FilesActivity : ListActivity() {
                 actions += Sheets.Action(R.drawable.ic_info, "About the recycle bin") {
                     Dialogs.info(
                         this, "Recycle bin",
-                        "What you delete in Files waits here for ${FilesSettings.binDays} days, then goes for good. It stays on the same storage (a hidden “${RecycleBin.FOLDER}” folder), " +
+                        "What you delete in Files waits here for ${com.swiftbrowser.files.BinClock.daysText(FilesSettings.binDays)}, then goes for good. It stays on the same storage (a hidden “${RecycleBin.FOLDER}” folder), " +
                             "so it still takes room there until then: empty the bin to free it now. Files in Private and in Swift's own folders don't come here.",
                     )
                 }

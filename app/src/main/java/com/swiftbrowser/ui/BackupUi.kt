@@ -54,7 +54,7 @@ object BackupUi {
     }
 
     fun filesSummary(): String =
-        if (SwiftApp.prefs.sp.getBoolean(Backup.FILES_LOCKED, false)) "Added, locked with your backup password" else "Off: backup files never hold them"
+        "Added to backup files, locked with your backup password"
 
     fun foundSummary(a: Activity): String {
         val f = GoogleBackup.found(a, withData = false)

@@ -28,7 +28,7 @@ object BackupSettings {
         "night_light" to INT, "night_light_strength" to INT, "text_scale" to FLOAT, "force_zoom" to BOOLEAN,
         "full_screen" to BOOLEAN, "haptics" to BOOLEAN,
         // The address bar and the menu
-        "toolbar_at_bottom" to BOOLEAN, "hide_toolbar_on_scroll" to BOOLEAN, "toolbar_follows_scroll" to BOOLEAN,
+        "toolbar_at_bottom" to BOOLEAN, "hide_toolbar_on_scroll" to BOOLEAN,
         "bar_swipes" to INT, "toolbar_layout" to STRING, "menu_layout" to STRING, "menu_hidden" to STRING,
         // 3.0.4: websites' colours in it.
         "site_colours" to BOOLEAN,
@@ -86,7 +86,7 @@ object BackupSettings {
         // 3.0.7: sites' own Lite mode levels ("site=level").
         "site_lite_level" to SET,
         // Storage & data
-        "quit_clear" to SET, "auto_backup" to BOOLEAN,
+        "quit_clear" to SET,
         // 3.0.7: the cache size.
         "cache_limit_mb" to INT,
     )

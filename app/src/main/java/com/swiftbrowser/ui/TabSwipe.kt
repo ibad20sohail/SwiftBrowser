@@ -156,6 +156,19 @@ class TabSwipe(
         peek.postDelayed(stopWaiting, 3000)
     }
 
+    /**
+     * 3.0.9: [tab] is on screen now. The picture shown while another tab's page loads goes at once:
+     * after closing a tab, the woken tab's stayed up to 3 seconds over a new tab opened meanwhile.
+     */
+    fun onTabShown(tab: Tab) {
+        val waiting = switching ?: return
+        if (waiting === tab) return
+        peek.removeCallbacks(stopWaiting)
+        switching = null
+        peek.animate().cancel()
+        reset()
+    }
+
     /** The engine has drawn [tab]'s page: its picture can go. */
     fun onPageDrawn(tab: Tab, contentful: Boolean) {
         if (switching === tab && (contentful || !needContent)) fadeOut()

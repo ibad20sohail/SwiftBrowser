@@ -582,20 +582,6 @@ class SettingsActivity : AppCompatActivity() {
                 prefs.hideToolbarOnScroll = it
             }
         }
-        def(Topic.LOOK, "Address bar", "Bar follows your finger", "toolbar animation smooth chrome follow finger slides") {
-            switch(
-                R.drawable.ic_touch, "Bar follows your finger",
-                { if (prefs.toolbarFollowsScroll) "It slides away and back as far as you scroll" else "Off: it hides and comes back in one go" },
-                details = "On, the address bar slides away and back exactly as far as you scroll, and finishes with a short " +
-                    "slide when you let go. Off, it hides or comes back in one go after a clear scroll.\n\n" +
-                    "Turn it off if scrolling feels less smooth with it.",
-                enabled = { prefs.hideToolbarOnScroll },
-                checked = { prefs.toolbarFollowsScroll },
-            ) { prefs.toolbarFollowsScroll = it }
-        }
-        def(Topic.LOOK, "Menu", "Arrange the menu", "menu buttons order arrange move hide customize more pages") {
-            action(R.drawable.ic_menu, "Arrange the menu", { "Hold any button in the menu to move it, or drag it to the top to hide it" }) { arrangeMenu() }
-        }
         def(Topic.LOOK, "Menu", "Reset the menu", "menu buttons default reset order") {
             action(R.drawable.ic_reset, "Reset the menu", { "Every button back where it started" }) { resetMenu() }
         }
@@ -617,7 +603,7 @@ class SettingsActivity : AppCompatActivity() {
         }
         def(Topic.FILES, null, "Upload from Swift's Files", "upload attach choose file picker website android default phone file manager") {
             switch(R.drawable.ic_upload, "Upload from Swift's Files", {
-                if (prefs.uploadFromFiles) "A website's upload button opens Swift's Files" else "Off: a website's upload button opens your phone's own file picker"
+                "A website's upload button opens Swift's Files, not your phone's own file picker"
             }, checked = { prefs.uploadFromFiles }) {
                 prefs.uploadFromFiles = it
             }
@@ -628,14 +614,14 @@ class SettingsActivity : AppCompatActivity() {
             }
         }
         def(Topic.FILES, null, "Show folders as tiles", "grid list view tiles") {
-            switch(R.drawable.ic_grid_view, "Show folders as tiles", { if (FilesSettings.grid) "Tiles with pictures" else "Off: a simple list" }, checked = { FilesSettings.grid }) {
+            switch(R.drawable.ic_grid_view, "Show folders as tiles", { "Tiles with pictures instead of a simple list" }, checked = { FilesSettings.grid }) {
                 FilesSettings.grid = it
             }
         }
         // 3.0.4: two folders next to each other with the phone sideways (also the button in Files' bar).
         def(Topic.FILES, null, "Two folders side by side", "two folders panes side by side dual split landscape sideways copy move") {
             switch(R.drawable.ic_two_panes, "Two folders side by side", {
-                if (FilesSettings.twoPanes) "With your phone sideways, to copy and move between them" else "Off: one folder at a time"
+                "With your phone sideways, to copy and move between them"
             }, checked = { FilesSettings.twoPanes }) {
                 FilesSettings.twoPanes = it
             }
@@ -651,13 +637,13 @@ class SettingsActivity : AppCompatActivity() {
             }
         }
         def(Topic.FILES, "Recycle bin", "Use the recycle bin", "recycle bin trash deleted restore undo") {
-            switch(R.drawable.ic_files_bin, "Use the recycle bin", { if (FilesSettings.useRecycleBin) "Deleted files can be brought back for ${FilesSettings.binDays} days" else "Off: deleting is for good" }, checked = { FilesSettings.useRecycleBin }) {
+            switch(R.drawable.ic_files_bin, "Use the recycle bin", { "Deleted files can be brought back for ${com.swiftbrowser.files.BinClock.daysText(FilesSettings.binDays)}" }, checked = { FilesSettings.useRecycleBin }) {
                 FilesSettings.useRecycleBin = it
             }
         }
         def(Topic.FILES, "Recycle bin", "Keep deleted files", "recycle bin days keep") {
-            action(R.drawable.ic_history, "Keep deleted files", { "${FilesSettings.binDays} days, then they go for good" }) {
-                choose("Keep deleted files", FilesSettings.BIN_DAY_CHOICES.map { "$it days" }, FilesSettings.BIN_DAY_CHOICES.indexOf(FilesSettings.binDays)) { i ->
+            action(R.drawable.ic_history, "Keep deleted files", { "${com.swiftbrowser.files.BinClock.daysText(FilesSettings.binDays)}, then they go for good" }) {
+                choose("Keep deleted files", FilesSettings.BIN_DAY_CHOICES.map { com.swiftbrowser.files.BinClock.daysText(it) }, FilesSettings.BIN_DAY_CHOICES.indexOf(FilesSettings.binDays)) { i ->
                     val days = FilesSettings.BIN_DAY_CHOICES[i]
                     if (days >= FilesSettings.binDays) {
                         FilesSettings.setBinDays(this@SettingsActivity, days)
@@ -674,7 +660,7 @@ class SettingsActivity : AppCompatActivity() {
                             Dialogs.confirm(
                                 this@SettingsActivity, "Delete $what for good?",
                                 "$what (${UrlUtils.formatBytes(due.bytes)}) " + (if (due.count == 1) "has" else "have") +
-                                    " been in the recycle bin longer than $days days and will be deleted for good.",
+                                    " been in the recycle bin longer than ${com.swiftbrowser.files.BinClock.daysText(days)} and will be deleted for good.",
                                 "Delete", danger = true,
                             ) {
                                 FilesSettings.setBinDays(this@SettingsActivity, days)
@@ -790,7 +776,7 @@ class SettingsActivity : AppCompatActivity() {
         ) {
             switch(
                 R.drawable.ic_globe, "Avoid \"browser too old\" messages",
-                { if (prefs.newerFirefoxVersion) "Sites are told Swift is a newer browser, so fewer say it's out of date" else "Off: sites are told Swift's real version" },
+                { "Sites are told Swift is a newer browser, so fewer say it's out of date" },
                 details = "Swift uses the last browser version made for Android 7. Some sites refuse a version that old, " +
                     "or keep saying the browser is out of date. With this on, sites are told it's a newer version instead.\n\n" +
                     "A site may then use something Swift can't do and not work right; turn this off again if one does. " +
@@ -804,7 +790,7 @@ class SettingsActivity : AppCompatActivity() {
         // 3.0.4: a strip of the open group's tabs by the address bar (GroupStrip).
         def(Topic.BROWSING, "Tabs", "Group's tabs by the address bar", "group tabs strip bar switch chips") {
             switch(R.drawable.ic_tab, "Group's tabs by the address bar", {
-                if (prefs.groupStrip) "In a group, its tabs in a strip by the bar, to switch between them" else "Off: switch through the tab grid"
+                "In a group, its tabs in a strip by the bar, to switch between them"
             }, checked = { prefs.groupStrip }) {
                 prefs.groupStrip = it
             }
@@ -875,7 +861,7 @@ class SettingsActivity : AppCompatActivity() {
         def(Topic.SPEED, "Data", "Data saver", "mobile data images cellular save") {
             switch(
                 R.drawable.ic_image, "Data saver",
-                { if (DataSaver.active) "On mobile data now: pages load without pictures" else "On mobile data, pages load without pictures" },
+                { "On mobile data, pages load without pictures" },
                 checked = { prefs.dataSaver },
             ) {
                 prefs.dataSaver = it
@@ -911,7 +897,7 @@ class SettingsActivity : AppCompatActivity() {
         def(Topic.VIDEO, "Videos on websites", "Keep playing in the background", "background play music audio screen off notification switch tabs") {
             switch(
                 R.drawable.ic_headphones, "Keep playing in the background",
-                { if (prefs.keepPlaying) "Music and videos go on in other tabs, other apps and with the screen off" else "Off: they pause when you leave their tab" },
+                { "Music and videos go on in other tabs, other apps and with the screen off" },
                 details = "On: a song or video keeps playing when you switch tabs, open another app or turn the screen off, " +
                     "with play and pause in the notifications. Sites that pause themselves when you leave them (like YouTube) " +
                     "keep playing too. One tab plays at a time.\n\nOff: it pauses as soon as its tab is out of view.",
@@ -925,7 +911,7 @@ class SettingsActivity : AppCompatActivity() {
         def(Topic.VIDEO, "Videos on websites", "Open videos in Swift's player", "swift player for website videos native vlc smooth lag gestures play in swift player website streaming") {
             switch(
                 R.drawable.ic_play, "Open videos in Swift's player",
-                { if (prefs.sitePlayer) "A button on playing videos opens them in Swift's player: smoother, with gestures and subtitles" else "Off: videos play in the page" },
+                { "A button on playing videos opens them in Swift's player: smoother, with gestures and subtitles" },
                 checked = { prefs.sitePlayer },
             ) { prefs.sitePlayer = it }
         }
@@ -935,7 +921,7 @@ class SettingsActivity : AppCompatActivity() {
             }
         }
         def(Topic.VIDEO, "Videos on websites", "Play silent videos by themselves", "autoplay previews muted") {
-            switch(R.drawable.ic_volume_off, "Play silent videos by themselves", { "Like the previews on YouTube's home page. Off: smoother scrolling." }, checked = { prefs.autoplayMuted }) {
+            switch(R.drawable.ic_volume_off, "Play silent videos by themselves", { "Like the previews on YouTube's home page; scrolling is smoother without them" }, checked = { prefs.autoplayMuted }) {
                 prefs.autoplayMuted = it
             }
         }
@@ -994,7 +980,7 @@ class SettingsActivity : AppCompatActivity() {
         // 3.0.4: also in the player's ⋮ menu; changes what plays at once.
         def(Topic.VIDEO, "Swift's player", "Night sound", "night sound quiet loud compress compressor dynamic range volume voices explosions") {
             switch(R.drawable.ic_night_sound, "Night sound", {
-                if (com.swiftbrowser.media.LocalPlayback.nightSoundOn) "Loud parts quieter, quiet voices louder, for watching at low volume" else "Off: the sound as the film has it"
+                "Loud parts quieter, quiet voices louder, for watching at low volume"
             }, checked = { com.swiftbrowser.media.LocalPlayback.nightSoundOn }) {
                 com.swiftbrowser.media.LocalPlayback.setNightSound(it)
             }
@@ -1036,7 +1022,7 @@ class SettingsActivity : AppCompatActivity() {
         def(Topic.DOWNLOADS, null, "Big downloads wait for Wi-Fi", "mobile data cellular wifi only") {
             switch(
                 R.drawable.ic_wifi, "Big downloads wait for Wi-Fi",
-                { if (prefs.wifiOnlyDownloads) "Files over 50 MB start when you're on Wi-Fi" else "Downloads start on mobile data too" },
+                { "Files over 50 MB start when you're on Wi-Fi" },
                 checked = { prefs.wifiOnlyDownloads },
             ) {
                 prefs.wifiOnlyDownloads = it
@@ -1046,7 +1032,7 @@ class SettingsActivity : AppCompatActivity() {
         def(Topic.DOWNLOADS, null, "Sort downloads into folders", "sort organise folders type videos music pictures documents apps") {
             switch(
                 R.drawable.ic_folder, "Sort downloads into folders",
-                { if (prefs.sortDownloads) "Videos, Music, Pictures, Documents and Apps in your download folder" else "Off: everything goes into the download folder" },
+                { "Videos, Music, Pictures, Documents and Apps in your download folder" },
                 checked = { prefs.sortDownloads },
             ) { prefs.sortDownloads = it }
         }
@@ -1091,19 +1077,19 @@ class SettingsActivity : AppCompatActivity() {
             }
         }
         def(Topic.DOWNLOADS, "Torrents", "Torrents on Wi-Fi only", "torrent wifi mobile data") {
-            switch(R.drawable.ic_wifi, "Wi-Fi only", { if (TorrentSettings.wifiOnly) "On mobile data torrents wait for Wi-Fi" else "Torrents use mobile data too" }, checked = { TorrentSettings.wifiOnly }) {
+            switch(R.drawable.ic_wifi, "Wi-Fi only", { "On mobile data, torrents wait for Wi-Fi" }, checked = { TorrentSettings.wifiOnly }) {
                 TorrentSettings.wifiOnly = it
                 Torrents.applySettings()
             }
         }
         def(Topic.DOWNLOADS, "Torrents", "Only while charging", "torrent charging charger battery heat") {
-            switch(R.drawable.ic_battery, "Only while charging", { if (TorrentSettings.chargingOnly) "Torrents wait for the charger" else "Off: torrents run on battery too" }, checked = { TorrentSettings.chargingOnly }) {
+            switch(R.drawable.ic_battery, "Only while charging", { "Torrents wait for the charger" }, checked = { TorrentSettings.chargingOnly }) {
                 TorrentSettings.chargingOnly = it
                 Torrents.applySettings()
             }
         }
         def(Topic.DOWNLOADS, "Torrents", "At night only", "torrent night schedule time cheap data") {
-            switch(R.drawable.ic_history, "At night only", { if (TorrentSettings.nightOnly) "Torrents run from 1 am to 7 am" else "Off: torrents run at any time" }, checked = { TorrentSettings.nightOnly }) {
+            switch(R.drawable.ic_history, "At night only", { "Torrents run from 1 am to 7 am" }, checked = { TorrentSettings.nightOnly }) {
                 TorrentSettings.nightOnly = it
                 Torrents.applySettings()
             }
@@ -1137,7 +1123,7 @@ class SettingsActivity : AppCompatActivity() {
         def(Topic.PRIVACY, null, "Use secure connections", "secure https only encrypted insecure http") {
             switch(
                 R.drawable.ic_lock, "Use secure connections",
-                { if (prefs.httpsOnly) "Sites open their secure version when they have one" else "Off: sites open the way the link says" },
+                { "Sites open their secure version when they have one" },
                 details = "Pages are sent protected whenever the site can do it, even from an old link, so nobody on " +
                     "the same Wi-Fi can read or change them. A site that can't still opens, and Swift shows an open " +
                     "lock next to its name.",
@@ -1157,7 +1143,7 @@ class SettingsActivity : AppCompatActivity() {
         ) {
             switch(
                 R.drawable.ic_safer, "Safer browsing",
-                { if (prefs.saferBrowsing) "Harder for bad sites to attack your phone; some games and video players may not work" else "Off: sites run at full speed" },
+                { "Harder for bad sites to attack your phone; some games and video players may not work" },
                 details = "Swift uses the last browser version made for Android 7, which doesn't get security fixes any more. " +
                     "Most attacks on older browsers go through the parts that make websites run fast.\n\n" +
                     "With this on, websites run without those parts: a little slower, and some games or video players may not " +
@@ -1176,7 +1162,7 @@ class SettingsActivity : AppCompatActivity() {
         ) {
             switch(
                 R.drawable.ic_incognito, "Allow screenshots in incognito",
-                { if (prefs.allowIncognitoScreenshots) "Incognito pages can appear in screenshots and in your recent apps" else "Off: incognito pages stay out of screenshots and your recent apps" },
+                { "Incognito pages can appear in screenshots and in your recent apps" },
                 checked = { prefs.allowIncognitoScreenshots },
             ) {
                 prefs.allowIncognitoScreenshots = it
@@ -1187,9 +1173,9 @@ class SettingsActivity : AppCompatActivity() {
         def(Topic.PRIVACY, "Passwords", "Offer to save passwords", "password login sign in autofill fill in remember") {
             switch(
                 R.drawable.ic_password, "Offer to save passwords",
-                { if (prefs.offerPasswords) "Swift asks after you sign in, and fills them in next time" else "Off: passwords aren't saved or filled in" },
-                details = "Passwords stay on your phone only, locked safely by Android. " +
-                    "They aren't in backups, and incognito tabs never save one.",
+                { "Swift asks after you sign in, and fills them in next time" },
+                details = "Passwords stay on your phone, locked safely by Android. They go into backups only when " +
+                    "locked with your backup password, and incognito tabs never save one.",
                 checked = { prefs.offerPasswords },
             ) {
                 prefs.offerPasswords = it
@@ -1208,10 +1194,6 @@ class SettingsActivity : AppCompatActivity() {
         }
         def(Topic.PRIVACY, "Sites", "Site settings", "desktop location sound permissions per site") {
             action(R.drawable.ic_tune, "Site settings", { siteSettingsText() }) { chooseSite() }
-        }
-        // 3.0: also here, where people look for it (it was only under Storage & data).
-        def(Topic.PRIVACY, "Sites", "Clear browsing data", "history cookies cache delete last hour day week time") {
-            action(R.drawable.ic_delete, "Clear browsing data", { "History, cookies, the cache and more, for the time you choose" }) { clearData() }
         }
 
         // VPN
@@ -1292,13 +1274,6 @@ class SettingsActivity : AppCompatActivity() {
                 "Settings, bookmarks, history, open tabs and site settings, to one file" +
                     if (prefs.sp.getBoolean(Backup.FILES_LOCKED, false)) ", with passwords and sign-ins locked" else ""
             }) { backUp() }
-        }
-        def(Topic.STORAGE, "Backup", "Back up every week", "automatic backup weekly") {
-            switch(
-                R.drawable.ic_history, "Back up every week",
-                { if (prefs.autoBackup) autoBackupText() else "Off: only when you tap Back up" },
-                checked = { prefs.autoBackup },
-            ) { prefs.autoBackup = it }
         }
         def(Topic.STORAGE, "Backup", "Restore from a backup", "import restore backup new phone") {
             action(R.drawable.ic_restore_backup, "Restore from a backup", { "Adds a backup's contents to your phone, then restarts Swift" }) {
@@ -1810,14 +1785,6 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     /** The browser with its menu open, ready to arrange (2.2). */
-    private fun arrangeMenu() {
-        startActivity(
-            Intent(this, MainActivity::class.java).putExtra(MainActivity.EXTRA_ARRANGE_MENU, true)
-                .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP),
-        )
-        finish()
-    }
-
     private fun resetMenu() {
         val before = MenuButtons.layout()
         MenuButtons.save(MenuButtons.defaultLayout())
@@ -2681,6 +2648,8 @@ class SettingsActivity : AppCompatActivity() {
             if (isFinishing || isDestroyed) return@latest
             if (c.version != null) prefs.lastUpdateCheck = System.currentTimeMillis()
             val r = c.release
+            // 3.0.9: kept, so Swift offers it at its next start too.
+            if (r != null && Updates.isNewer(r.version, BuildConfig.VERSION_NAME)) Updates.remember(prefs, r)
             when {
                 // 3.0: the real reason (GitHub busy, the file not up yet), not always the connection.
                 c.problem != null -> Messages.show(this, c.problem, long = true)
@@ -2689,7 +2658,7 @@ class SettingsActivity : AppCompatActivity() {
                     val size = if (r.size > 0) " (${UrlUtils.formatBytes(r.size)})" else ""
                     MaterialAlertDialogBuilder(this)
                         .setTitle("Update to Swift ${r.version}?")
-                        .setMessage(r.notes.ifBlank { "A new version of Swift is available." }.take(1500) +
+                        .setMessage(com.swiftbrowser.core.ReleaseNotes.plain(r.notes).ifBlank { "A new version of Swift is available." }.take(1500) +
                             "\n\nThe update$size downloads now; then Android asks to install it. Tabs and settings are kept.")
                         .setPositiveButton("Download") { _, _ ->
                             val item = Downloads.startUrl(Profiles.currentId, r.apkUrl, r.apkName, "application/vnd.android.package-archive", emptyMap(), null)
@@ -3288,12 +3257,6 @@ class SettingsActivity : AppCompatActivity() {
                 remeasureSoon()
             }
         }
-    }
-
-    private fun autoBackupText(): String {
-        val last = prefs.lastAutoBackup
-        return if (last <= 0) "The last two are kept in the download folder"
-        else "Last one " + android.text.format.DateUtils.getRelativeTimeSpanString(last, System.currentTimeMillis(), android.text.format.DateUtils.DAY_IN_MILLIS)
     }
 
     private fun readerText() =

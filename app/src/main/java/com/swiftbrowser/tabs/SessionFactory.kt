@@ -511,9 +511,12 @@ class TabDelegates(private val tab: Tab) :
     override fun onContentPermissionRequest(session: GeckoSession, perm: ContentPermission): GeckoResult<Int>? {
         return when (perm.permission) {
             // Silent videos that start by themselves (e.g. YouTube feed previews while scrolling).
-            // 3.0.7: never on a site at Lite mode High or Extreme (videos start only when tapped).
+            // 3.0.9: on a site at Lite mode High or Extreme the engine lets them start, and Lite mode's
+            // own script (perf/lite-high.js) stops those nobody touched. The engine refused them all
+            // there (3.0.7), also a preview the site starts as you hold or swipe on it, and showed its
+            // own play button, which opened the video.
             GeckoSession.PermissionDelegate.PERMISSION_AUTOPLAY_INAUDIBLE -> GeckoResult.fromValue(
-                if (SwiftApp.prefs.autoplayMuted && !liteAtLeast(perm.uri, com.swiftbrowser.core.LiteLevel.HIGH)) ContentPermission.VALUE_ALLOW else ContentPermission.VALUE_DENY,
+                if (liteAtLeast(perm.uri, com.swiftbrowser.core.LiteLevel.HIGH) || SwiftApp.prefs.autoplayMuted) ContentPermission.VALUE_ALLOW else ContentPermission.VALUE_DENY,
             )
             // Protected films and series (DRM).
             GeckoSession.PermissionDelegate.PERMISSION_MEDIA_KEY_SYSTEM_ACCESS -> GeckoResult.fromValue(ContentPermission.VALUE_ALLOW)

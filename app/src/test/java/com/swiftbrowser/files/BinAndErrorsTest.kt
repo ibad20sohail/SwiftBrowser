@@ -49,4 +49,13 @@ class BinAndErrorsTest {
         assertEquals(FileErrors.FULL, FileErrors.text(RuntimeException("copy", IOException("ENOSPC"))))
         assertNull(FileErrors.text(IOException("Connection reset")))
     }
+
+    @Test
+    fun oneAndThreeDaysToo() {
+        // 3.0.9: kept 1 or 3 days as well, and said right.
+        assertEquals("1 day", BinClock.daysText(1))
+        assertEquals("3 days", BinClock.daysText(3))
+        assertTrue(BinClock.due(now - 2 * day, now, 1))
+        assertFalse(BinClock.due(now - 2 * day, now, 3))
+    }
 }

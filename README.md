@@ -5,12 +5,12 @@ ad-heavy sites on older phones, and runs on Android 7 and newer.
 
 ## Download
 
-Swift 3.0.8 for Android 7 and newer comes in two files:
+Swift 3.0.9 for Android 7 and newer comes in two files:
 
-- **[Swift-64bit-3.0.8.apk](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v3.0.8/Swift-64bit-3.0.8.apk)**
+- **[Swift-64bit-3.0.9.apk](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v3.0.9/Swift-64bit-3.0.9.apk)**
   (64-bit ARM, about 202 MB): for newer phones, and for any phone that says Swift "isn't compatible
   with the latest version of Android".
-- **[Swift-3.0.8.apk](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v3.0.8/Swift-3.0.8.apk)**
+- **[Swift-3.0.9.apk](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v3.0.9/Swift-3.0.9.apk)**
   (32-bit ARM, about 165 MB): for older phones, such as those with 2 GB of memory.
 
 Either installs over an earlier Swift and keeps tabs and settings. Swift can also update itself
@@ -160,7 +160,7 @@ A file manager for the phone's storage and SD card, also with its own icon.
   to select many. **Two folders side by side** with the phone sideways.
 - **Archives** (ZIP, 7z, RAR, TAR, GZ, BZ2, XZ) open like folders. Extract all or some, and make
   ZIP or 7z, with a password for ZIP. RAR5 can't be opened, and RAR can't be made.
-- **Recycle bin**: deleted files can be brought back, for as long as you choose.
+- **Recycle bin**: deleted files can be brought back, for 1 day up to 90 days, as you choose.
 - **Free up space**: large files, duplicates, app files, empty folders and what Swift and torrents
   leave behind.
 - **Private folder** behind your screen lock or a PIN, kept out of other apps, the Gallery and
@@ -237,9 +237,10 @@ VPN. Only Swift's traffic goes through it; other apps keep their own connection.
 - **Lite mode** in five levels, for all sites and for each site (≡ menu → Lite), each adding to
   the one before: **Off** (sites exactly as designed; where phones with 4 GB of memory or more
   start), **Low** (no frosted glass, less motion, lighter YouTube and TheFlixer; where other phones
-  start), **Medium** (no animations, shadows, blur or filters), **High** (GIFs play once, videos
-  start only when tapped, fewer graphics layers) and **Extreme** (GIFs stay still, text shows at
-  once while a site's font loads).
+  start), **Medium** (no animations, shadows, blur or filters), **High** (GIFs and sites' silent
+  "GIF" videos play once, other videos start only when you touch them, fewer graphics layers) and
+  **Extreme** (GIFs, silent videos and moving drawings stay still until you touch them, and text
+  shows at once while a site's font loads).
 - **Battery saver**: below a level you choose, or with your phone's battery saver, Swift uses Lite
   mode Medium or higher, keeps only the open tab loaded and loads no pictures on mobile data.
 - **Data saver**: on mobile data, pages load without pictures. **Data used** shows each day.
@@ -255,14 +256,15 @@ VPN. Only Swift's traffic goes through it; other apps keep their own connection.
 - **Settings** in plain words, in twelve topics that show what is set in each, with a search box
   that understands everyday words ("battery", "ads", "music").
 - **Back up and restore** settings, profiles, bookmarks, history, open tabs and groups, and site
-  settings in one file, also by itself every week. Saved passwords and sign-ins to sites can be
+  settings in one file. Saved passwords and sign-ins to sites can be
   added, locked with your backup password; the VPN and the Private folder are never in it.
 - **Google backup**: Android's own backup to your Google account keeps a copy of all of this, with
   history, saved passwords and sign-ins, locked with a backup password only you know (with a hint
   you choose). It's off until you turn it on, and Swift on a new phone offers to restore it.
 - **Storage**: what Swift keeps on the phone, part by part, the sites that stored data (clear each
   one) and clearing sites you haven't visited for 30 days.
-- **Updates**: Swift checks and installs its own updates, signed by Swift, and shows what's new.
+- **Updates**: Swift checks at each start, offers a newer version in a window with what's new,
+  and installs its own updates, signed by Swift.
 - **Problem reports**: crashes and freezes with Swift's log of the last 3 days, shown to you before
   they are sent. When Android ran out of graphics memory, the report says so.
 

@@ -312,7 +312,8 @@ object Helper {
      * 3.0.7: where each of Lite mode's page styles applies, from the level for all sites and the
      * sites' own [levels] (saving battery: at least Medium): "fixes" (lighter YouTube and TheFlixer)
      * from Low, "lite" (no animations, shadows, blur or filters) from Medium, "litehigh" (fewer
-     * graphics layers) from High.
+     * graphics layers; 3.0.9: silent "GIF" videos play once) from High, "liteextreme" (3.0.9: they
+     * stay still until tapped, and moving drawings stop) at Extreme.
      */
     private fun liteLayers(levels: Map<String, com.swiftbrowser.core.LiteLevel>): JSONObject {
         val saving = com.swiftbrowser.engine.Power.saving
@@ -327,6 +328,7 @@ object Helper {
             .put("fixes", reach(com.swiftbrowser.core.LiteLevel.LOW))
             .put("lite", reach(com.swiftbrowser.core.LiteLevel.MEDIUM))
             .put("litehigh", reach(com.swiftbrowser.core.LiteLevel.HIGH))
+            .put("liteextreme", reach(com.swiftbrowser.core.LiteLevel.EXTREME))
     }
 
     /**

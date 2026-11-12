@@ -450,8 +450,8 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
         if (pager.page >= count) pager.goTo(count - 1) else showPage(pager.page)
     }
 
-    /** [animate] false: shown at once, as when the screen restarts in the other theme. [arrange]: with the hint (from Settings). */
-    fun open(animate: Boolean = true, arrange: Boolean = false) {
+    /** [animate] false: shown at once, as when the screen restarts in the other theme. */
+    fun open(animate: Boolean = true) {
         val tab = TabManager.current ?: return
         if (isOpen) return
         isOpen = true
@@ -467,7 +467,7 @@ class QuickMenu(private val a: MainActivity, private val root: FrameLayout) {
         pager.reset()
         // How to move buttons: when asked (Settings), and the first time after 2.3.
         val prefs = SwiftApp.prefs
-        val showHint = arrange || !prefs.sp.getBoolean(HINT_SEEN, false)
+        val showHint = !prefs.sp.getBoolean(HINT_SEEN, false)
         hint.visibility = if (showHint) View.VISIBLE else View.GONE
         if (showHint) prefs.sp.edit().putBoolean(HINT_SEEN, true).apply()
         scrim.animate().cancel()

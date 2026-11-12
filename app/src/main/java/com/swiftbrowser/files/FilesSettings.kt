@@ -30,7 +30,7 @@ object FilesSettings {
     const val START_LAST = "last"
 
     /** How long the recycle bin keeps things, in days (the choices offered). */
-    val BIN_DAY_CHOICES = listOf(7, 30, 90)
+    val BIN_DAY_CHOICES = listOf(1, 3, 7, 30, 90)
 
     /** Private opens with the phone's screen lock, with Swift's own PIN, or isn't set up yet. */
     const val LOCK_SCREEN = "screen"
@@ -85,7 +85,7 @@ object FilesSettings {
         set(v) = sp.edit().putBoolean(KEY_RECYCLE_BIN, v).apply()
 
     /**
-     * Days the recycle bin keeps things before they go for good: 7, 30 (the default) or 90. 3.0:
+     * Days the recycle bin keeps things before they go for good: 1, 3 (3.0.9), 7, 30 (the default) or 90. 3.0:
      * changing it deletes nothing by itself: [setBinDays] does, once Settings has asked (a shorter
      * time used to delete the older things for good at once, without a word).
      */

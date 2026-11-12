@@ -10,8 +10,8 @@ enum class LiteLevel(val key: String, val label: String, val summary: String) {
     OFF("off", "Off", "Sites exactly as designed: frosted glass and all their motion."),
     LOW("low", "Low", "No frosted glass, sites asked for less motion, lighter YouTube and TheFlixer."),
     MEDIUM("medium", "Medium", "Also no animations, shadows, blur or filters, and no smooth scrolling."),
-    HIGH("high", "High", "Also GIFs play once, videos start only when you tap play, and pages use fewer graphics layers."),
-    EXTREME("extreme", "Extreme", "Also GIFs stay still, and text shows at once while a site's font loads.");
+    HIGH("high", "High", "Also GIFs and GIF-type videos play once, other videos start only when you touch them, and pages use fewer graphics layers."),
+    EXTREME("extreme", "Extreme", "Also GIFs, silent videos and moving drawings stay still until you touch them, and text shows at once while a site's font loads.");
 
     fun atLeast(other: LiteLevel): Boolean = ordinal >= other.ordinal
 

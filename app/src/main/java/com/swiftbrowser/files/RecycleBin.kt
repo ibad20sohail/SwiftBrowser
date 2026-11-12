@@ -626,6 +626,9 @@ object BinClock {
     /** [deletedAt] as the bin counts it at [now]: a date before 2020 or still to come counts as now. */
     fun fixed(deletedAt: Long, now: Long): Long = if (deletedAt < EARLIEST || deletedAt > now) now else deletedAt
 
+    /** 3.0.9: "1 day", "3 days": how long things are kept, in words. */
+    fun daysText(days: Int): String = if (days == 1) "1 day" else "$days days"
+
     /** Whether a thing deleted at [deletedAt] goes for good at [now], when things are kept [days] days. */
     fun due(deletedAt: Long, now: Long, days: Int): Boolean = sane(now) && now > fixed(deletedAt, now) + days * DAY
 }

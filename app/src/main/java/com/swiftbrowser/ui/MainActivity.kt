@@ -200,14 +200,6 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         toolbarRefreshPosted = false
         if (toolbarWanted && fullscreenTab == null) refreshToolbarNow() else toolbarStale = true
     }
-    private var scrollRun = 0f
-
-    // When the toolbar appears or goes, the engine moves the page by its height so that the content
-    // stays where it is. That move arrives with a later scroll update, possibly after some of the
-    // user's own scrolling, and must not be taken for it (or the toolbar flips back and forth).
-    private var expectedShift = 0f
-    private var shiftExpectedUntil = 0L
-    private var toolbarToggledAt = 0L
 
     // Pull to refresh.
     private var ptrRefreshing = false
@@ -452,18 +444,26 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             if (lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) announceBattery()
         }
         setupEdgeSwipe()
-        // A newer Swift on GitHub? Asked at most once a day, a while after starting.
+        // A newer Swift on GitHub? 3.0.9: asked at each start, a few seconds in, and offered in a window
+        // (a message at the bottom was easy to miss), at each start until it is installed.
         handler.postDelayed({
-            if (!isFinishing) Updates.checkNow(prefs, force = false) { r -> offerUpdate(r) }
-        }, 15_000)
+            if (!isFinishing) Updates.checkNow(prefs, force = false) { r -> if (startWindowsDone) offerUpdate(r) else updateFound = r }
+        }, 4_000)
         if (savedInstanceState == null) whenStarted {
             if (isFinishing) return@whenStarted
             // 3.0.8: a Google backup Android put back (Swift installed again, a new phone) is offered
-            // first; what's new waits for the next start.
+            // first; what's new waits for the next start. 3.0.9: a newer Swift only when neither shows.
             lifecycleScope.launch {
                 val found = withContext(Dispatchers.IO) { com.swiftbrowser.core.GoogleBackup.toOffer(this@MainActivity) }
                 if (isFinishing) return@launch
-                if (found != null) BackupUi.offerOnStart(this@MainActivity, found) else WhatsNew.showOnStart(this@MainActivity)
+                val shown = if (found != null) {
+                    BackupUi.offerOnStart(this@MainActivity, found)
+                    true
+                } else {
+                    WhatsNew.showOnStart(this@MainActivity)
+                }
+                startWindowsDone = true
+                if (shown) updateOffered = true else (updateFound ?: Updates.remembered(prefs))?.let { offerUpdate(it) }
             }
         }
         // Housekeeping once the app has settled: the weekly backup, and the cache when the phone is
@@ -519,7 +519,6 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         lifecycleScope.launch {
             val freed = withContext(Dispatchers.IO) { com.swiftbrowser.core.Storage.freeSpaceIfLow(this@MainActivity) }
             if (freed > 0) snack("Your phone is almost full: Swift freed ${UrlUtils.formatBytes(freed)} of saved files", long = true)
-            withContext(Dispatchers.IO) { com.swiftbrowser.core.Backup.autoBackupIfDue(this@MainActivity) }
             // 3.0: history over a year old goes, once a week at most.
             withContext(Dispatchers.IO) { SwiftApp.db.pruneHistoryIfDue(prefs) }
             // Update APKs stay in the download folder after installing (about 150 MB each).
@@ -1180,13 +1179,6 @@ class MainActivity : AppCompatActivity(), BrowserUi {
                 switcherView?.close()
                 if (t !== current) TabManager.select(t)
             }
-            return
-        }
-        if (intent.getBooleanExtra(EXTRA_ARRANGE_MENU, false)) {
-            intent.removeExtra(EXTRA_ARRANGE_MENU)
-            stopEditing()
-            switcherView?.close()
-            root.post { if (!isFinishing) quickMenu.open(arrange = true) }
             return
         }
         if (intent.action in SHORTCUTS && intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY == 0) {
@@ -2626,6 +2618,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
     override fun onTabSelected(tab: Tab) {
         selectionMenu.dismiss()
+        // 3.0.9: a woken tab's picture, waiting for its page, doesn't stay over another tab's.
+        tabSwipe.onTabShown(tab)
         updateSitePlayerChip()
         if (resumeChipFor != null && resumeChipFor !== tab) hideResumeChip(null)
         // What this tab's page asked while it wasn't on screen (an alert, a sign-in) shows now (2.6).
@@ -3079,13 +3073,6 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         settleAnim?.cancel()
         toolbarWanted = show
         applyToolbarShown(target)
-        val now = SystemClock.uptimeMillis()
-        // Only a toolbar at the top moves the page, which the engine then makes up for (3.0.4: by the
-        // group strip's height too).
-        expectedShift = if (bottomBar) 0f else if (show) barPx.toFloat() else -barPx.toFloat()
-        shiftExpectedUntil = now + 1000
-        toolbarToggledAt = now
-        scrollRun = 0f
         if (show && toolbarStale) refreshToolbarNow()
     }
 
@@ -3105,59 +3092,24 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             // (any scroll when the bar doesn't hide while scrolling, else as usual: scrolling back up).
             if (!byUser || SystemClock.uptimeMillis() - swipeHiddenAt < 500) return
             if (!prefs.hideToolbarOnScroll) {
-                if (followsFinger()) settleToolbar(true) else showToolbar()
+                settleToolbar(true)
                 return
             }
         }
-        if (followsFinger()) {
-            // Back at the top after a fling upwards (not the engine making up for the toolbar's own move).
-            if (!toolbarWanted && scrollY <= barPx / 2f && last >= 0f && scrollY < last && !gestureLayer.fingerDown &&
-                settleAnim == null && SystemClock.uptimeMillis() - lastToolbarMoveAt > 400
-            ) {
-                settleToolbar(true)
-            }
-            return
-        }
-        if (!toolbarWanted && (scrollY <= barPx / 2f || !canAutoHideToolbar())) {
-            // Back at the top of the page (or hiding isn't wanted now): show the toolbar.
-            scrollRun = 0f
-            showToolbar()
-            return
-        }
-        if (last < 0f) return
-        var dy = scrollY - last
-        if (expectedShift != 0f) {
-            if (SystemClock.uptimeMillis() > shiftExpectedUntil) {
-                expectedShift = 0f
-            } else if (dy * expectedShift > 0f && abs(dy) >= abs(expectedShift) / 2) {
-                // The engine's move, plus whatever the user scrolled in the same frame.
-                dy -= expectedShift
-                expectedShift = 0f
-            }
-        }
-        if (!byUser || dy == 0f || !canAutoHideToolbar()) return
-        // Right after the toolbar moved, let the page settle before it may move again.
-        if (SystemClock.uptimeMillis() - toolbarToggledAt < TOOLBAR_SETTLE_MS) return
-        if ((dy > 0f) != (scrollRun > 0f)) scrollRun = 0f
-        scrollRun += dy
-        // A deliberate scroll is needed, not a nudge: about a finger's width down to hide, a bit
-        // less up to bring it back. Hiding only well below the top, so the page's move can't take
-        // it back to where the toolbar would show again.
-        if (toolbarWanted && scrollRun > dp(64f) && scrollY > barPx * 2) {
-            hideToolbar()
-        } else if (!toolbarWanted && scrollRun < -dp(48f)) {
-            showToolbar()
+        // Back at the top after a fling upwards (not the engine making up for the toolbar's own move).
+        if (!toolbarWanted && scrollY <= barPx / 2f && last >= 0f && scrollY < last && !gestureLayer.fingerDown &&
+            settleAnim == null && SystemClock.uptimeMillis() - lastToolbarMoveAt > 400
+        ) {
+            settleToolbar(true)
         }
     }
-
-    private fun followsFinger() = prefs.toolbarFollowsScroll
 
     /**
      * Chrome-like: the toolbar slides by exactly as much as the finger moves the page, and only
      * while the page itself scrolls. It is never left half-way: see [onFingerUp].
      */
     private fun onFingerMove(dy: Float) {
-        if (!followsFinger() || !canAutoHideToolbar() || !gecko.touchScrollsPage()) return
+        if (!canAutoHideToolbar() || !gecko.touchScrollsPage()) return
         // Only once the page is really scrolling, not while the finger is still deciding.
         if (SystemClock.uptimeMillis() - lastUserScrollAt > 300) return
         val target = (toolbarShown + dy).coerceIn(0f, barPx.toFloat())
@@ -3170,7 +3122,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
     /** The finger let go half-way: the toolbar finishes the way it was going. */
     private fun onFingerUp() {
-        if (!followsFinger() || toolbarShown <= 0f || toolbarShown >= barPx) return
+        if (toolbarShown <= 0f || toolbarShown >= barPx) return
         settleToolbar(fingerDirection > 0)
     }
 
@@ -4531,7 +4483,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
                     barSwipeMode = 0
                     hiddenBySwipe = hide
                     if (hide) swipeHiddenAt = SystemClock.uptimeMillis()
-                    if (followsFinger()) settleToolbar(!hide) else setToolbarWanted(!hide)
+                    settleToolbar(!hide)
                     Haptics.tick(appBar)
                     return true
                 }
@@ -4569,18 +4521,51 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
     // ------------------------------------------------------------------ updates
 
-    fun offerUpdate(r: Updates.Release) {
-        snack("Swift ${r.version} is available", "Update") { confirmUpdate(r) }
+    /** 3.0.9: the start's own windows (the Google backup's offer, what's new) have had their turn. */
+    private var startWindowsDone = false
+
+    /** 3.0.9: a newer Swift found before they had. */
+    private var updateFound: Updates.Release? = null
+
+    /** 3.0.9: a newer Swift is offered once a start. */
+    private var updateOffered = false
+
+    /** 3.0.9: in a window, once a start; not while it is downloading already. */
+    private fun offerUpdate(r: Updates.Release) {
+        if (updateOffered || isFinishing) return
+        // After the window about the last run's problem, not over it.
+        if (problemShowing) {
+            updateFound = r
+            return
+        }
+        val coming = Updates.downloadId.takeIf { it >= 0 }?.let { Downloads.get(it) }
+        if (coming != null && coming.status != Downloads.DONE && coming.status != Downloads.FAILED) return
+        updateOffered = true
+        confirmUpdate(r)
     }
 
     /** What's new, then the download; Android's installer opens when it is done. */
     fun confirmUpdate(r: Updates.Release) {
         val size = if (r.size > 0) " (${UrlUtils.formatBytes(r.size)})" else ""
+        // 3.0.9: downloaded before but not installed (the installer was left): straight to it.
+        val ready = Downloads.all().firstOrNull { it.status == Downloads.DONE && it.fileName == r.apkName && java.io.File(it.filePath).isFile }
         MaterialAlertDialogBuilder(this)
-            .setTitle("Update to Swift ${r.version}?")
-            .setMessage(r.notes.ifBlank { "A new version of Swift is available." }.take(1500) +
-                "\n\nThe update$size downloads now; then Android asks to install it. Tabs and settings are kept.")
-            .setPositiveButton("Download") { _, _ ->
+            .setTitle("Swift ${r.version} is available")
+            .setMessage(com.swiftbrowser.core.ReleaseNotes.plain(r.notes).ifBlank { "A new version of Swift is available." }.take(1500) +
+                if (ready != null) "\n\nIt has downloaded already. Tabs and settings are kept." else "\n\nThe update$size downloads now; then Android asks to install it. Tabs and settings are kept.")
+            .setPositiveButton(if (ready != null) "Install" else "Download") { _, _ ->
+                if (ready != null) {
+                    Updates.whenGenuine(this, ready) {
+                        DownloadsActivity.openFileIntent(this, ready)?.let { intent ->
+                            try {
+                                startActivity(intent)
+                            } catch (_: Exception) {
+                                snack("Open the downloaded update from Downloads to install it")
+                            }
+                        }
+                    }
+                    return@setPositiveButton
+                }
                 withStorage {
                     val item = Downloads.startUrl(Profiles.currentId, r.apkUrl, r.apkName, "application/vnd.android.package-archive", emptyMap(), null)
                     Updates.downloadId = item.id
@@ -4790,10 +4775,14 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     }
 
     /** The previous run ended badly (not by a crash in the app's own code, see above). */
+    /** 3.0.9: the window about the last run's problem is coming or open: a newer Swift waits for it. */
+    private var problemShowing = false
+
     private fun showProblemIfAny() {
         val problem = Diagnostics.problem ?: return
         val detail = Diagnostics.problemDetail
         Diagnostics.clearProblem()
+        problemShowing = true
         // 3.0.8: once Android's log of that run's end is read (a moment at most), which can tell that
         // its drawing ran out of graphics memory; the crash's own notes only said "abort in libc.so".
         lifecycleScope.launch {
@@ -4823,6 +4812,10 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             .setPositiveButton("OK", null)
             .setNeutralButton("Send report") { _, _ -> shareProblemReport() }
             .showImmersive()
+            .setOnDismissListener {
+                problemShowing = false
+                if (startWindowsDone) updateFound?.let { offerUpdate(it) }
+            }
     }
 
     /** The problem report with this run's settings; see Diagnostics. */
@@ -4842,7 +4835,6 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         /** 3.0.3: how long a tap on the tab button waits for a second one (Android's own double-tap time). */
         private const val TAB_DOUBLE_TAP_MS = 300L
 
-        private const val TOOLBAR_SETTLE_MS = 300L
 
         /** 3.0.4: the group strip's height (dp). */
         private const val STRIP_DP = 40
@@ -4884,7 +4876,6 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         const val EXTRA_OPEN_FILE = "open_file"
 
         /** From Settings → Look & screen: open the menu ready to arrange (2.2). */
-        const val EXTRA_ARRANGE_MENU = "arrange_menu"
 
         /** App icon shortcuts (res/xml/shortcuts.xml, 2.3). */
         private const val PREF_DOC_TABS_MOVED = "doc_tabs_moved"

@@ -211,14 +211,6 @@ class Prefs(ctx: Context) {
         get() = sp.getBoolean(HIDE_TOOLBAR, true)
         set(v) = sp.edit { putBoolean(HIDE_TOOLBAR, v) }
 
-    /**
-     * The toolbar slides away and back with the finger (as in Chrome) instead of jumping in one
-     * frame after a deliberate scroll.
-     */
-    var toolbarFollowsScroll: Boolean
-        get() = sp.getBoolean(TOOLBAR_FOLLOWS, true)
-        set(v) = sp.edit { putBoolean(TOOLBAR_FOLLOWS, v) }
-
     /** The address bar at the bottom of the screen, easier to reach with one hand. */
     var toolbarAtBottom: Boolean
         get() = sp.getBoolean(TOOLBAR_BOTTOM, false)
@@ -441,15 +433,6 @@ class Prefs(ctx: Context) {
         get() = sp.getBoolean(VIDEO_TAPS, true)
         set(v) = sp.edit { putBoolean(VIDEO_TAPS, v) }
 
-    /** A backup file is written once a week by itself (the last two are kept). */
-    var autoBackup: Boolean
-        get() = sp.getBoolean(AUTO_BACKUP, true)
-        set(v) = sp.edit { putBoolean(AUTO_BACKUP, v) }
-
-    var lastAutoBackup: Long
-        get() = sp.getLong(LAST_AUTO_BACKUP, 0L)
-        set(v) = sp.edit { putLong(LAST_AUTO_BACKUP, v) }
-
     /** When Swift last emptied its cache because the phone was almost full. */
     var lastLowSpaceCleanup: Long
         get() = sp.getLong(LAST_LOW_SPACE_CLEANUP, 0L)
@@ -520,7 +503,6 @@ class Prefs(ctx: Context) {
         const val SEARCH_SUGGESTIONS = "search_suggestions"
         const val SEARCH_ENGINE = "search_engine"
         const val HIDE_TOOLBAR = "hide_toolbar_on_scroll"
-        const val TOOLBAR_FOLLOWS = "toolbar_follows_scroll"
         const val TOOLBAR_BOTTOM = "toolbar_at_bottom"
         const val PULL_TO_REFRESH = "pull_to_refresh"
         const val SOFTWARE_RENDERING = "software_rendering"
@@ -531,8 +513,6 @@ class Prefs(ctx: Context) {
         const val TEXT_SCALE = "text_scale"
         const val FORCE_ZOOM = "force_zoom"
         const val KEEP_PLAYING = "keep_playing"
-        const val AUTO_BACKUP = "auto_backup"
-        const val LAST_AUTO_BACKUP = "last_auto_backup"
         const val LAST_LOW_SPACE_CLEANUP = "last_low_space_cleanup"
         const val LAST_HISTORY_PRUNE = "last_history_prune"
         const val SEEN_VERSION = "seen_version"

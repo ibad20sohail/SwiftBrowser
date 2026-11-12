@@ -20,7 +20,14 @@ import java.io.File
  */
 object Updates {
     private const val LATEST = "https://api.github.com/repos/ibad20sohail/SwiftBrowser/releases/latest"
-    private const val AUTO_CHECK_INTERVAL_MS = 24L * 3600 * 1000
+    /**
+     * 3.0.9: each start of Swift asks GitHub (it was once a day), but not again within this time, as
+     * when the screen only restarts.
+     */
+    private const val AUTO_CHECK_INTERVAL_MS = 10L * 60 * 1000
+
+    /** 3.0.9: the newest release a check found, so the next start can offer it at once. */
+    private const val FOUND = "update_found"
 
     class Release(val version: String, val apkUrl: String, val apkName: String, val size: Long, val notes: String)
 
@@ -67,19 +74,50 @@ object Updates {
     }
 
     /**
-     * Once a day at most; calls back only when there is a newer version. 3.0: the day starts from an
-     * answer, so a check that failed (no connection, GitHub busy) is tried again at the next start.
+     * At each start (3.0.9; once a day before); calls back only when there is a newer version, which
+     * is also kept for the next start ([remembered]). 3.0: the wait starts from an answer, so a check
+     * that failed (no connection, GitHub busy) is tried again at the next start.
      */
     fun checkNow(prefs: Prefs, force: Boolean, callback: (Release) -> Unit) {
         if (checking) return
-        if (!force && System.currentTimeMillis() - prefs.lastUpdateCheck < AUTO_CHECK_INTERVAL_MS) return
+        if (!force && System.currentTimeMillis() - prefs.lastUpdateCheck in 0 until AUTO_CHECK_INTERVAL_MS) return
         checking = true
         latest { c ->
             checking = false
             if (c.version != null) prefs.lastUpdateCheck = System.currentTimeMillis()
             val r = c.release
-            if (r != null && isNewer(r.version, BuildConfig.VERSION_NAME)) callback(r)
+            if (r != null && isNewer(r.version, BuildConfig.VERSION_NAME)) {
+                remember(prefs, r)
+                callback(r)
+            } else if (c.version != null && !isNewer(c.version, BuildConfig.VERSION_NAME)) {
+                remember(prefs, null)
+            }
         }
+    }
+
+    /** 3.0.9: the newer release found by an earlier check, or null (none, or it is installed now). */
+    fun remembered(prefs: Prefs): Release? {
+        val json = prefs.sp.getString(FOUND, null) ?: return null
+        val r = try {
+            JSONObject(json).let { Release(it.getString("version"), it.getString("url"), it.getString("name"), it.optLong("size", -1), it.optString("notes")) }
+        } catch (_: Exception) {
+            null
+        }
+        if (r == null || !isNewer(r.version, BuildConfig.VERSION_NAME)) {
+            remember(prefs, null)
+            return null
+        }
+        return r
+    }
+
+    /** 3.0.9: keeps [r] for the next start ([remembered]), or forgets it. */
+    fun remember(prefs: Prefs, r: Release?) {
+        if (r == null) {
+            prefs.sp.edit().remove(FOUND).apply()
+            return
+        }
+        val json = JSONObject().put("version", r.version).put("url", r.apkUrl).put("name", r.apkName).put("size", r.size).put("notes", r.notes)
+        prefs.sp.edit().putString(FOUND, json.toString()).apply()
     }
 
     private const val OFFLINE = "Couldn't check for updates. Check your internet connection."

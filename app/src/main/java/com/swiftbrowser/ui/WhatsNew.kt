@@ -24,6 +24,11 @@ object WhatsNew {
     private class Item(val icon: Int, val title: String, val text: String, val version: Int = 19)
 
     private val NEW = listOf(
+        Item(R.drawable.ic_lite, "Lite mode High and Extreme", "A site's GIFs that are really silent videos (Reddit, X, Giphy and others) now play once at High and stay still at Extreme until you touch one; before, one tap on the page let them loop for ever. A preview you hold or swipe on plays at both levels, and at Extreme moving drawings stand still too.", version = 31),
+        Item(R.drawable.ic_update, "Updates when Swift starts", "When a newer Swift is out, a window tells you as Swift starts, with what's new, and comes back at each start until you update.", version = 31),
+        Item(R.drawable.ic_settings, "Simpler Settings", "Each switch says in one sentence what it does, on or off. \"Bar follows your finger\", \"Arrange the menu\" (hold a button in the menu instead) and \"Back up every week\" are gone, and Clear browsing data is only in Storage & data.", version = 31),
+        Item(R.drawable.ic_files_bin, "Recycle bin", "Deleted files can be kept for 1 or 3 days too.", version = 31),
+        Item(R.drawable.ic_tab, "New tabs", "After closing a tab, a new tab no longer shows another tab's picture while its page loads.", version = 31),
         Item(R.drawable.ic_key, "Back up to your Google account", "Swift can keep your bookmarks, history, open tabs, settings, saved passwords and sign-ins in your Google account, locked with a backup password only you know, and bring them back on a new phone. Turn it on in Settings → Storage & data.", version = 30),
         Item(R.drawable.ic_documents, "Documents", "Pinching a Word document zooms the document, not the bar above it. + and − in the menu keep it open, the menu opens at once, and the bar no longer comes and goes by itself while you scroll a PDF.", version = 30),
         Item(R.drawable.ic_home, "Home page", "Scroll the home page and the search bar comes up in the address bar; a small button takes you back to the top. The drag handle on long pages is gone.", version = 30),
@@ -110,7 +115,8 @@ object WhatsNew {
     )
 
     /** At start: the welcome on a new install, what's new after an update. */
-    fun showOnStart(a: MainActivity) {
+    /** 3.0.9: whether something was shown (then a newer Swift waits for the next start). */
+    fun showOnStart(a: MainActivity): Boolean {
         val prefs = SwiftApp.prefs
         val seen = prefs.seenVersion
         prefs.seenVersion = BuildConfig.VERSION_CODE
@@ -120,10 +126,17 @@ object WhatsNew {
             null
         }
         val newInstall = seen == 0 && info != null && info.firstInstallTime == info.lastUpdateTime
-        when {
-            newInstall && !prefs.welcomeDone -> welcome(a)
+        return when {
+            newInstall && !prefs.welcomeDone -> {
+                welcome(a)
+                true
+            }
             // Never recorded (an update from 1.8 or older), or an older version than this one.
-            !newInstall && seen < BuildConfig.VERSION_CODE -> whatsNew(a, seen)
+            !newInstall && seen < BuildConfig.VERSION_CODE -> {
+                whatsNew(a, seen)
+                true
+            }
+            else -> false
         }
     }
 

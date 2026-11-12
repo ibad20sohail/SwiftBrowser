@@ -136,13 +136,15 @@ function colours(c) {
 // Styles pages get from their first byte on (3.0.7: Lite mode's by level, all sites or one):
 //  - youtube, theflixer: lighter versions of these two sites (no big blurs), from Low;
 //  - lite: no animations, shadows, blur or filters, from Medium;
-//  - litehigh: no graphics layers asked for ahead of time, from High;
+//  - litehigh: no graphics layers asked for ahead of time, and silent "GIF" videos play once, from High;
+//  - liteextreme: those videos stay still until tapped, and moving drawings stop, at Extreme (3.0.9);
 //  - dark: the sites the user turned dark (Site settings, 2.6).
 // The last choice is kept, so pages loading before the app has said it again look the same.
 // It also holds keepPlaying, which content scripts read (see content.js).
 const STYLES = {
   lite: { matches: ['http://*/*', 'https://*/*'], css: [{ file: '/perf/lite.css' }], allFrames: true },
-  litehigh: { matches: ['http://*/*', 'https://*/*'], css: [{ file: '/perf/lite-high.css' }], allFrames: true },
+  litehigh: { matches: ['http://*/*', 'https://*/*'], css: [{ file: '/perf/lite-high.css' }], js: [{ file: '/perf/lite-high.js' }], allFrames: true },
+  liteextreme: { matches: ['http://*/*', 'https://*/*'], js: [{ file: '/perf/lite-extreme.js' }], allFrames: true },
   youtube: { matches: ['*://*.youtube.com/*'], css: [{ file: '/perf/youtube.css' }] },
   theflixer: {
     matches: ['http://*/*', 'https://*/*'],
@@ -198,7 +200,10 @@ function reachOf(r, onByDefault) {
 
 function layersOf(l) {
   const x = (l && typeof l === 'object') ? l : {};
-  return { fixes: reachOf(x.fixes, true), lite: reachOf(x.lite, false), litehigh: reachOf(x.litehigh, false) };
+  return {
+    fixes: reachOf(x.fixes, true), lite: reachOf(x.lite, false), litehigh: reachOf(x.litehigh, false),
+    liteextreme: reachOf(x.liteextreme, false),
+  };
 }
 
 // What a look kept by a version before 3.0.7 meant: Lite mode on (but its excepted sites) and the
@@ -208,6 +213,7 @@ function oldLayers(look) {
     fixes: { on: look.fixes !== false, exclude: [], only: null },
     lite: { on: look.lite === true, exclude: sites(look.liteExcept), only: null },
     litehigh: { on: false, exclude: [], only: null },
+    liteextreme: { on: false, exclude: [], only: null },
   };
 }
 
@@ -225,6 +231,7 @@ function setLook(look, kept) {
   setFix('theflixer', layers.fixes, s => s.startsWith('theflixer.'));
   setStyle('lite', layers.lite.on, layers.lite.exclude, layers.lite.only);
   setStyle('litehigh', layers.litehigh.on, layers.litehigh.exclude, layers.litehigh.only);
+  setStyle('liteextreme', layers.liteextreme.on, layers.liteextreme.exclude, layers.liteextreme.only);
   const dark = look.darkSites || [];
   setStyle('dark', dark.length > 0, null, dark);
   const stored = Object.assign({}, look);

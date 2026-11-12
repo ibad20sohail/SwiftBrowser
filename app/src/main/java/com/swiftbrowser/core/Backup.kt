@@ -33,8 +33,6 @@ object Backup {
     /** A backup is never bigger than this (5,000 pages of history make about 1 MB). */
     private const val MAX_BYTES = 16 * 1024 * 1024
 
-    private const val AUTO_PREFIX = "Swift backup (automatic)"
-    private const val WEEK = 7L * 24 * 3600 * 1000
 
     class Summary(val profiles: Int, val bookmarks: Int, val tabs: Int, val history: Int, val created: String)
 
@@ -68,35 +66,12 @@ object Backup {
     /** 3.0.8: backup files also carry the passwords and sign-ins, locked with the backup password. */
     const val FILES_LOCKED = "backup_files_locked"
 
-    /** Blocking: writes the backup and returns its file. */
-    fun write(ctx: Context): File = write(ctx, automatic = false)
-
     /**
-     * Blocking: the weekly backup, if it is due (Settings → Privacy → Back up every week). Only the
-     * two newest automatic backups are kept. Returns the file written, or null.
+     * Blocking: writes the backup and returns its file. (3.0.9: only when the user asks; the weekly
+     * one Swift made by itself is gone.)
      */
-    fun autoBackupIfDue(ctx: Context): File? {
-        val prefs = SwiftApp.prefs
-        if (!prefs.autoBackup || System.currentTimeMillis() - prefs.lastAutoBackup < WEEK) return null
-        // 3.0: the tabs without their back history (only the addresses are needed).
-        if (SwiftApp.db.tabsWithoutState().none { !UrlUtils.isBlank(it.url) }) return null
-        val file = try {
-            write(ctx, automatic = true)
-        } catch (e: Exception) {
-            L.w("Automatic backup failed", e)
-            return null
-        }
-        prefs.lastAutoBackup = System.currentTimeMillis()
-        file.parentFile?.listFiles { f -> f.name.startsWith(AUTO_PREFIX) && f.name.endsWith(".json") }
-            ?.sortedByDescending { it.lastModified() }?.drop(2)?.forEach { it.delete() }
-        L.d("Automatic backup written: ${file.name}")
-        return file
-    }
-
-    private fun write(ctx: Context, automatic: Boolean): File {
-        // The automatic backup (a file in the Download folder, made by itself) leaves history out
-        // (2.6): only a backup made on purpose carries it.
-        val root = contents(ctx, history = !automatic)
+    fun write(ctx: Context): File {
+        val root = contents(ctx, history = true)
         // 3.0.8: the passwords and sign-ins, locked with the backup password, if the user chose so.
         if (SwiftApp.prefs.sp.getBoolean(FILES_LOCKED, false)) {
             BackupLock.lockBox(BackupSecrets.forFile(ctx))?.let { root.put("locked", it) }
@@ -104,7 +79,7 @@ object Backup {
         }
         val day = SimpleDateFormat("yyyy-MM-dd", Locale.ROOT).format(Date())
         val dir = Downloads.directory()
-        val base = if (automatic) "$AUTO_PREFIX $day" else "Swift backup $day"
+        val base = "Swift backup $day"
         var file = File(dir, "$base.json")
         var n = 2
         while (file.exists()) file = File(dir, "$base ($n).json").also { n++ }

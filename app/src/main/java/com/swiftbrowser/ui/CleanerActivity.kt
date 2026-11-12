@@ -257,7 +257,7 @@ class CleanerActivity : ListActivity() {
         val total = cards.filter { it.kind != Cleaner.Kind.EMPTY }.sumOf { it.bytes }
         items += Hint(
             (if (total > 0) "Up to ${UrlUtils.formatBytes(total)} can be freed. " else "") +
-                "Delete moves things to the recycle bin, where they stay ${FilesSettings.binDays} days (the space comes back when they leave it or you empty it). Delete forever frees it now.",
+                "Delete moves things to the recycle bin, where they stay ${com.swiftbrowser.files.BinClock.daysText(FilesSettings.binDays)} (the space comes back when they leave it or you empty it). Delete forever frees it now.",
         )
         items.addAll(cards)
         adapter.set(items)

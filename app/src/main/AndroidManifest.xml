@@ -164,6 +164,15 @@
                 <data android:mimeType="image/bmp" />
             </intent-filter>
         </activity>
+        <!-- 3.0.11: the same viewer as Files opens a picture, with a see-through window: the picture
+             grows out of Files' small picture of it and shrinks back into it (PictureGrow). -->
+        <activity
+            android:name=".ui.MediaViewerActivity$OverFiles"
+            android:autoRemoveFromRecents="true"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"
+            android:exported="false"
+            android:taskAffinity=""
+            android:theme="@style/Theme.Swift.Viewer" />
         <!-- 2.9: Swift's video and music player. A task of its own (singleTask), so the notification and
              "Open with Swift" always find the one player screen. Turning is handled by the screen itself
              (configChanges), so what plays doesn't restart; the orientation is set while playing. -->
@@ -194,6 +203,8 @@
 
         <!-- 2.9: Files' "Free up space" and Wi-Fi transfer. -->
         <activity android:name=".ui.CleanerActivity" android:exported="false" android:windowSoftInputMode="stateAlwaysHidden" />
+        <!-- 3.0.11: one of the user's playlists (Files → Music), over Files. -->
+        <activity android:name=".ui.PlaylistActivity" android:exported="false" android:windowSoftInputMode="stateAlwaysHidden" />
         <activity
             android:name=".ui.WifiTransferActivity"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"

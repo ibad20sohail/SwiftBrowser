@@ -21,8 +21,8 @@ android {
         applicationId = "com.swiftbrowser.app"
         minSdk = 24
         targetSdk = 35
-        versionCode = 32
-        versionName = "3.0.10"
+        versionCode = 33
+        versionName = "3.0.11"
     }
 
     flavorDimensions += "abi"

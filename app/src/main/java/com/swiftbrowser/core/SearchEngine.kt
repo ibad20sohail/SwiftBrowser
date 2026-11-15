@@ -46,6 +46,17 @@ enum class SearchEngine(
     /** Suggestions in the OpenSearch format: ["typed", ["suggestion", ...]]; null: the engine has none. */
     fun suggestUrl(query: String): String? = if (suggest.isEmpty()) null else suggest + URLEncoder.encode(query, "UTF-8")
 
+    /**
+     * 3.0.11: where "Search this picture" (a held picture) goes for the picture at [imageUrl]: Bing's own
+     * picture search with Bing, Google Lens with the others (DuckDuckGo, Startpage and one's own engine
+     * can't search by a picture's address).
+     */
+    fun pictureSearchUrl(imageUrl: String): String {
+        val picture = URLEncoder.encode(imageUrl, "UTF-8")
+        return if (this == BING) "https://www.bing.com/images/search?view=detailv2&iss=sbi&q=imgurl:$picture"
+        else "https://lens.google.com/uploadbyurl?url=$picture"
+    }
+
     companion object {
         /** Whether [icon] is one of the engines' logos (drawn in its own colours). */
         fun isLogo(icon: Int) = entries.any { it.icon == icon }

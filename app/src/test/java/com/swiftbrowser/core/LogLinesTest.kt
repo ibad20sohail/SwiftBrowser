@@ -38,6 +38,8 @@ class LogLinesTest {
         assertEquals("Blocked pop-up to a site", LogLines.withoutSites("Blocked pop-up to ads.tracker-net.io"))
         assertEquals("engine Gecko: a site failed", LogLines.withoutSites("engine Gecko: https://www.example.com/watch?v=1 failed"))
         assertEquals("current site: a site", LogLines.withoutSites("current site: thepiratebay.org"))
+        // 3.0.11: a script file with its line and column stays (it was turned into "js/a site:24").
+        assertEquals("onDomReady@js/contentscript.js:1314:24", LogLines.withoutSites("onDomReady@js/contentscript.js:1314:24"))
     }
 
     @Test

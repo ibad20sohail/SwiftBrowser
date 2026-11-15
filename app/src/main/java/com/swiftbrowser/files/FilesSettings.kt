@@ -17,7 +17,6 @@ object FilesSettings {
     const val KEY_GRID = "files_grid"
     const val KEY_SORT = "files_sort"
     const val KEY_CATEGORY_SORT = "files_category_sort"
-    const val KEY_THUMBNAILS = "files_thumbnails"
     const val KEY_RECYCLE_BIN = "files_recycle_bin"
     const val KEY_BIN_DAYS = "files_bin_days"
     const val KEY_WIFI_PORT = "files_wifi_port"
@@ -74,10 +73,6 @@ object FilesSettings {
 
     val sortLabels: List<String> get() = FileOps.sortLabels
 
-    /** Small pictures of photos, videos and apps in the lists (off: the kinds' icons only, lighter on a slow phone). */
-    var thumbnails: Boolean
-        get() = sp.getBoolean(KEY_THUMBNAILS, true)
-        set(v) = sp.edit().putBoolean(KEY_THUMBNAILS, v).apply()
 
     /** Deleting moves things to the recycle bin (off: Files asks, then deletes for good). */
     var useRecycleBin: Boolean

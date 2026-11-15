@@ -53,7 +53,7 @@ class DocRulesTest {
             assertFalse(type, DocRules.allowed(type, Sender.READER))
             assertFalse(type, DocRules.allowed(type, Sender.OTHER))
         }
-        for (type in listOf("hello", "click", "icon", "playing", "video-pos", "video-start", "media-ended", "media-error", "media-waiting", "google-account", "theme-color")) {
+        for (type in listOf("hello", "click", "icon", "playing", "video-pos", "video-start", "media-ended", "media-error", "media-waiting", "google-account", "theme-color", "address-form")) {
             assertTrue(type, DocRules.allowed(type, Sender.CONTENT_SCRIPT))
             assertFalse(type, DocRules.allowed(type, Sender.VIEWER))
         }

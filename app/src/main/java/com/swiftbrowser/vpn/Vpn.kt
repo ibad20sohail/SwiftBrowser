@@ -156,11 +156,6 @@ object Vpn {
         get() = SwiftApp.prefs.sp.getBoolean(KEY_EVERY_START, false)
         set(v) = SwiftApp.prefs.sp.edit().putBoolean(KEY_EVERY_START, v).apply()
 
-    /** 2.2: when a server doesn't answer (or stops answering), move on to another location by itself. */
-    var autoSwitch: Boolean
-        get() = SwiftApp.prefs.sp.getBoolean(KEY_AUTO_SWITCH, true)
-        set(v) = SwiftApp.prefs.sp.edit().putBoolean(KEY_AUTO_SWITCH, v).apply()
-
     var pauseWhenDown: Boolean
         get() = SwiftApp.prefs.sp.getBoolean(KEY_PAUSE, true)
         set(v) {
@@ -503,9 +498,9 @@ object Vpn {
     /** "NL-FREE#133 stopped answering": why Swift switched by itself; shown once it's connected. */
     var switchNote: String? = null
 
-    /** [from] didn't answer: on to the next location by itself (Settings: "Switch to another location"). True when it did. */
+    /** [from] didn't answer: on to the next location by itself (3.0.11: always; it was a setting). True when it did. */
     private fun switchAway(ctx: Context, from: Location, stopped: Boolean = false): Boolean {
-        if (!autoSwitch || !wanted) return false
+        if (!wanted) return false
         failedInChain += from.id
         val next = spareFor(from, failedInChain) ?: return false
         switchNote = "${from.server} " + (if (stopped) "stopped answering" else "didn't answer") + ": switched to ${next.flag} ${next.countryName} (${next.server})"
@@ -751,10 +746,9 @@ object Vpn {
     private const val KEY_AT_START = "vpn_at_start"
     private const val KEY_EVERY_START = "vpn_every_start"
     private const val KEY_PAUSE = "vpn_pause_when_down"
-    private const val KEY_AUTO_SWITCH = "vpn_auto_switch"
 
     /** Settings that stay on the phone (Backup leaves them out; the files themselves never go). */
-    val PREF_KEYS = setOf(KEY_LOCATIONS, KEY_CURRENT, KEY_WANTED, KEY_AT_START, KEY_EVERY_START, KEY_PAUSE, KEY_REMINDED, KEY_AUTO_SWITCH)
+    val PREF_KEYS = setOf(KEY_LOCATIONS, KEY_CURRENT, KEY_WANTED, KEY_AT_START, KEY_EVERY_START, KEY_PAUSE, KEY_REMINDED)
 
     /**
      * AES-GCM with a key that never leaves Android's keystore. 3.0: Android can lose the key (a reset

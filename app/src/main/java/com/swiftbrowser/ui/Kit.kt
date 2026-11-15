@@ -483,6 +483,9 @@ object Ui {
      */
     fun steadyFigures(tv: TextView): TextView = tv.apply { fontFeatureSettings = "tnum" }
 
+    /** 3.0.11: the same for text drawn by hand (a video's length over its picture in Files). */
+    fun steadyFigures(p: Paint): Paint = p.apply { fontFeatureSettings = "tnum" }
+
     /**
      * 3.0.4: no words split at the end of a line ("Proton VP-N"): Android 7 hyphenates labels by
      * default (Android 10 stopped), and a label reads better with the whole word on the next line.
@@ -1172,6 +1175,16 @@ object Motion {
             tv.text = text
             tv.animate().alpha(1f).setDuration(SHORT).setInterpolator(enter).start()
         }.start()
+    }
+
+    /** 3.0.11: [tv] shows [text] at once; a [swapText] on its way is given up (a list's row used again for another one). */
+    fun setText(tv: TextView, text: CharSequence) {
+        if (tv.getTag(R.id.motion_text) != null) {
+            tv.animate().cancel()
+            tv.setTag(R.id.motion_text, null)
+            tv.alpha = 1f
+        }
+        tv.text = text
     }
 
     /** A quick grow-and-settle, to show something changed (the tab count, a new item). */

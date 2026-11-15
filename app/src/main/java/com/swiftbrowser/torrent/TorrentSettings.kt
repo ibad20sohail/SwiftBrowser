@@ -14,13 +14,7 @@ object TorrentSettings {
     private const val WIFI_ONLY = "torrent_wifi_only"
     private const val BATTERY_PAUSE = "torrent_battery_pause"
     private const val EXTRA_TRACKERS = "torrent_extra_trackers"
-    private const val CHARGING_ONLY = "torrent_charging_only"
-    private const val NIGHT_ONLY = "torrent_night_only"
     private const val ENCRYPTED_ONLY = "torrent_encrypted_only"
-
-    /** "At night only": from 1 am to 7 am, when some data plans are cheaper. */
-    const val NIGHT_FROM = 1
-    const val NIGHT_TO = 7
 
     val AT_ONCE_CHOICES = intArrayOf(1, 2, 3)
 
@@ -70,31 +64,6 @@ object TorrentSettings {
         set(v) = sp.edit { putBoolean(ENCRYPTED_ONLY, v) }
 
     val ENCRYPTION_CHOICES = listOf("Use them when possible", "Only use them (fewer people to download from)")
-
-    /** Torrents only run while the phone charges (it stays cool, the battery full). */
-    var chargingOnly: Boolean
-        get() = sp.getBoolean(CHARGING_ONLY, false)
-        set(v) = sp.edit { putBoolean(CHARGING_ONLY, v) }
-
-    /** Torrents only run at night ([NIGHT_FROM] to [NIGHT_TO]). */
-    var nightOnly: Boolean
-        get() = sp.getBoolean(NIGHT_ONLY, false)
-        set(v) = sp.edit { putBoolean(NIGHT_ONLY, v) }
-
-    fun isNight(): Boolean = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY) in NIGHT_FROM until NIGHT_TO
-
-    /** 3.0: when the next night starts (1 am, wall clock), for the alarm that starts waiting torrents. */
-    fun nextNight(now: Long): Long {
-        val c = java.util.Calendar.getInstance().apply {
-            timeInMillis = now
-            set(java.util.Calendar.HOUR_OF_DAY, NIGHT_FROM)
-            set(java.util.Calendar.MINUTE, 0)
-            set(java.util.Calendar.SECOND, 5)
-            set(java.util.Calendar.MILLISECOND, 0)
-        }
-        if (c.timeInMillis <= now) c.add(java.util.Calendar.DAY_OF_YEAR, 1)
-        return c.timeInMillis
-    }
 
     fun speedLabel(kb: Int): String = when {
         kb <= 0 -> "No limit"

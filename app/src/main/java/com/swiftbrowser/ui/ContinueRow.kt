@@ -17,7 +17,6 @@ import com.swiftbrowser.core.Profiles
 import com.swiftbrowser.core.UrlUtils
 import com.swiftbrowser.files.FileKind
 import com.swiftbrowser.files.FileThumbs
-import com.swiftbrowser.files.FilesSettings
 import com.swiftbrowser.media.Unfinished
 import com.swiftbrowser.tabs.TabManager
 import java.io.File
@@ -183,30 +182,37 @@ class ContinueRow(
                 }
             }
             addView(picture, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+            // 3.0.11: the mark pulses softly while a picture is on its way (PictureLoading).
+            val none = { PictureLoading.stop(picture) }
             if (doc != null) {
                 // The document's whole first page (or its own picture), small on the tinted band (2.6):
                 // the top of a white page filled the card with white, glaring in dark mode.
-                com.swiftbrowser.docs.DocThumbs.load(context, doc.uri, doc.kind, dp(CARD_DP)) { bmp ->
+                val coming = com.swiftbrowser.docs.DocThumbs.load(context, doc.uri, doc.kind, dp(CARD_DP), onNone = none) { bmp ->
+                    PictureLoading.stop(picture)
                     picture.scaleType = ImageView.ScaleType.FIT_CENTER
                     picture.setPadding(0, dp(8), 0, dp(10))
                     picture.setImageBitmap(bmp)
                     picture.alpha = 0f
                     picture.animate().alpha(1f).setDuration(Motion.NORMAL).start()
                 }
+                if (coming) PictureLoading.start(picture)
             }
             item.image?.let { url ->
                 // Small and kept in memory a while (PreviewLoader); none on mobile data with Data saver.
                 // Just big enough to cover the card's picture (3.0: decoded to its size).
-                PreviewLoader.load(context as android.app.Activity, url, dp(PICTURE_DP), dp(CARD_DP)) { bmp ->
+                val coming = PreviewLoader.load(context as android.app.Activity, url, dp(PICTURE_DP), dp(CARD_DP), onNone = none) { bmp ->
+                    PictureLoading.stop(picture)
                     picture.scaleType = ImageView.ScaleType.CENTER_CROP
                     picture.setImageBitmap(bmp)
                     picture.alpha = 0f
                     picture.animate().alpha(1f).setDuration(Motion.NORMAL).start()
                 }
+                if (coming) PictureLoading.start(picture)
             }
-            // 3.0.3: a video on the phone shows a frame of it, made as Files' pictures are (when those are on).
-            if (local != null && item.video && FilesSettings.thumbnails) {
-                FileThumbs.load(context, local, item.fileTime, FileKind.VIDEO, dp(CARD_DP), wide = true) { bmp ->
+            // 3.0.3: a video on the phone shows a frame of it, made as Files' pictures are.
+            if (local != null && item.video) {
+                val coming = FileThumbs.load(context, local, item.fileTime, FileKind.VIDEO, dp(CARD_DP), wide = true, onNone = none) { bmp ->
+                    PictureLoading.stop(picture)
                     picture.scaleType = ImageView.ScaleType.CENTER_CROP
                     picture.setImageBitmap(bmp)
                     if (isAttachedToWindow) {
@@ -214,6 +220,7 @@ class ContinueRow(
                         picture.animate().alpha(1f).setDuration(Motion.SHORT).start()
                     }
                 }
+                if (coming != null) PictureLoading.start(picture)
             }
             addView(Progress(context, item.progress), FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(4), Gravity.BOTTOM))
         }, LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(PICTURE_DP)))

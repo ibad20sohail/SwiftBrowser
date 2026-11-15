@@ -12,6 +12,7 @@ import com.swiftbrowser.download.DownloadService
 import com.swiftbrowser.download.Downloads
 import com.swiftbrowser.engine.DataSaver
 import com.swiftbrowser.engine.Power
+import com.swiftbrowser.media.Subtitles
 import com.swiftbrowser.vpn.Vpn
 import org.json.JSONObject
 import org.libtorrent4j.AlertListener
@@ -30,16 +31,19 @@ import org.libtorrent4j.alerts.AddTorrentAlert
 import org.libtorrent4j.alerts.Alert
 import org.libtorrent4j.alerts.AlertType
 import org.libtorrent4j.alerts.FileErrorAlert
+import org.libtorrent4j.alerts.PieceFinishedAlert
 import org.libtorrent4j.alerts.SaveResumeDataAlert
 import org.libtorrent4j.alerts.TorrentAlert
 import org.libtorrent4j.alerts.TorrentErrorAlert
 import org.libtorrent4j.swig.add_torrent_params
+import org.libtorrent4j.swig.byte_vector
 import org.libtorrent4j.swig.error_code
 import org.libtorrent4j.swig.info_hash_t
 import org.libtorrent4j.swig.libtorrent
 import org.libtorrent4j.swig.settings_pack
 import java.io.File
 import java.net.URLEncoder
+import java.util.Locale
 
 /**
  * Torrents (2.9.2), with libtorrent. They are downloads like the others, rows of [Downloads] (kind
@@ -66,8 +70,6 @@ object Torrents {
     const val PAUSED_VPN = "Paused while Swift's VPN is on"
     const val WAITING_WIFI = "Waiting for Wi-Fi"
     const val PAUSED_BATTERY = "Paused: battery low"
-    const val WAITING_CHARGER = "Waiting for the charger"
-    const val WAITING_NIGHT = "Waiting for the night (1 am to 7 am)"
     const val PAUSED_STORAGE = "Paused: not enough free space for it"
     const val WAITING_TURN = "Waiting for another torrent to finish"
     const val GETTING_FILES = "Getting the file list…"
@@ -94,7 +96,7 @@ object Torrents {
     private const val TRIES = 4
 
     /** 3.0: the reasons a torrent waits for something outside Swift, not just its turn (no lock, no notification in front). */
-    private val OUTSIDE = setOf(PAUSED_VPN, WAITING_WIFI, PAUSED_BATTERY, WAITING_CHARGER, WAITING_NIGHT, PAUSED_STORAGE, NOBODY)
+    private val OUTSIDE = setOf(PAUSED_VPN, WAITING_WIFI, PAUSED_BATTERY, PAUSED_STORAGE, NOBODY)
 
     fun waitsFor(reason: String): Boolean = reason in OUTSIDE
 
@@ -153,8 +155,7 @@ object Torrents {
     fun blockReason(): String? {
         if (Vpn.wanted || Vpn.state != Vpn.State.OFF) return PAUSED_VPN
         if (TorrentSettings.wifiOnly && DataSaver.onMobileData) return WAITING_WIFI
-        if (TorrentSettings.chargingOnly && !Power.charging) return WAITING_CHARGER
-        if (TorrentSettings.nightOnly && !TorrentSettings.isNight()) return WAITING_NIGHT
+        // 3.0.11: no "only while charging" or "at night only" any more (removed from Settings).
         batteryBlocked = when {
             !TorrentSettings.batteryPause || Power.charging || Power.percent < 0 -> false
             batteryBlocked -> Power.percent < BATTERY_OK
@@ -247,6 +248,11 @@ object Torrents {
         TorrentFiles.main(entries) { prio[it.index] != Priority.IGNORE }?.let { item.extra.put("main", it.path) }
         item.total = entries.filter { prio[it.index] != Priority.IGNORE }.sumOf { it.size }
         handles[hash]?.prioritizeFiles(prio)
+        // 3.0.11: that made every piece's priority the file's again: a file being watched asks again.
+        watching?.takeIf { it.hash == hash }?.let {
+            it.asked = emptySet()
+            refreshWindow(it)
+        }
         // The resume data still has the old choice: it would win at the next start.
         if (hash !in active) resumeFile(hash).delete()
         if (item.status == Downloads.DONE) {
@@ -310,9 +316,10 @@ object Torrents {
         val torrents = Downloads.all().filter { it.kind == Downloads.KIND_TORRENT }
         val block = blockReason()
         val now = System.currentTimeMillis()
-        // Those running keep their place; then oldest first.
+        // Those running keep their place; then oldest first. 3.0.11: one being watched goes first.
+        val watched = watching?.hash
         val waiting = torrents.filter { it.status == Downloads.RUNNING || it.status == Downloads.QUEUED }
-            .sortedWith(compareBy({ hashOf(it) !in active }, { it.created }))
+            .sortedWith(compareBy({ watched == null || hashOf(it) != watched }, { hashOf(it) !in active }, { it.created }))
         var slots = TorrentSettings.atOnce
         for (item in waiting) {
             val hash = hashOf(item) ?: continue
@@ -335,15 +342,12 @@ object Torrents {
         }
         worker.removeCallbacks(recheck)
         val queued = waiting.filter { it.status == Downloads.QUEUED }
-        if (queued.any { it.error == WAITING_NIGHT || it.error == PAUSED_STORAGE || it.error == NOBODY }) {
+        if (queued.any { it.error == PAUSED_STORAGE || it.error == NOBODY }) {
             worker.postDelayed(recheck, RECHECK_MS)
         }
         // 3.0: those waiting for a time get Swift woken for it, also with the phone asleep and Swift closed.
-        val wakes = listOfNotNull(
-            if (queued.any { it.error == WAITING_NIGHT }) TorrentSettings.nextNight(now) else null,
-            queued.filter { it.error == NOBODY }.minOfOrNull { it.extra.optLong("retryAt", 0) }?.takeIf { it > now },
-        )
-        main.post { DownloadService.wakeAt(app, wakes.minOrNull()) }
+        val wake = queued.filter { it.error == NOBODY }.minOfOrNull { it.extra.optLong("retryAt", 0) }?.takeIf { it > now }
+        main.post { DownloadService.wakeAt(app, wake) }
         // Paused, failed or removed ones leave libtorrent.
         for ((hash, id) in active.toList()) {
             val item = Downloads.get(id)
@@ -425,10 +429,14 @@ object Torrents {
         }
         p.setSave_path(folder.absolutePath)
         // Swift decides what runs and when, so libtorrent's own queue is off; never "seed only".
+        // 3.0.11: nor in order, nor any piece more urgent than its file: what a watch left in the
+        // resume data when Swift was closed while it played (one still watched gets them in onAdded).
         p.setFlags(
             p.getFlags().and_(TorrentFlags.AUTO_MANAGED.inv()).and_(TorrentFlags.PAUSED.inv())
-                .and_(TorrentFlags.UPLOAD_MODE.inv()).and_(TorrentFlags.SEED_MODE.inv()),
+                .and_(TorrentFlags.UPLOAD_MODE.inv()).and_(TorrentFlags.SEED_MODE.inv())
+                .and_(TorrentFlags.SEQUENTIAL_DOWNLOAD.inv()),
         )
+        p.set_piece_priorities(byte_vector())
         // 3.0: never for a private torrent (one from a private tracker): its owners decide where it is
         // announced, and only their tracker may know who downloads it.
         val private = runCatching { p.ti_ptr()?.priv() == true }.getOrDefault(false)
@@ -477,6 +485,8 @@ object Torrents {
         item.peers = 0
         if (item.total > 0) item.done = item.total
         Downloads.torrentChanged(item, persist = true)
+        // 3.0.11: a file being watched is all there: the player just goes on.
+        watching?.takeIf { it.id == item.id }?.markComplete()
         // Galleries and music apps see the new files.
         val ti = infoOf(item)
         if (ti != null) {
@@ -503,6 +513,8 @@ object Torrents {
         if (!::app.isInitialized) return
         worker.post {
             val hash = hashOf(item) ?: return@post
+            // 3.0.11: a file being watched gets nothing more: the player says it isn't there any more.
+            watching?.takeIf { it.hash == hash }?.markGone()
             val th = handles.remove(hash)
             active.remove(hash)
             leaving.remove(hash)
@@ -550,6 +562,180 @@ object Torrents {
         }
         dirs.sortedByDescending { it.path.length }.forEach { d -> if (d.list()?.isEmpty() == true) d.delete() }
         folder.listFiles()?.filter { it.name.startsWith(".") && it.name.endsWith(".parts") && it.name.contains(hash, ignoreCase = true) }?.forEach { it.delete() }
+    }
+
+    // ------------------------------------------------------------------ 3.0.11: Watch now
+
+    /** The torrent file watched while it downloads: one at a time, as the player plays one thing. */
+    @Volatile
+    private var watching: TorrentStream? = null
+
+    /** Piece deadlines a rank apart: the most urgent piece is wanted at once, the next a little later. */
+    private const val DEADLINE_STEP_MS = 400
+
+    /** How often what a watched torrent has is read again from libtorrent (its piece alerts may be missed). */
+    private const val FILL_EVERY_MS = 5_000L
+
+    /** The torrent's subtitles are fetched with the start of the film only up to this much (a season pack's are many). */
+    private const val MAX_SUBTITLE_BYTES = 4L shl 20
+
+    /**
+     * 3.0.11, Watch now: file [index] of [item] (-1: its film, the one Play opens) is played while it
+     * downloads. Its pieces come in order from where the player reads, the file's start and end first;
+     * one paused or stopped by a tap goes on, and it goes before the other torrents (the rules that
+     * pause torrents still apply, and the player says when one does). Null when the file can't be
+     * watched: no file list yet, not one of the chosen files, not a video. On the main thread (it
+     * reads the torrent's metadata file, as the Files panel does).
+     */
+    fun watch(item: Downloads.Item, index: Int): TorrentStream? {
+        if (!::app.isInitialized) return null
+        val hash = hashOf(item) ?: return null
+        val ti = infoOf(item) ?: return null
+        val entries = TorrentFiles.list(ti)
+        val wanted = wantedOf(item, ti)
+        val main = item.extra.optString("main")
+        val entry = entries.firstOrNull { if (index >= 0) it.index == index else it.path == main }?.takeIf { it.index in wanted && it.video } ?: return null
+        watching?.let {
+            if (it.hash == hash && it.index == entry.index) {
+                resumeStopped(item)
+                return it
+            }
+        }
+        val folder = File(item.extra.optString("dir").ifEmpty { return null })
+        val file = File(folder, entry.path).takeIf { TorrentFiles.within(folder, it) } ?: return null
+        val fs = ti.files()
+        val map = runCatching { PieceMap(fs.fileOffset(entry.index), entry.size, fs.pieceLength(), fs.totalSize()) }.getOrNull() ?: return null
+        // While some pieces are asked for, libtorrent fetches nothing else: the film's subtitles (small
+        // files beside it or in a Subs folder) come with its start, or they would wait for its end.
+        val top = entry.path.substringBeforeLast('/', "").let { if (it.isEmpty()) "" else "$it/" }
+        val subs = entries.filter {
+            it.index in wanted && it.path.startsWith(top) && it.name.substringAfterLast('.', "").lowercase(Locale.ROOT) in Subtitles.EXTENSIONS
+        }.takeIf { list -> list.sumOf { it.size } <= MAX_SUBTITLE_BYTES }.orEmpty()
+        val pinned = map.edgePieces(PieceMap.HEAD_BYTES, PieceMap.tailBytes(entry.size)) +
+            subs.flatMap { PieceMap.piecesOf(fs.fileOffset(it.index), it.size, fs.pieceLength()) }
+        val s = TorrentStream(item.id, hash, entry.index, file, map, pinned.distinct(), ti.numFiles(), SystemClock::uptimeMillis) { moved ->
+            worker.post { if (watching === moved) refreshWindow(moved) }
+        }
+        if (item.status == Downloads.DONE) s.markComplete()
+        watching?.let { unwatch(it) }
+        watching = s
+        L.d("Torrents: watching a file while it downloads")
+        resumeStopped(item)
+        worker.post { startWatching(s) }
+        return s
+    }
+
+    /** Watching needs the torrent's pieces: one paused or stopped by a tap goes on. */
+    private fun resumeStopped(item: Downloads.Item) {
+        if (item.status == Downloads.PAUSED || item.status == Downloads.FAILED) Downloads.resume(item.id)
+    }
+
+    /** The player let go of [s] (closed, or plays something else): the torrent goes back to its usual order. */
+    fun unwatch(s: TorrentStream) {
+        if (watching !== s) return
+        watching = null
+        L.d("Torrents: watching ended")
+        worker.post { stopWatching(s) }
+    }
+
+    /** What the player reads file [index] of torrent [hash] through, while it is watched. */
+    fun stream(hash: String, index: Int): TorrentStream? = watching?.takeIf { it.hash == hash && it.index == index }
+
+    private fun startWatching(s: TorrentStream) {
+        if (watching !== s) return
+        val th = handles[s.hash]
+        // Not running (paused by a rule, waiting): what it has so far plays meanwhile.
+        if (th != null && s.hash !in leaving) applyWatch(s, th) else fillFromResume(s)
+        applyRules()
+    }
+
+    /** On [th] (its handle now): in order, with the pieces wanted first asked for. */
+    private fun applyWatch(s: TorrentStream, th: TorrentHandle) {
+        s.applied = th
+        s.asked = emptySet()
+        refreshHave(s, th)
+        runCatching { th.setFlags(TorrentFlags.SEQUENTIAL_DOWNLOAD) }.onFailure { L.w("Torrents: couldn't fetch in order", it) }
+        refreshWindow(s)
+    }
+
+    private fun refreshHave(s: TorrentStream, th: TorrentHandle) {
+        s.filledAt = SystemClock.uptimeMillis()
+        val pieces = runCatching { th.status(TorrentHandle.QUERY_PIECES).pieces() }.getOrNull() ?: return
+        val size = pieces.size()
+        s.fill { it < size && pieces.getBit(it) }
+    }
+
+    /** What a torrent out of libtorrent has, from its resume data. */
+    private fun fillFromResume(s: TorrentStream) {
+        val f = resumeFile(s.hash)
+        if (!f.isFile) return
+        try {
+            val ec = error_code()
+            val p = libtorrent.read_resume_data_ex(Vectors.bytes2byte_vector(f.readBytes()), ec)
+            if (ec.value() != 0) return
+            val have = p.get_have_pieces()
+            val size = have.size()
+            s.fill { it < size && have.get_bit(it) }
+        } catch (e: Throwable) {
+            L.w("Torrents: couldn't read what a watched torrent has", e)
+        }
+    }
+
+    /**
+     * The pieces [s] wants first get deadlines, the most urgent soonest (libtorrent asks the fastest
+     * people sharing for those first). New ones are added as the reading moves on; after a seek
+     * (reading somewhere not asked for) those asked for before stop being urgent.
+     */
+    private fun refreshWindow(s: TorrentStream) {
+        val th = handles[s.hash]?.takeIf { it === s.applied } ?: return
+        // While libtorrent checks the files, all are asked for again once it is done.
+        if (Downloads.get(s.id)?.error == CHECKING) {
+            s.asked = emptySet()
+            return
+        }
+        val want = s.wanted()
+        if (want.isEmpty() && s.asked.isEmpty()) return
+        val at = s.map.pieceOf(s.position)
+        val jump = s.asked.isEmpty() || (!s.have(at) && at !in s.asked)
+        try {
+            if (jump) th.clearPieceDeadlines()
+            want.forEachIndexed { rank, p -> if (jump || p !in s.asked) th.setPieceDeadline(p, rank * DEADLINE_STEP_MS) }
+        } catch (e: Throwable) {
+            L.w("Torrents: couldn't ask for a watched file's pieces", e)
+            return
+        }
+        s.asked = want.toHashSet()
+    }
+
+    /** Once a second while torrents run. */
+    private fun pollWatch(now: Long) {
+        val s = watching ?: return
+        val th = handles[s.hash] ?: return
+        if (s.hash in leaving) return
+        if (th !== s.applied) {
+            applyWatch(s, th)
+            return
+        }
+        if (now - s.filledAt > FILL_EVERY_MS) refreshHave(s, th)
+        refreshWindow(s)
+    }
+
+    private fun stopWatching(s: TorrentStream) {
+        val th = handles[s.hash]
+        if (th != null && th === s.applied) {
+            try {
+                th.clearPieceDeadlines()
+                th.unsetFlags(TorrentFlags.SEQUENTIAL_DOWNLOAD)
+                // The files' priorities as chosen also give each piece its own back (deadlines made some urgent).
+                val prio = Downloads.get(s.id)?.let { prioFrom(it.extra.optString("prio"), s.numFiles) }
+                    ?: th.torrentFile()?.let { TorrentFiles.defaultPriorities(it) }
+                if (prio != null) th.prioritizeFiles(prio)
+            } catch (e: Throwable) {
+                L.w("Torrents: couldn't put a watched torrent back in its usual order", e)
+            }
+        }
+        s.applied = null
+        applyRules()
     }
 
     // ------------------------------------------------------------------ libtorrent
@@ -695,6 +881,8 @@ object Torrents {
                     if (th.needSaveResumeData()) runCatching { th.saveResumeData(TorrentHandle.SAVE_INFO_DICT) }
                 }
             }
+            // 3.0.11: a file being watched: the pieces after where the player reads asked for next.
+            pollWatch(now)
             Downloads.torrentChanged(null, persist = false)
             if (now - lastStorage > STORAGE_EVERY_MS) {
                 lastStorage = now
@@ -743,6 +931,8 @@ object Torrents {
             AlertType.ADD_TORRENT.swig(), AlertType.METADATA_RECEIVED.swig(), AlertType.TORRENT_FINISHED.swig(),
             AlertType.SAVE_RESUME_DATA.swig(), AlertType.SAVE_RESUME_DATA_FAILED.swig(),
             AlertType.TORRENT_ERROR.swig(), AlertType.FILE_ERROR.swig(),
+            // 3.0.11: for a file being watched.
+            AlertType.PIECE_FINISHED.swig(),
         )
 
         // On libtorrent's thread: what is needed is taken from the alert here. The alert, and the handle
@@ -750,6 +940,9 @@ object Torrents {
         // from the session ([onAdded]).
         override fun alert(alert: Alert<*>) {
             val ta = alert as? TorrentAlert<*> ?: return
+            // 3.0.11: a piece matters only while a torrent's file is watched.
+            val watched = watching
+            if (watched == null && alert.type() == AlertType.PIECE_FINISHED) return
             val hash = try {
                 keyOf(ta.handle().swig().info_hashes())
             } catch (e: Throwable) {
@@ -779,6 +972,11 @@ object Torrents {
                     val why = (alert as FileErrorAlert).error().message
                     worker.post { onError(hash, why) }
                 }
+                // 3.0.11: straight to the player's waiting read from here; then the next pieces are asked for.
+                AlertType.PIECE_FINISHED -> if (watched != null && watched.hash == hash) {
+                    watched.gotPiece((alert as PieceFinishedAlert).pieceIndex())
+                    worker.post { if (watching === watched) refreshWindow(watched) }
+                }
                 else -> {}
             }
         }
@@ -801,6 +999,8 @@ object Torrents {
         }
         th.unsetFlags(TorrentFlags.AUTO_MANAGED)
         th.resume()
+        // 3.0.11: a file being watched (from the start, or again after a pause): its pieces in order.
+        watching?.takeIf { it.hash == hash }?.let { applyWatch(it, th) }
     }
 
     /** A magnet link's file list arrived: all but the junk are wanted, and the row gets its real name. */

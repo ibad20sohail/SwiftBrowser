@@ -560,6 +560,14 @@ class SettingsActivity : AppCompatActivity() {
         def(Topic.LOOK, "Colours", "Colours", "color colour accent background black amoled navy warm blue green purple orange red teal pink indigo amber cyan brown graphite custom own personal") {
             custom { ColoursPanel.build(this@SettingsActivity) }
         }
+        // 3.0.11: Site settings' Dark page for every site at once; a site's own switch then keeps it light.
+        def(Topic.LOOK, null, "Dark pages on every site", "dark page all sites every website night black force dark mode websites pages") {
+            switch(R.drawable.ic_dark, "Dark pages on every site", { "Swift turns every site dark, for sites without a dark mode; a site's own settings can keep it light" }, checked = { prefs.darkPagesAll }) {
+                prefs.darkPagesAll = it
+                com.swiftbrowser.media.Helper.sendLook()
+                snack(if (it) "Sites turn dark as they load. Reload a page to see it now." else "Sites go back to their own colours as they load")
+            }
+        }
         def(Topic.LOOK, null, "Night light", "night light warm amber blue light eyes sleep evening") {
             action(R.drawable.ic_night_light, "Night light", {
                 val mode = prefs.nightLight
@@ -587,11 +595,6 @@ class SettingsActivity : AppCompatActivity() {
                 prefs.toolbarAtBottom = it
             }
         }
-        def(Topic.LOOK, "Address bar", "Website colours in the address bar", "theme color colour site website brand tint adaptive vivaldi address bar toolbar") {
-            switch(R.drawable.ic_bar_colour, "Website colours in the address bar", { "The bar takes on each site's own colour" }, checked = { prefs.siteColours }) {
-                prefs.siteColours = it
-            }
-        }
         def(Topic.LOOK, "Address bar", "Address bar buttons", "toolbar buttons home house profile tabs menu reload share bookmark new tab scan qr arrange customize") {
             action(R.drawable.ic_toolbar_buttons, "Address bar buttons", { toolbarButtonsText() }) { arrangeToolbar() }
         }
@@ -602,9 +605,6 @@ class SettingsActivity : AppCompatActivity() {
             switch(R.drawable.ic_toolbar, "Hide the bar while scrolling", { "More room for the page; scroll back a little to bring it back" }, checked = { prefs.hideToolbarOnScroll }) {
                 prefs.hideToolbarOnScroll = it
             }
-        }
-        def(Topic.LOOK, "Menu", "Reset the menu", "menu buttons default reset order") {
-            action(R.drawable.ic_reset, "Reset the menu", { "Every button back where it started" }) { resetMenu() }
         }
         def(Topic.FILES, null, "Show Files in the app drawer", "icon launcher home screen app list drawer documents files apps own app") {
             switch(
@@ -652,28 +652,32 @@ class SettingsActivity : AppCompatActivity() {
                 choose("Sort folders by", FilesSettings.sortLabels, FilesSettings.sort) { i -> FilesSettings.sort = i }
             }
         }
-        def(Topic.FILES, null, "Picture previews", "thumbnails previews pictures videos") {
-            switch(R.drawable.ic_image, "Picture previews", { "Small pictures of photos and videos in the lists" }, checked = { FilesSettings.thumbnails }) {
-                FilesSettings.thumbnails = it
-            }
-        }
-        def(Topic.FILES, "Recycle bin", "Use the recycle bin", "recycle bin trash deleted restore undo") {
-            switch(R.drawable.ic_files_bin, "Use the recycle bin", { "Deleted files can be brought back for ${com.swiftbrowser.files.BinClock.daysText(FilesSettings.binDays)}" }, checked = { FilesSettings.useRecycleBin }) {
-                FilesSettings.useRecycleBin = it
-            }
-        }
-        def(Topic.FILES, "Recycle bin", "Keep deleted files", "recycle bin days keep") {
-            action(R.drawable.ic_history, "Keep deleted files", { "${com.swiftbrowser.files.BinClock.daysText(FilesSettings.binDays)}, then they go for good" }) {
-                choose("Keep deleted files", FilesSettings.BIN_DAY_CHOICES.map { com.swiftbrowser.files.BinClock.daysText(it) }, FilesSettings.BIN_DAY_CHOICES.indexOf(FilesSettings.binDays)) { i ->
-                    val days = FilesSettings.BIN_DAY_CHOICES[i]
-                    if (days >= FilesSettings.binDays) {
+        // 3.0.11: one row for the recycle bin: Off, or how long deleted files are kept (was a switch plus a row).
+        def(Topic.FILES, "Recycle bin", "Keep deleted files", "recycle bin trash deleted restore undo days keep off") {
+            action(R.drawable.ic_files_bin, "Keep deleted files", {
+                if (!FilesSettings.useRecycleBin) "Off: deleting is for good"
+                else "${com.swiftbrowser.files.BinClock.daysText(FilesSettings.binDays)}, then they go for good"
+            }) {
+                val choices = FilesSettings.BIN_DAY_CHOICES
+                val at = if (FilesSettings.useRecycleBin) 1 + choices.indexOf(FilesSettings.binDays) else 0
+                choose("Keep deleted files", listOf("Off") + choices.map { com.swiftbrowser.files.BinClock.daysText(it) }, at) { i ->
+                    if (i == 0) {
+                        FilesSettings.useRecycleBin = false
+                        return@choose
+                    }
+                    val days = choices[i - 1]
+                    val keep = {
+                        FilesSettings.useRecycleBin = true
                         FilesSettings.setBinDays(this@SettingsActivity, days)
+                    }
+                    if (days >= FilesSettings.binDays) {
+                        keep()
                     } else {
                         // 3.0: a shorter time deletes the older things for good at once: asked first, with how many and how much.
                         FilesSettings.binDue(this@SettingsActivity, days) { due ->
                             if (isFinishing) return@binDue
                             if (due.count == 0) {
-                                FilesSettings.setBinDays(this@SettingsActivity, days)
+                                keep()
                                 refreshAll()
                                 return@binDue
                             }
@@ -684,7 +688,7 @@ class SettingsActivity : AppCompatActivity() {
                                     " been in the recycle bin longer than ${com.swiftbrowser.files.BinClock.daysText(days)} and will be deleted for good.",
                                 "Delete", danger = true,
                             ) {
-                                FilesSettings.setBinDays(this@SettingsActivity, days)
+                                keep()
                                 refreshAll()
                             }
                         }
@@ -789,23 +793,6 @@ class SettingsActivity : AppCompatActivity() {
         def(Topic.BROWSING, "Pages", "Swipe from the edges", "back forward gesture") {
             switch(R.drawable.ic_gesture, "Swipe from the edges", { "Swipe in from the left to go back, from the right to go forward" }, checked = { prefs.edgeSwipe }) {
                 prefs.edgeSwipe = it
-            }
-        }
-        def(
-            Topic.BROWSING, "Pages", "Avoid \"browser too old\" messages",
-            "tell newer user agent useragent firefox version browser out of date outdated old update upgrade unsupported not supported sites esr",
-        ) {
-            switch(
-                R.drawable.ic_globe, "Avoid \"browser too old\" messages",
-                { "Sites are told Swift is a newer browser, so fewer say it's out of date" },
-                details = "Swift uses the last browser version made for Android 7. Some sites refuse a version that old, " +
-                    "or keep saying the browser is out of date. With this on, sites are told it's a newer version instead.\n\n" +
-                    "A site may then use something Swift can't do and not work right; turn this off again if one does. " +
-                    "It applies to pages you open from now on.",
-                checked = { prefs.newerFirefoxVersion },
-            ) {
-                prefs.newerFirefoxVersion = it
-                com.swiftbrowser.engine.UserAgent.applyToOpenTabs()
             }
         }
         // 3.0.4: a strip of the open group's tabs by the address bar (GroupStrip).
@@ -956,11 +943,6 @@ class SettingsActivity : AppCompatActivity() {
                 prefs.videoGestures = it
             }
         }
-        def(Topic.VIDEO, "Videos on websites", "Turn full-screen videos sideways", "landscape orientation rotate") {
-            switch(R.drawable.ic_rotate, "Turn full-screen videos sideways", { "They turn sideways by themselves" }, checked = { prefs.autoLandscape }) {
-                prefs.autoLandscape = it
-            }
-        }
         // 2.9: Swift's video and music player (PlayerSettings).
         def(Topic.VIDEO, "Swift's player", "Swipes in the player", "player gestures swipe brightness volume seek vlc") {
             switch(R.drawable.ic_gesture, "Swipes in the player", { "Brightness on the left, volume on the right, sideways to move through the video" }, checked = { PlayerSettings.gestures }) {
@@ -1103,18 +1085,6 @@ class SettingsActivity : AppCompatActivity() {
                 Torrents.applySettings()
             }
         }
-        def(Topic.DOWNLOADS, "Torrents", "Only while charging", "torrent charging charger battery heat") {
-            switch(R.drawable.ic_battery, "Only while charging", { "Torrents wait for the charger" }, checked = { TorrentSettings.chargingOnly }) {
-                TorrentSettings.chargingOnly = it
-                Torrents.applySettings()
-            }
-        }
-        def(Topic.DOWNLOADS, "Torrents", "At night only", "torrent night schedule time cheap data") {
-            switch(R.drawable.ic_history, "At night only", { "Torrents run from 1 am to 7 am" }, checked = { TorrentSettings.nightOnly }) {
-                TorrentSettings.nightOnly = it
-                Torrents.applySettings()
-            }
-        }
         def(Topic.DOWNLOADS, "Torrents", "Pause on low battery", "torrent battery low pause") {
             switch(R.drawable.ic_battery, "Pause on low battery", { "Below 15% unless charging; they go on at 20%" }, checked = { TorrentSettings.batteryPause }) {
                 TorrentSettings.batteryPause = it
@@ -1177,20 +1147,6 @@ class SettingsActivity : AppCompatActivity() {
                 confirmRestart(if (it) "Websites run the safer way after Swift restarts." else "Websites run at full speed again after Swift restarts.")
             }
         }
-        def(
-            Topic.PRIVACY, "Incognito", "Allow screenshots in incognito",
-            "screenshot screenshots screen capture shot record recording incognito private recent apps recents picture",
-        ) {
-            switch(
-                R.drawable.ic_incognito, "Allow screenshots in incognito",
-                { "Incognito pages can appear in screenshots and in your recent apps" },
-                checked = { prefs.allowIncognitoScreenshots },
-            ) {
-                prefs.allowIncognitoScreenshots = it
-                // At once, on the browser's screen behind this one.
-                (TabManager.ui as? MainActivity)?.applySecureScreen()
-            }
-        }
         def(Topic.PRIVACY, "Passwords", "Offer to save passwords", "password login sign in autofill fill in remember") {
             switch(
                 R.drawable.ic_password, "Offer to save passwords",
@@ -1212,6 +1168,19 @@ class SettingsActivity : AppCompatActivity() {
             action(R.drawable.ic_block, "Never saved for", {
                 Passwords.neverSites().size.let { if (it == 0) "No sites" else if (it == 1) "1 site" else "$it sites" }
             }) { PasswordsUi.never(this@SettingsActivity) { refreshAll() } }
+        }
+        // 3.0.11: addresses Swift fills in on forms (AddressesUi).
+        def(Topic.PRIVACY, "Passwords", "Addresses", "address addresses autofill fill in forms name phone email street city postcode zip shipping checkout delivery") {
+            action(R.drawable.ic_pic_place, "Addresses", { "Your name, phone and address, filled in on forms" }) { AddressesUi.list(this@SettingsActivity) }
+        }
+        def(Topic.PRIVACY, "Passwords", "Offer to save addresses", "address addresses autofill fill in forms save remember shipping checkout") {
+            switch(
+                R.drawable.ic_pic_place, "Offer to save addresses",
+                { "Swift asks after you send your address on a site" },
+                details = "Saved addresses stay on your phone, locked safely by Android, and fill in on forms. They go into " +
+                    "backups only when locked with your backup password, and incognito tabs never save or fill one.",
+                checked = { prefs.offerAddresses },
+            ) { prefs.offerAddresses = it }
         }
         def(Topic.PRIVACY, "Sites", "Site settings", "desktop location sound permissions per site") {
             action(R.drawable.ic_tune, "Site settings", { siteSettingsText() }) { chooseSite() }
@@ -1245,15 +1214,6 @@ class SettingsActivity : AppCompatActivity() {
             ) {
                 com.swiftbrowser.vpn.Vpn.connectAtStart = it
             }
-        }
-        def(Topic.VPN, "Options", "Switch to another location", "automatic failover switch server not answering backup") {
-            switch(
-                R.drawable.ic_swap, "Switch to another location",
-                { "If a location stops working, Swift moves to another by itself" },
-                details = "Swift picks the same country first, and the fastest one from your last test. It tells you where " +
-                    "it went. Off: the VPN stops and pages wait (if paused) until you pick another location.",
-                checked = { com.swiftbrowser.vpn.Vpn.autoSwitch },
-            ) { com.swiftbrowser.vpn.Vpn.autoSwitch = it }
         }
         def(Topic.VPN, "Options", "Pause pages if the VPN drops", "kill switch leak block vpn drops") {
             switch(
@@ -1299,6 +1259,16 @@ class SettingsActivity : AppCompatActivity() {
         def(Topic.STORAGE, "Backup", "Restore from a backup", "import restore backup new phone") {
             action(R.drawable.ic_restore_backup, "Restore from a backup", { "Adds a backup's contents to your phone, then restarts Swift" }) {
                 chooseBackup()
+            }
+        }
+        // 3.0.11: Chrome's bookmarks, history and passwords, from the files Google makes (ChromeImportUi).
+        def(Topic.STORAGE, "Backup", "Bring in from Chrome", "chrome google import takeout bookmarks history passwords csv zip move switch") {
+            action(R.drawable.ic_download, "Bring in from Chrome", { "Its bookmarks, history and passwords, from files Google makes for you" }) {
+                ChromeImportUi.sheet(
+                    this@SettingsActivity, open = { openInBrowser(it) },
+                    chooseZip = { pickFile(chromeZipPicker, arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream")) },
+                    chooseCsv = { pickFile(passwordsCsvPicker, arrayOf("text/csv", "text/comma-separated-values", "text/plain", "application/octet-stream")) },
+                )
             }
         }
         // 3.0.8: Android's backup to the user's Google account, all of it locked with the backup password.
@@ -1808,13 +1778,6 @@ class SettingsActivity : AppCompatActivity() {
             }
             .setNegativeButton(android.R.string.cancel, null)
             .showImmersive()
-    }
-
-    /** The browser with its menu open, ready to arrange (2.2). */
-    private fun resetMenu() {
-        val before = MenuButtons.layout()
-        MenuButtons.save(MenuButtons.defaultLayout())
-        Messages.show(this, "The menu is back as it started", "Undo") { MenuButtons.save(before) }
     }
 
     /** "Profile, Home · address · Tabs, Menu". */
@@ -2571,15 +2534,20 @@ class SettingsActivity : AppCompatActivity() {
                 override fun onStopTrackingTouch(bar: android.widget.SeekBar) {}
             })
         }
-        HomeBackground.drawable(this, incognito = false) { late ->
+        val now = HomeBackground.drawable(this, incognito = false) { late ->
+            PictureLoading.stop(preview)
             picture = late
             HomeBackground.showClarity(late, slider.progress)
             preview.background = late
             sampleInk()
-        }?.let {
-            picture = it
-            preview.background = it
+        }
+        if (now != null) {
+            picture = now
+            preview.background = now
             sampleInk()
+        } else if (HomeBackground.current(this) == HomeBackground.PICTURE) {
+            // 3.0.11: the picture is being read: a soft pulse meanwhile (PictureLoading).
+            PictureLoading.start(preview)
         }
         return LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -2598,6 +2566,22 @@ class SettingsActivity : AppCompatActivity() {
 
     private val restorePicker = registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) confirmRestore(uri)
+    }
+
+    /** 3.0.11: Bring in from Chrome: Google Takeout's .zip, and Google Password Manager's .csv. */
+    private val chromeZipPicker = registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) ChromeImportUi.takeout(this, uri)
+    }
+    private val passwordsCsvPicker = registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) ChromeImportUi.passwords(this, uri)
+    }
+
+    private fun pickFile(picker: androidx.activity.result.ActivityResultLauncher<Array<String>>, types: Array<String>) {
+        try {
+            picker.launch(types)
+        } catch (_: Exception) {
+            snack("No app to choose a file with")
+        }
     }
 
     private fun confirmRestore(uri: android.net.Uri) {

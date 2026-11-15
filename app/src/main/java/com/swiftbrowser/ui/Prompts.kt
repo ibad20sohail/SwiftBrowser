@@ -16,7 +16,10 @@ import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.swiftbrowser.SwiftApp
+import com.swiftbrowser.core.Address
+import com.swiftbrowser.core.AddressRules
 import com.swiftbrowser.core.Passwords
+import com.swiftbrowser.core.PasswordsCsv
 import com.swiftbrowser.core.UrlUtils
 import com.swiftbrowser.tabs.TabManager
 import org.mozilla.geckoview.AllowOrDeny
@@ -78,7 +81,7 @@ class Prompts : PromptDelegate {
         session: GeckoSession,
         prompt: T,
         onClosed: (() -> Unit)? = null,
-        build: (Context, GeckoResult<PromptResponse>) -> AlertDialog?,
+        build: (Context, GeckoResult<PromptResponse>) -> android.app.Dialog?,
     ): GeckoResult<PromptResponse> {
         val result = GeckoResult<PromptResponse>()
         val tab = TabManager.bySession(session)
@@ -96,11 +99,12 @@ class Prompts : PromptDelegate {
         return result
     }
 
+    /** 3.0.11: [build] may make a sheet too (the pick of an address). */
     private fun <T : BasePrompt> open(
         prompt: T,
         result: GeckoResult<PromptResponse>,
         onClosed: (() -> Unit)?,
-        build: (Context, GeckoResult<PromptResponse>) -> AlertDialog?,
+        build: (Context, GeckoResult<PromptResponse>) -> android.app.Dialog?,
     ) {
         val ctx = context
         val dialog = if (ctx != null) build(ctx, result) else null
@@ -520,7 +524,9 @@ class Prompts : PromptDelegate {
         }
         return show(session, request) { ctx, result ->
             val site = UrlUtils.siteName(entry.origin).ifBlank { entry.origin }
-            val update = entry.guid != null
+            // 3.0.11: a strong password Swift made was saved as it was filled in, without a user name;
+            // the form sent now brings that, which reads as saving the sign-in, not as a change.
+            val update = entry.guid != null && made[entry.origin] != entry.password?.hashCode()
             builder(ctx, if (update) "Update your password for $site?" else "Save your password for $site?")
                 .setMessage(
                     (entry.username?.ifBlank { null } ?: "(no user name)") +
@@ -536,20 +542,157 @@ class Prompts : PromptDelegate {
         }
     }
 
-    /** Several sign-ins saved for the site: which one to fill in. */
+    /**
+     * Several sign-ins saved for the site: which one to fill in. 3.0.11: on a sign-up or change of
+     * password form the engine also offers a strong password it made (hint GENERATED: 15 random
+     * characters without look-alikes, within the field's limits). Swift asks first; using it fills
+     * it in, and in the field asking for it again, and the engine hands it straight to Swift to save
+     * with the site (Engine's onLoginSave), so it is never lost; the user name follows when the form
+     * is sent ([onLoginSave]). Not offered in incognito tabs (they never save passwords), with saving
+     * off or for a site marked Never, nor again on a page where it was turned down.
+     */
     override fun onLoginSelect(
         session: GeckoSession, request: PromptDelegate.AutocompleteRequest<Autocomplete.LoginSelectOption>,
     ): GeckoResult<PromptResponse> {
-        val options = request.options
-        if (options.isEmpty()) return GeckoResult.fromValue(request.dismiss())
+        val generated = request.options.firstOrNull { it.hint and Autocomplete.SelectOption.Hint.GENERATED != 0 }
+        val options = request.options.filter { it.hint and Autocomplete.SelectOption.Hint.GENERATED == 0 }
+        val tab = TabManager.bySession(session)
+        val origin = tab?.let { PasswordsCsv.originOf(it.url) }
+        val strong = generated?.takeIf {
+            tab != null && origin != null && !tab.incognito && SwiftApp.prefs.offerPasswords && !Passwords.never(origin) &&
+                !it.value.password.isNullOrEmpty() && turnedDown[session] != origin
+        }
+        if (strong == null && options.isEmpty()) return GeckoResult.fromValue(request.dismiss())
         return show(session, request) { ctx, result ->
-            builder(ctx, "Sign in as")
-                .setItems(options.map { it.value.username?.ifBlank { null } ?: "(no user name)" }.toTypedArray()) { _, which ->
-                    result.complete(request.confirm(options[which]))
-                }
-                .setNegativeButton(android.R.string.cancel, null)
+            if (strong != null && origin != null) {
+                strongPassword(ctx, session, request, strong, origin, options, result)
+            } else {
+                builder(ctx, "Sign in as")
+                    .setItems(options.map { it.value.username?.ifBlank { null } ?: "(no user name)" }.toTypedArray()) { _, which ->
+                        result.complete(request.confirm(options[which]))
+                    }
+                    .setNegativeButton(android.R.string.cancel, null)
+                    .create()
+            }
+        }
+    }
+
+    /** 3.0.11: the pages where the strong password was turned down (by site), so it isn't offered at every tap there. */
+    private val turnedDown = java.util.WeakHashMap<GeckoSession, String>()
+
+    /** 3.0.11: the strong passwords used, by site (their hash only), for the save question's words ([onLoginSave]). */
+    private val made = object : LinkedHashMap<String, Int>() {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Int>?) = size > 20
+    }
+
+    /**
+     * 3.0.11: "Use a strong password?" with the password the engine made for [origin]'s form, or,
+     * when the site has saved sign-ins too ([saved]: a form the engine took for a new password may be
+     * a sign-in one), a list with it first.
+     */
+    private fun strongPassword(
+        ctx: Context,
+        session: GeckoSession,
+        request: PromptDelegate.AutocompleteRequest<Autocomplete.LoginSelectOption>,
+        generated: Autocomplete.LoginSelectOption,
+        origin: String,
+        saved: List<Autocomplete.LoginSelectOption>,
+        result: GeckoResult<PromptResponse>,
+    ): AlertDialog {
+        val password = generated.value.password
+        val site = UrlUtils.siteName(origin).ifBlank { origin }
+        val use = {
+            // Saved with the page's site and no form address (any form there), as Swift's imports are;
+            // the hint stays, so the engine saves it and fills the field asking for it again too.
+            val entry = Autocomplete.LoginEntry.Builder().origin(origin).formActionOrigin("").username("").password(password).build()
+            made[origin] = password.hashCode()
+            result.complete(request.confirm(Autocomplete.LoginSelectOption(entry, generated.hint)))
+            TabManager.ui?.showMessage("Strong password saved for $site")
+        }
+        val turnDown = { turnedDown[session] = origin }
+        if (saved.isNotEmpty()) {
+            val labels = listOf("Use a strong password") + saved.map { it.value.username?.ifBlank { null } ?: "(no user name)" }
+            return builder(ctx, "Fill in a password")
+                .setItems(labels.toTypedArray()) { _, which -> if (which == 0) use() else result.complete(request.confirm(saved[which - 1])) }
+                .setNegativeButton(android.R.string.cancel) { _, _ -> turnDown() }
                 .create()
         }
+        val shown = EditText(ctx).apply {
+            setText(password)
+            keyListener = null
+            isFocusable = false
+            isLongClickable = false
+            setTextIsSelectable(false)
+            Ui.field(this)
+        }
+        val d = builder(ctx, "Use a strong password?")
+            .setMessage("Swift made one for $site. It fills it in and keeps it with your passwords, so you don't have to remember it.")
+            .setView(padded(ctx, shown))
+            .setPositiveButton("Use password") { _, _ -> use() }
+            .setNegativeButton("Not now") { _, _ -> turnDown() }
+            .create()
+        d.setOnCancelListener { turnDown() }
+        // Kept out of screenshots and the recent-apps picture, as the saved passwords are.
+        d.window?.addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
+        return d
+    }
+
+    /**
+     * 3.0.11: a form with an address: which saved address to fill in (Addresses), as a sheet. Never
+     * in incognito tabs; turned down, not again on that page (the engine asks at each of its fields).
+     */
+    override fun onAddressSelect(
+        session: GeckoSession, request: PromptDelegate.AutocompleteRequest<Autocomplete.AddressSelectOption>,
+    ): GeckoResult<PromptResponse> {
+        val tab = TabManager.bySession(session)
+        val page = tab?.url?.substringBefore('#').orEmpty()
+        if (tab == null || tab.incognito || request.options.isEmpty() || addressTurnedDown[session] == page) {
+            return GeckoResult.fromValue(request.dismiss())
+        }
+        return show(session, request) { ctx, result ->
+            val col = Sheets.column(ctx)
+            col.addView(Sheets.header(ctx, "Fill in an address"))
+            lateinit var sheet: com.google.android.material.bottomsheet.BottomSheetDialog
+            for (option in request.options) {
+                val a = option.value
+                val line = AddressRules.summary(Address(street = a.streetAddress.orEmpty(), city = a.addressLevel2.orEmpty(), postcode = a.postalCode.orEmpty()))
+                col.addView(AddressesUi.row(ctx, a.name.orEmpty().ifBlank { line }, line) {
+                    result.complete(request.confirm(option))
+                    sheet.dismiss()
+                })
+            }
+            col.addView(Sheets.wideButton(ctx, "Not now", outlined = true) {
+                addressTurnedDown[session] = page
+                sheet.dismiss()
+            })
+            sheet = Sheets.sheet(ctx, col)
+            sheet.setOnCancelListener { addressTurnedDown[session] = page }
+            sheet
+        }
+    }
+
+    /** 3.0.11: the page where the address sheet was turned down last, by tab. */
+    private val addressTurnedDown = java.util.WeakHashMap<GeckoSession, String>()
+
+    /**
+     * 3.0.11: "Save this address?" (or "Update this address?") after [session]'s page sent a form
+     * with one (AddressesUi), showing [text]. It waits for its tab like the page's own questions.
+     * [onSave] on Save or Update, [onNever] on "Don't ask again".
+     */
+    fun askAddress(session: GeckoSession, update: Boolean, text: String, onSave: () -> Unit, onNever: () -> Unit) {
+        val tab = TabManager.bySession(session) ?: return
+        val ask = ask@{
+            val ctx = context ?: return@ask
+            if (tab.incognito) return@ask
+            builder(ctx, if (update) "Update this address?" else "Save this address?")
+                .setMessage("$text\n\nSwift keeps it on your phone, locked by Android, and fills it in on forms.")
+                .setPositiveButton(if (update) "Update" else "Save") { _, _ -> onSave() }
+                .setNegativeButton("Not now", null)
+                .setNeutralButton("Don't ask again") { _, _ -> onNever() }
+                .create()
+                .showImmersive()
+        }
+        if (tab !== TabManager.current) waiting += Waiting(session, ask) else ask()
     }
 
     override fun onPopupPrompt(session: GeckoSession, prompt: PopupPrompt): GeckoResult<PromptResponse> {

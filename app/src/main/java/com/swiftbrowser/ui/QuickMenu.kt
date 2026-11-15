@@ -119,9 +119,6 @@ object MenuButtons {
         fun encode(): String = pages.filter { it.isNotEmpty() }.joinToString("|") { it.joinToString(",") }
     }
 
-    /** A new menu's layout: every button, in order, page after page. */
-    fun defaultLayout(): Layout = Layout(all.map { it.key }.chunked(PER_PAGE).map { it.toMutableList() }.toMutableList(), mutableListOf())
-
     /** The menu as arranged; from before 2.2, the 7 chosen buttons first, then the switches, then the rest. */
     fun layout(): Layout {
         val prefs = SwiftApp.prefs

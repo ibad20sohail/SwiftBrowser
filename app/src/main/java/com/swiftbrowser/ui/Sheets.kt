@@ -64,15 +64,18 @@ object Sheets {
      * its first rows come in one after another. [footer]: what stays in sight at its end however
      * long the content is (its main button).
      */
-    fun sheet(ctx: Context, content: View, expand: Boolean = true, footer: View? = null): BottomSheetDialog {
+    fun sheet(ctx: Context, content: View, expand: Boolean = true, footer: View? = null, scrolls: Boolean = true): BottomSheetDialog {
         Palette.paint(content)
         footer?.let { Palette.paint(it) }
         val dialog = BottomSheetDialog(ctx)
         // 2.9: a NestedScrollView, which tells the sheet it is scrolled (a plain ScrollView let the
-        // sheet take the drag and close mid-list).
-        val scroll = if (content is RecyclerView || content is androidx.core.widget.NestedScrollView) content else SheetScroll(ctx).apply {
+        // sheet take the drag and close mid-list). 3.0.11: not around content of a fixed height that
+        // scrolls by itself ([scrolls] false: a link's page in its preview).
+        val scroll = if (!scrolls || content is RecyclerView || content is androidx.core.widget.NestedScrollView) content else SheetScroll(ctx).apply {
             isVerticalScrollBarEnabled = false
-            overScrollMode = View.OVER_SCROLL_NEVER
+            // 3.0.11: a long sheet stretches softly at its ends (Stretch; it had no glow before). A pull
+            // down from its top still moves the sheet itself, which takes that drag first.
+            overScrollMode = if (Stretch.add(this)) View.OVER_SCROLL_IF_CONTENT_SCROLLS else View.OVER_SCROLL_NEVER
             addView(content)
         }
         // A swipe that starts while the list is scrolled down only scrolls it, all the way back to the
@@ -106,7 +109,7 @@ object Sheets {
             dialog.behavior.state = BottomSheetBehavior.STATE_EXPANDED
             dialog.behavior.skipCollapsed = true
         }
-        (content as? ViewGroup)?.takeIf { it !is RecyclerView && it.childCount >= 2 }?.let { group ->
+        (content as? ViewGroup)?.takeIf { scrolls && it !is RecyclerView && it.childCount >= 2 }?.let { group ->
             dialog.setOnShowListener { Motion.stagger(group) }
         }
         return dialog
@@ -1275,7 +1278,8 @@ object Sheets {
             SiteSettings.setAutoReader(site, on, incognito)
             onChanged?.invoke()
         })
-        col.addView(switchRow(ctx, R.drawable.ic_dark, "Dark page", "Swift turns the site dark, for sites without a dark mode. Pictures stay as they are.", SiteSettings.darkPage(site, incognito)) { on ->
+        // 3.0.11: with Dark pages on every site (Settings), this switch keeps the site light when turned off.
+        col.addView(switchRow(ctx, R.drawable.ic_dark, "Dark page", if (SwiftApp.prefs.darkPagesAll) "Swift turns this site dark, as it does every site now; turned off, the site keeps its own colours." else "Swift turns the site dark, for sites without a dark mode. Pictures stay as they are.", SiteSettings.darkPage(site, incognito)) { on ->
             SiteSettings.setDarkPage(site, on, incognito)
             // A moment for the page style to be in place.
             if (onThisSite && tab != null) android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ TabManager.reload(tab) }, 400)

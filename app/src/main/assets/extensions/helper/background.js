@@ -65,6 +65,9 @@ function onNative(msg) {
       // 3.0.7: where each of Lite mode's styles goes, by level and site (the app works it out).
       layers: layersOf(msg.layers),
       darkSites: sites(msg.darkSites),
+      // 3.0.11: Dark page on every site, but the sites kept light.
+      darkAll: msg.darkAll === true,
+      lightSites: sites(msg.lightSites),
       keepPlaying: msg.keepPlaying === true,
       readerFont: msg.readerFont === 'sans' ? 'sans' : 'serif',
       readerSpacing: Number.isInteger(msg.readerSpacing) ? msg.readerSpacing : 1,
@@ -79,6 +82,7 @@ function onNative(msg) {
       // 3.0.1: the same lists without what incognito tabs chose: only these are written down.
       layers: msg.layersKeep ? layersOf(msg.layersKeep) : null,
       darkSites: Array.isArray(msg.darkSitesKeep) ? sites(msg.darkSitesKeep) : null,
+      lightSites: Array.isArray(msg.lightSitesKeep) ? sites(msg.lightSitesKeep) : null,
     });
   } else if (msg.type === 'clear-articles') {
     // Clear browsing data (2.6): the articles kept for reader view go too. 2.8: for a time (from
@@ -138,7 +142,7 @@ function colours(c) {
 //  - lite: no animations, shadows, blur or filters, from Medium;
 //  - litehigh: no graphics layers asked for ahead of time, and silent "GIF" videos play once, from High;
 //  - liteextreme: those videos stay still until tapped, and moving drawings stop, at Extreme (3.0.9);
-//  - dark: the sites the user turned dark (Site settings, 2.6).
+//  - dark: the sites the user turned dark (Site settings, 2.6); 3.0.11: or every site but the ones kept light.
 // The last choice is kept, so pages loading before the app has said it again look the same.
 // It also holds keepPlaying, which content scripts read (see content.js).
 const STYLES = {
@@ -151,12 +155,14 @@ const STYLES = {
     includeGlobs: ['*://theflixer.*', '*://*.theflixer.*'],
     css: [{ file: '/perf/theflixer.css' }],
   },
-  dark: { css: [{ file: '/perf/dark.css' }] },
+  // Its matches are only used for every site (3.0.11); for chosen sites they are the sites' own.
+  dark: { matches: ['http://*/*', 'https://*/*'], css: [{ file: '/perf/dark.css' }] },
 };
 
 /** Site names as the app sends them (example.com), nothing else. */
+// 3.0.11: also one-word names (localhost, a router's or a computer's name), whose settings were left out.
 function sites(list) {
-  return Array.isArray(list) ? list.filter(s => typeof s === 'string' && /^[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(s)) : [];
+  return Array.isArray(list) ? list.filter(s => typeof s === 'string' && /^[a-z0-9-]+(\.[a-z0-9-]+)*$/i.test(s)) : [];
 }
 const registrations = new Map();
 let lookQueue = Promise.resolve();
@@ -233,10 +239,12 @@ function setLook(look, kept) {
   setStyle('litehigh', layers.litehigh.on, layers.litehigh.exclude, layers.litehigh.only);
   setStyle('liteextreme', layers.liteextreme.on, layers.liteextreme.exclude, layers.liteextreme.only);
   const dark = look.darkSites || [];
-  setStyle('dark', dark.length > 0, null, dark);
+  // 3.0.11: every site but the ones kept light, or only the sites turned dark.
+  if (look.darkAll === true) { setStyle('dark', true, look.lightSites || []); } else { setStyle('dark', dark.length > 0, null, dark); }
   const stored = Object.assign({}, look);
   if (kept && kept.layers) { stored.layers = kept.layers; }
   if (kept && kept.darkSites) { stored.darkSites = kept.darkSites; }
+  if (kept && kept.lightSites) { stored.lightSites = kept.lightSites; }
   browser.storage.local.set({ look: stored }).catch(() => { });
 }
 
@@ -246,6 +254,8 @@ browser.storage.local.get('look').then(r => {
     setLook({
       layers: look.layers ? layersOf(look.layers) : oldLayers(look),
       darkSites: sites(look.darkSites),
+      darkAll: look.darkAll === true,
+      lightSites: sites(look.lightSites),
       keepPlaying: look.keepPlaying === true,
       readerFont: look.readerFont === 'sans' ? 'sans' : 'serif',
       readerSpacing: Number.isInteger(look.readerSpacing) ? look.readerSpacing : 1,

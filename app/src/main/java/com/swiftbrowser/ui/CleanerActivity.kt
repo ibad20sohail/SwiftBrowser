@@ -656,6 +656,7 @@ class CleanerActivity : ListActivity() {
                 holder.thumb?.cancel()
                 holder.thumb = null
                 Motion.stopPicture(holder.icon)
+                PictureLoading.stop(holder.icon)
             }
         }
     }
@@ -713,6 +714,7 @@ class CleanerActivity : ListActivity() {
         h.thumb?.cancel()
         h.thumb = null
         Motion.stopPicture(h.icon)
+        PictureLoading.stop(h.icon)
         val kind = f.kind
         h.icon.tag = f.file.path
         h.icon.scaleType = ImageView.ScaleType.CENTER
@@ -726,18 +728,23 @@ class CleanerActivity : ListActivity() {
             h.icon.setImageResource(if (f.isDir) R.drawable.ic_folder else kind.icon)
             h.icon.imageTintList = if (f.isDir) onContainerTint else secondaryTint
         }
-        if (!f.isDir && FilesSettings.thumbnails && FileThumbs.has(kind)) {
+        if (!f.isDir && FileThumbs.has(kind)) {
             val key = f.file.path
             // From memory it comes during this call; one made later comes in softly.
             var binding = true
-            h.thumb = FileThumbs.load(this, f.file, f.time, kind, thumbPx) { bmp ->
+            h.thumb = FileThumbs.load(this, f.file, f.time, kind, thumbPx, onNone = {
+                if (h.icon.tag == key) PictureLoading.stop(h.icon)
+            }) { bmp ->
                 if (h.icon.tag != key) return@load
+                PictureLoading.stop(h.icon)
                 h.icon.imageTintList = null
                 h.icon.scaleType = ImageView.ScaleType.CENTER_CROP
                 h.icon.setImageBitmap(bmp)
                 if (!binding) Motion.fadePicture(h.icon)
             }
             binding = false
+            // 3.0.11: a soft pulse while it is made (PictureLoading).
+            if (h.thumb != null) PictureLoading.start(h.icon)
         }
         bindTick(h, f, false)
     }

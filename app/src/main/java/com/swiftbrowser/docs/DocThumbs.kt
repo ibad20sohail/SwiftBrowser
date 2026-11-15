@@ -54,14 +54,17 @@ object DocThumbs {
     /** Swift went out of sight or Android is short of memory: the pictures kept in memory go (they are on disk too). */
     fun trim() = memory.evictAll()
 
-    /** [onLoaded] runs on the main thread, only when there is a picture. */
-    fun load(ctx: Context, uri: String, kind: Docs.Kind, width: Int, onLoaded: (Bitmap) -> Unit) {
+    /**
+     * [onLoaded] runs on the main thread, only when there is a picture. 3.0.11: true when it is made
+     * in the background (worth a loading pulse); [onNone] when that gave nothing.
+     */
+    fun load(ctx: Context, uri: String, kind: Docs.Kind, width: Int, onNone: (() -> Unit)? = null, onLoaded: (Bitmap) -> Unit): Boolean {
         val key = "$width:$uri"
         memory.get(key)?.let {
             onLoaded(it)
-            return
+            return false
         }
-        if (key in none) return
+        if (key in none) return false
         val app = ctx.applicationContext
         io.execute {
             val file = File(dir(app), hash(key) + ".jpg")
@@ -78,12 +81,14 @@ object DocThumbs {
             main.post {
                 if (bmp == null) {
                     none += key
+                    onNone?.invoke()
                 } else {
                     memory.put(key, bmp)
                     onLoaded(bmp)
                 }
             }
         }
+        return true
     }
 
     private fun dir(ctx: Context) = File(ctx.cacheDir, "doc_thumbs").apply { mkdirs() }

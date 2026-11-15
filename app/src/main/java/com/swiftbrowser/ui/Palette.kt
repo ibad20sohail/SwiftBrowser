@@ -368,9 +368,10 @@ object Palette {
 
     /**
      * 3.0.5: the glow at the ends of [v], a list or scroll view that isn't made with [paint], in the
-     * accent chosen.
+     * accent chosen. 3.0.11: a soft stretch there instead (Stretch); the glow only where it stays.
      */
     fun glow(v: View) {
+        if (Stretch.add(v)) return
         if (!themeHasAccent(v.context)) ExactAccent.glow(v, color(v.context, R.color.accent))
     }
 
@@ -436,7 +437,9 @@ object Palette {
                     if (v is EditText && v.background is InsetDrawable) v.backgroundTintList = underlineTint(v.context)
                 }
             }
-            is RecyclerView, is ScrollView, is HorizontalScrollView, is AbsListView -> if (!exact) ExactAccent.glow(v, color(v.context, R.color.accent))
+            // 3.0.11: a soft stretch at their ends (Stretch); the glow, where it stays, in the accent chosen.
+            is RecyclerView, is ScrollView, is HorizontalScrollView, is AbsListView, is androidx.core.widget.NestedScrollView ->
+                if (!Stretch.add(v) && !exact) ExactAccent.glow(v, color(v.context, R.color.accent))
         }
         if (v is ViewGroup) for (i in 0 until v.childCount) paintTree(v.getChildAt(i), swap, accentSwap, exact)
     }

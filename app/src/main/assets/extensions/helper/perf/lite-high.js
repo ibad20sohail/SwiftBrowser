@@ -20,6 +20,10 @@
   const done = new WeakSet();
   // Tapped: it plays once more.
   const once = new WeakSet();
+  // Swift 3.0.11: a (not looping) video started under the finger: it plays whenever the site starts it
+  // again (after a stall, a quality change, an ad). Pausing those made players stop and start again
+  // over and over (hundreds of times in one problem report), the video stalling all along.
+  const started = new WeakSet();
   // Where the finger is (or was let go), and until when a touch there counts.
   let finger = null;
   let fingerUntil = 0;
@@ -64,12 +68,16 @@
   document.addEventListener('play', e => {
     const v = e.target;
     if (!silent(v)) { return; }
+    if (started.has(v)) { return; }
     if (once.has(v)) {
       // Tapped: once, then it stops again.
       v.loop = false;
       return;
     }
-    if (touched(v)) { return; }
+    if (touched(v)) {
+      if (!v.loop) { started.add(v); }
+      return;
+    }
     if (v.loop && !extreme() && !done.has(v)) {
       // High: a GIF video's one play, to the end.
       v.loop = false;

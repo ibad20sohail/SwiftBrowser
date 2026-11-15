@@ -117,8 +117,22 @@ object StorageKinds {
     /** Each storage's sizes as last measured while Swift runs, by its top folder's path. */
     private val measured = ConcurrentHashMap<String, Sizes>()
 
-    /** [root]'s storage as last measured, or null when it wasn't yet. */
-    fun cached(root: File): Sizes? = measured[root.path]
+    /**
+     * 3.0.11: the last sizes are kept on the phone too, so that after Android closed Swift the bar
+     * opens with them (it showed all that is used in the accent colour until the index answered).
+     */
+    private const val SAVED = "storage_kinds"
+
+    /** [root]'s storage as last measured (now or in an earlier run), or null when it never was. Not on the main thread. */
+    fun cached(ctx: Context, root: File): Sizes? = measured[root.path] ?: saved(ctx, root)?.also { measured[root.path] = it }
+
+    private fun saved(ctx: Context, root: File): Sizes? = try {
+        ctx.getSharedPreferences(SAVED, Context.MODE_PRIVATE).getString(root.path, null)
+            ?.split(',')?.mapNotNull { it.toLongOrNull() }?.takeIf { it.size == 4 }
+            ?.let { Sizes(it[0], it[1], it[2], it[3]) }
+    } catch (_: Exception) {
+        null
+    }
 
     /**
      * What [root]'s storage holds by kind, from Android's media index: pictures, videos and music
@@ -128,7 +142,10 @@ object StorageKinds {
      */
     fun measure(ctx: Context, root: File): Sizes? {
         val sizes = sums(ctx, root) ?: walk(ctx, root) ?: return null
-        measured[root.path] = sizes
+        if (measured.put(root.path, sizes) != sizes) {
+            ctx.getSharedPreferences(SAVED, Context.MODE_PRIVATE).edit()
+                .putString(root.path, "${sizes.pictures},${sizes.videos},${sizes.music},${sizes.documents}").apply()
+        }
         return sizes
     }
 

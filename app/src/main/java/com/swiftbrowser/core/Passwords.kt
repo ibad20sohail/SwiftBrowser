@@ -85,6 +85,16 @@ object Passwords {
         null
     }
 
+    /**
+     * 3.0.11: what [lock] gave for each of [stored] (saved addresses), unlocked; null for one that
+     * can't be any more. Throws when the keystore doesn't answer (they may be fine). Blocking.
+     */
+    fun unlockAll(stored: List<String>): List<String?> {
+        if (stored.isEmpty()) return emptyList()
+        val key = existingKey()
+        return stored.map { decrypt(it, key) }
+    }
+
     /** 3.0: how many of a profile's sign-ins can be read, and how many can't any more. */
     class Count(val readable: Int, val unreadable: Int)
 
@@ -185,6 +195,31 @@ object Passwords {
     }
 
     fun putBack(row: LoginRow) = SwiftApp.db.saveLogin(row)
+
+    /**
+     * 3.0.11: passwords brought in (Chrome's, from Google Password Manager's export) into profile
+     * [profileId], with Backup's rule: a site and name it already has keeps Swift's own. Blocking.
+     * Returns how many were added and how many were there already. The form address is "" (any form
+     * on the site, as a browser's own import does: an export doesn't say which form it was).
+     */
+    fun importRows(profileId: Long, rows: List<PasswordsCsv.Row>): Pair<Int, Int> {
+        val db = SwiftApp.db
+        val here = db.logins(profileId).mapTo(HashSet()) { it.origin to it.username }
+        val now = System.currentTimeMillis()
+        var added = 0
+        var already = 0
+        db.transaction {
+            for (r in rows) {
+                if (!here.add(r.origin to r.username)) {
+                    already++
+                    continue
+                }
+                db.saveLogin(LoginRow(UUID.randomUUID().toString(), profileId, r.origin, "", null, r.username, lock(r.password), now, now, 0))
+                added++
+            }
+        }
+        return added to already
+    }
 
     /** Clearing browsing data: sign-ins saved since [since] (0: all of them); 2.8: until [until] for chosen dates. */
     fun clearSince(profileId: Long, since: Long, until: Long = Long.MAX_VALUE) = SwiftApp.db.deleteLoginsSince(profileId, since, until)

@@ -54,7 +54,7 @@ object BackupUi {
     }
 
     fun filesSummary(): String =
-        "Added to backup files, locked with your backup password"
+        "Added to backup files with your saved addresses, locked with your backup password"
 
     fun foundSummary(a: Activity): String {
         val f = GoogleBackup.found(a, withData = false)
@@ -113,7 +113,7 @@ object BackupUi {
         MaterialAlertDialogBuilder(a)
             .setTitle("Back up to your Google account")
             .setMessage(
-                "Swift keeps a copy of your bookmarks, history, open tabs, settings, saved passwords and sign-ins to sites, and your phone " +
+                "Swift keeps a copy of your bookmarks, history, open tabs, settings, saved passwords and addresses, and sign-ins to sites, and your phone " +
                     "puts it in your Google account (about once a day, while charging on Wi-Fi). On a new phone, or after installing Swift " +
                     "again, Swift offers to bring it all back.\n\nIt is locked with your backup password: nobody can open it without it, " +
                     "not even Google. If you forget the password, the backup can't be restored.\n\nThe VPN and the Private folder are never in it.",
@@ -217,7 +217,7 @@ object BackupUi {
         withPassword(a, refresh) {
             sp.edit().putBoolean(Backup.FILES_LOCKED, true).apply()
             refresh()
-            Messages.show(a, "Backups you make from now on hold your passwords and sign-ins, locked with your backup password", long = true)
+            Messages.show(a, "Backups you make from now on hold your passwords, addresses and sign-ins, locked with your backup password", long = true)
         }
     }
 
@@ -343,7 +343,7 @@ object BackupUi {
             .setTitle("Restore from your Google backup?")
             .setMessage(
                 "Your phone brought back Swift's backup from ${f.device}, ${day(f.created)}: bookmarks, history, open tabs, settings, " +
-                    "saved passwords and sign-ins to sites. You need your backup password.\n\nIt stays in Settings → Storage & data if you want it later.",
+                    "saved passwords and addresses, and sign-ins to sites. You need your backup password.\n\nIt stays in Settings → Storage & data if you want it later.",
             )
             .setPositiveButton("Restore") { _, _ -> restoreGoogle(a, f) }
             .setNegativeButton("Not now", null)
@@ -435,7 +435,7 @@ object BackupUi {
                     return@runOnUiThread
                 }
                 askPassword(
-                    a, "Passwords and sign-ins", "This backup also holds saved passwords and sign-ins, locked with a backup password.",
+                    a, "Passwords and sign-ins", "This backup also holds saved passwords, addresses and sign-ins, locked with a backup password.",
                     box.optString("hint").take(BackupLock.MAX_HINT), wrong, skip = "Skip them", onCancel = { then(null) },
                 ) { pw ->
                     val waiting = Messages.sticky(a, "Opening…")

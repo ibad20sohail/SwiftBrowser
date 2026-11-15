@@ -75,6 +75,8 @@ import com.swiftbrowser.media.LocalMedia
 import com.swiftbrowser.media.LocalPlayback
 import com.swiftbrowser.media.MusicService
 import com.swiftbrowser.media.PlayerSettings
+import com.swiftbrowser.media.PlaylistRules
+import com.swiftbrowser.media.Playlists
 import com.swiftbrowser.media.SoundEffects
 import com.swiftbrowser.media.Subtitles
 import com.swiftbrowser.media.TrackChoice
@@ -200,6 +202,9 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
     private var scrubbing = false
     private var previewSeeks = false
     private var lastPreviewAt = 0L
+
+    /** 3.0.11: the picture of the moment above the finger while the bar is dragged (made the first time). */
+    private var seekPicture: SeekPicture? = null
 
     /** The video or song the screen shows (to notice another one starting). */
     private var shownEntry: LocalPlayback.Entry? = null
@@ -360,6 +365,18 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
                 playStream(url, i.getStringExtra(EXTRA_TITLE), headers, i.getBooleanExtra(EXTRA_INCOGNITO, false), i.getBooleanExtra(EXTRA_DASH, false))
                 true
             }
+            // 3.0.11: a torrent's video while it downloads (Watch now), only from Swift itself.
+            ACTION_PLAY_TORRENT -> {
+                if (!ViewerAccess.isOwn(i)) return false
+                playTorrent(i.getLongExtra(EXTRA_DOWNLOAD, -1), i.getIntExtra(EXTRA_FILE, -1))
+                true
+            }
+            // 3.0.11: a playlist of the user's, handed over by Swift itself in this run of it.
+            ACTION_PLAY_LIST -> {
+                val l = listToPlay?.takeIf { ViewerAccess.isOwn(i) && it.token == i.getStringExtra(EXTRA_LIST) } ?: return false
+                listToPlay = null
+                playList(l)
+            }
             Intent.ACTION_VIEW -> {
                 val data = i.data ?: return false
                 // 3.0: another app's link to Swift's own files (its data folder, its file provider).
@@ -428,6 +445,45 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         val entry = LocalPlayback.Entry(Uri.parse(url), name, kindOf(path) != Kind.AUDIO, stream = true, hls = hls, dash = dash, headers = headers, incognito = incognito)
         LocalPlayback.load(this, listOf(entry), 0, C.TIME_UNSET)
         attach()
+    }
+
+    /** 3.0.11: file [index] of torrent download [id] (-1: its film) played while it downloads, where it was left off. */
+    private fun playTorrent(id: Long, index: Int) {
+        val entry = com.swiftbrowser.media.TorrentPlayback.entry(id, index)
+        val f = entry?.file
+        if (entry == null || f == null) {
+            val why = "Swift can't play this torrent's video yet."
+            if (LocalPlayback.current != null) {
+                say(why)
+                return
+            }
+            applyMode(true)
+            titleView.text = ""
+            showProblem(why, openWith = false, retry = false)
+            return
+        }
+        val resume = LocalMedia.position(this, f)
+        LocalPlayback.load(this, listOf(entry), 0, resume ?: C.TIME_UNSET)
+        attach()
+        if (resume != null) root.post { say("Going on from ${time(resume)}", "Start over") { LocalPlayback.seekTo(0) } }
+    }
+
+    /**
+     * 3.0.11: a playlist of the user's (Playlists) on the music screen: its songs in its order, from the
+     * one chosen (a long recording where it was left), shuffled from there if asked. Its songs moved or
+     * deleted were left out already. False when none is left to play.
+     */
+    private fun playList(l: ListToPlay): Boolean {
+        val songs = l.songs.map { File(it) }.filter { kindOf(it.name) == Kind.AUDIO }
+        if (songs.isEmpty()) return false
+        val start = l.start.coerceIn(0, songs.size - 1)
+        val resume = LocalMedia.position(this, songs[start])
+        LocalPlayback.load(this, songs.map { entryFor(it, Kind.AUDIO) }, start, resume ?: C.TIME_UNSET)
+        LocalPlayback.listName = l.name
+        LocalPlayback.setShuffle(l.shuffle, start)
+        attach()
+        if (resume != null) root.post { say("Going on from ${time(resume)}", "Start over") { LocalPlayback.seekTo(0) } }
+        return true
     }
 
     /** "Open with Swift" from another app: that one video or song (a shared file's folder can't be read). */
@@ -575,9 +631,9 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
             closeFrameBar()
             applyMode(e.video)
             loadSubtitles(e)
-            // 3.0: a file of Private is kept out of screenshots and recent apps; an incognito one too
-            // unless Settings allow screenshots in incognito.
-            if (e.secure) SecureScreen.set(this, true) else SecureScreen.forIncognito(this, e.incognito)
+            // 3.0: a file of Private is kept out of screenshots and recent apps (cleared again for the
+            // next, normal one); 3.0.11: incognito ones no longer are.
+            SecureScreen.set(this, e.secure)
         }
         updateInfo()
         updateProgress()
@@ -853,11 +909,17 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
                     if (!fromUser) return
                     setIfChanged(elapsed, time(value.toLong()))
                     previewAt(value.toLong())
+                    // 3.0.11: and the picture of that moment above the finger.
+                    seekPicture?.move(value.toLong(), time(value.toLong()))
                 }
 
-                override fun onStartTrackingTouch(bar: SeekBar) = scrubStart()
+                override fun onStartTrackingTouch(bar: SeekBar) {
+                    scrubStart()
+                    seekPictureStart()
+                }
 
                 override fun onStopTrackingTouch(bar: SeekBar) {
+                    seekPicture?.stop()
                     scrubEnd(bar.progress.toLong())
                     scheduleHide()
                 }
@@ -1392,7 +1454,8 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         if (videoMode) {
             titleView.text = e.title
         } else {
-            titleView.text = when {
+            // 3.0.11: a playlist of the user's goes by its name, a folder's songs by the folder's.
+            titleView.text = LocalPlayback.listName ?: when {
                 e.file != null -> e.file.parentFile?.name ?: "Music"
                 e.stream && !e.incognito -> UrlUtils.host(e.uri.toString())?.removePrefix("www.") ?: "Music"
                 else -> "Music"
@@ -1557,6 +1620,8 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
                 updateChips()
             }
             followBarIfDue()
+            // 3.0.11: why a torrent being watched keeps the video loading (a rule paused it, nothing comes in).
+            com.swiftbrowser.media.TorrentPlayback.note()?.let { say(it, long = true) }
             handler.postDelayed(this, 500)
         }
     }
@@ -1966,6 +2031,22 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         updateWave()
     }
 
+    /**
+     * 3.0.11: a video that is a file on the phone shows the picture of the moment above the finger
+     * while the bar is dragged (SeekPicture); website videos and streams the time only, as before.
+     */
+    private fun seekPictureStart() {
+        val e = LocalPlayback.current ?: return
+        val f = e.file ?: return
+        val p = player ?: return
+        // A torrent's video still downloading (Watch now) has parts not there yet: the time only.
+        if (!videoMode || e.stream || e.network || com.swiftbrowser.media.TorrentUri.isTorrent(e.uri)) return
+        val d = p.duration.takeIf { it != C.TIME_UNSET && it > 0 } ?: return
+        val v = p.videoSize
+        val ratio = if (v.width > 0 && v.height > 0) v.width * v.pixelWidthHeightRatio / v.height else 0f
+        (seekPicture ?: SeekPicture(root).also { seekPicture = it }).start(seek, f, ratio, time(d))
+    }
+
     private fun previewAt(ms: Long) {
         if (!scrubbing || !previewSeeks) return
         val now = SystemClock.uptimeMillis()
@@ -2311,6 +2392,8 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         if (SoundEffects.info() != null) actions += Sheets.Action(R.drawable.ic_tune, "Equalizer", primary = !videoMode) { equalizerPanel() }
         // 3.0.4: night sound's switch comes next, then the rest.
         val after = ArrayList<Sheets.Action>()
+        // 3.0.11: the song playing into a playlist of the user's (not an incognito download's, nor Private's).
+        if (f != null && !videoMode && !e.private) after += Sheets.Action(R.drawable.ic_playlist_add, "Add to playlist") { addToPlaylist(f) }
         if (videoMode && !e.private) after += Sheets.Action(R.drawable.ic_image, "Screenshot") { screenshot() }
         if (n > 1) after += Sheets.Action(R.drawable.ic_view_list, "Playlist") { playlistPanel() }
         // 3.0.4: other apps can't read a network folder's file through Swift.
@@ -2333,6 +2416,14 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
                 addView(switchRow(ctx, R.drawable.ic_night_sound, "Night sound", LocalPlayback.nightSoundOn) { on -> setNightSound(on) })
                 addView(Sheets.actionList(ctx, after) { a -> picked { a.run() } })
             }
+        }
+    }
+
+    /** 3.0.11: ⋮ → Add to playlist: the playlists to choose from in the panel, then a word on how it went. */
+    private fun addToPlaylist(f: File) {
+        Playlists.whenLoaded(this) { lists ->
+            if (isFinishing) return@whenLoaded
+            showPanel { ctx -> PlaylistUi.chooser(this, ctx, listOf(f), lists, close = { panel.close() }) { text, _ -> say(text) } }
         }
     }
 
@@ -2692,7 +2783,9 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
             val height = minOf(entries.size * dp(64), (panel.maxHeight() - dp(96)).coerceAtLeast(dp(128)))
             (list.layoutManager as LinearLayoutManager).scrollToPositionWithOffset(now, dp(64))
             Sheets.column(ctx).apply {
-                addView(Sheets.header(ctx, if (videoMode) "Videos in this folder" else "Songs in this folder", "${entries.size}, by name"))
+                // 3.0.11: a playlist of the user's, in their order.
+                val own = LocalPlayback.listName
+                addView(Sheets.header(ctx, own ?: if (videoMode) "Videos in this folder" else "Songs in this folder", if (own != null) PlaylistRules.songsText(entries.size) else "${entries.size}, by name"))
                 addView(list, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, height))
             }
         }
@@ -3793,6 +3886,8 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         handler.removeCallbacksAndMessages(null)
         // 3.0.4: a change of the music screen's colours under way stops with it.
         coverFade.cancel()
+        // 3.0.11: and the seek picture's reader, should a drag still be on.
+        seekPicture?.release()
         LocalPlayback.unwatch(this)
         player?.let {
             it.removeListener(events)
@@ -3811,6 +3906,11 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
     companion object {
         const val ACTION_PLAY_FILE = "com.swiftbrowser.player.PLAY_FILE"
         const val ACTION_PLAY_STREAM = "com.swiftbrowser.player.PLAY_STREAM"
+
+        /** 3.0.11: a torrent's video while it downloads (Watch now): the download's id, the file's index. */
+        const val ACTION_PLAY_TORRENT = "com.swiftbrowser.player.PLAY_TORRENT"
+        private const val EXTRA_DOWNLOAD = "download"
+        private const val EXTRA_FILE = "file"
 
         /** 3.0.3: how long Up next waits before the next video plays. */
         private const val UP_NEXT_SECONDS = 5
@@ -3901,6 +4001,35 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
 
         /** Brings back the player screen as it is (the notification opens it with this). */
         fun showIntent(ctx: Context): Intent = Intent(ctx, PlayerActivity::class.java).setAction(ACTION_SHOW)
+
+        /** 3.0.11: Watch now: file [index] (-1: its film) of torrent download [id], played while it downloads. */
+        fun openTorrent(from: Activity, id: Long, index: Int = -1) {
+            val i = Intent(from, PlayerActivity::class.java).setAction(ACTION_PLAY_TORRENT).putExtra(EXTRA_DOWNLOAD, id).putExtra(EXTRA_FILE, index)
+            from.startActivity(ViewerAccess.mark(i))
+        }
+
+        /** 3.0.11: plays a playlist of the user's (Playlists); see [openList]. */
+        private const val ACTION_PLAY_LIST = "com.swiftbrowser.player.PLAY_LIST"
+        private const val EXTRA_LIST = "list"
+
+        /** 3.0.11: a playlist handed over by [openList] (only in this run of Swift, as a website video). */
+        internal class ListToPlay(val token: String, val name: String, val songs: List<String>, val start: Int, val shuffle: Boolean)
+
+        private var listToPlay: ListToPlay? = null
+
+        /**
+         * 3.0.11: plays the playlist [name]'s [songs] (paths, those still on the phone) in their order from
+         * [start] on the music screen; [shuffle]: in a random order that starts there. Next, previous and
+         * the notification follow it, not the songs' folders. Handed over in memory, not in the intent:
+         * a long playlist is more than an intent may carry.
+         */
+        fun openList(from: Context, name: String, songs: List<String>, start: Int, shuffle: Boolean) {
+            val token = java.util.UUID.randomUUID().toString()
+            listToPlay = ListToPlay(token, name, songs, start, shuffle)
+            val i = Intent(from, PlayerActivity::class.java).setAction(ACTION_PLAY_LIST).putExtra(EXTRA_LIST, token)
+            if (from !is Activity) i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            from.startActivity(ViewerAccess.mark(i))
+        }
 
         /** "Film 2.mkv" before "Film 10.mkv": numbers in names count as numbers. */
         fun naturalCompare(a: String, b: String): Int {

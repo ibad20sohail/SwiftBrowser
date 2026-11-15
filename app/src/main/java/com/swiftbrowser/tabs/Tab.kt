@@ -223,7 +223,6 @@ interface BrowserUi {
     fun releaseSession(session: GeckoSession)
 
     fun onFullScreen(tab: Tab, fullScreen: Boolean)
-    fun onVideoFullscreen(tab: Tab, width: Long, height: Long)
     fun onContextMenu(tab: Tab, element: GeckoSession.ContentDelegate.ContextElement)
     fun onExternalResponse(tab: Tab, response: WebResponse)
     fun onBlocked(tab: Tab, url: String, popup: Boolean)

@@ -478,7 +478,6 @@ object TabManager {
         // Whatever the setting says, when the phone is close to running out of memory only the
         // open tab keeps its page: otherwise Android closes Swift altogether. Same on low battery.
         val low = prefs.maxLiveTabs > 1 && Diagnostics.memoryLow()
-        if (low) L.d("Memory low (${Diagnostics.memoryText()}): keeping only the open tab loaded")
         val max = if (low || com.swiftbrowser.engine.Power.saving) 1 else prefs.maxLiveTabs
         val others = tabs.filter { it.session != null && it !== current }
         // Tabs not opened for half an hour let go of their page too (2.7), whatever the number:
@@ -490,7 +489,11 @@ object TabManager {
         val openCounts = current?.session != null && current?.kept != true
         var count = 0
         var idleOnly = true
-        for (id in TabRules.toUnload(loaded, openCounts, max, idleSince)) {
+        val unload = TabRules.toUnload(loaded, openCounts, max, idleSince)
+        // 3.0.11: said only when there is something to let go (it was logged at every check, 177 times
+        // in one problem report with nothing left to unload).
+        if (low && unload.isNotEmpty()) L.d("Memory low (${Diagnostics.memoryText()}): keeping only the open tab loaded")
+        for (id in unload) {
             val t = others.firstOrNull { it.id == id } ?: continue
             val idle = t.lastUsed < idleSince
             if (!idle) idleOnly = false
@@ -534,6 +537,11 @@ object TabManager {
     private val freeAfterLeaving = Runnable {
         L.d("Out of sight for a minute: keeping only the open (or playing, or kept) tab loaded")
         suspendBackgroundTabs("Swift was out of sight for a minute")
+        // 3.0.11: the ad blocker's list updates (every 6 h) wait for this too, and not while something
+        // plays or memory is short: rebuilding the filters takes 100-250 MB for a while.
+        if (tabs.none { it.playing } && !com.swiftbrowser.core.Diagnostics.memoryLow()) {
+            com.swiftbrowser.adblock.AdBlock.updateInBackground()
+        }
     }
 
     /** "Keep loaded" (3.0.1) on or off for [tab]; off lets the usual limits apply to it again. */
@@ -1210,7 +1218,7 @@ object TabManager {
             s.setUserAgentMode(
                 if (desktop) GeckoSessionSettings.USER_AGENT_MODE_DESKTOP else GeckoSessionSettings.USER_AGENT_MODE_MOBILE,
             )
-            // 3.0: with "Tell sites a newer Firefox version", its desktop or mobile kind.
+            // 3.0: the newer Firefox version told to sites, in its desktop or mobile kind.
             s.setUserAgentOverride(com.swiftbrowser.engine.UserAgent.overrideFor(desktop))
             s.setViewportMode(
                 if (desktop) GeckoSessionSettings.VIEWPORT_MODE_DESKTOP else GeckoSessionSettings.VIEWPORT_MODE_MOBILE,

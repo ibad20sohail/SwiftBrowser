@@ -42,6 +42,9 @@ class LoginRow(
     val username: String, val password: String, val created: Long, val used: Long, val times: Int,
 )
 
+/** 3.0.11: a saved address; [data] is its fields as JSON, encrypted (Addresses), never stored as typed. */
+class AddressRow(val guid: String, val profileId: Long, val data: String, val created: Long, val used: Long)
+
 data class DownloadRow(
     val id: Long,
     val profileId: Long,
@@ -64,7 +67,7 @@ data class DownloadRow(
  * Small hand-written SQLite layer: profiles, tabs (with their order and groups), recently closed
  * tabs, history, bookmarks, downloads, per-site ad levels and where videos were left off.
  */
-class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 8) {
+class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 9) {
 
     override fun onConfigure(db: SQLiteDatabase) {
         db.enableWriteAheadLogging()
@@ -104,6 +107,7 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 8) {
         addVersion6(db)
         addVersion7(db)
         addVersion8(db)
+        addVersion9(db)
 
         db.insert("profiles", null, ContentValues().apply {
             put("name", "Personal")
@@ -126,11 +130,20 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 8) {
         // 3.0: from here on each step must be safe to run twice ("IF NOT EXISTS"): a newer Swift's
         // database kept by onDowngrade is marked with this version, so it comes back through them.
         if (oldVersion < 8) addVersion8(db)
+        if (oldVersion < 9) addVersion9(db)
     }
 
     /** 3.0: address completion picks the pages visited most among all of history: an index for that order. */
     private fun addVersion8(db: SQLiteDatabase) {
         db.execSQL("CREATE INDEX IF NOT EXISTS history_visits ON history(profile_id, visits DESC, last_visit DESC)")
+    }
+
+    /** 3.0.11: saved addresses for forms, each profile its own (Addresses). */
+    private fun addVersion9(db: SQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS addresses(guid TEXT PRIMARY KEY, profile_id INTEGER NOT NULL, data TEXT NOT NULL, " +
+                "created INTEGER NOT NULL, used INTEGER NOT NULL)",
+        )
     }
 
     /**
@@ -252,6 +265,8 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 8) {
             db.delete("documents", "profile_id=?", a)
             db.delete("starred_documents", "profile_id=?", a)
             db.delete("logins", "profile_id=?", a)
+            // 3.0.11: and its saved addresses.
+            db.delete("addresses", "profile_id=?", a)
             db.setTransactionSuccessful()
         } finally {
             db.endTransaction()
@@ -388,6 +403,26 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 8) {
             put("last_visit", lastVisit)
             put("visits", visits)
         }, SQLiteDatabase.CONFLICT_IGNORE) != -1L
+
+    /**
+     * 3.0.11: a page from elsewhere (Chrome's history): added when it isn't here (true), else this one
+     * keeps the later last visit (with its title) and the larger visit count.
+     */
+    fun mergeHistory(profileId: Long, url: String, title: String, lastVisit: Long, visits: Int): Boolean {
+        if (importHistory(profileId, url, title, lastVisit, visits)) return true
+        // SQLite reads every column's old value for the whole SET, so the title test sees the old last_visit.
+        writableDatabase.execSQL(
+            "UPDATE history SET title = CASE WHEN ? > last_visit AND ? <> '' THEN ? ELSE title END, " +
+                "last_visit = MAX(last_visit, ?), visits = MAX(visits, ?) WHERE profile_id = ? AND url = ?",
+            arrayOf<Any>(lastVisit, title, title, lastVisit, visits, profileId, url),
+        )
+        return false
+    }
+
+    /** 3.0.11: one page by its address (Undo of an import). */
+    fun deleteHistoryUrl(profileId: Long, url: String) {
+        writableDatabase.delete("history", "profile_id=? AND url=?", arrayOf("$profileId", url))
+    }
 
     /** True: added (not already there). */
     fun importBookmark(profileId: Long, url: String, title: String, created: Long, folder: String = ""): Boolean =
@@ -971,13 +1006,45 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 8) {
             .isNotEmpty()
 
     fun addBookmark(profileId: Long, url: String, title: String) {
+        // 3.0.11: a bookmark already there stays as it is (replacing it made a new row that lost its
+        // folder); it's only called for pages not bookmarked.
         writableDatabase.insertWithOnConflict("bookmarks", null, ContentValues().apply {
             put("profile_id", profileId)
             put("url", url)
             put("title", title)
             put("created", System.currentTimeMillis())
+        }, SQLiteDatabase.CONFLICT_IGNORE)
+    }
+
+    /** 3.0.11: a sign-in with this id in any profile (saving one with the same id would move it). */
+    fun loginExists(guid: String): Boolean =
+        query("SELECT 1 FROM logins WHERE guid = ? LIMIT 1", arrayOf(guid)) { 1 }.isNotEmpty()
+
+    // ---------------------------------------------------------------- saved addresses (3.0.11)
+
+    /** A profile's addresses, the one used or changed last first. */
+    fun addresses(profileId: Long): List<AddressRow> =
+        query("SELECT guid, profile_id, data, created, used FROM addresses WHERE profile_id = ? ORDER BY used DESC", arrayOf("$profileId")) {
+            AddressRow(it.str(0), it.getLong(1), it.str(2), it.getLong(3), it.getLong(4))
+        }
+
+    fun saveAddress(row: AddressRow) {
+        writableDatabase.insertWithOnConflict("addresses", null, ContentValues().apply {
+            put("guid", row.guid)
+            put("profile_id", row.profileId)
+            put("data", row.data)
+            put("created", row.created)
+            put("used", row.used)
         }, SQLiteDatabase.CONFLICT_REPLACE)
     }
+
+    fun deleteAddress(guid: String) {
+        writableDatabase.delete("addresses", "guid=?", arrayOf(guid))
+    }
+
+    /** An address with this id in any profile (saving one with the same id would move it). */
+    fun addressExists(guid: String): Boolean =
+        query("SELECT 1 FROM addresses WHERE guid = ? LIMIT 1", arrayOf(guid)) { 1 }.isNotEmpty()
 
     fun removeBookmark(profileId: Long, url: String) {
         writableDatabase.delete("bookmarks", "profile_id=? AND url=?", arrayOf("$profileId", url))
@@ -1099,6 +1166,7 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "swift.db", null, 8) {
             "documents" to listOf("id", "uri", "name", "kind", "size", "web", "profile_id", "place", "progress", "total", "opened", "updated"),
             "starred_documents" to listOf("uri", "profile_id", "name", "kind", "size", "added"),
             "logins" to listOf("guid", "profile_id", "origin", "form_action", "realm", "username", "password", "created", "used", "times"),
+            "addresses" to listOf("guid", "profile_id", "data", "created", "used"),
         )
     }
 }

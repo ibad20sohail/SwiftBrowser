@@ -69,10 +69,20 @@ import kotlin.math.abs
  * "Open with Swift" from other apps comes here too: a file opens with its folder around it;
  * another app's link (content://) shows just that picture, and an edit of it is saved as a copy
  * in Pictures/Swift.
+ *
+ * 3.0.11: opened from Files ([OverFiles]), a picture grows out of its small picture there, and
+ * shrinks back into it when the screen is closed on it (PictureGrow).
  */
-class MediaViewerActivity : AppCompatActivity(), Messages.DarkScreen {
+open class MediaViewerActivity : AppCompatActivity(), Messages.DarkScreen {
     // 3.0.3: a black screen in both modes: its messages are dark too.
     override val darkMessages: Boolean get() = true
+
+    /** 3.0.11: this screen's window shows Files behind it ([OverFiles]): a picture can grow out of Files and shrink back. */
+    protected open val overFiles: Boolean get() = false
+
+    /** 3.0.11: the picture growing out of Files or shrinking back into it, once one has; and the file it is. */
+    private var move: PictureGrow.Move? = null
+    private var growPath: String? = null
 
     enum class Kind { IMAGE, VIDEO, AUDIO }
 
@@ -147,8 +157,9 @@ class MediaViewerActivity : AppCompatActivity(), Messages.DarkScreen {
         }
         // 3.0: a picture of Private (or one Files asks to protect) stays out of screenshots and recent apps.
         if (ViewerAccess.secure(this, intent, first.file)) SecureScreen.set(this, true)
-        // Black from the first frame (the window is in Swift's background colour otherwise).
-        window.setBackgroundDrawable(ColorDrawable(Color.BLACK))
+        // Black from the first frame (the window is in Swift's background colour otherwise). 3.0.11:
+        // over Files the window is see-through: the screen draws its own black, which can fade.
+        window.setBackgroundDrawable(ColorDrawable(if (overFiles) Color.TRANSPARENT else Color.BLACK))
         blackBars()
         root = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
         setContentView(root)
@@ -162,12 +173,90 @@ class MediaViewerActivity : AppCompatActivity(), Messages.DarkScreen {
                 when {
                     slides != null -> stopSlideshow()
                     editor != null -> editor?.requestClose()
-                    else -> finish()
+                    else -> close()
                 }
             }
         })
         SystemBars.keepHidden(this)
+        // 3.0.11: opened from Files, the picture grows out of its small picture there.
+        if (overFiles) openOverFiles(first, savedInstanceState == null)
         if (first.file != null) listFolder(first) else readSharedName(first)
+    }
+
+    /**
+     * 3.0.11: the picture grows out of the small picture Files showed of it (handed over as Files
+     * opened it), the whole picture taking its place as soon as it is decoded. Without one (Files had
+     * none in memory, the screen was made again), the screen comes in with a soft fade instead: Files
+     * asked Android for no motion of its own.
+     */
+    private fun openOverFiles(first: Pic, fresh: Boolean) {
+        growPath = first.file?.path
+        val start = growPath?.takeIf { fresh }?.let { PictureGrow.claim(it) }
+        if (start == null || !Motion.enabled(this)) {
+            if (fresh && Motion.enabled(this)) {
+                root.alpha = 0f
+                Motion.anim(root, Motion.NORMAL, Motion.enter).alpha(1f).withLayer().start()
+            }
+            return
+        }
+        val m = PictureGrow.Move(this, root, pager, listOf(topBar, bottom))
+        move = m
+        m.grow(start)
+        load(first, urgent = true) { bmp ->
+            val i = first.info
+            move?.full(bmp, i?.width ?: 0, i?.height ?: 0)
+        }
+    }
+
+    /**
+     * 3.0.11: Back or ←: opened from Files and still on that picture, it shrinks back into its small
+     * picture there when that is on the screen (PictureGrow); otherwise the screen closes as before.
+     */
+    private fun close() {
+        if (!shrinkBack()) finish()
+    }
+
+    private fun shrinkBack(): Boolean {
+        val m = move
+        if (m?.isShrinking == true) return true
+        val path = growPath ?: return false
+        if (!overFiles || isFinishing || editor != null || slides != null || !Motion.enabled(this)) return false
+        if (pics.getOrNull(index)?.file?.path != path) return false
+        val spot = PictureGrow.source()?.spot(path) ?: return false
+        // Still growing: it turns back from where it is; otherwise from the page on show.
+        val page = if (m?.moving == true) null else pageOf(current()) ?: return false
+        val dx = pager.left + pager.translationX + (page?.let { it.left + it.translationX } ?: 0f)
+        val dy = pager.top + pager.translationY + (page?.let { it.top + it.translationY } ?: 0f)
+        val mv = m ?: PictureGrow.Move(this, root, pager, listOf(topBar, bottom)).also { move = it }
+        return mv.shrink(page, dx, dy, spot, path) {
+            finish()
+            @Suppress("DEPRECATION")
+            overridePendingTransition(0, 0)
+        }
+    }
+
+    /** 3.0.11: [p]'s page, with its picture. */
+    private fun pageOf(p: Pic): PictureView? {
+        for (i in 0 until pager.childCount) {
+            val v = pager.getChildAt(i) as? PictureView ?: continue
+            if (v.tag === p && v.hasPicture) return v
+        }
+        return null
+    }
+
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        // 3.0.11: turned while a picture moves: one shrinking back into Files closes the screen at once,
+        // one growing out of it shows where it would end.
+        val m = move ?: return
+        if (!m.moving) return
+        val leaving = m.isShrinking
+        m.stop()
+        if (leaving) {
+            finish()
+            @Suppress("DEPRECATION")
+            overridePendingTransition(0, 0)
+        }
     }
 
     @Suppress("DEPRECATION")
@@ -569,7 +658,7 @@ class MediaViewerActivity : AppCompatActivity(), Messages.DarkScreen {
                 contentDescription = "Back"
                 background = Ui.rippleBorderless(this@MediaViewerActivity, Ui.RIPPLE_ON_DARK)
                 Ui.pressable(this, Motion.PRESS_ICON, morph = false)
-                setOnClickListener { finish() }
+                setOnClickListener { close() }
             }, LinearLayout.LayoutParams(size, size))
             addView(LinearLayout(this@MediaViewerActivity).apply {
                 orientation = LinearLayout.VERTICAL
@@ -1228,6 +1317,8 @@ class MediaViewerActivity : AppCompatActivity(), Messages.DarkScreen {
     }
 
     override fun onDestroy() {
+        // 3.0.11: Files' small picture shows again, whatever happened.
+        move?.stop()
         if (::root.isInitialized) {
             handler.removeCallbacksAndMessages(null)
             bitmaps.evictAll()
@@ -1286,5 +1377,17 @@ class MediaViewerActivity : AppCompatActivity(), Messages.DarkScreen {
 
         /** 3.0: what shows picture [file] (a finished download's notification too). */
         fun intentFor(ctx: Context, file: File): Intent = ViewerAccess.mark(Intent(ctx, MediaViewerActivity::class.java).putExtra(EXTRA_PATH, file.path))
+
+        /** 3.0.11: picture [file] as Files opens it, for it to grow out of Files' small picture ([OverFiles]). */
+        fun intentOverFiles(ctx: Context, file: File): Intent = ViewerAccess.mark(Intent(ctx, OverFiles::class.java).putExtra(EXTRA_PATH, file.path))
+    }
+
+    /**
+     * 3.0.11: this screen as Files opens a picture: its window is see-through (Theme.Swift.Viewer), so
+     * the picture can grow out of Files' small picture of it and shrink back into it (PictureGrow).
+     * Files stays drawn behind it meanwhile (paused, not stopped).
+     */
+    class OverFiles : MediaViewerActivity() {
+        override val overFiles: Boolean get() = true
     }
 }

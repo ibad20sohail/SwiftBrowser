@@ -157,10 +157,6 @@ class Prefs(ctx: Context) {
         get() = AdLevel.fromKey(sp.getString(AD_LEVEL, AdLevel.HIGH.key))
         set(v) = sp.edit { putString(AD_LEVEL, v.key) }
 
-    /** Full-screen videos turn the screen to landscape. Off: the phone's own auto-rotate decides. */
-    var autoLandscape: Boolean
-        get() = sp.getBoolean(AUTO_LANDSCAPE, false)
-        set(v) = sp.edit { putBoolean(AUTO_LANDSCAPE, v) }
 
     /** Swipes on full-screen videos change brightness and volume. */
     var videoGestures: Boolean
@@ -216,11 +212,6 @@ class Prefs(ctx: Context) {
         get() = sp.getBoolean(TOOLBAR_BOTTOM, false)
         set(v) = sp.edit { putBoolean(TOOLBAR_BOTTOM, v) }
 
-    /** 3.0.4: the address bar takes the colour a website asks for (its theme-color), as in Vivaldi. */
-    var siteColours: Boolean
-        get() = sp.getBoolean(SITE_COLOURS, true)
-        set(v) = sp.edit { putBoolean(SITE_COLOURS, v) }
-
     var pullToRefresh: Boolean
         get() = sp.getBoolean(PULL_TO_REFRESH, true)
         set(v) = sp.edit { putBoolean(PULL_TO_REFRESH, v) }
@@ -257,6 +248,11 @@ class Prefs(ctx: Context) {
         get() = sp.getBoolean(KEEP_PLAYING, true)
         set(v) = sp.edit { putBoolean(KEEP_PLAYING, v) }
 
+    /** 3.0.11: every site gets the dark page (2.6's, for one site), but the sites kept light in their Site settings. */
+    var darkPagesAll: Boolean
+        get() = sp.getBoolean(DARK_PAGES_ALL, false)
+        set(v) = sp.edit { putBoolean(DARK_PAGES_ALL, v) }
+
     /** Before 2.2: the house button next to the address. Only read to carry it over (ToolbarButtons). */
     val showHomeButton: Boolean
         get() = sp.getBoolean(SHOW_HOME_BUTTON, true)
@@ -287,25 +283,12 @@ class Prefs(ctx: Context) {
         set(v) = sp.edit { putBoolean(HTTPS_ONLY, v) }
 
     /**
-     * 3.0: incognito pages may appear in screenshots and Android's recent-apps picture. Off: they
-     * are kept out of both (as in Firefox).
-     */
-    var allowIncognitoScreenshots: Boolean
-        get() = sp.getBoolean(INCOGNITO_SCREENSHOTS, false)
-        set(v) = sp.edit { putBoolean(INCOGNITO_SCREENSHOTS, v) }
-
-    /**
      * 3.0: Safer browsing: web pages run without the engine's JavaScript compilers and WebAssembly,
      * the usual way into an old browser (Engine.saferPrefs). Slower scripts; off at first.
      */
     var saferBrowsing: Boolean
         get() = sp.getBoolean(SAFER_BROWSING, false)
         set(v) = sp.edit { putBoolean(SAFER_BROWSING, v) }
-
-    /** 3.0: sites are told a newer Firefox than the engine's 143 (engine.UserAgent); off at first. */
-    var newerFirefoxVersion: Boolean
-        get() = sp.getBoolean(NEWER_FIREFOX, false)
-        set(v) = sp.edit { putBoolean(NEWER_FIREFOX, v) }
 
     /** Firefox answers cookie banners with "Reject" where it knows how. */
     var rejectCookieBanners: Boolean
@@ -392,6 +375,11 @@ class Prefs(ctx: Context) {
     var offerPasswords: Boolean
         get() = sp.getBoolean("login_offer", true)
         set(v) = sp.edit { putBoolean("login_offer", v) }
+
+    /** 3.0.11: offer to save addresses sent on sites (AddressesUi); saved ones fill in either way. */
+    var offerAddresses: Boolean
+        get() = sp.getBoolean("address_offer", true)
+        set(v) = sp.edit { putBoolean("address_offer", v) }
 
     /** Videos on sites can be played in Swift's own player (a button over the page) (2.9, off at first). */
     var sitePlayer: Boolean
@@ -494,7 +482,6 @@ class Prefs(ctx: Context) {
         const val NEWS_HIDDEN = "news_hidden"
         const val DEFAULT_MENU_BUTTONS = "new_tab,incognito,bookmarks,history,downloads,reader,save"
         const val AD_LEVEL = "ad_level"
-        const val AUTO_LANDSCAPE = "auto_landscape"
         const val VIDEO_GESTURES = "video_gestures"
         const val HLS_TO_MP4 = "hls_to_mp4"
         const val CONFIRM_DOWNLOADS = "confirm_downloads"
@@ -513,6 +500,7 @@ class Prefs(ctx: Context) {
         const val TEXT_SCALE = "text_scale"
         const val FORCE_ZOOM = "force_zoom"
         const val KEEP_PLAYING = "keep_playing"
+        const val DARK_PAGES_ALL = "dark_pages_all"
         const val LAST_LOW_SPACE_CLEANUP = "last_low_space_cleanup"
         const val LAST_HISTORY_PRUNE = "last_history_prune"
         const val SEEN_VERSION = "seen_version"
@@ -520,15 +508,12 @@ class Prefs(ctx: Context) {
         const val HAPTICS = "haptics"
         const val HTTPS_ONLY = "https_only"
         const val REJECT_COOKIE_BANNERS = "reject_cookie_banners"
-        const val INCOGNITO_SCREENSHOTS = "incognito_screenshots"
         const val SAFER_BROWSING = "safer_browsing"
-        const val NEWER_FIREFOX = "newer_firefox_version"
         const val WIFI_ONLY_DOWNLOADS = "wifi_only_downloads"
         const val READER_FONT = "reader_font"
         const val READER_SPACING = "reader_spacing"
         const val READER_THEME = "reader_theme"
         val READER_THEMES = listOf("auto", "light", "sepia", "dark")
-        const val SITE_COLOURS = "site_colours"
         const val EDGE_SWIPE = "edge_swipe"
         const val LITE_SITES = "lite_sites"
         const val LITE_MODE = "lite_mode"

@@ -314,7 +314,7 @@ class DownloadService : Service() {
                 "${waiting.size} downloads are waiting"
             }
             val text = waiting.mapNotNull { it.error }.distinct().let { reasons ->
-                if (reasons.size == 1) reasons[0] else "For Wi-Fi, the night or the charger, as you chose"
+                if (reasons.size == 1) reasons[0] else "Each one says in Downloads what it waits for"
             }
             val n = NotificationCompat.Builder(ctx, CHANNEL_PROGRESS)
                 .setSmallIcon(R.drawable.ic_notify)

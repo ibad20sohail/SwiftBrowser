@@ -51,8 +51,8 @@ object SessionFactory {
             // unless "Keep playing in the background" is on: then video and music go on.
             .suspendMediaWhenInactive(!SwiftApp.prefs.keepPlaying)
             .build()
-        // 3.0: "Tell sites a newer Firefox version" (Settings → Privacy & security).
-        com.swiftbrowser.engine.UserAgent.overrideFor(tab.desktop)?.let { settings.setUserAgentOverride(it) }
+        // 3.0: sites are told a newer Firefox version (3.0.11: always, see UserAgent).
+        settings.setUserAgentOverride(com.swiftbrowser.engine.UserAgent.overrideFor(tab.desktop))
         val session = GeckoSession(settings)
         val d = TabDelegates(tab)
         session.setNavigationDelegate(d)
@@ -252,8 +252,12 @@ class TabDelegates(private val tab: Tab) :
     /** The address that last failed to load (3.0): its error page isn't a site that "isn't secure". */
     private var failedUrl: String? = null
 
+    /** 3.0.11: why the last load failed, for its "didn't load" line (failed loads said no reason). */
+    private var loadErrorNote: String? = null
+
     override fun onLoadError(session: GeckoSession, uri: String?, error: WebRequestError): GeckoResult<String>? {
         failedUrl = uri
+        loadErrorNote = "error 0x${Integer.toHexString(error.code)}, category ${error.category}"
         // No connection (or it dropped): the page tries again by itself once there is one. 3.0: not
         // a site that can't be found (or won't answer) while the phone is online, see ErrorPage.
         // Failed while pages were paused for the VPN (Engine.setNetworkBlocked): loads once it's connected.
@@ -300,8 +304,10 @@ class TabDelegates(private val tab: Tab) :
     override fun onPageStop(session: GeckoSession, success: Boolean) {
         if (pageStartedAt > 0 && pageSite.isNotEmpty()) {
             val s = (android.os.SystemClock.elapsedRealtime() - pageStartedAt) / 100 / 10.0
-            L.d("Tab ${tab.id} ${if (success) "loaded" else "didn't load"} $pageSite in $s s")
+            val why = if (!success) loadErrorNote?.let { " ($it)" }.orEmpty() else ""
+            L.d("Tab ${tab.id} ${if (success) "loaded" else "didn't load"} $pageSite in $s s$why")
         }
+        loadErrorNote = null
         pageStartedAt = 0L
         tab.loading = false
         tab.progress = 100
@@ -649,11 +655,5 @@ class TabDelegates(private val tab: Tab) :
         }
         ui?.onPlayingChanged(tab)
         SwiftApp.instance?.let { Playback.onPlayingChanged(it, tab) }
-    }
-
-    override fun onFullscreen(
-        session: GeckoSession, mediaSession: MediaSession, enabled: Boolean, meta: MediaSession.ElementMetadata?,
-    ) {
-        if (enabled && meta != null) ui?.onVideoFullscreen(tab, meta.width, meta.height)
     }
 }

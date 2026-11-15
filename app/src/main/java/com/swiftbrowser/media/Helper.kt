@@ -236,6 +236,8 @@ object Helper {
                 }
                 ReadAloud.onMessage(ctx, msg)
             }
+            // 3.0.11: the page sent a form with an address: Swift may offer to save it (never from incognito).
+            "address-form" -> if (!tab.incognito) com.swiftbrowser.ui.AddressesUi.onFormSent(tab, msg)
             "video-start" -> WatchPositions.onStart(tab, msg)
             "media-ended" -> SleepTimer.onMediaEnded(tab)
             // For the log (2.7): players failing or stopping to load. 3.0: a few per tab every ten
@@ -346,6 +348,10 @@ object Helper {
                     // 3.0.1: what the helper may write down: the same without incognito tabs' choices.
                     .put("layersKeep", liteLayers(com.swiftbrowser.core.SiteSettings.liteLevelsKept()))
                     .put("darkSitesKeep", org.json.JSONArray(com.swiftbrowser.core.SiteSettings.darkPagesKept()))
+                    // 3.0.11: Dark page on every site, but the sites kept light (and those kept light to write down).
+                    .put("darkAll", prefs.darkPagesAll)
+                    .put("lightSites", org.json.JSONArray(com.swiftbrowser.core.SiteSettings.lightPages()))
+                    .put("lightSitesKeep", org.json.JSONArray(com.swiftbrowser.core.SiteSettings.lightPagesKept()))
                     .put("keepPlaying", prefs.keepPlaying)
                     .put("readerFont", prefs.readerFont).put("readerSpacing", prefs.readerSpacing)
                     // 3.0.4: and its page colour (auto, light, sepia or dark).

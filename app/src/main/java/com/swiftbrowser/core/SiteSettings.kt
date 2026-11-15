@@ -27,18 +27,21 @@ object SiteSettings {
     private const val READER = "site_reader"
     private const val DARK = "site_dark"
 
+    /** 3.0.11: the sites kept light while every site gets the dark page (Prefs.darkPagesAll). */
+    private const val NO_DARK = "site_no_dark"
+
     /** "site=scale" entries: the site's own text size (2.3). */
     private const val TEXT_SCALE = "site_text_scale"
 
     /** 3.0.7: "site=level" entries: the site's own Lite mode level (NO_LITE's sites count as Off). */
     private const val LITE_LEVELS = "site_lite_level"
-    private val KEYS = listOf(DESKTOP, AUTOPLAY, LOCATION_ALLOW, LOCATION_BLOCK, NO_LITE, READER, DARK)
+    private val KEYS = listOf(DESKTOP, AUTOPLAY, LOCATION_ALLOW, LOCATION_BLOCK, NO_LITE, READER, DARK, NO_DARK)
 
     /** The on/off settings (location has three choices). */
-    private val SWITCHES = listOf(DESKTOP, AUTOPLAY, READER, DARK)
+    private val SWITCHES = listOf(DESKTOP, AUTOPLAY, READER, DARK, NO_DARK)
 
     /** Settings the helper's page styles carry for every tab alike (3.0.1; Lite levels too, 3.0.7). */
-    private val FOR_ALL_TABS = setOf(DARK)
+    private val FOR_ALL_TABS = setOf(DARK, NO_DARK)
 
     /** What incognito tabs chose (3.0.1), on the main thread. */
     private val incognitoSwitches = SWITCHES.associateWith { IncognitoChoices<Boolean>() }
@@ -132,11 +135,16 @@ object SiteSettings {
 
     fun setAutoReader(site: String, on: Boolean, incognito: Boolean = false) = put(READER, site, on, incognito)
 
-    /** Swift turns the site dark (2.6): for sites without a dark mode of their own. */
-    fun darkPage(site: String?, incognito: Boolean = false): Boolean = isOn(DARK, site, incognito)
+    /**
+     * Swift turns the site dark (2.6): for sites without a dark mode of their own. 3.0.11: with Dark
+     * page on for every site, every site but the ones kept light.
+     */
+    fun darkPage(site: String?, incognito: Boolean = false): Boolean =
+        if (SwiftApp.prefs.darkPagesAll) site != null && !isOn(NO_DARK, site, incognito) else isOn(DARK, site, incognito)
 
+    /** 3.0.11: with Dark page on for every site, turning one site's off keeps it light (and on again: dark like the rest). */
     fun setDarkPage(site: String, on: Boolean, incognito: Boolean = false) {
-        put(DARK, site, on, incognito)
+        if (SwiftApp.prefs.darkPagesAll) put(NO_DARK, site, !on, incognito) else put(DARK, site, on, incognito)
         com.swiftbrowser.media.Helper.sendLook()
     }
 
@@ -145,6 +153,14 @@ object SiteSettings {
 
     /** The saved ones only: what the helper may write down. */
     fun darkPagesKept(): List<String> = set(DARK).sorted()
+
+    /** 3.0.11: the sites kept light while every site is dark, with incognito's choices; and the saved ones only. */
+    fun lightPages(): List<String> = incognitoSwitches.getValue(NO_DARK).sitesOn(set(NO_DARK)).sorted()
+
+    fun lightPagesKept(): List<String> = set(NO_DARK).sorted()
+
+    /** 3.0.11: what Site settings' list says about [site]'s page colour: kept light while every site is dark. */
+    fun keptLight(site: String): Boolean = site in set(NO_DARK)
 
     /** The site's own text size (1 = as designed); null: the size for all sites. */
     fun textScale(site: String?, incognito: Boolean = false): Float? {
@@ -195,7 +211,8 @@ object SiteSettings {
         }
 
     fun reset(site: String, incognito: Boolean = false) {
-        val look = darkPage(site)
+        // 3.0.11: either list changes how the page looks (kept light while every site is dark, too).
+        val look = isOn(DARK, site, incognito) || isOn(NO_DARK, site, incognito)
         if (incognito) {
             for (key in SWITCHES) put(key, site, false, incognito = true)
             setLocation(site, Location.ASK, incognito = true)

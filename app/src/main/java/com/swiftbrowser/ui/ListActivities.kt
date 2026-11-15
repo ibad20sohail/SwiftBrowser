@@ -321,11 +321,11 @@ abstract class ListActivity : AppCompatActivity() {
     private val swipeRect = android.graphics.RectF()
     private var swipeRadii: FloatArray? = null
 
+    /** The bin drawn on the band behind a row being swiped away, made the first time one is. */
+    private val swipeIcon by lazy { Ui.icon(this, R.drawable.ic_delete, Ui.danger(this)) }
+
     /** Rows for which [canSwipe] says yes can be swiped away sideways; [onSwiped] then removes them. */
     protected fun enableSwipe(canSwipe: (RecyclerView.ViewHolder) -> Boolean, onSwiped: (RecyclerView.ViewHolder) -> Unit) {
-        val icon = Ui.icon(this, R.drawable.ic_delete, Ui.danger(this))
-        val iconSize = Ui.dp(this, 24)
-        val margin = Ui.dp(this, 24)
         ItemTouchHelper(object : ItemTouchHelper.SimpleCallback(0, ItemTouchHelper.LEFT or ItemTouchHelper.RIGHT) {
             override fun onMove(rv: RecyclerView, vh: RecyclerView.ViewHolder, target: RecyclerView.ViewHolder) = false
 
@@ -335,41 +335,50 @@ abstract class ListActivity : AppCompatActivity() {
             override fun onSwiped(vh: RecyclerView.ViewHolder, direction: Int) = onSwiped(vh)
 
             override fun onChildDraw(c: Canvas, rv: RecyclerView, vh: RecyclerView.ViewHolder, dX: Float, dY: Float, state: Int, active: Boolean) {
-                if (state == ItemTouchHelper.ACTION_STATE_SWIPE && dX != 0f) {
-                    // What is revealed behind the row: a soft red band with a bin on the near side.
-                    val v = vh.itemView
-                    swipePaint.color = Palette.color(this@ListActivity, R.color.danger_container)
-                    val piece = Piece.of(v)
-                    if (piece != null) {
-                        // 3.0.4: a grouped row's band is its piece's shape where it was; the row moving
-                        // over it shows it at its own rounded corners too.
-                        val l = v.left.toFloat()
-                        val t = v.top.toFloat()
-                        val r = v.right.toFloat()
-                        val b = v.bottom.toFloat()
-                        if (swipeRadii !== piece.radii || swipeRect.left != l || swipeRect.top != t || swipeRect.right != r || swipeRect.bottom != b) {
-                            swipeRect.set(l, t, r, b)
-                            swipeRadii = piece.radii
-                            swipePath.reset()
-                            swipePath.addRoundRect(swipeRect, piece.radii, android.graphics.Path.Direction.CW)
-                        }
-                        c.drawPath(swipePath, swipePaint)
-                    } else {
-                        val left = if (dX > 0) v.left.toFloat() else v.right + dX
-                        val right = if (dX > 0) v.left + dX else v.right.toFloat()
-                        c.drawRect(left, v.top.toFloat(), right, v.bottom.toFloat(), swipePaint)
-                    }
-                    if (icon != null && kotlin.math.abs(dX) > margin) {
-                        val top = v.top + (v.height - iconSize) / 2
-                        val x = if (dX > 0) v.left + margin else v.right - margin - iconSize
-                        icon.setBounds(x, top, x + iconSize, top + iconSize)
-                        icon.alpha = (kotlin.math.abs(dX) / (v.width * 0.3f) * 255).toInt().coerceIn(0, 255)
-                        icon.draw(c)
-                    }
-                }
+                if (state == ItemTouchHelper.ACTION_STATE_SWIPE && dX != 0f) drawSwipe(c, vh, dX)
                 super.onChildDraw(c, rv, vh, dX, dY, state, active)
             }
         }).attachToRecyclerView(list)
+    }
+
+    /**
+     * What is revealed behind a row swiped [dX] sideways: a soft red band with a bin on the near side.
+     * 3.0.11: on its own, for a screen whose rows also move by dragging (a playlist's songs), which
+     * needs one ItemTouchHelper doing both.
+     */
+    protected fun drawSwipe(c: Canvas, vh: RecyclerView.ViewHolder, dX: Float) {
+        val icon = swipeIcon
+        val iconSize = Ui.dp(this, 24)
+        val margin = Ui.dp(this, 24)
+        val v = vh.itemView
+        swipePaint.color = Palette.color(this, R.color.danger_container)
+        val piece = Piece.of(v)
+        if (piece != null) {
+            // 3.0.4: a grouped row's band is its piece's shape where it was; the row moving
+            // over it shows it at its own rounded corners too.
+            val l = v.left.toFloat()
+            val t = v.top.toFloat()
+            val r = v.right.toFloat()
+            val b = v.bottom.toFloat()
+            if (swipeRadii !== piece.radii || swipeRect.left != l || swipeRect.top != t || swipeRect.right != r || swipeRect.bottom != b) {
+                swipeRect.set(l, t, r, b)
+                swipeRadii = piece.radii
+                swipePath.reset()
+                swipePath.addRoundRect(swipeRect, piece.radii, android.graphics.Path.Direction.CW)
+            }
+            c.drawPath(swipePath, swipePaint)
+        } else {
+            val left = if (dX > 0) v.left.toFloat() else v.right + dX
+            val right = if (dX > 0) v.left + dX else v.right.toFloat()
+            c.drawRect(left, v.top.toFloat(), right, v.bottom.toFloat(), swipePaint)
+        }
+        if (icon != null && kotlin.math.abs(dX) > margin) {
+            val top = v.top + (v.height - iconSize) / 2
+            val x = if (dX > 0) v.left + margin else v.right - margin - iconSize
+            icon.setBounds(x, top, x + iconSize, top + iconSize)
+            icon.alpha = (kotlin.math.abs(dX) / (v.width * 0.3f) * 255).toInt().coerceIn(0, 255)
+            icon.draw(c)
+        }
     }
 
     /** An empty list: an icon (3.0.5: or a drawing of its own, [art]), what is missing, and how to fill it. */
@@ -768,7 +777,12 @@ class BookmarksActivity : ListActivity() {
     }
 
     private val importPicker = registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) importFrom(uri)
+        if (uri == null) return@registerForActivityResult
+        // 3.0.11: Google Takeout's .zip brings Chrome's bookmarks and its history (ChromeImportUi).
+        lifecycleScope.launch {
+            val zip = withContext(Dispatchers.IO) { com.swiftbrowser.core.ChromeImport.looksLikeZip(this@BookmarksActivity, uri) }
+            if (zip) ChromeImportUi.takeout(this@BookmarksActivity, uri) { load() } else importFrom(uri)
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -776,15 +790,23 @@ class BookmarksActivity : ListActivity() {
         setTitles("Bookmarks", Profiles.current().name)
         toolbar.setNavigationOnClickListener { onBackPressedDispatcher.onBackPressed() }
         toolbar.menu.add(0, 1, 0, "Import").setShowAsAction(android.view.MenuItem.SHOW_AS_ACTION_ALWAYS)
-        toolbar.setOnMenuItemClickListener {
+        // 3.0.11: and out again, as a bookmarks file other browsers bring in.
+        toolbar.menu.add(0, EXPORT, 1, "Export").setShowAsAction(android.view.MenuItem.SHOW_AS_ACTION_ALWAYS)
+        toolbar.setOnMenuItemClickListener { item ->
+            if (item.itemId == EXPORT) {
+                export()
+                return@setOnMenuItemClickListener true
+            }
             Dialogs.confirm(
                 this, "Import bookmarks",
                 "From a bookmarks file another browser saved: in Chrome on a computer, Bookmarks → Bookmark manager → ⋮ → Export bookmarks; " +
-                    "in Firefox, Bookmarks → Manage bookmarks → Import and Backup → Export. Copy the file to your phone, then choose it.",
+                    "in Firefox, Bookmarks → Manage bookmarks → Import and Backup → Export. Copy the file to your phone, then choose it.\n\n" +
+                    "Or Google Takeout's .zip of your Chrome data: its bookmarks and history both come in (Settings → Storage & data → " +
+                    "Bring in from Chrome).",
                 "Choose file",
             ) {
                 try {
-                    importPicker.launch(arrayOf("text/html", "application/xhtml+xml", "text/plain", "application/octet-stream"))
+                    importPicker.launch(arrayOf("text/html", "application/xhtml+xml", "text/plain", "application/zip", "application/x-zip-compressed", "application/octet-stream"))
                 } catch (e: Exception) {
                     Messages.show(this, "No app to choose a file with")
                 }
@@ -1003,6 +1025,34 @@ class BookmarksActivity : ListActivity() {
         )
     }
 
+    /**
+     * 3.0.11: this profile's bookmarks as a bookmarks file (BookmarkFile.write), with their folders,
+     * in the download folder as backups are; then where it went, with Share.
+     */
+    private fun export() {
+        lifecycleScope.launch {
+            val rows = withContext(Dispatchers.IO) { SwiftApp.db.bookmarks(Profiles.currentId) }
+            if (rows.isEmpty()) {
+                Messages.show(this@BookmarksActivity, "No bookmarks to export yet")
+                return@launch
+            }
+            val file = withContext(Dispatchers.IO) {
+                try {
+                    val html = BookmarkFile.write(rows.map { BookmarkFile.Mark(it.url, it.title, it.folder, it.created) })
+                    com.swiftbrowser.core.Backup.saveToDownloads(this@BookmarksActivity, "Swift bookmarks", "html", html)
+                } catch (e: Exception) {
+                    com.swiftbrowser.core.L.w("Couldn't export bookmarks", e)
+                    null
+                }
+            }
+            if (file == null) Messages.show(this@BookmarksActivity, "Couldn't save the bookmarks file") else ExportUi.saved(this@BookmarksActivity, file, "text/html")
+        }
+    }
+
+    private companion object {
+        const val EXPORT = 2
+    }
+
     /** A bookmarks file saved by Chrome, Firefox or another browser (the "Netscape" format they share). */
     private fun importFrom(uri: android.net.Uri) {
         val pid = Profiles.currentId
@@ -1017,8 +1067,7 @@ class BookmarksActivity : ListActivity() {
                     if (bytes.size > 500_000) withContext(Dispatchers.Main) { progress = Messages.sticky(this@BookmarksActivity, "Importing bookmarks…") }
                     val marks = BookmarkFile.parse(String(bytes, Charsets.UTF_8))
                     val db = SwiftApp.db
-                    val had = db.bookmarks(pid).map { it.url }.toHashSet()
-                    val fresh = marks.filter { had.add(it.url) }
+                    val fresh = BookmarkFile.fresh(db, pid, marks)
                     // 3.0: one transaction (it wrote to the phone's storage once per bookmark).
                     db.transaction {
                         fresh.forEachIndexed { i, m ->
@@ -1053,7 +1102,7 @@ class BookmarksActivity : ListActivity() {
     }
 }
 
-/** Reads a browser's bookmarks file: links in folders (<H3>), as Chrome and Firefox export them (2.6). */
+/** Reads a browser's bookmarks file: links in folders (<H3>), as Chrome and Firefox export them (2.6); 3.0.11: and writes one. */
 object BookmarkFile {
     class Mark(val url: String, val title: String, val folder: String, val added: Long)
 
@@ -1089,6 +1138,39 @@ object BookmarkFile {
 
     private fun decode(s: String): String =
         s.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&#39;", "'").replace("&amp;", "&")
+
+    /**
+     * 3.0.11: [marks] as a bookmarks file in the same format ("Export bookmarks"), which Chrome,
+     * Firefox and [parse] bring in: each folder an <H3> with its own list (as Swift shows them, by
+     * name), then the bookmarks at the top of the list; dates in seconds, as browsers write them.
+     */
+    fun write(marks: List<Mark>): String = buildString {
+        append("<!DOCTYPE NETSCAPE-Bookmark-file-1>\n")
+        append("<!-- This is an automatically generated file.\n     It will be read and overwritten.\n     DO NOT EDIT! -->\n")
+        append("<META HTTP-EQUIV=\"Content-Type\" CONTENT=\"text/html; charset=UTF-8\">\n")
+        append("<TITLE>Bookmarks</TITLE>\n<H1>Bookmarks</H1>\n<DL><p>\n")
+        fun link(m: Mark, indent: String) {
+            append(indent).append("<DT><A HREF=\"").append(encode(m.url)).append("\" ADD_DATE=\"").append(m.added / 1000).append("\">")
+                .append(encode(m.title)).append("</A>\n")
+        }
+        for (folder in marks.map { it.folder }.filter { it.isNotEmpty() }.distinct().sortedBy { it.lowercase() }) {
+            append("    <DT><H3>").append(encode(folder)).append("</H3>\n    <DL><p>\n")
+            for (m in marks) if (m.folder == folder) link(m, "        ")
+            append("    </DL><p>\n")
+        }
+        for (m in marks) if (m.folder.isEmpty()) link(m, "    ")
+        append("</DL><p>\n")
+    }
+
+    /** What [decode] reads back: the characters that would end a name or an address early. */
+    private fun encode(s: String): String =
+        s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
+
+    /** [marks] not bookmarked in profile [pid] yet (nor twice in the file: the first one counts). 3.0.11: shared with ChromeImport. */
+    fun fresh(db: com.swiftbrowser.core.Db, pid: Long, marks: List<Mark>): List<Mark> {
+        val had = db.bookmarks(pid).map { it.url }.toHashSet()
+        return marks.filter { had.add(it.url) }
+    }
 }
 
 class DownloadsActivity : ListActivity() {
@@ -1327,6 +1409,8 @@ class DownloadsActivity : ListActivity() {
             actions += Sheets.Action(if (video) R.drawable.ic_play else R.drawable.ic_open_new, if (video) "Play" else "Open", primary = true) { openTorrentItem(d) }
             actions += Sheets.Action(R.drawable.ic_folder, "Where", primary = true) { showInFolder(d) }
         }
+        // 3.0.11: its film can be watched while it downloads (its pieces then come in order).
+        if (!done && isVideo(d)) actions += Sheets.Action(R.drawable.ic_play, "Watch now", primary = true) { PlayerActivity.openTorrent(this, d.id) }
         actions += Sheets.Action(R.drawable.ic_link, "Copy link", primary = true) { copyText(this, d.url) }
         if (d.extra.optInt("files") > 1) actions += Sheets.Action(R.drawable.ic_check, "Choose the files") { TorrentSheet.chooseFiles(this, d) }
         if (!running) actions += Sheets.Action(R.drawable.ic_close, "Remove from list (keep the files)") { removeFromList(d, deleteFile = false) }
@@ -1591,6 +1675,7 @@ class DownloadsActivity : ListActivity() {
         override fun onViewRecycled(holder: DownloadHolder) {
             holder.frameRequest?.cancel()
             holder.frameRequest = null
+            PictureLoading.stop(holder.icon)
         }
     }
 
@@ -1602,6 +1687,7 @@ class DownloadsActivity : ListActivity() {
     private fun showFrame(h: DownloadHolder, d: Downloads.Item, video: Boolean) {
         h.frameRequest?.cancel()
         h.frameRequest = null
+        PictureLoading.stop(h.icon)
         h.frame = null
         h.icon.imageTintList = h.iconTint
         h.icon.background = h.iconBadge
@@ -1612,8 +1698,12 @@ class DownloadsActivity : ListActivity() {
         h.frameFor = if (wanted) d.filePath else null
         if (!wanted) return
         val key = d.filePath
-        h.frameRequest = com.swiftbrowser.files.FileThumbs.load(this, File(d.filePath), d.created, com.swiftbrowser.files.FileKind.VIDEO, Ui.dp(this, 40)) { bmp ->
+        h.frameRequest = com.swiftbrowser.files.FileThumbs.load(
+            this, File(d.filePath), d.created, com.swiftbrowser.files.FileKind.VIDEO, Ui.dp(this, 40),
+            onNone = { if (h.frameFor == key) PictureLoading.stop(h.icon) },
+        ) { bmp ->
             if (h.frameFor != key) return@load
+            PictureLoading.stop(h.icon)
             h.frame = bmp
             h.icon.imageTintList = null
             h.icon.background = h.frameFill
@@ -1622,6 +1712,8 @@ class DownloadsActivity : ListActivity() {
             h.icon.scaleType = ImageView.ScaleType.CENTER_CROP
             h.icon.setImageBitmap(bmp)
         }
+        // 3.0.11: a soft pulse while it is made (PictureLoading).
+        if (h.frameRequest != null) PictureLoading.start(h.icon)
     }
 
     /** When it was downloaded (2.6; 3.0.5: the same short date as Files and the bin). */

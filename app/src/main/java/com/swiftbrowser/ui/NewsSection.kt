@@ -350,7 +350,10 @@ class NewsSection(context: Context, private val listener: Listener) : LinearLayo
     private fun release(row: View) {
         val image = row.getTag(R.id.row_image) as? String ?: return
         if (row.getTag(R.id.row_action) != null) return
-        row.findViewById<ImageView>(R.id.row_icon)?.setImageDrawable(null)
+        row.findViewById<ImageView>(R.id.row_icon)?.let {
+            it.setImageDrawable(null)
+            PictureLoading.stop(it)
+        }
         row.setTag(R.id.row_action, image)
     }
 
@@ -380,11 +383,18 @@ class NewsSection(context: Context, private val listener: Listener) : LinearLayo
             val pending = row.getTag(R.id.row_action) as? String ?: continue
             row.setTag(R.id.row_action, null)
             val picture = row.findViewById<ImageView>(R.id.row_icon)
-            PreviewLoader.load(context as Activity, pending, cardPictureSize, cardPictureWidth) { bmp ->
+            // 3.0.11: the grey box pulses softly while its picture loads (PictureLoading), and stops when
+            // none comes; a picture for a row let go meanwhile (scrolled far away) isn't put in.
+            val coming = PreviewLoader.load(context as Activity, pending, cardPictureSize, cardPictureWidth, onNone = {
+                PictureLoading.stop(picture)
+            }) { bmp ->
+                PictureLoading.stop(picture)
+                if (row.getTag(R.id.row_action) != null) return@load
                 picture.setImageBitmap(bmp)
                 picture.alpha = 0f
                 picture.animate().alpha(1f).setDuration(Motion.NORMAL).start()
             }
+            if (coming) PictureLoading.start(picture)
         }
     }
 
@@ -416,7 +426,10 @@ class NewsSection(context: Context, private val listener: Listener) : LinearLayo
             val picture = WidePicture(ctx).apply {
                 id = R.id.row_icon
                 scaleType = ImageView.ScaleType.CENTER_CROP
-                setBackgroundColor(Ui.color(ctx, R.color.skeleton))
+                // 3.0.11: a little lighter than the card in the dark look, so its loading pulse shows
+                // (the skeleton grey is nearly the dark card's own colour).
+                val box = Ui.color(ctx, R.color.skeleton)
+                setBackgroundColor(if (Palette.isNight(ctx)) androidx.core.graphics.ColorUtils.blendARGB(box, Ui.text(ctx), 0.14f) else box)
                 importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
                 // 3.0.5: a little dimmer in the dark look.
                 SoftPictures.apply(this)

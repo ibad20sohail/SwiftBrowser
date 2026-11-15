@@ -8,6 +8,7 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.CheckBox
+import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.core.view.AccessibilityDelegateCompat
@@ -269,11 +270,21 @@ object TorrentSheet {
             }.also { allBox = it.second }.first)
         }
         val top = ti.name()
+        // 3.0.11: a torrent still downloading: each of its chosen videos can be watched already (▶).
+        val downloading = item?.takeIf { it.status != Downloads.DONE }
         for (e in entries.take(MAX_ROWS)) {
             // Where it is inside the torrent's own folder, when not at its top.
             val folder = e.path.removePrefix("$top/").substringBeforeLast('/', "").replace("/", " › ")
             val caption = UrlUtils.formatBytes(e.size) + if (folder.isNotEmpty()) " · in $folder" else ""
-            val (view, box) = row(a, e.name, caption, e.index in ticked) { on ->
+            val watch = if (downloading != null && e.video && before?.contains(e.index) == true) {
+                {
+                    dialog.dismiss()
+                    PlayerActivity.openTorrent(a, downloading.id, e.index)
+                }
+            } else {
+                null
+            }
+            val (view, box) = row(a, e.name, caption, e.index in ticked, watch) { on ->
                 if (quiet) return@row
                 if (on) ticked += e.index else ticked -= e.index
                 refresh()
@@ -302,8 +313,8 @@ object TorrentSheet {
         }
     }
 
-    /** A file's row: a tick box, its name and a line under it. */
-    private fun row(a: Activity, name: String, caption: String?, on: Boolean, change: (Boolean) -> Unit): Pair<View, CheckBox> {
+    /** A file's row: a tick box, its name and a line under it; 3.0.11: and ▶ when it can be [watch]ed now. */
+    private fun row(a: Activity, name: String, caption: String?, on: Boolean, watch: (() -> Unit)? = null, change: (Boolean) -> Unit): Pair<View, CheckBox> {
         val box = CheckBox(a).apply {
             isChecked = on
             buttonTintList = ColorStateList.valueOf(Ui.accent(a))
@@ -314,7 +325,7 @@ object TorrentSheet {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             minimumHeight = Ui.dp(a, 52)
-            setPadding(Ui.dp(a, 16), 0, Ui.dp(a, 20), 0)
+            setPadding(Ui.dp(a, 16), 0, Ui.dp(a, if (watch != null) 8 else 20), 0)
             setBackgroundResource(RowHolder.selectableBackground(a))
             contentDescription = if (caption != null) "$name, $caption" else name
             setOnClickListener { box.isChecked = !box.isChecked }
@@ -334,6 +345,15 @@ object TorrentSheet {
                 addView(Ui.text(a, Ui.Type.BODY, name, lines = 2))
                 if (caption != null) addView(Ui.text(a, Ui.Type.CAPTION, caption, lines = 1))
             }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            if (watch != null) {
+                addView(ImageButton(a).apply {
+                    setImageDrawable(Ui.icon(a, R.drawable.ic_play, Ui.textSecondary(a)))
+                    contentDescription = "Watch now"
+                    background = Ui.rippleBorderless(a)
+                    Ui.pressable(this, Motion.PRESS_ICON, morph = false)
+                    setOnClickListener { watch() }
+                }, LinearLayout.LayoutParams(Ui.dp(a, 44), Ui.dp(a, 44)))
+            }
         }
         return view to box
     }

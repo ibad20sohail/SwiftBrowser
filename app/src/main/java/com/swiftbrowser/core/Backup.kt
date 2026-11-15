@@ -61,6 +61,12 @@ object Backup {
         /** 3.0.8: saved passwords added, and sign-ins to sites put back at the next start. */
         var passwords = 0
         var signIns = 0
+
+        /** 3.0.11: playlists added, or given songs they lacked. */
+        var playlists = 0
+
+        /** 3.0.11: saved addresses added (they travel with the passwords). */
+        var addresses = 0
     }
 
     /** 3.0.8: backup files also carry the passwords and sign-ins, locked with the backup password. */
@@ -77,13 +83,21 @@ object Backup {
             BackupLock.lockBox(BackupSecrets.forFile(ctx))?.let { root.put("locked", it) }
                 ?: L.w("Backup: passwords and sign-ins left out (the backup password needs setting again)")
         }
+        return saveToDownloads(ctx, "Swift backup", "json", root.toString())
+    }
+
+    /**
+     * Blocking: [text] in a new file "[name] yyyy-MM-dd.[ext]" (" (2)" and on when that's taken) in
+     * the download folder. 3.0.11: also for exported bookmarks and passwords.
+     */
+    fun saveToDownloads(ctx: Context, name: String, ext: String, text: String): File {
         val day = SimpleDateFormat("yyyy-MM-dd", Locale.ROOT).format(Date())
         val dir = Downloads.directory()
-        val base = "Swift backup $day"
-        var file = File(dir, "$base.json")
+        val base = "$name $day"
+        var file = File(dir, "$base.$ext")
         var n = 2
-        while (file.exists()) file = File(dir, "$base ($n).json").also { n++ }
-        file.writeText(root.toString())
+        while (file.exists()) file = File(dir, "$base ($n).$ext").also { n++ }
+        file.writeText(text)
         // So file managers and other apps see it straight away.
         android.media.MediaScannerConnection.scanFile(ctx.applicationContext, arrayOf(file.path), null, null)
         return file
@@ -139,6 +153,8 @@ object Backup {
         val levels = JSONObject()
         for ((site, level) in AdBlock.overrides()) levels.put(site, level.key)
         root.put("siteLevels", levels)
+        // 3.0.11: the user's playlists (their names and their songs' paths; never the songs).
+        root.put("playlists", com.swiftbrowser.media.Playlists.forBackup(ctx))
         return root
     }
 
@@ -272,6 +288,13 @@ object Backup {
             Profiles.refresh()
             return null
         }
+        // 3.0.11: the playlists (a playlist of a name here already gets only the songs it lacks).
+        val playlists = try {
+            com.swiftbrowser.media.Playlists.restore(ctx, root.optJSONArray("playlists"))
+        } catch (e: Exception) {
+            L.w("Restoring a backup's playlists failed", e)
+            0
+        }
         // The settings go in as one edit (all of them or none), after the data. 3.0.1: if they fail,
         // the data stays in and the message says the settings didn't change.
         val settings = try {
@@ -280,8 +303,8 @@ object Backup {
             L.w("Restoring a backup's settings failed; they stay as they were", e)
             -1
         }
-        L.d("Backup restored: ${profiles.length()} profiles, $bookmarks bookmarks, $history history, $tabs tabs, $settings settings")
-        return Restored(newProfiles, bookmarks, history, tabs, siteLevels, settings, ids)
+        L.d("Backup restored: ${profiles.length()} profiles, $bookmarks bookmarks, $history history, $tabs tabs, $playlists playlists, $settings settings")
+        return Restored(newProfiles, bookmarks, history, tabs, siteLevels, settings, ids).also { it.playlists = playlists }
     }
 
     /** The message after a restore (3.0.1): exactly what went in. */
@@ -293,7 +316,9 @@ object Backup {
             n(r.history, "history entry", "history entries").takeIf { r.history > 0 },
             n(r.tabs, "tab", "tabs").takeIf { r.tabs > 0 },
             n(r.siteLevels, "site's ad blocking level", "sites' ad blocking levels").takeIf { r.siteLevels > 0 },
+            n(r.playlists, "playlist", "playlists").takeIf { r.playlists > 0 },
             n(r.passwords, "saved password", "saved passwords").takeIf { r.passwords > 0 },
+            n(r.addresses, "saved address", "saved addresses").takeIf { r.addresses > 0 },
             n(r.signIns, "sign-in to sites", "sign-ins to sites").takeIf { r.signIns > 0 },
         )
         val data = when (added.size) {
@@ -389,6 +414,12 @@ object Backup {
                     restored.signIns = signIns
                 } catch (e: Exception) {
                     L.w("Restoring a backup's passwords and sign-ins failed", e)
+                }
+                // 3.0.11: and the saved addresses that came with them.
+                try {
+                    secrets.optJSONArray("addresses")?.let { restored.addresses = Addresses.restore(it, restored.profileIds) }
+                } catch (e: Exception) {
+                    L.w("Restoring a backup's saved addresses failed", e)
                 }
             }
             android.os.Handler(android.os.Looper.getMainLooper()).post { done(restored) }

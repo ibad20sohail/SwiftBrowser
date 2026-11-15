@@ -29,8 +29,9 @@ internal object ExactAccent {
     private const val HIGHLIGHT_ALPHA = 0x66000000
 
     // Looked up once; a field that isn't there stays null. Below Android 10 only (the caller checks).
+    // 3.0.11: the lists' ends are also where Stretch puts its own.
     @SuppressLint("DiscouragedPrivateApi", "SoonBlockedPrivateApi", "PrivateApi")
-    private object Hidden {
+    object Hidden {
         private fun field(owner: Class<*>, name: String): Field? = try {
             owner.getDeclaredField(name).apply { isAccessible = true }
         } catch (_: Exception) {

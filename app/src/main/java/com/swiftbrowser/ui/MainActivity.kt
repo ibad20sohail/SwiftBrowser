@@ -451,9 +451,20 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         setupEdgeSwipe()
         // A newer Swift on GitHub? 3.0.9: asked at each start, a few seconds in, and offered in a window
         // (a message at the bottom was easy to miss), at each start until it is installed.
-        handler.postDelayed({
-            if (!isFinishing) Updates.checkNow(prefs, force = false) { r -> if (startWindowsDone) offerUpdate(r) else updateFound = r }
-        }, 4_000)
+        // 3.0.11: not while Swift's VPN is still connecting (its block makes every request fail; it took
+        // 5-6 s at a fresh start in a problem report): asked once the block lifts, for up to a minute.
+        var updateWaits = 0
+        val updateCheck = object : Runnable {
+            override fun run() {
+                if (isFinishing) return
+                if (com.swiftbrowser.engine.Engine.networkBlocked && updateWaits++ < 30) {
+                    handler.postDelayed(this, 2_000)
+                    return
+                }
+                Updates.checkNow(prefs, force = false) { r -> if (startWindowsDone) offerUpdate(r) else updateFound = r }
+            }
+        }
+        handler.postDelayed(updateCheck, 4_000)
         if (savedInstanceState == null) whenStarted {
             if (isFinishing) return@whenStarted
             // 3.0.8: a Google backup Android put back (Swift installed again, a new phone) is offered
@@ -479,6 +490,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         showDownloadRing()
         Downloads.all().filter { VpnUi.isSetupFile(it) }.mapTo(setupFilesSeen) { it.id }
         Downloads.addListener(setupFileListener)
+        Downloads.all().filter { chromeFileKind(it) != null }.mapTo(chromeFilesSeen) { it.id }
+        Downloads.addListener(chromeFileListener)
         built = true
         SwiftApp.browserBuilt = true
         startScreen?.let { start ->
@@ -808,6 +821,32 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     private val accountListener: () -> Unit = { updateProfileChip() }
 
     /** Setup files (.conf) already finished: each new one is offered as a VPN location once. */
+    /**
+     * 3.0.11: Google Takeout's .zip (named takeout-….zip) or a passwords export (a .csv with "password"
+     * in its name, as Google's and Chrome's are) finished downloading: offered to bring into Swift, once.
+     */
+    private val chromeFilesSeen = HashSet<Long>()
+    private val chromeFileListener: () -> Unit = {
+        for (d in Downloads.all()) {
+            val kind = chromeFileKind(d) ?: continue
+            if (!chromeFilesSeen.add(d.id)) continue
+            snack("Downloaded ${d.fileName}", "Bring into Swift", long = true) {
+                val uri = android.net.Uri.fromFile(java.io.File(d.filePath))
+                if (kind == "zip") ChromeImportUi.takeout(this, uri) else ChromeImportUi.passwords(this, uri, download = d)
+            }
+        }
+    }
+
+    private fun chromeFileKind(d: Downloads.Item): String? {
+        if (d.status != Downloads.DONE) return null
+        val name = d.fileName.lowercase()
+        return when {
+            name.startsWith("takeout") && name.endsWith(".zip") -> "zip"
+            name.endsWith(".csv") && "password" in name -> "csv"
+            else -> null
+        }
+    }
+
     private val setupFilesSeen = HashSet<Long>()
     private val setupFileListener: () -> Unit = {
         for (d in Downloads.all()) {
@@ -844,27 +883,16 @@ class MainActivity : AppCompatActivity(), BrowserUi {
                     snack("VPN on · $where", "Reload") { current?.let { TabManager.reload(it) } }
                 }
             }
+            // 3.0.11: switching to another location is always automatic (it was a setting), so every
+            // other location was tried already: the VPN sheet is the way on.
             com.swiftbrowser.vpn.Vpn.State.FAILED -> if (vpn.wanted) {
-                // 2.2: another location (the same country first) is one tap away.
-                // With automatic switching on, every other location was tried already.
-                val spare = if (vpn.autoSwitch) null else vpn.spareFor(vpn.current())
-                if (spare != null) {
-                    val first = vpn.error?.substringBefore(". ")?.trimEnd('.')?.plus(".") ?: "The VPN isn't connected."
-                    snack(first, "Try ${spare.server}", long = true) { VpnUi.turnOn(this, vpnPermission, spare) }
-                } else {
-                    snack(vpn.error ?: "The VPN isn't connected", "VPN") { showVpnSheet() }
-                }
+                snack(vpn.error ?: "The VPN isn't connected", "VPN") { showVpnSheet() }
             }
             // 3.0.7: it turned itself off (no internet, or no location answered): why, once; pages
             // that waited for it load now.
             com.swiftbrowser.vpn.Vpn.State.OFF -> vpn.error?.let { why ->
                 TabManager.onOnline()
-                val spare = if (vpn.autoSwitch) null else vpn.spareFor(vpn.current())
-                if (spare != null) {
-                    snack(why, "Try ${spare.server}", long = true) { VpnUi.turnOn(this, vpnPermission, spare) }
-                } else {
-                    snack(why, "VPN", long = true) { showVpnSheet() }
-                }
+                snack(why, "VPN", long = true) { showVpnSheet() }
             }
             else -> Unit
         }
@@ -1029,9 +1057,9 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             // background): an active page also keeps the engine's page process from being closed.
             val keepPlaying = prefs.keepPlaying && current?.playing == true
             current?.session?.let { if (it.isOpen && !keepPlaying) it.setActive(false) }
-            AdBlock.updateInBackground()
             // 3.0.2: other tabs let go of their pages a minute after none of Swift's screens shows
-            // (TabManager.inSight), not a minute after this one is covered by Settings or the player.
+            // (TabManager.inSight), not a minute after this one is covered by Settings or the player;
+            // 3.0.11: so do the ad blocker's list updates (they were started here).
         }
         updateKeepScreenOn()
     }
@@ -1060,6 +1088,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         Downloads.removeListener(updateDownloadListener)
         Downloads.removeListener(downloadRingListener)
         Downloads.removeListener(setupFileListener)
+        Downloads.removeListener(chromeFileListener)
         if (TabManager.ui === this) TabManager.ui = null
         if (Engine.activityDelegate != null) Engine.activityDelegate = null
         home.listener = null
@@ -1910,7 +1939,6 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
     /** Incognito tabs get a dark toolbar whatever the theme, like in Chrome. */
     private fun applyIncognitoStyle(incognito: Boolean) {
-        applySecureScreen()
         if (styledIncognito == incognito) return
         styledIncognito = incognito
         // 3.0: the keyboard learns nothing typed in incognito: no suggestions, nothing for its
@@ -1942,23 +1970,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     /** 3.0.4: the accent's bits on the bar (a filled star, the VPN on, the loading line), readable on its colour. */
     private fun barAccent(): Int = barShown?.accent ?: Ui.accent(this)
 
-    /** Whether this screen is kept out of screenshots now (null: not set yet). */
-    private var secureShown: Boolean? = null
-
-    /**
-     * 3.0: an incognito page, or the tab grid's incognito page, stays out of screenshots and Android's
-     * recent-apps picture, unless Settings → Privacy & security allows it. Settings calls this when
-     * that changes.
-     */
-    fun applySecureScreen() {
-        val grid = switcherView?.takeIf { it.isOpen }
-        val incognito = grid?.showingIncognito ?: (current?.incognito == true)
-        val on = incognito && !prefs.allowIncognitoScreenshots
-        // Changing the window's flags lays it out again: only when it changes.
-        if (on == secureShown) return
-        secureShown = on
-        SecureScreen.forIncognito(this, incognito)
-    }
+    // 3.0.11: incognito pages may always appear in screenshots and recent apps (it was a setting, off at
+    // first), so the browser's screen no longer keeps itself out of them.
 
     // ------------------------------------------------------------------ 3.0.4: the bar's colours
 
@@ -1996,12 +2009,12 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
     /**
      * The website's colour for the bar now (its theme-color, fit for the bar: BarTones.forBar), or null
-     * for Swift's own: not with website colours off, in incognito, while typing an address or in full
-     * screen, nor on Swift's own pages (the home page, reader view, documents, saved pages, the crash
-     * view; an error page says no colour, see TabDelegates.onPageStop).
+     * for Swift's own: not in incognito, while typing an address or in full screen, nor on Swift's own
+     * pages (the home page, reader view, documents, saved pages, the crash view; an error page says no
+     * colour, see TabDelegates.onPageStop). 3.0.11: always on (no longer a setting).
      */
     private fun siteColourFor(tab: Tab?): Int? {
-        if (tab == null || !prefs.siteColours || tab.incognito || editing || fullscreenTab != null) return null
+        if (tab == null || tab.incognito || editing || fullscreenTab != null) return null
         if (tab.showsHome || tab.crashed || !UrlUtils.isHttp(tab.url)) return null
         val c = tab.siteColour ?: return null
         return BarTones.forBar(c, color(R.color.toolbar_bg), Palette.isNight(this))
@@ -2450,15 +2463,11 @@ class MainActivity : AppCompatActivity(), BrowserUi {
                 TabManager.newTabInGroup(group)
             }
 
-            // 3.0: not a page under the home page (pageOnScreen); the screenshot rule of the tab now shown.
+            // 3.0: not a page under the home page (pageOnScreen).
             override fun onSwitcherClosed() {
                 activateIfSeen()
-                applySecureScreen()
             }
         }
-        // 3.0: switching the grid to its incognito page (or back) lays it out again: incognito tabs
-        // stay out of screenshots there too (applySecureScreen).
-        s.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> if (s.isOpen) applySecureScreen() }
     }
 
     /** Holding the tab button: the quick things to do with tabs. */
@@ -2533,7 +2542,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
                 current?.let { syncSession(it) }
                 if (coverWaitsForLeaving) {
                     coverWaitsForLeaving = false
-                    fadePageCover()
+                    // 3.0.11: and only once the new tab's page has drawn (stopCoverWait).
+                    if (coverWaitsForPaint == null) fadePageCover()
                 }
             }
         }
@@ -2644,6 +2654,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         selectionMenu.dismiss()
         // 3.0.9: a woken tab's picture, waiting for its page, doesn't stay over another tab's.
         tabSwipe.onTabShown(tab)
+        // 3.0.11: nor does a new tab's cover (animateNewTab sets it again for another new tab below).
+        if (coverWaitsForPaint != null && coverWaitsForPaint !== tab) stopCoverWait()
         // 3.0.10: the menu stays open under its sheets, but not over another tab (one reopened from a sheet).
         if (menuOpen && quickMenu.openedFor !== tab) quickMenu.close()
         updateSitePlayerChip()
@@ -3433,17 +3445,56 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             pageCover.setBackgroundColor(color(if (tab.incognito) R.color.incognito_bg else R.color.page_bg))
             pageCover.animate().cancel()
             pageCover.alpha = 1f
-            pageCover.translationY = dp(24f)
+            pageCover.translationY = 0f
             pageCover.visibility = View.VISIBLE
             // 3.0: while the tab left has its picture taken (onLeavingTab), the view still shows that
             // tab's page: the cover stays whole until the new tab's page is in it.
-            if (leavingTab != null) {
-                pageCover.translationY = 0f
-                coverWaitsForLeaving = true
-            } else {
-                fadePageCover()
-            }
+            coverWaitsForLeaving = leavingTab != null
+            // 3.0.11: and until the new page has really drawn, not for a set time: the cover used to fade
+            // at once and the engine's own colour (grey in the dark look) showed until the site's first
+            // paint. Not for ever: a page that never paints gives the cover up after NEW_TAB_COVER_MAX_MS.
+            coverWaitsForPaint = tab
+            coverPaintSeen = false
+            // A page still loading must draw some of its content (its first frame is only the engine's
+            // background); one that loaded behind, opened in the background, is there with its first frame.
+            coverNeedsContent = tab.loading
+            handler.removeCallbacks(coverPaintTimeout)
+            handler.postDelayed(coverPaintTimeout, NEW_TAB_COVER_MAX_MS)
         }
+    }
+
+    /** 3.0.11: the new tab whose page the cover waits for (see [animateNewTab]); null when it doesn't wait. */
+    private var coverWaitsForPaint: Tab? = null
+    private var coverPaintSeen = false
+    private var coverNeedsContent = true
+    private val coverPaintTimeout = Runnable { stopCoverWait() }
+
+    /**
+     * 3.0.11: the waited-for tab's page drew something. The engine says so before the picture reaches
+     * the screen (by over a second on a slow GPU), so, as the start-up screen does, the cover goes once
+     * the page can be read back from the screen, or after START_PAGE_DRAW_MS whatever happens.
+     */
+    private fun coverPagePainted(tab: Tab) {
+        if (tab !== coverWaitsForPaint || coverPaintSeen) return
+        coverPaintSeen = true
+        handler.removeCallbacks(coverPaintTimeout)
+        handler.postDelayed(coverPaintTimeout, START_PAGE_DRAW_MS)
+        if (tab.session?.isOpen == true && gecko.session === tab.session) {
+            gecko.capturePixels().accept({ picture ->
+                picture?.recycle()
+                if (coverWaitsForPaint === tab) stopCoverWait()
+            }, { _ -> if (coverWaitsForPaint === tab) stopCoverWait() })
+        } else {
+            stopCoverWait()
+        }
+    }
+
+    /** 3.0.11: the cover waits no more for the new tab's page: it fades, unless the tab left is still having its picture taken. */
+    private fun stopCoverWait() {
+        handler.removeCallbacks(coverPaintTimeout)
+        if (coverWaitsForPaint == null) return
+        coverWaitsForPaint = null
+        if (!coverWaitsForLeaving && !isDestroyed) fadePageCover()
     }
 
     /** 3.0.10: the tab whose site, opened from the home page, the home page waits for before fading. */
@@ -3767,6 +3818,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             actions += Sheets.Action(R.drawable.ic_tab, "Background", primary = true) { TabManager.newTab(link, parent = tab, select = false) }
             if (!tab.incognito) actions += Sheets.Action(R.drawable.ic_incognito, "Incognito", primary = true) { TabManager.newTab(link, parent = tab, incognito = true) }
             actions += Sheets.Action(R.drawable.ic_share, "Share", primary = true) { share(link) }
+            // 3.0.11: a look at the page in a sheet, without a tab.
+            if (UrlUtils.isHttp(link)) actions += Sheets.Action(R.drawable.ic_visibility, "Preview") { LinkPreview.show(this, tab, link) }
             actions += Sheets.Action(R.drawable.ic_copy, "Copy link") { copy(link) }
             element.textContent?.trim()?.takeIf { it.isNotEmpty() && it != link }?.let { text ->
                 actions += Sheets.Action(R.drawable.ic_link_text, "Copy link text") { copy(text) }
@@ -3781,6 +3834,10 @@ class MainActivity : AppCompatActivity(), BrowserUi {
                     actions += Sheets.Action(R.drawable.ic_download, if (main) "Save" else "Save picture", primary = main) { downloadUrl(tab, src) }
                     if (main && UrlUtils.isHttp(src)) actions += Sheets.Action(R.drawable.ic_share, "Share", primary = true) { share(src) }
                     actions += Sheets.Action(R.drawable.ic_link, if (main) "Copy" else "Copy picture link", primary = main) { copy(src) }
+                    // 3.0.11: find where else it is, what it shows (only a picture on the web has an address to send).
+                    if (UrlUtils.isHttp(src)) actions += Sheets.Action(R.drawable.ic_search, "Search this picture") {
+                        TabManager.newTab(com.swiftbrowser.core.SearchEngine.current.pictureSearchUrl(src), parent = tab)
+                    }
                 }
                 isMedia -> {
                     actions += Sheets.Action(R.drawable.ic_download, if (main) "Save" else "Save $mediaWord", primary = main) { downloadUrl(tab, src) }
@@ -3845,8 +3902,9 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     }
 
     private fun enterFullscreen(tab: Tab) {
-        val portrait = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_PORTRAIT
-        coverFullscreenSwitch(turns = prefs.autoLandscape && portrait)
+        // 3.0.11: Swift no longer turns the screen itself ("Turn full-screen videos sideways" is gone):
+        // the phone's own auto-rotate decides.
+        coverFullscreenSwitch(turns = false)
         quickMenu.close()
         stopEditing()
         cancelPullRefresh()
@@ -3862,7 +3920,6 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         findBar.visibility = View.GONE
         videoBtn.visibility = View.GONE
         hideSystemBars()
-        if (prefs.autoLandscape) requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
         gestureLayer.setVideoMode(true, swipes = prefs.videoGestures, taps = prefs.videoTaps)
         updateKeepScreenOn()
     }
@@ -4010,13 +4067,6 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         if (fullscreenTab != null) hideSystemBars() else applySystemBars()
         // 3.0.10: back from a sheet opened from the menu (it stays open under them).
         if (menuOpen) quickMenu.refresh()
-    }
-
-    override fun onVideoFullscreen(tab: Tab, width: Long, height: Long) {
-        // Portrait videos (e.g. phone recordings) stay upright.
-        if (fullscreenTab === tab && prefs.autoLandscape && height > width && width > 0) {
-            requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
-        }
     }
 
     private val hideHud = Runnable {
@@ -4671,6 +4721,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         if (contentful && tab === current) releaseThemePicture()
         // 3.0.5: the page the start-up screen waited for is really there now.
         if (contentful && tab === startupPage) liftStartupCover(tab)
+        // 3.0.11: a new tab's page drew: its cover can go (once it is on the screen).
+        if (contentful || !coverNeedsContent) coverPagePainted(tab)
     }
 
     // ------------------------------------------------------------------ updates
@@ -4953,9 +5005,11 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         }
         val (title, text) = when (problem) {
             Diagnostics.Problem.CLOSED_BY_ANDROID -> "Swift was closed while you used it" to
-                "Android closed Swift while it was on screen. On a phone with little memory that almost always means it ran out of memory " +
-                "(very heavy pages such as Google's AI answers can do that).\n\nTo make it less likely: keep fewer tabs in memory " +
-                "(Settings → Speed, data & battery), close tabs you don't need, and close other apps.\n\nIf it keeps happening, send a report."
+                // 3.0.11: not "keep fewer tabs in memory": with memory low Swift keeps only the open one
+                // loaded already, and it happened with one tab loaded (a long video) in a problem report.
+                "Android closed Swift while it was on screen. On a phone with little memory that almost always means it ran out of memory: " +
+                "a long video on a heavy site, or very heavy pages such as Google's AI answers, can do that.\n\n" +
+                "To make it less likely: close other apps and the tabs you don't need.\n\nIf it keeps happening, send a report."
             Diagnostics.Problem.ENGINE_CRASH -> "Swift's engine crashed" to
                 "The Firefox engine inside Swift crashed last time. " + (reason?.let { "$it\n\n" } ?: "\n\n") +
                 (detail?.let { "Details: $it\n\n" } ?: "") + "Sending a report (with the last 3 days' logs) helps find out why."
@@ -5030,6 +5084,9 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
         /** 3.0.10: the home page waits this long at most for the site opened from it to draw. */
         private const val HOME_LEAVE_MAX_MS = 1500L
+
+        /** 3.0.11: a new tab's cover waits this long at most for its page to draw (a slow site, a page that never paints). */
+        private const val NEW_TAB_COVER_MAX_MS = 6000L
 
         const val EXTRA_URL = "url"
         const val EXTRA_NEW_TAB = "new_tab"

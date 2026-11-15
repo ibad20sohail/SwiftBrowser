@@ -5,12 +5,12 @@ ad-heavy sites on older phones, and runs on Android 7 and newer.
 
 ## Download
 
-Swift 3.0.10 for Android 7 and newer comes in two files:
+Swift 3.0.11 for Android 7 and newer comes in two files:
 
-- **[Swift-64bit-3.0.10.apk](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v3.0.10/Swift-64bit-3.0.10.apk)**
+- **[Swift-64bit-3.0.11.apk](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v3.0.11/Swift-64bit-3.0.11.apk)**
   (64-bit ARM, about 202 MB): for newer phones, and for any phone that says Swift "isn't compatible
   with the latest version of Android".
-- **[Swift-3.0.10.apk](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v3.0.10/Swift-3.0.10.apk)**
+- **[Swift-3.0.11.apk](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v3.0.11/Swift-3.0.11.apk)**
   (32-bit ARM, about 165 MB): for older phones, such as those with 2 GB of memory.
 
 Either installs over an earlier Swift and keeps tabs and settings. Swift can also update itself
@@ -30,14 +30,15 @@ are attached to the releases because GitHub doesn't accept files over 100 MB in 
   in groups, search suggestions, your open tabs, bookmarks and history, and offers a link you just
   copied. Hold the address for Paste and go, Copy, Share and Edit.
 - **More room for the page**: the bar slides away and back with your finger as you scroll, a swipe
-  on it can hide it, and full screen hides the phone's own bars too.
+  on it can hide it, and full screen hides the phone's own bars too. When they come back for the
+  keyboard, Swift glides out of their way and back, instead of jumping.
 - **Address bar buttons**: up to 4 on either side of the address, arranged by dragging: profile,
   home, tabs, menu, new tab, reload, share, bookmark, VPN and Scan QR.
 - **Search**: Google, DuckDuckGo, Bing, Startpage or a search engine of your own, with suggestions
   and its logo in the address bar.
 - **Home page**: a search box (with voice search and QR codes) that slides into the address bar,
   up to 15 shortcuts you can arrange, what you left half-way, and the news, in the order you choose
-  and over a soft gradient or a picture of your own, with a slider for how clear the picture is. The picture runs behind a see-through address bar, and the text and buttons on it take whichever colour reads.
+  and over a soft gradient or a picture of your own, with a slider for how clear the picture is. The picture or gradient runs behind a see-through address bar, and the text and buttons on it take whichever colour reads.
   Colours can be taken from that picture. Once you scroll past the search box it moves up into the
   address bar, and an ↑ button brings you back to the top.
 - **News** on the home page: headlines from Google News for your country as cards with their
@@ -52,6 +53,8 @@ are attached to the releases because GitHub doesn't accept files over 100 MB in 
   code and Quit.
 - **Long press** on a link, picture or video: what it is, the main actions as big buttons (new,
   background or incognito tab, share; for pictures open, save, share, copy) and the rest as rows.
+  **Preview** shows a link's page in a sheet without opening a tab, and **Search this picture**
+  looks a picture up with Google Lens (or Bing, when it is your search engine).
 - **Selected text**: Search, Share and Listen next to Copy.
 - **Reader view**: a clean version of an article, with your choice of font, line spacing and page
   colour (light, dark or sepia). It remembers where you stopped, and **Listen** reads the article
@@ -60,9 +63,10 @@ are attached to the releases because GitHub doesn't accept files over 100 MB in 
   language downloads once (about 20 MB).
 - **Site settings** for each site: desktop mode, sound that starts by itself, location, ad-blocking
   level, Lite mode, dark page, text size, always open in reader view, and clearing its cookies and
-  data.
-- **History** by day, with search and Delete day. **Bookmarks** with folders, search and import from
-  Chrome or Firefox. Removing things can be undone for a few seconds.
+  data. **Dark pages on every site** (Settings → Look & screen) turns all sites dark at once; a site's
+  own switch can keep it light.
+- **History** by day, with search and Delete day. **Bookmarks** with folders, search, and import from
+  and export to Chrome or Firefox. Removing things can be undone for a few seconds.
 - **Save offline** (a page as a PDF), **Add to Home screen**, **Scan QR codes**, **pull down to
   refresh**, **swipe from the edges** to go back and forward, **zoom** even on sites that turn it
   off, a text size for all sites or each one, and pages that load again by themselves when the
@@ -88,7 +92,7 @@ are attached to the releases because GitHub doesn't accept files over 100 MB in 
 - **Profiles**: each has its own Google login, cookies, history, bookmarks and tabs, and shows
   the Google account signed in to it.
 - **Incognito tabs**: no history, and cookies, site data and site settings changed in them go away
-  when the last one closes. They stay out of screenshots and recent apps unless you allow it.
+  when the last one closes.
 
 ### Ad blocking
 
@@ -111,7 +115,7 @@ are attached to the releases because GitHub doesn't accept files over 100 MB in 
 - Notification and lock-screen controls with the picture, play and pause, skip, sleep timer and
   close. Headset and Bluetooth buttons work, and playing pauses when headphones are unplugged.
 - In full screen: double-tap a side to skip (keep tapping to skip more), hold for double speed,
-  swipe for brightness and volume, and turn sideways by itself.
+  and swipe for brightness and volume.
 - **Continue watching** where you left off, even after a reload.
 - **Sleep timer**: stops after 15 to 90 minutes or at the end of the video, fading the sound out.
 - Playback speed from 0.5x to 3x. Sites get H.264 video, which the phone's hardware can play.
@@ -122,8 +126,11 @@ are attached to the releases because GitHub doesn't accept files over 100 MB in 
 
 - Swipe for brightness, volume and seeking; double-tap to skip (taps in a row add up); hold for 2×;
   pinch to fill the screen; lock; turning; picture size; speed.
-- Previous and next, the folder as a playlist, repeat, shuffle, an Up next card, A-B repeat, and
-  frame by frame while paused.
+- Previous and next, the folder or a playlist of your own as the list, repeat, shuffle, an Up next
+  card, A-B repeat, and frame by frame while paused. Dragging a video's bar shows a small picture of
+  that moment.
+- **Playlists** of your own (Files → Music): songs in the order you choose, played or shuffled on
+  the music screen. Songs moved or deleted show greyed and are skipped.
 - **Sound and subtitles**: audio tracks, subtitle files found next to the video or picked yourself,
   size, colour and timing, for every subtitle and for the sound, kept for each video. Urdu, Arabic
   and other subtitles are read in the right encoding.
@@ -145,16 +152,21 @@ a thumbnail strip, slideshow, moving GIFs, and set as wallpaper or contact photo
   as one MP4 when possible.
 - **Torrents**: magnet links, .torrent files and "Open with Swift", with a panel of the files (junk
   unticked, a warning for Windows programs and 10-bit videos, a free space check). Speed limits, how
-  many at once, Wi-Fi only, only while charging, at night only, extra sources, and protected
+  many at once, Wi-Fi only, extra sources, and protected
   connections. They pause on low battery and while Swift's VPN is on.
+- **Watch now**: a video in a torrent that is still downloading plays in Swift's player (the
+  torrent's menu, or ▶ in its list of files). Its first and last pieces come first, then the pieces
+  from where you watch, in order, also after a jump. The player says when something keeps the
+  torrent waiting.
 
 ### Files
 
 A file manager for the phone's storage and SD card, also with its own icon.
 
 - A start page with how full each storage is and what fills it, categories, Continue, recent files
-  and favourite folders. Grid or list, with pictures of photos and videos and how much of a video
-  was watched.
+  and favourite folders. Grid or list, with pictures of photos and videos, how long each video is,
+  and how much of it was watched. A photo grows out of its small picture when opened and shrinks
+  back when closed, and the bars at the bottom slide in and out without moving the list.
 - Opens for a website's upload button, or your phone's own picker if you prefer (Settings → Files).
 - Copy, move, rename, delete, new folder, share, details, and folder sizes. Hold a file and slide
   to select many. **Two folders side by side** with the phone sideways.
@@ -195,6 +207,13 @@ app's "Open with".
   gets security fixes.
 - **Saved passwords**, locked by Android, each profile with its own, and shown only after your
   screen lock. They go into backups only when locked with your backup password.
+- **Strong passwords**: on sign-up and change-password forms Swift offers a strong password, fills
+  it in (also where it is asked for again) and saves it with the site. Never in incognito.
+- **Saved addresses** (Settings → Passwords → Addresses): your name, phone, email and address,
+  filled in on forms in any country. After you send a new address Swift offers to save it. Locked
+  like the passwords, each profile its own, and never in incognito.
+- **Export** bookmarks (Bookmarks → Export) and passwords (Saved passwords → Export, after your
+  screen lock) as files Chrome and Firefox can bring in.
 - **Address bar safety**: it can't be faked by pages posing as a search engine, lookalike names
   show as they really are, and QR codes show where they lead first.
 - **Clear browsing data** by time or by dates, seeing how much each thing takes. **Quit** can
@@ -230,7 +249,8 @@ VPN. Only Swift's traffic goes through it; other apps keep their own connection.
 - **Night light**: a warm layer over Swift, pages and videos too.
 - **Start-up screen** in your colours, with the logo and, when something has to load, what's
   loading, step by step.
-- Short, light animations and a light vibration on long presses (which can be turned off).
+- Short, light animations (lists stretch softly at their ends) and a light vibration on long
+  presses (which can be turned off).
 
 ### Speed on older phones
 
@@ -258,6 +278,9 @@ VPN. Only Swift's traffic goes through it; other apps keep their own connection.
 - **Back up and restore** settings, profiles, bookmarks, history, open tabs and groups, and site
   settings in one file. Saved passwords and sign-ins to sites can be
   added, locked with your backup password; the VPN and the Private folder are never in it.
+- **Bring in from Chrome**: Chrome's bookmarks and history from Google Takeout's .zip, and its
+  passwords from Google Password Manager's .csv export (a file downloaded in Swift is offered at
+  once; the passwords file can be deleted right after).
 - **Google backup**: Android's own backup to your Google account keeps a copy of all of this, with
   history, saved passwords and sign-ins, locked with a backup password only you know (with a hint
   you choose). It's off until you turn it on, and Swift on a new phone offers to restore it.

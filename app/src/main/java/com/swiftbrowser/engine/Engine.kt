@@ -120,6 +120,10 @@ object Engine {
             override fun onLoginUsed(login: org.mozilla.geckoview.Autocomplete.LoginEntry, usedFields: Int) {
                 loginIo.execute { com.swiftbrowser.core.Passwords.used(login) }
             }
+
+            // 3.0.11: saved addresses for forms (Prompts shows the pick). GeckoView 143 never hands one
+            // over to save (its onAddressSave is only called by its own tests): AddressesUi asks.
+            override fun onAddressFetch(): GeckoResult<Array<org.mozilla.geckoview.Autocomplete.Address>> = addressesForForms()
         }
         runtime.activityDelegate = GeckoRuntime.ActivityDelegate { pending ->
             activityDelegate?.onStartActivityForResult(pending)
@@ -141,6 +145,25 @@ object Engine {
                 com.swiftbrowser.core.Passwords.entries(domain)
             } catch (e: Exception) {
                 L.w("Couldn't read saved passwords", e)
+                emptyArray()
+            }
+            result.complete(entries)
+        }
+        return result
+    }
+
+    /**
+     * 3.0.11: the current profile's addresses, read off the main thread. None while an incognito tab
+     * is on screen (the engine doesn't say which tab asks; the pick in Prompts checks the tab too).
+     */
+    private fun addressesForForms(): GeckoResult<Array<org.mozilla.geckoview.Autocomplete.Address>> {
+        if (TabManager.current?.incognito == true) return GeckoResult.fromValue(emptyArray())
+        val result = GeckoResult<Array<org.mozilla.geckoview.Autocomplete.Address>>()
+        loginIo.execute {
+            val entries = try {
+                com.swiftbrowser.core.Addresses.entries()
+            } catch (e: Exception) {
+                L.w("Couldn't read saved addresses (${e.javaClass.simpleName})")
                 emptyArray()
             }
             result.complete(entries)
@@ -186,7 +209,7 @@ object Engine {
             SetGeckoPreference.setStringPref("gfx.webrender.debug.profiler-ui", DRAW_SPEED_UI, BRANCH),
             SetGeckoPreference.setBoolPref("gfx.webrender.debug.profiler", prefs.showDrawSpeed, BRANCH),
             SetGeckoPreference.setBoolPref("gfx.webrender.debug.gpu-time-queries", prefs.showDrawSpeed, BRANCH),
-        ) + cachePrefs(prefs.cacheLimitMb) + lookPrefs(prefs.liteLevel == com.swiftbrowser.core.LiteLevel.OFF) + privacyPrefs(prefs)
+        ) + cachePrefs(prefs.cacheLimitMb) + lookPrefs(prefs.liteLevel == com.swiftbrowser.core.LiteLevel.OFF) + privacyPrefs(prefs) + formPrefs()
         GeckoPreferenceController.setGeckoPrefs(list).accept({ result ->
             val failed = result?.filterValues { !it }?.keys.orEmpty()
             if (failed.isNotEmpty()) L.w("Engine prefs not set: $failed")
@@ -197,6 +220,20 @@ object Engine {
     }
 
     private const val SOFTWARE_RENDERING_PREF = "gfx.webrender.software"
+
+    /**
+     * 3.0.11: forms. Saved addresses fill in for every country: "detect" kept them to eight (by the
+     * engine's guess of the region), "on" is all of them. The engine's own "save this address?"
+     * can't ask through GeckoView 143, so Swift asks itself (AddressesUi). And a strong password
+     * offered on sign-up forms (Prompts), as the engine's defaults have it, set so it stays so.
+     */
+    private fun formPrefs() = listOf<SetGeckoPreference<*>>(
+        SetGeckoPreference.setStringPref("extensions.formautofill.addresses.supported", "on", BRANCH),
+        SetGeckoPreference.setBoolPref("extensions.formautofill.addresses.enabled", true, BRANCH),
+        SetGeckoPreference.setBoolPref("extensions.formautofill.addresses.capture.enabled", false, BRANCH),
+        SetGeckoPreference.setBoolPref("signon.generation.available", true, BRANCH),
+        SetGeckoPreference.setBoolPref("signon.generation.enabled", true, BRANCH),
+    )
 
     /**
      * 3.0.7: the web cache within the cache size chosen (CacheBudget). 3.0.5 let the engine size it

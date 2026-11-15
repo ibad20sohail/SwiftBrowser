@@ -30,8 +30,6 @@ object BackupSettings {
         // The address bar and the menu
         "toolbar_at_bottom" to BOOLEAN, "hide_toolbar_on_scroll" to BOOLEAN,
         "bar_swipes" to INT, "toolbar_layout" to STRING, "menu_layout" to STRING, "menu_hidden" to STRING,
-        // 3.0.4: websites' colours in it.
-        "site_colours" to BOOLEAN,
         // Before 2.2, read once to carry them over.
         "menu_buttons" to STRING, "show_home_button" to BOOLEAN,
         // Home & news
@@ -56,7 +54,7 @@ object BackupSettings {
         "data_saver" to BOOLEAN, "battery_saver" to BOOLEAN, "battery_saver_level" to INT, "show_draw_speed" to BOOLEAN,
         // Video & downloads
         "keep_playing" to BOOLEAN, "continue_watching" to BOOLEAN, "video_taps" to BOOLEAN, "video_gestures" to BOOLEAN,
-        "auto_landscape" to BOOLEAN, "autoplay_muted" to BOOLEAN, "site_player" to BOOLEAN, "hls_to_mp4" to BOOLEAN,
+        "autoplay_muted" to BOOLEAN, "site_player" to BOOLEAN, "hls_to_mp4" to BOOLEAN,
         "confirm_downloads" to BOOLEAN, "wifi_only_downloads" to BOOLEAN, "downloads_by_type" to BOOLEAN,
         "download_folder" to STRING,
         // Swift's player
@@ -69,20 +67,21 @@ object BackupSettings {
         "player_night_sound" to BOOLEAN,
         // Torrents
         "torrent_at_once" to INT, "torrent_down_kbps" to INT, "torrent_up_kbps" to INT, "torrent_wifi_only" to BOOLEAN,
-        "torrent_battery_pause" to BOOLEAN, "torrent_extra_trackers" to BOOLEAN, "torrent_charging_only" to BOOLEAN,
-        "torrent_night_only" to BOOLEAN, "torrent_encrypted_only" to BOOLEAN,
+        "torrent_battery_pause" to BOOLEAN, "torrent_extra_trackers" to BOOLEAN, "torrent_encrypted_only" to BOOLEAN,
         // Files
         "files_hidden" to BOOLEAN, "files_start_at" to STRING, "files_grid" to BOOLEAN, "files_sort" to INT,
-        "files_category_sort" to INT, "files_thumbnails" to BOOLEAN, "files_recycle_bin" to BOOLEAN,
+        "files_category_sort" to INT, "files_recycle_bin" to BOOLEAN,
         "files_bin_days" to INT, "files_wifi_port" to INT,
         // 3.0.4: two folders side by side (where each side was is not a setting).
         "files_two_panes" to BOOLEAN, "upload_from_files" to BOOLEAN,
         // Privacy & security
         "https_only" to BOOLEAN, "reject_cookie_banners" to BOOLEAN, "secure_dns" to STRING,
-        "incognito_screenshots" to BOOLEAN, "safer_browsing" to BOOLEAN, "newer_firefox_version" to BOOLEAN,
+        "safer_browsing" to BOOLEAN,
         // Per-site settings (lists of sites; text sizes as "site=size")
         "site_desktop" to SET, "site_autoplay" to SET, "site_location_allow" to SET, "site_location_block" to SET,
         "site_no_lite" to SET, "site_reader" to SET, "site_dark" to SET, "site_text_scale" to SET,
+        // 3.0.11: Dark page on every site, and the sites kept light then.
+        "dark_pages_all" to BOOLEAN, "site_no_dark" to SET,
         // 3.0.7: sites' own Lite mode levels ("site=level").
         "site_lite_level" to SET,
         // Storage & data

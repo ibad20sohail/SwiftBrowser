@@ -5,7 +5,8 @@
 // (3.0.4) mutes a muted tab, does the full-screen video gestures (skip, hold for
 // double speed), reports where long videos are so the app can offer to continue
 // them, and, in the top frame, tells the app the page's icon, (3.0.4) the colour
-// it asks for its bar and, on Google's pages, which account is signed in.
+// it asks for its bar and, on Google's pages, which account is signed in. 3.0.11: it also tells the
+// app when a form with an address is sent, so Swift can offer to keep it.
 (function () {
   if (window.__swiftHelper) { return; }
   window.__swiftHelper = true;
@@ -439,16 +440,34 @@
   // 3.0: failures too at most once every 10 s, and 10 in all, per frame (each is a line in the log).
   let errorsSent = 0;
   let errorSent = 0;
+  // Swift 3.0.11: a page being left cuts its videos off, which isn't a failure worth a line (seen as
+  // codes 1 and 4 within 0.1 s of each navigation in a problem report).
+  let leaving = false;
+  window.addEventListener('beforeunload', () => { leaving = true; }, true);
+  window.addEventListener('pagehide', () => { leaving = true; }, true);
+  window.addEventListener('pageshow', () => { leaving = false; }, true);
   window.addEventListener('error', ev => {
     const m = ev.target;
     if (!ev.isTrusted || !m || (m.tagName !== 'VIDEO' && m.tagName !== 'AUDIO')) { return; }
+    const e = m.error;
+    // MEDIA_ERR_ABORTED (1): the fetch was stopped on purpose, not a failure.
+    if (leaving || (e && e.code === 1)) { return; }
     const now = Date.now();
     if (errorsSent >= 10 || now - errorSent < 10000) { return; }
     errorsSent++;
     errorSent = now;
-    const e = m.error;
     send({ type: 'media-error', code: e ? e.code : 0, text: e && e.message ? String(e.message).slice(0, 200) : '' });
   }, true);
+  // 3.0.11: how much is loaded ahead of where it plays: the buffered range holding the playhead (the
+  // last range misled when the buffer has gaps, even below zero).
+  const loadedAhead = m => {
+    const b = m.buffered;
+    const t = m.currentTime;
+    for (let i = 0; i < b.length; i++) {
+      if (b.start(i) <= t + 0.5 && t < b.end(i)) { return Math.round(b.end(i) - t); }
+    }
+    return 0;
+  };
   window.addEventListener('waiting', ev => {
     const m = ev.target;
     if (!ev.isTrusted || !m || m.tagName !== 'VIDEO' || m.currentTime < 1) { return; }
@@ -456,9 +475,138 @@
     const now = Date.now();
     if (now - waitSent < 30000) { return; }
     waitSent = now;
-    send({ type: 'media-waiting', count: waits, t: Math.round(m.currentTime), buffered: m.buffered.length ? Math.round(m.buffered.end(m.buffered.length - 1) - m.currentTime) : 0 });
+    send({ type: 'media-waiting', count: waits, t: Math.round(m.currentTime), buffered: loadedAhead(m) });
     waits = 0;
   }, true);
+
+  // ---------------------------------------------------------------- addresses sent (3.0.11)
+
+  // A form with an address that the page sends: its fields go to Swift, which may offer to keep the
+  // address (the engine fills saved ones in, but GeckoView 143 can't ask to save one). A field is
+  // known by the name the page gives it for browsers (autocomplete="postal-code"), else guessed from
+  // its name, label or placeholder. Never in incognito tabs, and only forms with a street.
+  const AC_FIELDS = {
+    'name': 'name', 'given-name': 'given', 'additional-name': 'additional', 'family-name': 'family',
+    'organization': 'org', 'street-address': 'street', 'address-line1': 'line1', 'address-line2': 'line2',
+    'address-line3': 'line3', 'address-level1': 'region', 'address-level2': 'city', 'postal-code': 'postcode',
+    'country': 'country', 'country-name': 'country', 'tel': 'tel', 'tel-national': 'tel', 'email': 'email',
+  };
+  // Autocomplete names of something else (a card, a sign-in, a part of a phone number).
+  const AC_OTHER = /^(cc-|username|current-password|new-password|one-time-code|webauthn|bday|sex|url|photo|impp|transaction-|language|nickname|organization-title|honorific-|tel-|address-level[34])/;
+  // Guesses, in this order: the first that fits.
+  const GUESSES = [
+    ['email', /e.?mail/],
+    ['tel', /phone|mobile|\btel\b|cell|whatsapp/],
+    ['postcode', /post.?code|postal|\bzip|pin.?code|\bplz\b|\bcep\b/],
+    ['country', /country|\bnation/],
+    ['region', /\bstate\b|province|region|county|prefecture/],
+    ['city', /\bcity\b|\btown\b|locality|suburb/],
+    ['org', /company|organi[sz]ation|business.?name/],
+    ['line2', /(address|addr|line).?2|apartment|\bapt\b|suite|\bflat\b|building|landmark/],
+    ['street', /street|address|\baddr|line.?1|\broad\b/],
+    ['given', /first.?name|given.?name|\bfname\b|forename/],
+    ['family', /last.?name|family.?name|surname|\blname\b/],
+    ['name', /full.?name|your.?name|\bname\b/],
+  ];
+  const NOT_ADDRESS = /pass|captcha|search|coupon|promo|voucher|card|cvv|cvc|iban|otp|user.?name|user.?id|login|confirm|ip.?address|web.?address|url/;
+  const SKIP_TYPES = /^(hidden|password|checkbox|radio|file|submit|button|image|reset|search|date|datetime-local|month|week|time|range|color)$/;
+  // A button that sends the form ("Continue", "Place order"), for pages whose script sends it.
+  const SENDS = /continue|next|save|submit|order|pay|checkout|check out|confirm|deliver|ship|proceed|done|update|sign up|register|create|add address/i;
+
+  function hintOf(el) {
+    let t = [el.name, el.id, el.getAttribute('placeholder'), el.getAttribute('aria-label')].join(' ');
+    if (el.labels && el.labels.length) { t += ' ' + (el.labels[0].textContent || '').slice(0, 80); }
+    return t.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/[_\-[\].:]+/g, ' ').toLowerCase();
+  }
+
+  function kindOf(el) {
+    if (el.tagName === 'INPUT' && SKIP_TYPES.test((el.type || '').toLowerCase())) { return null; }
+    const tokens = (el.getAttribute('autocomplete') || '').trim().toLowerCase().split(/\s+/);
+    const last = tokens[tokens.length - 1];
+    if (AC_FIELDS[last]) { return AC_FIELDS[last]; }
+    if (last && AC_OTHER.test(last)) { return null; }
+    if (el.type === 'email') { return 'email'; }
+    if (el.type === 'tel') { return 'tel'; }
+    const hint = hintOf(el);
+    if (NOT_ADDRESS.test(hint)) { return null; }
+    for (const [kind, re] of GUESSES) {
+      if (re.test(hint)) { return kind; }
+    }
+    return null;
+  }
+
+  // What the form holds: one value for each kind of field (the first one seen), or null when it
+  // isn't an address (no street, or fewer than three fields filled).
+  function addressIn(root) {
+    const fields = root.querySelectorAll('input, select, textarea');
+    if (fields.length < 3 || fields.length > 200) { return null; }
+    const out = {};
+    let n = 0;
+    for (const el of fields) {
+      // Fields that aren't shown (a trap for robots, or a step not reached) aren't the user's.
+      if (el.disabled || el.getClientRects().length === 0) { continue; }
+      const kind = kindOf(el);
+      if (!kind || out[kind]) { continue; }
+      let v = '';
+      if (el.tagName === 'SELECT') {
+        const o = el.options[el.selectedIndex];
+        const value = o ? (o.value || '').trim() : '';
+        const text = o ? (o.textContent || '').trim() : '';
+        // "Select a country", "--": left as it was.
+        if (!value || /^(-+|select|choose)/i.test(text)) { continue; }
+        v = kind === 'country' && /^[A-Za-z]{2,3}$/.test(value) ? value : text;
+      } else {
+        v = (el.value || '').trim();
+      }
+      if (!v || v.length > 300) { continue; }
+      out[kind] = v;
+      n++;
+    }
+    return n >= 3 && (out.street || out.line1) ? out : null;
+  }
+
+  let addressSent = '';
+  let addressSentAt = 0;
+
+  function sendAddress(root) {
+    const found = root ? addressIn(root) : null;
+    if (!found) { return; }
+    // The form's button and the form itself (or a page sending twice) say it once.
+    const key = JSON.stringify(found);
+    const now = Date.now();
+    if (key === addressSent && now - addressSentAt < 10000) { return; }
+    addressSent = key;
+    addressSentAt = now;
+    send({ type: 'address-form', fields: found });
+  }
+
+  if (!(browser.extension && browser.extension.inIncognitoContext)) {
+    window.addEventListener('submit', ev => {
+      if (ev.isTrusted && ev.target && ev.target.tagName === 'FORM') { sendAddress(ev.target); }
+    }, true);
+    // A page whose script sends the form: the fields around the button tapped, when it says it sends.
+    window.addEventListener('click', ev => {
+      if (!ev.isTrusted) { return; }
+      let el = ev.target;
+      if (el && el.nodeType !== 1) { el = el.parentElement; }
+      const button = el && el.closest ? el.closest('button, input[type=submit], input[type=button], [role=button]') : null;
+      if (!button) { return; }
+      const label = (button.textContent || button.value || button.getAttribute('aria-label') || '').slice(0, 60);
+      if (button.type !== 'submit' && !SENDS.test(label)) { return; }
+      // Its form, or the nearest box around it with a few fields (six levels up at most).
+      let box = button.closest('form');
+      if (!box) {
+        box = button.parentElement;
+        let up = 0;
+        while (box && up < 6 && box.querySelectorAll('input, select, textarea').length < 4) {
+          box = box.parentElement;
+          up++;
+        }
+        if (up >= 6) { box = null; }
+      }
+      if (box) { sendAddress(box); }
+    }, true);
+  }
 
   // Capture phase on window: runs before the page's own click handlers.
   window.addEventListener('click', ev => {

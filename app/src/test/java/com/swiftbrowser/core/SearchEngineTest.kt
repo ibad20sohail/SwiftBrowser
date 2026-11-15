@@ -6,6 +6,18 @@ import org.junit.Test
 
 /** 3.0: only the engines' own results pages put search words (and a logo) in the address bar. */
 class SearchEngineTest {
+    /** 3.0.11: a held picture's "Search this picture": Bing's picture search with Bing, Google Lens otherwise. */
+    @Test
+    fun pictureSearch() {
+        val pic = "https://example.com/a b/cat.jpg?x=1&y=2"
+        val encoded = "https%3A%2F%2Fexample.com%2Fa+b%2Fcat.jpg%3Fx%3D1%26y%3D2"
+        assertEquals("https://lens.google.com/uploadbyurl?url=$encoded", SearchEngine.GOOGLE.pictureSearchUrl(pic))
+        assertEquals("https://lens.google.com/uploadbyurl?url=$encoded", SearchEngine.DUCKDUCKGO.pictureSearchUrl(pic))
+        assertEquals("https://lens.google.com/uploadbyurl?url=$encoded", SearchEngine.STARTPAGE.pictureSearchUrl(pic))
+        assertEquals("https://lens.google.com/uploadbyurl?url=$encoded", SearchEngine.CUSTOM.pictureSearchUrl(pic))
+        assertEquals("https://www.bing.com/images/search?view=detailv2&iss=sbi&q=imgurl:$encoded", SearchEngine.BING.pictureSearchUrl(pic))
+    }
+
     @Test
     fun googleIsOnlyGoogle() {
         for (h in listOf(

@@ -352,13 +352,19 @@ object AdBlock {
     /**
      * Lists are updated while the app is in the background (uBO's own timer is off): rebuilding
      * the filters keeps uBO busy for a while on a slow phone, and pages would wait for it.
+     * 3.0.11: called once Swift has been out of sight for a minute (TabManager), not each time the
+     * browser's screen is covered by another of Swift's screens: the rebuild takes 100-250 MB more
+     * memory for a while, which got Swift closed by Android on a 2 GB phone during a video.
      */
     fun updateInBackground() {
         if (!ready) return
         val now = System.currentTimeMillis()
         val last = prefs.sp.getLong(LAST_UPDATE_CHECK, 0)
         if (now - last < UPDATE_CHECK_INTERVAL_MS) return
-        if (updateFilterLists()) prefs.sp.edit().putLong(LAST_UPDATE_CHECK, now).apply()
+        if (updateFilterLists()) {
+            prefs.sp.edit().putLong(LAST_UPDATE_CHECK, now).apply()
+            L.d("uBO: updating the filter lists (due every 6 h)")
+        }
     }
 
     private const val LAST_UPDATE_CHECK = "ubo_last_update_check"

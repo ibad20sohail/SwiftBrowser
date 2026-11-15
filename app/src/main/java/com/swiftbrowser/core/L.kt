@@ -88,6 +88,14 @@ object L {
     /** Writes what is waiting now, on the calling thread (a crash, Swift closing itself). */
     fun flushNow() = writePending()
 
+    /**
+     * 3.0.11: writes what is waiting at once, on the log's own thread (no 2 s wait): when Swift goes out
+     * of sight, as Android often closes it seconds later and the last lines were lost.
+     */
+    fun writeSoon() {
+        if (dir != null) writer.execute { writePending() }
+    }
+
     private fun writePending() {
         val text: String
         synchronized(this) {
@@ -289,7 +297,9 @@ object LogLines {
         val noAddresses = ADDRESS.replace(line, "a site")
         return HOST.replace(noAddresses) { m ->
             val name = m.value
-            if (NOT_SITES.any { name.startsWith(it) } || FILE_ENDINGS.any { name.endsWith(it) }) name else "a site"
+            // 3.0.11: a file with its line number ("contentscript.js:1314") is a file too, not a site with a port.
+            val bare = name.substringBefore(':')
+            if (NOT_SITES.any { name.startsWith(it) } || FILE_ENDINGS.any { bare.endsWith(it) }) name else "a site"
         }
     }
 }

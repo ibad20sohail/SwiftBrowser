@@ -6,14 +6,21 @@ import android.graphics.ColorFilter
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.PixelFormat
+import android.graphics.RectF
 import android.graphics.drawable.Drawable
+import android.view.View
 import com.swiftbrowser.R
+import com.swiftbrowser.download.Hls
 
 /**
  * 3.0.3: what a video's picture in Files says about it: a thin line in the accent's colour along its
  * bottom for how much of it was watched in Swift's player, and a small tick once it was watched to its
  * end. Drawn over the picture (its foreground): no views of its own, nothing to lay out, no shadow.
  * [tile]: on a tile of the grid (bigger, its tick in the top-start corner), else on a row's picture.
+ *
+ * 3.0.11: and on a tile, the video's length ("3:05", "1:42:10") in a small dark pill at the
+ * bottom-right corner (the play mark has the other one), in figures of one width. A row's picture is
+ * too small for it: a row says it at the start of its second line.
  */
 class WatchMarks(ctx: Context, private val tile: Boolean) : Drawable() {
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -27,19 +34,40 @@ class WatchMarks(ctx: Context, private val tile: Boolean) : Drawable() {
     private val stroke = Ui.dpf(ctx, if (tile) 2f else 1.5f)
     private val edge = Ui.dpf(ctx, 1.5f)
 
+    /** 3.0.11: the length's pill: the small dark shape the player puts on a picture, its corners the smallest. */
+    private val pill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = OverPicture.FILL_SOFT }
+    private val ink = Ui.steadyFigures(Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = android.graphics.Color.WHITE
+        textSize = Ui.dpf(ctx, Ui.Type.SMALL.sp) * ctx.resources.configuration.fontScale
+        typeface = Ui.typeface(Ui.Type.SMALL)
+    })
+    private val pillCorner = Ui.dpf(ctx, Ui.R_XSMALL.toFloat())
+    private val pillSide = Ui.dpf(ctx, Ui.XS * 1.5f)
+    private val pillEdge = Ui.dpf(ctx, Ui.XS / 2f)
+    private val pillBox = RectF()
+
     /** How much was watched (0..1); below 0, no line. */
     private var share = -1f
     private var finished = false
 
-    /** Shows [share] of it watched (null: nothing kept) and whether it was [finished]; false when there is nothing to draw. */
-    fun set(share: Float?, finished: Boolean): Boolean {
+    /** 3.0.11: the length shown on a tile, or null. */
+    var length: String? = null
+        private set
+
+    /**
+     * Shows [share] of it watched (null: nothing kept) and whether it was [finished]; 3.0.11: and on
+     * a tile its [length] (null: none). False when there is nothing to draw.
+     */
+    fun set(share: Float?, finished: Boolean, length: String? = this.length): Boolean {
         val s = share ?: -1f
-        if (s != this.share || finished != this.finished) {
+        val l = length.takeIf { tile }
+        if (s != this.share || finished != this.finished || l != this.length) {
             this.share = s
             this.finished = finished
+            this.length = l
             invalidateSelf()
         }
-        return s >= 0f || finished
+        return s >= 0f || finished || l != null
     }
 
     override fun draw(c: Canvas) {
@@ -74,6 +102,23 @@ class WatchMarks(ctx: Context, private val tile: Boolean) : Drawable() {
             paint.color = onAccent
             c.drawPath(tick, paint)
         }
+        length?.let { text -> drawLength(c, text) }
+    }
+
+    /** 3.0.11: the length's pill in the bottom corner away from the play mark (its end; the other side in a right-to-left language). */
+    private fun drawLength(c: Canvas, text: String) {
+        val b = bounds
+        val m = ink.fontMetrics
+        val w = ink.measureText(text) + 2 * pillSide
+        val h = m.descent - m.ascent + 2 * pillEdge
+        val bottom = b.bottom - inset
+        if (layoutDirection == View.LAYOUT_DIRECTION_RTL) {
+            pillBox.set(b.left + inset, bottom - h, b.left + inset + w, bottom)
+        } else {
+            pillBox.set(b.right - inset - w, bottom - h, b.right - inset, bottom)
+        }
+        c.drawRoundRect(pillBox, pillCorner, pillCorner, pill)
+        c.drawText(text, pillBox.left + pillSide, pillBox.centerY() - (m.ascent + m.descent) / 2, ink)
     }
 
     override fun setAlpha(alpha: Int) {}
@@ -87,4 +132,10 @@ class WatchMarks(ctx: Context, private val tile: Boolean) : Drawable() {
         /** The line's track (what is still to watch): a shade over any picture. */
         const val TRACK = 0x59000000
     }
+}
+
+/** 3.0.11: a video's length as its picture in Files says it, apart from Android so it is tested on the PC. */
+internal object VideoLength {
+    /** "3:05", "1:42:10" (as the media sheet says a video's length); null under a second, or not known. */
+    fun text(ms: Long): String? = if (ms < 1000) null else Hls.formatDuration(ms / 1000.0)
 }

@@ -106,7 +106,7 @@ object BackupLock {
  * 3.0.8: the saved passwords and the sign-ins to sites (the engine's cookies), for locked backups
  * only: out of the phone unlocked, inside a backup locked with the backup password; back in, the
  * passwords locked again with this phone's keystore, the cookies at Swift's next start (the engine
- * reads them once, as it starts).
+ * reads them once, as it starts). 3.0.11: the saved addresses go the same way (Addresses).
  */
 object BackupSecrets {
     private const val PENDING = "google-backup/sign-ins-to-restore"
@@ -160,8 +160,9 @@ object BackupSecrets {
         else -> JSONObject.NULL
     }
 
-    /** Blocking: what a backup file's locked part holds. */
-    fun forFile(ctx: Context): JSONObject = JSONObject().put("logins", logins()).apply { cookies(ctx)?.let { put("cookies", it) } }
+    /** Blocking: what a backup file's locked part holds (3.0.11: the saved addresses too, Addresses). */
+    fun forFile(ctx: Context): JSONObject =
+        JSONObject().put("logins", logins()).put("addresses", Addresses.forBackup()).apply { cookies(ctx)?.let { put("cookies", it) } }
 
     /**
      * Blocking: puts back [from]'s saved passwords (into the profiles they have here, [ids]: the
@@ -183,7 +184,10 @@ object BackupSecrets {
                 if (pass.isEmpty() || pass.length > 4096) continue
                 val here = known.getOrPut(pid) { db.logins(pid) }
                 if (here.any { it.origin == origin && it.username == user }) continue
-                val guid = o.optString("guid").takeIf { g -> g.isNotBlank() && g.length <= 64 && here.none { it.guid == g } } ?: UUID.randomUUID().toString()
+                // 3.0.11: an id in use in any profile (not only this one) gets a new one: saving over it
+                // would have moved that profile's sign-in here.
+                val guid = o.optString("guid").takeIf { g -> g.isNotBlank() && g.length <= 64 && here.none { it.guid == g } && !db.loginExists(g) }
+                    ?: UUID.randomUUID().toString()
                 db.saveLogin(
                     LoginRow(
                         guid, pid, origin, o.optString("action").takeIf { !o.isNull("action") }, o.optString("realm").takeIf { !o.isNull("realm") },

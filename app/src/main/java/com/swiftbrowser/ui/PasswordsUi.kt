@@ -22,6 +22,7 @@ import com.swiftbrowser.core.UrlUtils
  * phone's screen lock is entered ([check]); a password stays hidden until Show is tapped. 3.0: kept
  * out of screenshots and the recent-apps picture while they show (SecureScreen); a copied password
  * leaves the clipboard after 45 seconds; sign-ins that can't be read any more are said to be so.
+ * 3.0.11: Export writes them as Chrome's passwords file ([export]).
  */
 object PasswordsUi {
     private val io = com.swiftbrowser.core.Background.single("passwords")
@@ -69,13 +70,15 @@ object PasswordsUi {
                     if (a.isFinishing) return@later
                     // 3.0: Android's secure storage didn't answer: said so (it showed "None yet").
                     if (read == null) Messages.show(a, "Swift couldn't open your saved passwords just now. Try again in a moment.", long = true)
-                    else showList(a, read.first, read.second, changed)
+                    else showList(a, read.first, read.second, changed, check)
                 }
             }
         }
     }
 
-    private fun showList(a: Activity, logins: List<Passwords.Login>, unreadable: List<com.swiftbrowser.core.LoginRow>, changed: () -> Unit) {
+    private fun showList(
+        a: Activity, logins: List<Passwords.Login>, unreadable: List<com.swiftbrowser.core.LoginRow>, changed: () -> Unit, check: (() -> Unit) -> Unit,
+    ) {
         if (logins.isEmpty() && unreadable.isEmpty()) {
             Dialogs.info(a, "Saved passwords", "None yet. When you sign in on a site, Swift offers to keep the password and fills it in next time.")
             return
@@ -115,8 +118,44 @@ object PasswordsUi {
                     addView(rows)
                 })
                 .setNegativeButton("Close", null)
+                // 3.0.11: out as Chrome's passwords file, to move them to another browser.
+                .setNeutralButton("Export") { _, _ -> export(a, check) }
                 .create(),
         )
+    }
+
+    /**
+     * 3.0.11: this profile's passwords as a file in Google Password Manager's columns (PasswordsCsv),
+     * which Chrome and Firefox bring in, in the download folder as backups are. After the screen lock
+     * (one check lasts a minute) and a question that says plainly the file isn't locked.
+     */
+    private fun export(a: Activity, check: (() -> Unit) -> Unit) {
+        check {
+            Dialogs.confirm(
+                a, "Export your passwords?",
+                "Swift saves them in a file in your download folder. The file isn't locked: anyone who opens it can read all your " +
+                    "passwords, and other apps on your phone can open it. Delete it once you've moved them.",
+                "Export", danger = true,
+            ) {
+                io.execute {
+                    val file = try {
+                        val logins = Passwords.read(com.swiftbrowser.core.Profiles.currentId).first
+                        if (logins.isEmpty()) null
+                        else com.swiftbrowser.core.Backup.saveToDownloads(
+                            a, "Swift passwords", "csv", com.swiftbrowser.core.PasswordsCsv.write(logins.map { com.swiftbrowser.core.PasswordsCsv.Row(it.origin, it.username, it.password) }),
+                        )
+                    } catch (e: Exception) {
+                        com.swiftbrowser.core.L.w("Passwords couldn't be exported (${e.javaClass.simpleName})")
+                        null
+                    }
+                    later(a) {
+                        if (a.isFinishing) return@later
+                        if (file == null) Messages.show(a, "Swift couldn't export your passwords just now. Try again in a moment.", long = true)
+                        else ExportUi.saved(a, file, "text/csv")
+                    }
+                }
+            }
+        }
     }
 
     /** A saved sign-in: the site's icon in the lists' rounded holder (from what Swift has kept; nothing is fetched), its name and the user name. */

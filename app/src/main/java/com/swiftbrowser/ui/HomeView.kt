@@ -116,7 +116,7 @@ class HomeView @JvmOverloads constructor(
     /** A picture read late fading in over what is behind the page now. */
     private var pictureFade: android.animation.ValueAnimator? = null
 
-    /** 3.0.5: the page's picture; null when it has a colour or a gradient. */
+    /** 3.0.5: the page's picture (3.0.11: or gradient), which runs on behind the see-through bar; null when it has a plain colour. */
     private var picture: android.graphics.drawable.Drawable? = null
 
     // The address bar's room, which the picture also fills: above the page, or below it with the bar at the bottom.

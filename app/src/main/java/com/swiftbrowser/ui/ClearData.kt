@@ -335,6 +335,10 @@ object ClearData {
             TabManager.flushSaves()
             val main = android.os.Handler(android.os.Looper.getMainLooper())
             val finish = {
+                // 3.0.11: said in the log and marked as Swift's own ending (a Quit looked like Android
+                // closing Swift in problem reports).
+                com.swiftbrowser.core.L.d("Quit")
+                com.swiftbrowser.core.Diagnostics.markCleanExit()
                 a.finishAndRemoveTask()
                 // The engine and services stop with the process, so nothing goes on in the background.
                 main.postDelayed({ Process.killProcess(Process.myPid()) }, 600)

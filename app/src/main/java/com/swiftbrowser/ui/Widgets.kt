@@ -135,10 +135,52 @@ object SystemBars {
                 decor.postDelayed(check, RECHECK_MS)
             }
         }
+        glide(a, wanted)
+    }
+
+    /**
+     * 3.0.11: when the bars come back in full screen (the keyboard, a dialog) the screen makes room
+     * under the status bar, and when they go it takes that room again: before, it jumped there in one
+     * frame. Now it is drawn where it was and glides to its new place. Only where it is drawn moves
+     * (nothing is laid out again on the way), so a page under it costs nothing more. Not for a turn of
+     * the phone (the width changes), nor with [allowed] false (a full-screen video has its own fade).
+     */
+    private fun glide(a: Activity, allowed: () -> Boolean) {
+        val content = a.findViewById<View>(android.R.id.content) ?: return
+        val at = IntArray(2)
+        var lastTop = Int.MIN_VALUE
+        var lastWidth = 0
+        // Its own animator: the screen's other motion (a fade of its colours) is left alone.
+        var slide: android.animation.ValueAnimator? = null
+        content.viewTreeObserver.addOnPreDrawListener {
+            content.getLocationOnScreen(at)
+            // Its place as laid out, without a glide on the way there.
+            val top = at[1] - Math.round(content.translationY)
+            val moved = top - lastTop
+            if (lastTop != Int.MIN_VALUE && moved != 0 && content.width == lastWidth && Math.abs(moved) <= Ui.dp(a, GLIDE_MAX_DP) &&
+                SwiftApp.prefs.fullScreen && allowed() && Motion.enabled(a)
+            ) {
+                slide?.cancel()
+                val from = content.translationY - moved
+                content.translationY = from
+                slide = android.animation.ValueAnimator.ofFloat(from, 0f).apply {
+                    duration = Motion.NORMAL
+                    interpolator = Motion.standard
+                    addUpdateListener { content.translationY = it.animatedValue as Float }
+                    start()
+                }
+            }
+            lastTop = top
+            lastWidth = content.width
+            true
+        }
     }
 
     /** How soon the bars go again once nothing needs them (and how often that is checked while typing). */
     private const val RECHECK_MS = 900L
+
+    /** 3.0.11: the most the screen glides when the bars come or go (the status bar's height and some); more is something else. */
+    private const val GLIDE_MAX_DP = 80
 
     fun apply(a: Activity) {
         val c = WindowCompat.getInsetsController(a.window, a.window.decorView)

@@ -149,6 +149,8 @@ object GoogleBackup {
         return try {
             val root = Backup.contents(ctx, history = true)
                 .put("logins", BackupSecrets.logins())
+                // 3.0.11: the saved addresses, locked as the passwords are.
+                .put("addresses", Addresses.forBackup())
             BackupSecrets.cookies(ctx)?.let { root.put("cookies", it) }
             val header = JSONObject()
                 .put("app", "Swift").put("format", FORMAT).put("created", System.currentTimeMillis())

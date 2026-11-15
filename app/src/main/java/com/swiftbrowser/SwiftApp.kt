@@ -129,7 +129,7 @@ class SwiftApp : Application() {
                 if (version < 2) remove(Prefs.MAX_LIVE_TABS)
                 if (version < 3) {
                     // From 1.2 full-screen videos neither force landscape nor add swipe gestures by default.
-                    remove(Prefs.AUTO_LANDSCAPE)
+                    remove("auto_landscape")
                     remove(Prefs.VIDEO_GESTURES)
                 }
                 // 2.7: no more choice of drawing method (always the graphics chip), no search shortcuts.

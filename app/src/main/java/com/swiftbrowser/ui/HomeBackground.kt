@@ -121,7 +121,8 @@ object HomeBackground {
                     val p = PRESETS.first { it.key == k }
                     if (night) p.dark else p.light
                 }
-                gradient(two, page)
+                // 3.0.11: it runs on behind the see-through address bar, as a picture does.
+                GradientBackdrop(intArrayOf(two[0], two[1], page), night)
             }
         }
     }
@@ -151,17 +152,112 @@ object HomeBackground {
 
     /** [picture], from [drawable], also fills this much room past the page's top and bottom: where the address bar is. */
     fun reach(picture: Drawable?, above: Int, below: Int) {
-        (picture as? PictureDrawable)?.reach(above, below)
+        (picture as? BarBackdrop)?.reach(above, below)
     }
 
-    /** What draws the part of [picture] that is behind the address bar, as the bar's own background; null when it isn't a picture. */
-    fun barPart(picture: Drawable?): Drawable? = (picture as? PictureDrawable)?.barPart
+    /** What draws the part of [picture] that is behind the address bar, as the bar's own background; null when it isn't a picture or a gradient. */
+    fun barPart(picture: Drawable?): Drawable? = (picture as? BarBackdrop)?.barPart
 
-    /** The colour of the address bar's buttons over [picture], whichever reads best on the strip behind them; null when it isn't a picture. */
-    fun barInk(ctx: Context, picture: Drawable?): Int? = (picture as? PictureDrawable)?.barInk(ctx)
+    /** The colour of the address bar's buttons over [picture], whichever reads best on the strip behind them; null when it isn't a picture or a gradient. */
+    fun barInk(ctx: Context, picture: Drawable?): Int? = (picture as? BarBackdrop)?.barInk(ctx)
 
-    /** About the colour along the top edge of [picture] as it shows, for the status bar above it; null when it isn't a picture. */
-    fun topColour(ctx: Context, picture: Drawable?): Int? = (picture as? PictureDrawable)?.topColour(ctx)
+    /** About the colour along the top edge of [picture] as it shows, for the status bar above it; null when it isn't a picture or a gradient. */
+    fun topColour(ctx: Context, picture: Drawable?): Int? = (picture as? BarBackdrop)?.topColour(ctx)
+
+    /** 3.0.11: a home background that runs on behind the see-through address bar: your picture (3.0.5) or a gradient. */
+    private interface BarBackdrop {
+        /** It also fills this much room past the page's top and bottom: where the address bar is. */
+        fun reach(above: Int, below: Int)
+
+        /** Its share behind the bar, drawn in the bar's own place. */
+        val barPart: Drawable
+
+        fun barInk(ctx: Context): Int
+
+        fun topColour(ctx: Context): Int
+    }
+
+    /** Light or dark buttons on [c], as reads best; the look's own colour when that is the side it comes down on. */
+    private fun inkOn(ctx: Context, c: Int, night: Boolean): Int {
+        val light = Contrast.ratio(INK_LIGHT, c) >= Contrast.ratio(INK_DARK, c)
+        return if (light == night) Ui.text(ctx) else if (light) INK_LIGHT else INK_DARK
+    }
+
+    /**
+     * 3.0.11: a gradient from [colours]' first at the top into the page colour at the bottom, drawn,
+     * like a picture, for the page and the address bar's room together ([reach]): the see-through bar
+     * shows its own share ([barPart]) and the gradient runs on unbroken behind it.
+     */
+    private class GradientBackdrop(private val colours: IntArray, private val night: Boolean) : Drawable(), BarBackdrop {
+        private val shade = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, colours)
+        private var fade = 255
+        private var above = 0
+        private var below = 0
+
+        override fun reach(above: Int, below: Int) {
+            if (this.above == above && this.below == below) return
+            this.above = above
+            this.below = below
+            fit()
+            invalidateSelf()
+            barPart.invalidateSelf()
+        }
+
+        override val barPart: Drawable = object : Drawable() {
+            override fun draw(canvas: Canvas) {
+                canvas.save()
+                canvas.clipRect(bounds)
+                // The bar stands right above the page, or right below it.
+                canvas.translate(0f, if (above > 0) above.toFloat() else -this@GradientBackdrop.bounds.bottom.toFloat())
+                shade.alpha = 255
+                shade.draw(canvas)
+                canvas.restore()
+            }
+
+            override fun setAlpha(alpha: Int) = Unit
+
+            override fun setColorFilter(colorFilter: ColorFilter?) = Unit
+
+            @Suppress("OVERRIDE_DEPRECATION")
+            override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
+        }
+
+        /** The bar's buttons stand on the gradient's top with the bar at the top, on the page colour at the bottom. */
+        override fun barInk(ctx: Context): Int = inkOn(ctx, if (below > 0) colours.last() else colours.first(), night)
+
+        override fun topColour(ctx: Context): Int = colours.first()
+
+        override fun onBoundsChange(bounds: Rect) {
+            super.onBoundsChange(bounds)
+            fit()
+            barPart.invalidateSelf()
+        }
+
+        private fun fit() {
+            val b = bounds
+            shade.setBounds(b.left, b.top - above, b.right, b.bottom + below)
+        }
+
+        override fun draw(canvas: Canvas) {
+            canvas.save()
+            canvas.clipRect(bounds)
+            shade.alpha = fade
+            shade.draw(canvas)
+            canvas.restore()
+        }
+
+        override fun setAlpha(alpha: Int) {
+            fade = alpha
+            invalidateSelf()
+        }
+
+        override fun setColorFilter(colorFilter: ColorFilter?) {
+            shade.colorFilter = colorFilter
+        }
+
+        @Suppress("OVERRIDE_DEPRECATION")
+        override fun getOpacity(): Int = PixelFormat.OPAQUE
+    }
 
     private val INK_LIGHT = 0xFFFFFFFF.toInt()
     private val INK_DARK = 0xFF1A1C21.toInt()
@@ -177,10 +273,6 @@ object HomeBackground {
     private const val BAR_ROWS = 4
     private const val TOP_ROWS = 2
     private const val TOP_EDGE = 0.02f
-
-    /** A gradient from [two] at the top into the page colour at the bottom. */
-    fun gradient(two: IntArray, page: Int): Drawable =
-        GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(two[0], two[1], page))
 
     /** A small round sample of [key] for the chooser. */
     fun swatch(ctx: Context, key: String): Drawable {
@@ -295,7 +387,7 @@ object HomeBackground {
      * 3.0.5: it is cut for the page and the address bar's room together ([reach]), and [barPart] draws
      * the bar's share, so the picture runs on unbroken behind the see-through bar.
      */
-    private class PictureDrawable(private val bmp: Bitmap, private val page: Int, private val night: Boolean, strength: Float) : Drawable() {
+    private class PictureDrawable(private val bmp: Bitmap, private val page: Int, private val night: Boolean, strength: Float) : Drawable(), BarBackdrop {
         private val paint = Paint(Paint.FILTER_BITMAP_FLAG)
         private val src = Rect()
         private val veil = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, veilColours(strength))
@@ -308,7 +400,7 @@ object HomeBackground {
         private var above = 0
         private var below = 0
 
-        fun reach(above: Int, below: Int) {
+        override fun reach(above: Int, below: Int) {
             if (this.above == above && this.below == below) return
             this.above = above
             this.below = below
@@ -319,7 +411,7 @@ object HomeBackground {
         }
 
         /** The bar's share of the picture, in the bar's own place. */
-        val barPart: Drawable = object : Drawable() {
+        override val barPart: Drawable = object : Drawable() {
             override fun draw(canvas: Canvas) {
                 canvas.save()
                 canvas.clipRect(bounds)
@@ -403,12 +495,12 @@ object HomeBackground {
             edge = 0xFF000000.toInt() or ((r / points) shl 16) or ((g / points) shl 8) or (b / points)
         }
 
-        fun barInk(ctx: Context): Int {
+        override fun barInk(ctx: Context): Int {
             lookAtBar(ctx)
             return if (barLight == night) Ui.text(ctx) else if (barLight) INK_LIGHT else INK_DARK
         }
 
-        fun topColour(ctx: Context): Int {
+        override fun topColour(ctx: Context): Int {
             lookAtBar(ctx)
             return edge
         }

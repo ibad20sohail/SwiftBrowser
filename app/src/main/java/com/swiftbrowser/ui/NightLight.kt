@@ -58,6 +58,12 @@ object NightLight {
         show(layer)
     }
 
+    /**
+     * 3.0.11: [activity]'s layer, if it has one: the picture viewer fades its own with its background
+     * while Files (with its own layer) shows behind it.
+     */
+    fun layer(activity: Activity): View? = (activity.window.decorView as? ViewGroup)?.findViewWithTag(TAG)
+
     /** The setting or the time changed: every open screen follows. */
     fun refreshAll() {
         layers.removeAll { it.get() == null }

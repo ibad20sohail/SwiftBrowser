@@ -19,10 +19,11 @@ object DocRules {
      * What the content scripts in websites' frames send (content.js). "google-account" (3.0) is
      * checked again in Kotlin: only from Google's own https pages, never from incognito. 3.0.4:
      * "theme-color", the colour a page asks for its bar (only ever a colour for the address bar).
+     * 3.0.11: "address-form", an address a page's form sent (only ever offered to the user to save).
      */
     private val FROM_PAGES = setOf(
         "hello", "click", "icon", "playing", "video-pos", "video-start", "media-ended", "media-error", "media-waiting",
-        "google-account", "theme-color",
+        "google-account", "theme-color", "address-form",
     )
 
     /** 3.0.4: reader view's own: where it was read to, and its Aa button (Swift's panel for its look). */

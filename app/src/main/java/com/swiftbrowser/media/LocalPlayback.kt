@@ -39,6 +39,7 @@ import androidx.media3.exoplayer.audio.ForwardingAudioSink
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.exoplayer.source.SampleStream
+import androidx.media3.exoplayer.source.ShuffleOrder
 import androidx.media3.exoplayer.text.TextOutput
 import androidx.media3.exoplayer.text.TextRenderer
 import androidx.media3.extractor.DefaultExtractorsFactory
@@ -124,6 +125,12 @@ object LocalPlayback {
     /** The list, in the player's order (shuffling only changes the order they play in). */
     var entries: List<Entry> = emptyList()
         private set
+
+    /**
+     * 3.0.11: the name of the user's playlist (Playlists) the list is, null for a folder's songs or one
+     * file: set after [load], which forgets it.
+     */
+    var listName: String? = null
 
     val index: Int get() = player?.currentMediaItemIndex ?: 0
     val current: Entry? get() = entries.getOrNull(index)
@@ -248,8 +255,9 @@ object LocalPlayback {
         val http = GeckoDataSource.Factory(headers.filterKeys { !it.equals("User-Agent", ignoreCase = true) } + ("User-Agent" to agent), private)
         // MP3, AAC and AMR files without a table of contents can still be skipped through.
         val extractors = DefaultExtractorsFactory().setConstantBitrateSeekingEnabled(true)
-        // 3.0.4: network folders' files from their share, the rest as before.
-        return DefaultMediaSourceFactory(com.swiftbrowser.files.net.NetDataSource.Factory(ctx, DefaultDataSource.Factory(ctx, http)), extractors)
+        // 3.0.4: network folders' files from their share, the rest as before. 3.0.11: a torrent's
+        // video being watched while it downloads (swift-torrent: addresses) through TorrentDataSource.
+        return DefaultMediaSourceFactory(com.swiftbrowser.files.net.NetDataSource.Factory(ctx, TorrentDataSource.Factory(DefaultDataSource.Factory(ctx, http))), extractors)
     }
 
     // No title of Swift's own in the item: it would win over the song's tags.
@@ -274,6 +282,7 @@ object LocalPlayback {
         cancelSleep(notify = false)
         clearLoop(notify = false)
         entries = list
+        listName = null
         playingIndex = start
         clearInfo()
         dismissed = false
@@ -394,6 +403,32 @@ object LocalPlayback {
         val a = app ?: return null
         val f = e.file ?: return null
         return if (e.private) null else LocalMedia.position(a, f)
+    }
+
+    /**
+     * 3.0.11: shuffling on in a fresh random order that starts with item [first] (a playlist's Shuffle:
+     * every song once, beginning there), or off (its Play: in the playlist's order).
+     */
+    fun setShuffle(on: Boolean, first: Int) {
+        val p = player ?: return
+        if (on && p.mediaItemCount > 1) {
+            p.setShuffleOrder(ShuffleOrder.DefaultShuffleOrder(PlaylistRules.shuffleOrder(p.mediaItemCount, first, java.util.Random()), System.nanoTime()))
+        }
+        p.shuffleModeEnabled = on
+    }
+
+    /**
+     * 3.0.11: a song of the user's playlist that couldn't play was moved or deleted after it began: the
+     * next one plays instead of the error. True when it did.
+     */
+    private fun skipGone(): Boolean {
+        val p = player ?: return false
+        val f = current?.file ?: return false
+        if (listName == null || f.exists() || !p.hasNextMediaItem()) return false
+        L.d("Player: a playlist's song is gone, on to the next")
+        p.seekTo(p.nextMediaItemIndex, 0)
+        p.prepare()
+        return true
     }
 
     /**
@@ -524,6 +559,7 @@ object LocalPlayback {
         player = null
         night = null
         entries = emptyList()
+        listName = null
         sources = null
         clearInfo()
         inBackground = false
@@ -1106,6 +1142,8 @@ object LocalPlayback {
 
         override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
             L.w("Player: ${current?.logName ?: "media"} couldn't play (${error.errorCodeName})")
+            // 3.0.11: a playlist's song gone meanwhile: on to the next one.
+            if (skipGone()) return
             app?.let { MusicService.sync(it) }
         }
     }

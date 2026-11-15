@@ -27,6 +27,12 @@ object Health {
     private val main = Handler(Looper.getMainLooper())
 
     @Volatile private var watching = false
+
+    /**
+     * 3.0.11: which watchdog is the live one. Off and on again within its 1 s sleep used to leave the
+     * old thread running next to the new one (two memory notes a minute, seen in a problem report).
+     */
+    @Volatile private var generation = 0
     @Volatile private var answered = 0L
     private val pong = Runnable { answered = SystemClock.uptimeMillis() }
 
@@ -46,22 +52,24 @@ object Health {
         if (!::app.isInitialized) return
         if (!visible) {
             watching = false
+            generation++
             return
         }
         if (watching) return
         watching = true
-        Thread({ watch() }, "watchdog").apply {
+        val mine = ++generation
+        Thread({ watch(mine) }, "watchdog").apply {
             isDaemon = true
             priority = Thread.MIN_PRIORITY
         }.start()
     }
 
-    private fun watch() {
+    private fun watch(mine: Int) {
         var stuckSince = 0L
         var told = false
         var nextMemory = SystemClock.uptimeMillis() + 5000
         answered = SystemClock.uptimeMillis()
-        while (watching) {
+        while (watching && mine == generation) {
             val asked = SystemClock.uptimeMillis()
             main.post(pong)
             try {
@@ -109,9 +117,14 @@ object Health {
                 "$name ${used.getOrNull(i)?.totalPss?.div(1024) ?: 0} MB" + if (graphics > 0) " (graphics $graphics)" else ""
             }
             val text = "Memory: ${mi.availMem / MB} MB free of ${mi.totalMem / MB} MB${if (mi.lowMemory) " (low)" else ""}; Swift: $parts"
+            // 3.0.11: memory that stays low (as Diagnostics.memoryLow counts it) lets background pages go
+            // now, not at the next tab switch, warning or 5-minute check: in a problem report it stayed
+            // under the line for minutes, with no warning from Android, until Android closed Swift.
+            val low = mi.lowMemory || mi.availMem < mi.threshold * 2
             main.post {
                 val loaded = TabManager.tabs.count { it.session != null }
                 L.d("$text; tabs loaded $loaded of ${TabManager.tabs.size}")
+                if (low) TabManager.trimLiveSessions()
             }
         } catch (e: Exception) {
             L.w("Memory note failed", e)
@@ -212,7 +225,11 @@ object Health {
             try {
                 val p = ProcessBuilder("logcat", "-d", "-v", "time", "*:E").redirectErrorStream(true).start()
                 val all = p.inputStream.bufferedReader().readLines()
-                    .filter { l -> !l.contains("JavaScript") && !l.contains("eglCodecCommon") && !l.contains("/Swift(") }
+                    // 3.0.11: page scripts' errors stay out (they can quote pages), but not those of Swift's
+                    // own add-ons (ad blocker, helper), which were missing from a problem report.
+                    .filter { l ->
+                        (!l.contains("JavaScript") || l.contains("moz-extension://")) && !l.contains("eglCodecCommon") && !l.contains("/Swift(")
+                    }
                 val lines = (if (since > 0) LogLines.between(all, since, until, System.currentTimeMillis()) else all).takeLast(120)
                 if (lines.isEmpty()) return@Thread
                 endedOutOfGraphicsMemory = LogLines.graphicsOutOfMemory(lines)

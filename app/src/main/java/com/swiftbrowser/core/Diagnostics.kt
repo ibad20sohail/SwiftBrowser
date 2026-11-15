@@ -114,6 +114,7 @@ object Diagnostics {
         com.swiftbrowser.core.Health.onScreen(onScreen)
         com.swiftbrowser.tabs.TabManager.onScreen(onScreen)
         L.d(if (onScreen) "On screen" else "Out of sight")
+        if (!onScreen) L.writeSoon()
     }
 
     /** Before the app closes itself (e.g. to restart): that isn't a problem. */
@@ -185,14 +186,15 @@ object Diagnostics {
 
     // ------------------------------------------------------------------ engine crashes
 
-    class EngineCrash(val time: Long, val fatal: Boolean, val reason: String, val line: String)
+    class EngineCrash(val time: Long, val fatal: Boolean, val reason: String, val line: String, val version: String? = null)
 
     /** Called by the crash service, in its own process. */
     fun recordEngineCrash(ctx: Context, fatal: Boolean, process: String, reason: String) {
         try {
             val file = File(ctx.filesDir, CRASHES)
+            // 3.0.11: and the version of Swift that crashed (a report couldn't tell which version each was).
             val lines = (file.takeIf { it.exists() }?.readLines().orEmpty() +
-                "${System.currentTimeMillis()}\t${if (fatal) "fatal" else "page"}\t$process\t${reason.replace('\n', ' ').replace('\t', ' ')}")
+                "${System.currentTimeMillis()}\t${if (fatal) "fatal" else "page"}\t$process\t${reason.replace('\n', ' ').replace('\t', ' ')}\t${BuildConfig.VERSION_NAME}")
                 .takeLast(MAX_CRASH_LINES)
             file.writeText(lines.joinToString("\n") + "\n")
         } catch (_: Exception) {
@@ -203,7 +205,7 @@ object Diagnostics {
         File(ctx.filesDir, CRASHES).takeIf { it.exists() }?.readLines().orEmpty().mapNotNull { line ->
             val parts = line.split('\t')
             val t = parts.getOrNull(0)?.toLongOrNull() ?: return@mapNotNull null
-            EngineCrash(t, parts.getOrNull(1) == "fatal", "${parts.getOrNull(2).orEmpty()}: ${parts.getOrNull(3).orEmpty()}", line)
+            EngineCrash(t, parts.getOrNull(1) == "fatal", "${parts.getOrNull(2).orEmpty()}: ${parts.getOrNull(3).orEmpty()}", line, parts.getOrNull(4))
         }
     } catch (_: Exception) {
         emptyList()
@@ -233,7 +235,7 @@ object Diagnostics {
         each("--- Engine crashes ---")
         val crashes = engineCrashes(app)
         if (crashes.isEmpty()) each("none")
-        crashes.forEach { each("${time.format(Date(it.time))} ${if (it.fatal) "app" else "page/graphics"} ${it.reason}") }
+        crashes.forEach { c -> each("${time.format(Date(c.time))} ${if (c.fatal) "app" else "page/graphics"} ${c.reason}${c.version?.let { " (Swift $it)" }.orEmpty()}") }
         File(app.filesDir, "last_crash.txt").takeIf { it.exists() }?.let {
             each("")
             each("--- App crash ---")

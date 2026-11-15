@@ -31,22 +31,31 @@ object PreviewLoader {
     /** Android is short of memory: the kept pictures go (they load again when needed). */
     fun trim() = cache.evictAll()
 
-    fun load(activity: Activity, url: String, size: Int, width: Int = size, onLoaded: (Bitmap) -> Unit) {
+    /**
+     * [onLoaded] on the main thread with the picture, at once when it's kept in memory. 3.0.11: true
+     * when it is fetched in the background (worth a loading pulse); [onNone] when that gave nothing.
+     */
+    fun load(activity: Activity, url: String, size: Int, width: Int = size, onNone: (() -> Unit)? = null, onLoaded: (Bitmap) -> Unit): Boolean {
         cached(url, size, width)?.let {
             onLoaded(it)
-            return
+            return false
         }
-        if (DataSaver.active && !url.startsWith("data:")) return
+        if (DataSaver.active && !url.startsWith("data:")) return false
         io.execute {
             val bytes = try {
                 read(url)
             } catch (_: Exception) {
                 null
-            } ?: return@execute
-            val bmp = decode(bytes, width, size) ?: return@execute
+            }
+            val bmp = bytes?.let { decode(it, width, size) }
+            if (bmp == null) {
+                if (onNone != null) main.post { if (!activity.isFinishing && !activity.isDestroyed) onNone() }
+                return@execute
+            }
             cache.put(key(url, size, width), bmp)
             main.post { if (!activity.isFinishing && !activity.isDestroyed) onLoaded(bmp) }
         }
+        return true
     }
 
     private fun read(url: String): ByteArray? {

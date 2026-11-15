@@ -199,12 +199,12 @@ open class DocumentActivity : AppCompatActivity() {
 
     /**
      * Shows document [id] once the viewer page can load. [secure]: kept out of screenshots and the
-     * recent-apps picture (a file of Private's); incognito ones too, unless allowed in Settings (3.0).
+     * recent-apps picture (a file of Private's; 3.0.11: incognito ones no longer are).
      */
     private fun show(id: String, secure: Boolean) {
         docId = id
         if (Docs.find(id)?.incognito == true) incognito = true
-        if (secure || Docs.isPrivate(id)) SecureScreen.set(this, true) else SecureScreen.forIncognito(this, incognito)
+        SecureScreen.set(this, secure || Docs.isPrivate(id))
         Docs.whenViewerReady { if (!isDestroyed) load(id) }
     }
 

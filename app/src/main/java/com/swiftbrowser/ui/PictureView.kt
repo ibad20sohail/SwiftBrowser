@@ -84,6 +84,17 @@ class PictureView(context: Context) : View(context) {
 
     val hasPicture: Boolean get() = picture != null
 
+    /** 3.0.11: the picture drawn now (a GIF's frame as it plays): the viewer shrinks it back into Files (PictureGrow). */
+    val shown: Bitmap? get() = picture
+
+    /** 3.0.11: where the whole picture is drawn now in this view, zoomed or not; false before it has one. */
+    fun pictureRect(out: RectF): Boolean {
+        if (picture == null || fullWidth <= 0 || fullHeight <= 0) return false
+        out.set(0f, 0f, fullWidth.toFloat(), fullHeight.toFloat())
+        m.mapRect(out)
+        return true
+    }
+
     /** Screen pixels per picture pixel. */
     val scale: Float
         get() {

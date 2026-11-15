@@ -81,6 +81,7 @@ import com.swiftbrowser.files.Transfers
 import com.swiftbrowser.files.TwoPanes
 import com.swiftbrowser.files.Volumes
 import com.swiftbrowser.media.LocalMedia
+import com.swiftbrowser.media.Playlists
 import com.swiftbrowser.media.Unfinished
 import com.swiftbrowser.media.Watched
 import kotlinx.coroutines.CancellationException
@@ -341,9 +342,6 @@ class FilesActivity : ListActivity() {
     /** Tiles instead of rows (2.8), remembered. */
     private var grid = false
 
-    /** Small pictures in the lists (2.9: can be turned off in Settings). */
-    private var thumbsOn = true
-
     /** The options as the list on show used them: another value means Settings changed them meanwhile. */
     private var settingsShown = ""
 
@@ -552,7 +550,6 @@ class FilesActivity : ListActivity() {
         otherPane().attached = twoPanes
         computeGrid()
         grid = FilesSettings.grid
-        thumbsOn = FilesSettings.thumbnails
         settingsShown = settingsKey()
         readAnimationScale()
         if (savedInstanceState != null) {
@@ -617,6 +614,8 @@ class FilesActivity : ListActivity() {
             goTo(there)
         }
         if (needAccess && Build.VERSION.SDK_INT < 30) requestAccess()
+        // 3.0.11: made again (turned) while one of its pictures may be open over it: this is the Files to shrink back into.
+        if (savedInstanceState != null) PictureGrow.use(growSource)
     }
 
     /**
@@ -714,7 +713,7 @@ class FilesActivity : ListActivity() {
 
     /** Files' options as they are now, to tell when Settings changed them. */
     private fun settingsKey() = listOf(
-        FilesSettings.grid, FilesSettings.showHidden, FilesSettings.thumbnails, FilesSettings.sort, FilesSettings.categorySort, FilesSettings.binDays,
+        FilesSettings.grid, FilesSettings.showHidden, FilesSettings.sort, FilesSettings.categorySort, FilesSettings.binDays,
         FilesSettings.twoPanes,
     ).joinToString("|")
 
@@ -822,6 +821,8 @@ class FilesActivity : ListActivity() {
             for (p in shownPanes()) withPane(p) { pruneGone() }
             // 3.0.3: back from the player: the videos' pictures show how much is watched now.
             for (p in shownPanes()) p.adapter.notifyItemRangeChanged(0, p.adapter.itemCount, PAYLOAD_WATCHED)
+            // 3.0.11: back from a playlist's screen: Music shows the playlists as they are now.
+            playlistsChanged()
         }
         started = true
     }
@@ -845,7 +846,6 @@ class FilesActivity : ListActivity() {
         if (key == settingsShown) return
         settingsShown = key
         grid = FilesSettings.grid
-        thumbsOn = FilesSettings.thumbnails
         menuShown = ""
         // 3.0.4: two folders turned on or off in Settings meanwhile; then each side follows the options.
         setTwoPanes(twoOffered && FilesSettings.twoPanes)
@@ -890,9 +890,16 @@ class FilesActivity : ListActivity() {
         } else if (homeDirty && shownPanes().any { it.home }) {
             loadHome()
         }
+        // 3.0.11: back from a picture opened over Files (PictureGrow), which only paused Files: a picture
+        // deleted there leaves the list, as onStart has it done after other screens.
+        if (viewerOver) {
+            viewerOver = false
+            for (p in shownPanes()) withPane(p) { pruneGone() }
+        }
     }
 
     override fun onDestroy() {
+        PictureGrow.forget(growSource)
         progress.dismiss()
         opening?.dismiss()
         // 3.0.5: leaving Files lets go of its small pictures (up to 12 MB, kept while browsing before).
@@ -1014,12 +1021,18 @@ class FilesActivity : ListActivity() {
         })
         column.addView(page, at, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
 
-        bottom = LinearLayout(this).apply {
+        // 3.0.11: it lies over the lists' ends: a touch between its buttons stays on it, and while it
+        // slides away its buttons (for a selection there no longer is) take none.
+        bottom = object : LinearLayout(this) {
+            override fun onInterceptTouchEvent(ev: MotionEvent) = bottomBar.isLeaving || super.onInterceptTouchEvent(ev)
+        }.apply {
             orientation = LinearLayout.VERTICAL
             visibility = View.GONE
             setBackgroundColor(Palette.color(this@FilesActivity, R.color.sheet_bg))
+            isClickable = true
         }
-        bottomBar = BottomBar(bottom)
+        // 3.0.11: over both sides' lists, which get room under it (BottomBar).
+        bottomBar = BottomBar(bottom) { panes.map { it.list } }
         // 3.0.5: no line above it: its own colour against the page's says where it begins.
         jobStrip = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -1055,15 +1068,19 @@ class FilesActivity : ListActivity() {
         })
         pasteButton = MaterialButton(this).apply { setOnClickListener { paste() } }
         pasteBar.addView(pasteButton)
-        bottom.addView(pasteBar)
 
         actionBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             setPadding(Ui.dp(this@FilesActivity, 4), Ui.dp(this@FilesActivity, 2), Ui.dp(this@FilesActivity, 4), Ui.dp(this@FilesActivity, 2))
             visibility = View.GONE
         }
-        bottom.addView(actionBar)
-        column.addView(bottom, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        // 3.0.11: the paste bar and the selection's bar take one place in turn, fading into each other there.
+        bottom.addView(FrameLayout(this).apply {
+            addView(pasteBar, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            addView(actionBar, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        // 3.0.11: over the lists' ends (they had to make room for it, and jumped as it came and went).
+        page.addView(bottom, androidx.coordinatorlayout.widget.CoordinatorLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { gravity = Gravity.BOTTOM })
         Palette.paint(bottom)
     }
 
@@ -1185,7 +1202,8 @@ class FilesActivity : ListActivity() {
         var bottom = 0
         for (i in 0 until rv.childCount) bottom = maxOf(bottom, rv.getChildAt(i).bottom)
         if (bottom == 0) return false
-        return topInPage(rv) + bottom > page.height
+        // 3.0.11: rows under the bars at the bottom (they lie over the list) are out of sight too.
+        return topInPage(rv) + bottom > page.height - bottomBar.cover
     }
 
     /** 3.0.4: how far down the page (under the title bar) [v]'s top is now: a side's list sits in the row of lists. */
@@ -1253,6 +1271,8 @@ class FilesActivity : ListActivity() {
         updateChrome()
         loadJob = lifecycleScope.launch {
             val found = withContext(Dispatchers.IO) {
+                // 3.0.11: Music has the user's playlists at its top (read once, then kept in memory).
+                if (cat == FileIndex.Category.MUSIC) Playlists.load(app)
                 val all = FileIndex.list(app, cat) { !isActive }
                 // The index gives them newest first already.
                 if (order == FileOps.SORT_DATE) all else FileOps.sorted(all, order)
@@ -1359,8 +1379,8 @@ class FilesActivity : ListActivity() {
             var docs: List<Docs.Doc> = emptyList()
             var continued: List<Unfinished.Item> = emptyList()
             val (storages, favourites, bin) = withContext(Dispatchers.IO) {
-                // 3.0.4: with what fills each storage as measured last (while Swift runs), until it is again below.
-                val cards = Volumes.refresh(app).map { v -> v.space().let { (free, total) -> StorageCard(v, free, total, StorageKinds.cached(v.root)) } }
+                // 3.0.4: with what fills each storage as measured last (3.0.11: also in an earlier run), until it is again below.
+                val cards = Volumes.refresh(app).map { v -> v.space().let { (free, total) -> StorageCard(v, free, total, StorageKinds.cached(app, v.root)) } }
                 val favs = Favourites.paths().map { File(it) }.filter { it.isDirectory && !PrivateFolder.isInside(app, it) }
                     .map { rowOf(FileItem.of(it, count = true, where = FileIndex.placeOf(app, it.parentFile))) }
                 docs = recentDocuments()
@@ -1531,6 +1551,7 @@ class FilesActivity : ListActivity() {
                 inBin && rows.isNotEmpty() -> listOf(Hint("Things you delete stay here for ${com.swiftbrowser.files.BinClock.daysText(FilesSettings.binDays)}, then go for good. Tap one to restore it.")) + rows
                 inPrivate && dir.path == PrivateFolder.root(this).path && rows.isNotEmpty() -> listOf(Hint(PRIVATE_HINT)) + rows
                 category == FileIndex.Category.DOCUMENTS && rows.isNotEmpty() -> documentRows()
+                category == FileIndex.Category.MUSIC && !picking && !loading -> musicRows()
                 else -> rows
             }
         }
@@ -1600,6 +1621,37 @@ class FilesActivity : ListActivity() {
         out += DocFilter(listOf("All") + present.map { it.label }, if (chosen == null) 0 else present.indexOf(chosen) + 1)
         if (chosen == null) out.addAll(rows) else rows.forEachIndexed { i, r -> if (groups[i] == chosen) out += r }
         return out
+    }
+
+    /**
+     * 3.0.11: Music: the user's playlists first, a group of rows as the start page's Tools (each, then
+     * New playlist), then the songs under a heading of their own. With no songs and no playlists, the
+     * empty screen as before.
+     */
+    private fun musicRows(): List<Any> {
+        val lists = Playlists.cached() ?: return rows
+        if (rows.isEmpty() && lists.isEmpty()) return rows
+        val out = ArrayList<Any>(rows.size + lists.size + 4)
+        out += Header("Playlists")
+        PlaylistUi.sorted(lists).forEach { out += PlaylistUi.ListRow(it) }
+        out += PlaylistUi.NewRow
+        out += Header("Songs")
+        if (rows.isEmpty()) out += Hint(FileIndex.Category.MUSIC.hint) else out.addAll(rows)
+        return out
+    }
+
+    /** 3.0.11: a playlist was made, changed or deleted: Music shows the playlists as they are now. */
+    private fun playlistsChanged() {
+        for (p in shownPanes()) withPane(p) { if (category == FileIndex.Category.MUSIC && index == null && !loading) render() }
+    }
+
+    /** 3.0.11: what Files says about playlists, above its bars. */
+    private val playlistSay = PlaylistUi.Say { text, action, onAction -> say(text, action, onAction = onAction) }
+
+    /** 3.0.11: songs (a song's ⋮, or those selected) into a playlist of the user's, chosen in a sheet. */
+    private fun addToPlaylist(files: List<File>) = PlaylistUi.addFromFiles(this, files, playlistSay) {
+        clearSelection()
+        playlistsChanged()
     }
 
     /** Rows or tiles (2.8): the start page is always a list; folders, categories, archives and searches follow the choice. */
@@ -1844,14 +1896,16 @@ class FilesActivity : ListActivity() {
                     if (two) barButton(R.drawable.ic_unarchive, "Extract to the\u00A0$toward", lines = 2) { index?.let { i -> extractToOther(i.file, i, null, "") } } else null,
                     barButton(R.drawable.ic_folder, "Extract to…") { index?.let { i -> clipExtract(i.file, i, null, "") } },
                 ))
-                else -> actionBar.removeAllViews()
+                // 3.0.11: none: its buttons stay while it slides away (they are made again when a bar comes).
+                else -> {}
             }
         }
-        actionBar.visibility = if (bar.isEmpty()) View.GONE else View.VISIBLE
         // Things wait to be put in a folder: only a folder can take them (not the start page, a category or the bin).
         val c = clip
-        if (c != null && !selecting && idx == null && !home && cat == null && !inBin) {
-            pasteBar.visibility = View.VISIBLE
+        val paste = c != null && !selecting && idx == null && !home && cat == null && !inBin
+        // 3.0.11: the selection's bar and the paste bar fade into each other in their one place (BottomBar).
+        bottomBar.pick(listOf(actionBar, pasteBar), if (bar.isNotEmpty()) actionBar else if (paste) pasteBar else null, animationsOn, jobStrip.visibility == View.VISIBLE)
+        if (paste) {
             when (c) {
                 is Clip.Files -> {
                     val what = if (c.files.size == 1) "“${c.files[0].name}”" else FileJobs.items(c.files.size)
@@ -1863,8 +1917,6 @@ class FilesActivity : ListActivity() {
                     pasteButton.text = "Extract here"
                 }
             }
-        } else {
-            pasteBar.visibility = View.GONE
         }
         updateBottom()
     }
@@ -1919,8 +1971,9 @@ class FilesActivity : ListActivity() {
 
     /** The area at the bottom only shows when one of its bars does. */
     private fun updateBottom() {
-        // 2.9: the bar slides up from the bottom edge when it comes, and back down when it goes.
-        bottomBar.show(jobStrip.visibility == View.VISIBLE || pasteBar.visibility == View.VISIBLE || actionBar.visibility == View.VISIBLE, animationsOn)
+        // 2.9: the bar slides up from the bottom edge when it comes, and back down when it goes. 3.0.11:
+        // the one of its bars in turn chosen (one going may still show as it fades or slides away).
+        bottomBar.show(jobStrip.visibility == View.VISIBLE || bottomBar.picked != null, animationsOn)
     }
 
     private lateinit var bottomBar: BottomBar
@@ -2378,6 +2431,8 @@ class FilesActivity : ListActivity() {
         val actions = ArrayList<Sheets.Action>()
         val one = files.singleOrNull()
         val private = inPrivate
+        // 3.0.11: songs selected go in a playlist together (never Private's).
+        if (!private && rowsNow.all { !it.isDir && it.entry == null && PlaylistUi.isSong(it.name) }) actions += Sheets.Action(R.drawable.ic_playlist_add, "Add to playlist") { addToPlaylist(files) }
         if (one != null) actions += Sheets.Action(R.drawable.ic_edit, "Rename") { rename(one) }
         // 2.9: into Private from the phone's storage or a card; within Private, copying and moving between its folders.
         if (private) {
@@ -2435,8 +2490,96 @@ class FilesActivity : ListActivity() {
             r.isDir -> openFolder(f)
             Archives.formatOf(r.name) != null -> openArchive(f)
             inPrivate -> openPrivateFile(r, f)
+            // 3.0.11: a picture grows out of its small picture into the viewer.
+            growPicture(r, f) -> {}
             FileOpener.open(this, f) -> finish()
         }
+    }
+
+    // ------------------------------------------------------------------ 3.0.11: pictures grow out of their small pictures
+
+    /** The picture whose small picture is hidden while it moves out of it into the viewer or back (PictureGrow). */
+    private var heldThumb: String? = null
+
+    /** A picture opened over Files with its window see-through: Files was only paused behind it, not stopped. */
+    private var viewerOver = false
+
+    /**
+     * A picture of the list grows out of its small picture into the viewer (PictureGrow): when all of
+     * that small picture is on the screen, its picture made and its size known (both from making it),
+     * with animations on. False: it opens as before.
+     */
+    private fun growPicture(r: Row, f: File): Boolean {
+        if (!animationsOn || MediaViewerActivity.kindOf(r.name) != MediaViewerActivity.Kind.IMAGE) return false
+        val h = thumbHolder(r.key) ?: return false
+        val spot = spotOf(h) ?: return false
+        val thumb = (h.icon.drawable as? android.graphics.drawable.BitmapDrawable)?.bitmap ?: return false
+        val size = FileThumbs.facts(f, r.time)?.takeIf { it.width > 0 && it.height > 0 } ?: return false
+        PictureGrow.handOver(PictureGrow.Start(f.path, spot.rect, spot.radius, thumb, size.width, size.height, spot.barColor), growSource)
+        try {
+            startActivity(MediaViewerActivity.intentOverFiles(this, f))
+        } catch (e: Exception) {
+            L.w("Files: the picture viewer didn't open", e)
+            PictureGrow.claim(f.path)
+            return false
+        }
+        // The viewer does the motion itself.
+        @Suppress("DEPRECATION")
+        overridePendingTransition(0, 0)
+        viewerOver = true
+        return true
+    }
+
+    /** The row or tile on the screen showing [path] (the side worked on first), if there is one. */
+    private fun thumbHolder(path: String): FileHolder? {
+        for (p in listOf(chosen) + shownPanes().filter { it !== chosen }) {
+            val rv = p.list
+            for (i in 0 until rv.childCount) {
+                val h = rv.getChildViewHolder(rv.getChildAt(i)) as? FileHolder ?: continue
+                if (h.boundKey == path) return h
+            }
+        }
+        return null
+    }
+
+    /** [h]'s picture where it is on the screen, if all of it shows (not scrolled partly away, nor under the bars at the bottom). */
+    @Suppress("DEPRECATION")
+    private fun spotOf(h: FileHolder): PictureGrow.Spot? {
+        val icon = h.icon
+        // Hidden only because its picture is on its way out of it (Back while it still grows): as good as shown.
+        val shown = if (heldThumb != null && h.boundKey == heldThumb) (icon.parent as? View)?.isShown == true else icon.isShown
+        if (!shown || icon.width <= 0 || icon.drawable !is android.graphics.drawable.BitmapDrawable) return null
+        val seen = android.graphics.Rect()
+        if (!icon.getGlobalVisibleRect(seen) || seen.width() < icon.width || seen.height() < icon.height) return null
+        val at = IntArray(2).also { icon.getLocationOnScreen(it) }
+        val pageAt = IntArray(2).also { page.getLocationOnScreen(it) }
+        if (at[1] + icon.height > pageAt[1] + page.height - bottomBar.cover) return null
+        val radius = Ui.dpf(this, (if (h.tile) Corners.nested(TILE_RADIUS, TILE_GAP) else Ui.R_SMALL).toFloat())
+        return PictureGrow.Spot(android.graphics.Rect(at[0], at[1], at[0] + icon.width, at[1] + icon.height), radius, window.statusBarColor)
+    }
+
+    /** The small picture of [path] hidden (null: none is), on whichever side shows it. */
+    private fun holdThumb(path: String?) {
+        if (heldThumb == path) return
+        heldThumb = path
+        for (p in panes) {
+            val rv = p.list
+            for (i in 0 until rv.childCount) {
+                val h = rv.getChildViewHolder(rv.getChildAt(i)) as? FileHolder ?: continue
+                h.icon.visibility = if (path != null && h.boundKey == path) View.INVISIBLE else View.VISIBLE
+            }
+        }
+    }
+
+    /** What the picture viewer asks Files while a picture opened from it shows. */
+    private val growSource = object : PictureGrow.Source {
+        override fun spot(path: String): PictureGrow.Spot? {
+            // Only while Files is on show behind the viewer (not left, nor in another task).
+            if (isFinishing || !lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)) return null
+            return thumbHolder(path)?.let { spotOf(it) }
+        }
+
+        override fun hold(path: String?) = holdThumb(path)
     }
 
     /**
@@ -2526,6 +2669,8 @@ class FilesActivity : ListActivity() {
                 actions += Sheets.Action(R.drawable.ic_share, "Share", primary = true) { FileOpener.share(this, listOf(f)) }
                 actions += Sheets.Action(R.drawable.ic_copy, "Copy", primary = true) { setClip(listOf(f), move = false) }
                 actions += Sheets.Action(R.drawable.ic_move, "Move", primary = true) { setClip(listOf(f), move = true) }
+                // 3.0.11: a song goes in a playlist of the user's own.
+                if (PlaylistUi.isSong(r.name)) actions += Sheets.Action(R.drawable.ic_playlist_add, "Add to playlist") { addToPlaylist(listOf(f)) }
                 actions += Sheets.Action(R.drawable.ic_reopen, "Open with another app") { FileOpener.openWith(this, f) }
                 actions += Sheets.Action(R.drawable.ic_archive, "Compress") { compress(listOf(f)) }
             }
@@ -3412,11 +3557,19 @@ class FilesActivity : ListActivity() {
             // 3.0.4: and what it holds once measured ("12 items · 1.40 GB").
             sizeText(r, owner)?.let { parts += it }
         } else if (r.size >= 0) {
+            // 3.0.11: a video's length first, once making its picture told it (a row's picture is too small to carry it).
+            videoLength(r)?.let { parts += it }
             parts += UrlUtils.formatBytes(r.size)
         }
         dateText(r.time)?.let { parts += it }
         if (!r.where.isNullOrEmpty()) parts += "in " + r.where
         return parts.joinToString(" · ")
+    }
+
+    /** 3.0.11: "3:05" for a video whose picture was made (its length is read with it, FileThumbs); null otherwise. */
+    private fun videoLength(r: Row): String? {
+        val f = r.file?.takeIf { r.kind == FileKind.VIDEO } ?: return null
+        return FileThumbs.facts(f, r.time)?.let { VideoLength.text(it.lengthMs) }
     }
 
     // 3.0.5: the same short date as Downloads.
@@ -3536,17 +3689,18 @@ class FilesActivity : ListActivity() {
                 tag = doc.uri
             }
             card.addView(thumb, LinearLayout.LayoutParams(w, dp(132)))
-            if (thumbsOn) {
-                // From memory it comes during this call; one read later comes in softly.
-                var binding = true
-                DocThumbs.load(this, doc.uri, doc.kind, w) { bmp ->
-                    if (thumb.tag != doc.uri) return@load
-                    thumb.scaleType = ImageView.ScaleType.CENTER_CROP
-                    thumb.setImageBitmap(bmp)
-                    if (!binding) Motion.fadePicture(thumb)
-                }
-                binding = false
+            // From memory it comes during this call; one read later comes in softly.
+            var binding = true
+            val coming = DocThumbs.load(this, doc.uri, doc.kind, w, onNone = { PictureLoading.stop(thumb) }) { bmp ->
+                if (thumb.tag != doc.uri) return@load
+                PictureLoading.stop(thumb)
+                thumb.scaleType = ImageView.ScaleType.CENTER_CROP
+                thumb.setImageBitmap(bmp)
+                if (!binding) Motion.fadePicture(thumb)
             }
+            binding = false
+            // 3.0.11: a soft pulse while it is made (PictureLoading).
+            if (coming) PictureLoading.start(thumb)
             card.addView(Ui.text(this, Ui.Type.BODY, doc.name, lines = 2).apply {
                 Ui.size(this, Ui.Type.CAPTION, keepFont = true)
                 setPadding(dp(2), dp(6), dp(2), 0)
@@ -3677,16 +3831,19 @@ class FilesActivity : ListActivity() {
      * A video's picture shows how much of it was watched in Swift's player, and a tick once it was
      * watched to its end: looked up by the path and size the row has (no disk access while binding).
      */
-    private fun markWatched(owner: Pane, h: FileHolder, r: Row) {
+    private fun markWatched(owner: Pane, h: FileHolder, r: Row, length: String? = h.marks?.length) {
         val path = r.file?.path?.takeIf { r.kind == FileKind.VIDEO && !owner.inBin }
         val share = path?.let { LocalMedia.progress(this, it, r.size) }
         val done = path != null && Watched.isFinished(this, path, r.size)
-        if (share == null && !done) {
+        // 3.0.11: and a tile's length, once its picture shows (kept as it is when only the marks are asked for again).
+        val long = length.takeIf { path != null && h.tile }
+        if (share == null && !done && long == null) {
+            h.marks?.set(null, false, null)
             if (h.icon.foreground != null) h.icon.foreground = null
             return
         }
         val marks = h.marks ?: WatchMarks(this, h.tile).also { h.marks = it }
-        marks.set(share, done)
+        marks.set(share, done, long)
         if (h.icon.foreground !== marks) h.icon.foreground = marks
     }
 
@@ -3768,8 +3925,8 @@ class FilesActivity : ListActivity() {
         endSlide()
     }
 
-    /** The part of the list on show, top and bottom in its own coordinates (the bars above can push its end below the screen). */
-    private fun listShown(): Pair<Int, Int> = list.paddingTop to minOf(list.height, page.height - topInPage(list))
+    /** The part of the list on show, top and bottom in its own coordinates (the bars above can push its end below the screen; 3.0.11: the bars below lie over it). */
+    private fun listShown(): Pair<Int, Int> = list.paddingTop to minOf(list.height, page.height - topInPage(list) - bottomBar.cover)
 
     /** The files from the held one to the one under the finger are as the slide makes them; those it left are as they were. */
     private fun slideOver() {
@@ -4270,6 +4427,9 @@ class FilesActivity : ListActivity() {
         /** 3.0.5: a start page row's group: rows next to each other go together, anything else ends a group. */
         private val groupOf: (Int) -> Any? = { i -> if (items[i] is Row) 0 else null }
 
+        /** 3.0.11: Music's playlist rows go together the same way. */
+        private val playlistGroup: (Int) -> Any? = { i -> if (items[i] is PlaylistUi.Row) 0 else null }
+
         private fun keyOf(o: Any): Any = when (o) {
             is Row -> o.key
             is Hint -> "hint:" + o.text
@@ -4280,6 +4440,7 @@ class FilesActivity : ListActivity() {
             is ToolGrid -> "tools"
             is RecentDocs -> "docs:" + o.docs.joinToString(",") { it.id }
             is ContinueCards -> "continue:" + o.items.joinToString(",") { it.url + ":" + it.progress }
+            is PlaylistUi.Row -> o.key
             else -> o
         }
 
@@ -4295,6 +4456,7 @@ class FilesActivity : ListActivity() {
             is DocFilter -> TYPE_DOC_FILTER
             is RecentDocs -> TYPE_DOCS
             is ContinueCards -> TYPE_CONTINUE
+            is PlaylistUi.Row -> TYPE_PLAYLIST
             else -> TYPE_HINT
         }
 
@@ -4308,6 +4470,10 @@ class FilesActivity : ListActivity() {
             TYPE_TOOLS -> makeTools()
             TYPE_DOCS -> makeRecentDocs()
             TYPE_CONTINUE -> makeContinue()
+            // 3.0.11: Music's playlists (PlaylistUi): a tap opens one (or makes a new one), ⋮ or a hold its choices.
+            TYPE_PLAYLIST -> PlaylistUi.holder(this@FilesActivity, { r -> PlaylistUi.open(this@FilesActivity, r) { playlistsChanged() } }) { p ->
+                PlaylistUi.menu(this@FilesActivity, p, playlistSay) { playlistsChanged() }
+            }
             TYPE_DOC_FILTER -> FilterHolder(FrameLayout(this@FilesActivity).apply {
                 setPadding(0, dp(4), 0, dp(6))
                 layoutParams = RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
@@ -4346,6 +4512,7 @@ class FilesActivity : ListActivity() {
                 is DocFilter -> bindDocFilter(holder as FilterHolder, item)
                 is RecentDocs -> bindRecentDocs(holder as DocsHolder, item)
                 is ContinueCards -> (holder as ContinueHolder).row.show(item.items)
+                is PlaylistUi.Row -> PlaylistUi.bind(holder as PlaylistUi.Holder, item, position, items.size, playlistGroup)
                 is Hint -> (holder as HintHolder).text.let { t ->
                     t.text = item.text
                     // 3.0.5: lined up with the section headings and cards around it on the start page, with the rows elsewhere.
@@ -4360,6 +4527,7 @@ class FilesActivity : ListActivity() {
                 holder.thumb?.cancel()
                 holder.thumb = null
                 Motion.stopPicture(holder.icon)
+                PictureLoading.stop(holder.icon)
             }
         }
     }
@@ -4552,33 +4720,48 @@ class FilesActivity : ListActivity() {
             // The bin's rows say where things were on a second line.
             val lines = if (owner.inBin) 2 else 1
             if (s.maxLines != lines) s.maxLines = lines
-            s.text = subtitleText(r, owner)
+            // 3.0.11: at once (a video's length coming in for the file it showed before gives way).
+            Motion.setText(s, subtitleText(r, owner))
         }
         if (h.tile) bindSize(owner, h, r)
         h.thumb?.cancel()
         h.thumb = null
         Motion.stopPicture(h.icon)
+        PictureLoading.stop(h.icon)
         h.icon.tag = r.key
         setIcon(h, r)
         h.play?.visibility = if (r.kind == FileKind.VIDEO) View.VISIBLE else View.GONE
-        markWatched(owner, h, r)
+        // 3.0.11: a tile's length comes with its picture (below).
+        markWatched(owner, h, r, null)
+        // 3.0.11: a picture growing out of this one into the viewer (or back) has it hidden meanwhile.
+        h.icon.visibility = if (r.key == heldThumb) View.INVISIBLE else View.VISIBLE
         val f = r.file
-        if (f != null && !r.isDir && thumbsOn && FileThumbs.has(r.kind)) {
+        if (f != null && !r.isDir && FileThumbs.has(r.kind)) {
             val key = r.key
             // An app's icon stays an icon on a tile, not a blown-up square.
             val apkOnTile = h.tile && r.kind == FileKind.APK
             // From memory it comes during this call; one made later comes in softly.
             var binding = true
-            h.thumb = FileThumbs.load(this, f, r.time, r.kind, if (h.tile) tilePx else thumbPx) { bmp ->
+            h.thumb = FileThumbs.load(this, f, r.time, r.kind, if (h.tile) tilePx else thumbPx, onNone = {
+                if (h.icon.tag == key) PictureLoading.stop(h.icon)
+            }) { bmp ->
                 if (h.icon.tag != key) return@load
+                PictureLoading.stop(h.icon)
                 h.icon.imageTintList = null
                 val p = if (apkOnTile) tileIconPad / 2 else 0
                 h.icon.setPadding(p, p, p, p)
                 h.icon.scaleType = if (apkOnTile) ImageView.ScaleType.FIT_CENTER else ImageView.ScaleType.CENTER_CROP
                 h.icon.setImageBitmap(bmp)
                 if (!binding) Motion.fadePicture(h.icon)
+                // 3.0.11: a video's length was read with its picture: on a tile's picture, or in a row's second line.
+                if (r.kind == FileKind.VIDEO) {
+                    markWatched(owner, h, r, videoLength(r))
+                    if (!binding) h.subtitle?.let { Motion.swapText(it, subtitleText(r, owner)) }
+                }
             }
             binding = false
+            // 3.0.11: a soft pulse while it is made (PictureLoading).
+            if (h.thumb != null) PictureLoading.start(h.icon)
         }
         bindSelection(owner, h, r, false)
     }
@@ -4791,9 +4974,10 @@ class FilesActivity : ListActivity() {
         val split = if (known) s.kinds?.let { StorageKinds.split(s.total, s.free, it) } else null
         when {
             split != null -> h.bar.show(split.parts(), intArrayOf(kindColors[0], kindColors[1], kindColors[2], kindColors[3], otherColor, freeColor))
-            // Until what fills it is known: used and free, as before.
-            known -> h.bar.show(longArrayOf(used, s.free), intArrayOf(Ui.accent(this), freeColor))
-            else -> h.bar.show(longArrayOf(0, 1), intArrayOf(Ui.accent(this), freeColor))
+            // Until what fills it is known: used and free, as before; 3.0.11: used in the neutral colour
+            // of "Other", not the accent, which flashed before the parts' own colours came.
+            known -> h.bar.show(longArrayOf(used, s.free), intArrayOf(otherColor, freeColor))
+            else -> h.bar.show(longArrayOf(0, 1), intArrayOf(otherColor, freeColor))
         }
         h.detail.text = if (known) "${UrlUtils.formatBytes(used)} used · ${UrlUtils.formatBytes(s.free)} free" else "Measuring…"
         h.detail.setTextColor(if (full) Ui.danger(this) else Ui.textSecondary(this))
@@ -5005,6 +5189,9 @@ class FilesActivity : ListActivity() {
         /** 3.0.5: a start page row: a grouped piece; the kinds of holders don't change on a recycled row. */
         private const val TYPE_HOME_ROW = 10
 
+        /** 3.0.11: one of Music's playlists, or New playlist (PlaylistUi). */
+        private const val TYPE_PLAYLIST = 11
+
         private const val SLIDE_FORWARD = 1
         private const val SLIDE_BACK = -1
         private const val SLIDE_FADE = 2
@@ -5067,16 +5254,50 @@ class FilesActivity : ListActivity() {
             if (ctx !is Activity) i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             ctx.startActivity(i)
         }
+
+        /** 3.0.11: what [EXTRA_FOLDER] says to open at category [cat] (a playlist's Add songs, at Music). */
+        fun categoryPlace(cat: FileIndex.Category): String = CATEGORY + cat.key
     }
 }
 
 
 // ---------------------------------------------------------------------- what Files, Network folders and Free up space share
 
-/** The bar at the bottom of a list screen: it slides up when it comes and back down when it goes. */
-internal class BottomBar(private val bar: View) {
+/**
+ * The bar at the bottom of a list screen: it slides up when it comes and back down when it goes.
+ *
+ * 3.0.11: given the [lists] it lies over (Files), it lies over their ends instead of taking room from
+ * them, and fades as it slides. They get room under it ([cover]) to scroll their last rows up into,
+ * which goes back with the bar as it leaves: a list scrolled to its end follows it down, so nothing
+ * in the lists jumps as it comes and goes. Bars that take its one place in turn fade into each other
+ * there ([pick]).
+ */
+internal class BottomBar(private val bar: View, private val lists: (() -> List<RecyclerView>)? = null) {
     /** It is sliding away (it shows until it is gone). */
     private var leaving = false
+
+    /** 3.0.11: sliding away: what it shows is on its way out (nothing in it takes a touch then). */
+    val isLeaving: Boolean get() = leaving
+
+    /** 3.0.11: how much of the lists' ends it covers (px), the room they have under it. */
+    var cover = 0
+        private set
+
+    /** 3.0.11: what each list's bottom padding has for it, and the room going back as it leaves. */
+    private val added = HashMap<RecyclerView, Int>()
+    private var giving: android.animation.ValueAnimator? = null
+
+    /** 3.0.11: the one of the bars in turn ([pick]) on show, and all of them. */
+    var picked: View? = null
+        private set
+    private var parts: List<View> = emptyList()
+
+    init {
+        // Its height known (it came, or what is in it changed): the lists' room under it is as tall.
+        if (lists != null) bar.addOnLayoutChangeListener { _, _, top, _, bottom, _, _, _, _ ->
+            if (bar.visibility == View.VISIBLE && !leaving) setCover(bottom - top)
+        }
+    }
 
     fun show(any: Boolean, animate: Boolean) {
         val ctx = bar.context
@@ -5084,29 +5305,150 @@ internal class BottomBar(private val bar: View) {
             leaving = false
             bar.animate().cancel()
             bar.translationY = 0f
+            bar.alpha = 1f
             bar.visibility = if (any) View.VISIBLE else View.GONE
+            if (lists != null) {
+                giving?.cancel()
+                setCover(if (any) bar.height else 0)
+            }
+            if (!any) hideUnpicked()
             return
         }
         if (any) {
             if (bar.visibility == View.VISIBLE && !leaving) return
             leaving = false
             bar.animate().cancel()
+            giving?.cancel()
             if (bar.visibility != View.VISIBLE) {
                 bar.visibility = View.VISIBLE
                 bar.translationY = Ui.dpf(ctx, 72f)
+                if (lists != null) bar.alpha = 0f
+            } else if (lists != null) {
+                // Turned back on its way out: the room under it again at once (adding it moves nothing).
+                setCover(bar.height)
             }
-            Motion.anim(bar, Motion.NORMAL, Motion.enter).translationY(0f).start()
+            val a = Motion.anim(bar, Motion.NORMAL, Motion.enter).translationY(0f)
+            if (lists != null) a.alpha(1f).withLayer()
+            a.start()
         } else if (bar.visibility == View.VISIBLE && !leaving) {
             leaving = true
             bar.animate().cancel()
-            Motion.anim(bar, Motion.SHORT, Motion.exit).translationY(bar.height.toFloat().coerceAtLeast(Ui.dpf(ctx, 72f))).withEndAction {
+            val a = Motion.anim(bar, Motion.SHORT, Motion.exit).translationY(bar.height.toFloat().coerceAtLeast(Ui.dpf(ctx, 72f)))
+            if (lists != null) a.alpha(0f).withLayer()
+            a.withEndAction {
                 if (leaving) {
                     leaving = false
                     bar.visibility = View.GONE
                     bar.translationY = 0f
+                    bar.alpha = 1f
+                    hideUnpicked()
                 }
             }.start()
+            if (lists != null) giveBack(Motion.SHORT)
         }
+    }
+
+    /**
+     * 3.0.11: shows [chosen] of [all], bars that take the bar's one place in turn (null: none of
+     * them). While the bar is up, the one coming fades in over the one going, in place. With none
+     * chosen the bar slides away with the last one on show, unless something else keeps it up
+     * ([stays]): then that one fades away where it is.
+     */
+    fun pick(all: List<View>, chosen: View?, animate: Boolean, stays: Boolean) {
+        parts = all
+        if (chosen === picked) return
+        picked = chosen
+        val up = bar.visibility == View.VISIBLE && !leaving
+        for (p in all) {
+            if (p === chosen) {
+                p.animate().cancel()
+                if (animate && up) {
+                    if (p.visibility != View.VISIBLE) {
+                        p.alpha = 0f
+                        p.visibility = View.VISIBLE
+                    }
+                    // On top of the one going, so a touch meanwhile is for it.
+                    p.bringToFront()
+                    Motion.anim(p, Motion.SHORT, Motion.enter).alpha(1f).withLayer().start()
+                } else {
+                    p.alpha = 1f
+                    p.visibility = View.VISIBLE
+                }
+            } else if (p.visibility == View.VISIBLE) {
+                when {
+                    animate && up && (chosen != null || stays) -> Motion.anim(p, Motion.SHORT, Motion.exit).alpha(0f).withLayer().withEndAction {
+                        if (picked !== p) {
+                            p.visibility = View.GONE
+                            p.alpha = 1f
+                        }
+                    }.start()
+                    // The whole bar slides away with it on show: it goes once the bar has.
+                    animate && up -> {}
+                    else -> {
+                        p.animate().cancel()
+                        p.visibility = View.GONE
+                        p.alpha = 1f
+                    }
+                }
+            }
+        }
+    }
+
+    /** 3.0.11: the bars in turn that aren't on show any more go, the bar having gone. */
+    private fun hideUnpicked() {
+        for (p in parts) {
+            if (p === picked) continue
+            p.animate().cancel()
+            p.visibility = View.GONE
+            p.alpha = 1f
+        }
+    }
+
+    /** 3.0.11: the lists' room under the bar is [px]. */
+    private fun setCover(px: Int) {
+        giving?.cancel()
+        giving = null
+        cover = px
+        for (rv in lists?.invoke().orEmpty()) pad(rv, px)
+    }
+
+    private fun pad(rv: RecyclerView, px: Int) {
+        val was = added[rv] ?: 0
+        if (was == px) return
+        added[rv] = px
+        rv.setPadding(rv.paddingLeft, rv.paddingTop, rv.paddingRight, rv.paddingBottom - was + px)
+    }
+
+    /**
+     * 3.0.11: the bar leaves: its room goes back. A list scrolled down to its end (less than that
+     * room left to scroll) follows the bar down as it goes, over [ms] (laid out again each frame,
+     * just for those few); the others at once, which moves nothing.
+     */
+    private fun giveBack(ms: Long) {
+        giving?.cancel()
+        val from = cover
+        cover = 0
+        val follow = ArrayList<RecyclerView>()
+        for (rv in lists?.invoke().orEmpty()) {
+            val left = if (from > 0 && rv.isLaidOut && rv.canScrollVertically(-1)) leftToScroll(rv) else null
+            if (left != null && left < from) follow += rv else pad(rv, 0)
+        }
+        if (follow.isEmpty()) return
+        giving = android.animation.ValueAnimator.ofInt(from, 0).apply {
+            duration = ms
+            interpolator = Motion.exit
+            addUpdateListener { v -> for (rv in follow) pad(rv, v.animatedValue as Int) }
+            start()
+        }
+    }
+
+    /** 3.0.11: how far [rv] can still scroll down (px) while its last row is on show; null when that is further away. */
+    private fun leftToScroll(rv: RecyclerView): Int? {
+        val n = rv.adapter?.itemCount ?: return null
+        if (n == 0) return 0
+        val last = rv.findViewHolderForAdapterPosition(n - 1)?.itemView ?: return null
+        val bottom = rv.layoutManager?.getDecoratedBottom(last) ?: last.bottom
+        return bottom - (rv.height - rv.paddingBottom)
     }
 
     /** [part] of the bar comes in; while the bar itself is already up, with a short fade. */

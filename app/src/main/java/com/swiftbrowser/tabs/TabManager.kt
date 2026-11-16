@@ -825,7 +825,27 @@ object TabManager {
      * 3.0: when they can't all be read (one too big for Android 7, a picture's data: address closed
      * before 3.0; this closed Swift), the others, without what is too long to read back.
      */
-    fun recentlyClosed(profileId: Long): List<ClosedTabRow> = try {
+    fun recentlyClosed(profileId: Long): List<ClosedTabRow> {
+        val rows = readRecentlyClosed(profileId)
+        // 3.0.12: a list being cleared (its Undo still showing) reads as empty; tabs closed since still show.
+        val cut = closedClearedAt[profileId] ?: return rows
+        return rows.filter { it.closedAt > cut }
+    }
+
+    /**
+     * 3.0.12: "Clear this list" with an Undo instead of a question first: the list is hidden now
+     * ([recentlyClosed]) and cleared up to that moment once its message has gone
+     * ([clearRecentlyClosed] with the returned time), or shown again by [unhideRecentlyClosed].
+     */
+    private val closedClearedAt = java.util.concurrent.ConcurrentHashMap<Long, Long>()
+
+    fun hideRecentlyClosed(profileId: Long): Long = System.currentTimeMillis().also { closedClearedAt[profileId] = it }
+
+    fun unhideRecentlyClosed(profileId: Long) {
+        closedClearedAt.remove(profileId)
+    }
+
+    private fun readRecentlyClosed(profileId: Long): List<ClosedTabRow> = try {
         db.closedTabList(profileId, CLOSED_KEEP)
     } catch (e: Exception) {
         L.w("Couldn't read the recently closed tabs at once (${e.javaClass.simpleName})")
@@ -859,8 +879,12 @@ object TabManager {
         return tab
     }
 
-    fun clearRecentlyClosed(profileId: Long) {
-        io.safe("clear the recently closed tabs") { db.clearClosedTabs(profileId) }
+    /** [upTo]: only tabs closed until then (3.0.12: the moment "Clear this list" was tapped, see [hideRecentlyClosed]). */
+    fun clearRecentlyClosed(profileId: Long, upTo: Long = Long.MAX_VALUE) {
+        io.safe("clear the recently closed tabs") {
+            if (upTo == Long.MAX_VALUE) db.clearClosedTabs(profileId) else db.deleteClosedTabsSince(profileId, 0L, upTo)
+            closedClearedAt.remove(profileId, upTo)
+        }
     }
 
     private fun nextAfterClosing(tab: Tab): Tab {

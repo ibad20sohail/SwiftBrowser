@@ -280,10 +280,14 @@ class PlaylistActivity : ListActivity() {
         }
         if (missing > 0) actions += Sheets.Action(R.drawable.ic_close, if (missing == 1) "Take out the missing song" else "Take out the $missing missing songs") { removeMissing() }
         actions += Sheets.Action(R.drawable.ic_delete, "Delete playlist", danger = true) {
-            Dialogs.confirm(this, "Delete “${p.name}”?", "The songs stay on your phone.", "Delete", danger = true) {
-                Playlists.delete(this, p.id)
-                finish()
+            // 3.0.12: no question first: deleted at once, and the screen this goes back to offers Undo.
+            Playlists.delete(this, p.id)?.let { (gone, at) ->
+                Messages.later("Deleted the playlist “${gone.name}”", "Undo") { screen ->
+                    Playlists.putBack(screen, gone, at)
+                    (screen as? FilesActivity)?.playlistsChanged()
+                }
             }
+            finish()
         }
         Sheets.actions(this, p.name, PlaylistRules.songsText(p.songs.size, missing), actions, iconRes = R.drawable.ic_queue_music)
     }

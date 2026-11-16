@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 3.0.12: Android 12 and later always show a start screen of their own when Swift is opened from
+         the home screen (windowDisablePreview counts only for other starts). It is made like Swift's
+         own: the background, and the logo in the same place and size (splash_logo), so Swift's takes
+         over from it without a different picture jumping into it. -->
+    <style name="Theme.Swift.Launch">
+        <item name="android:windowDisablePreview">true</item>
+        <item name="android:windowSplashScreenBackground">@color/page_bg</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/splash_logo</item>
+    </style>
+
+    <!-- The light and the dark one, chosen by Swift's own look for the next start (Android 13+:
+         SplashScreen.setSplashScreenTheme), whatever the phone's own look is. -->
+    <style name="Theme.Swift.Launch.Light">
+        <item name="android:windowSplashScreenBackground">@color/splash_light_bg</item>
+    </style>
+
+    <style name="Theme.Swift.Launch.Dark">
+        <item name="android:windowSplashScreenBackground">@color/splash_dark_bg</item>
+    </style>
+</resources>

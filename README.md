@@ -5,12 +5,12 @@ ad-heavy sites on older phones, and runs on Android 7 and newer.
 
 ## Download
 
-Swift 3.0.11 for Android 7 and newer comes in two files:
+Swift 3.0.12 for Android 7 and newer comes in two files:
 
-- **[Swift-64bit-3.0.11.apk](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v3.0.11/Swift-64bit-3.0.11.apk)**
+- **[Swift-64bit-3.0.12.apk](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v3.0.12/Swift-64bit-3.0.12.apk)**
   (64-bit ARM, about 202 MB): for newer phones, and for any phone that says Swift "isn't compatible
   with the latest version of Android".
-- **[Swift-3.0.11.apk](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v3.0.11/Swift-3.0.11.apk)**
+- **[Swift-3.0.12.apk](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v3.0.12/Swift-3.0.12.apk)**
   (32-bit ARM, about 165 MB): for older phones, such as those with 2 GB of memory.
 
 Either installs over an earlier Swift and keeps tabs and settings. Swift can also update itself
@@ -66,7 +66,7 @@ are attached to the releases because GitHub doesn't accept files over 100 MB in 
   data. **Dark pages on every site** (Settings → Look & screen) turns all sites dark at once; a site's
   own switch can keep it light.
 - **History** by day, with search and Delete day. **Bookmarks** with folders, search, and import from
-  and export to Chrome or Firefox. Removing things can be undone for a few seconds.
+  and export to Chrome or Firefox. Removing things can be undone while its message shows.
 - **Save offline** (a page as a PDF), **Add to Home screen**, **Scan QR codes**, **pull down to
   refresh**, **swipe from the edges** to go back and forward, **zoom** even on sites that turn it
   off, a text size for all sites or each one, and pages that load again by themselves when the

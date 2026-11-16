@@ -91,11 +91,14 @@ class CleanerActivity : ListActivity() {
         list.adapter = adapter
         list.itemAnimator = Motion.listAnimator()
         buildBar()
-        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+        val back = object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 if (shown != null) showSummary(Motion.BACK) else finish()
             }
-        })
+        }
+        onBackPressedDispatcher.addCallback(this, back)
+        // 3.0.12: leaving the cleaner is Android's own Back, with its preview (14+).
+        PredictiveBack.follow(this, back) { shown != null }
         showSpace()
         // Turned sideways: what was found stays (a walk still running starts again).
         val kept = if (savedInstanceState != null) lastResults else null

@@ -92,6 +92,9 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var container: FrameLayout
     private var topic: Topic? = null
 
+    /** 3.0.12: how far the main page was scrolled when a topic opened (see [show]). */
+    private var mainScrollY = 0
+
     /** Bring the rows on screen up to date after something changed (one change can affect others). */
     private val refreshers = ArrayList<() -> Unit>()
     private val resultRefreshers = ArrayList<() -> Unit>()
@@ -155,7 +158,7 @@ class SettingsActivity : AppCompatActivity() {
         savedInstanceState?.getInt(STATE_SCROLL, 0)?.takeIf { it > 0 }?.let { y ->
             (container.getChildAt(0) as? ScrollView)?.let { page -> page.post { page.scrollTo(0, y) } }
         }
-        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+        val back = object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 // A search is cleared first (2.6).
                 val box = settingsSearch
@@ -167,7 +170,12 @@ class SettingsActivity : AppCompatActivity() {
                     else -> finish()
                 }
             }
-        })
+        }
+        onBackPressedDispatcher.addCallback(this, back)
+        // 3.0.12: leaving Settings is Android's own Back, with its preview of the screen below (14+).
+        PredictiveBack.follow(this, back) {
+            (topic != null && !intent.getBooleanExtra(EXTRA_ONLY, false)) || settingsSearch?.text?.isNotEmpty() == true
+        }
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -237,6 +245,9 @@ class SettingsActivity : AppCompatActivity() {
 
     private fun show(t: Topic?, animate: Boolean = true) {
         val forward = t != null
+        // 3.0.12: the main page keeps its place: scrolled where it was when a topic opened, back from it.
+        if (topic == null && t != null) (container.getChildAt(container.childCount - 1) as? ScrollView)?.let { mainScrollY = it.scrollY }
+        val backToMain = topic != null && t == null
         topic = t
         refreshers.clear()
         resultRefreshers.clear()
@@ -258,6 +269,10 @@ class SettingsActivity : AppCompatActivity() {
         while (container.childCount > 1) container.removeViewAt(0)
         val old = container.getChildAt(0)
         container.addView(page)
+        if (backToMain && mainScrollY > 0) {
+            val y = mainScrollY
+            page.post { page.scrollTo(0, y) }
+        }
         // The search box waits for a tap rather than taking the focus (and a blinking cursor).
         container.isFocusableInTouchMode = true
         container.requestFocus()
@@ -1800,10 +1815,25 @@ class SettingsActivity : AppCompatActivity() {
             setPadding(dp(16), dp(8), dp(16), 0)
             addView(com.google.android.material.button.MaterialButton(this@SettingsActivity, null, androidx.appcompat.R.attr.borderlessButtonStyle).apply {
                 text = "Reset"
+                // 3.0.12: no question first: it resets at once and the button offers Undo for a few seconds
+                // (a message would be hidden under this sheet).
+                var undo: ToolbarButtons.Layout? = null
+                val settle = Runnable {
+                    undo = null
+                    Motion.swapText(this, "Reset")
+                }
                 setOnClickListener {
-                    Dialogs.confirm(this@SettingsActivity, "Reset the address bar buttons?", "They go back to Swift's own choice and order.", "Reset") {
-                        editor.reset()
+                    removeCallbacks(settle)
+                    val before = undo
+                    if (before != null) {
+                        editor.restore(before)
+                        settle.run()
+                        return@setOnClickListener
                     }
+                    undo = editor.reset() ?: return@setOnClickListener
+                    Haptics.tick(this)
+                    Motion.swapText(this, "Undo")
+                    postDelayed(settle, 6000)
                 }
             })
             addView(com.google.android.material.button.MaterialButton(this@SettingsActivity).apply {

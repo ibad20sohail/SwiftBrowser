@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 3.0.12: Swift's start-screen logo (Ui.logo in its default blue: the comet on a circle with a soft
+     diagonal gradient) as Android 12+ shows it on its own start screen. Android draws this icon
+     288 dp wide and shows only its middle, so the logo takes the middle third: 96 dp, as Swift's own
+     start screen draws it (StartScreen), in the same place, so one takes over from the other. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="288dp"
+    android:height="288dp"
+    android:viewportWidth="300"
+    android:viewportHeight="300">
+    <group
+        android:translateX="100"
+        android:translateY="100">
+        <path android:pathData="M50,0 A50,50 0,1 1,50 100 A50,50 0,1 1,50 0 Z">
+            <aapt:attr name="android:fillColor">
+                <gradient
+                    android:endX="100"
+                    android:endY="100"
+                    android:startX="0"
+                    android:startY="0"
+                    android:type="linear">
+                    <item android:color="#FF5A97FF" android:offset="0" />
+                    <item android:color="#FF1542C2" android:offset="1" />
+                </gradient>
+            </aapt:attr>
+        </path>
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M52.08,30.41 A14,14 0 1,1 71.33,49.66 C54.94,59.68 41.41,62.82 28.2,76.02 A1.8,1.8 0 0,1 25.72,73.55 C38.92,60.34 42.07,46.8 52.08,30.41 Z" />
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M36.31,30.24 A3.4,3.4 0 1,1 41.1,35.02 L24.27,49.04 A1.4,1.4 0 0,1 22.29,47.07 Z" />
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M66.65,60.73 A3.4,3.4 0 1,1 71.42,65.5 L58.88,75.24 A1.4,1.4 0 0,1 56.91,73.27 Z" />
+    </group>
+</vector>

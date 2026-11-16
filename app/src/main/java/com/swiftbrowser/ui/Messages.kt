@@ -31,6 +31,46 @@ object Messages {
     private val mainHandler = Handler(Looper.getMainLooper())
     private var current: Pill? = null
 
+    /**
+     * 3.0.12: Android 13 and later show their own "Copied" whenever something goes on the clipboard,
+     * so Swift's would be a second one: Swift says it only on older Androids.
+     */
+    val saysCopied: Boolean get() = android.os.Build.VERSION.SDK_INT < 33
+
+    /** 3.0.12: a message waiting for the next screen (see [later]). */
+    private class Waiting(
+        val text: CharSequence,
+        val action: String?,
+        val at: Long,
+        val onDismiss: (() -> Unit)?,
+        val onAction: ((Activity) -> Unit)?,
+    )
+
+    private var waiting: Waiting? = null
+
+    /**
+     * 3.0.12: a message for the screen that comes up next, for a screen that closes itself (a
+     * playlist deleted from its own screen offers its Undo where you land). [onAction] gets that screen.
+     * Not shown if no screen comes up within a few seconds ([onDismiss] then runs).
+     */
+    fun later(text: CharSequence, action: String? = null, onDismiss: (() -> Unit)? = null, onAction: ((Activity) -> Unit)? = null) {
+        waiting = Waiting(text, action, android.os.SystemClock.uptimeMillis(), onDismiss, onAction)
+    }
+
+    /** Called as each of Swift's screens comes up (SwiftApp): a [later] message shows there. */
+    fun showWaiting(activity: Activity) {
+        val w = waiting ?: return
+        waiting = null
+        if (android.os.SystemClock.uptimeMillis() - w.at > LATER_MS) {
+            w.onDismiss?.invoke()
+            return
+        }
+        val act = w.onAction
+        show(activity, w.text, w.action, onDismiss = w.onDismiss, onAction = act?.let { f -> { f(activity) } })
+    }
+
+    private const val LATER_MS = 3000L
+
     /** A message that stays until it is dismissed, and can change its text and progress. */
     class Handle internal constructor(private val pill: Pill) {
         fun setText(text: CharSequence) {

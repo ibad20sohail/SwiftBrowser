@@ -196,6 +196,7 @@ class TabSwitcherView @JvmOverloads constructor(
      * coordinates): its picture shrinks from there into its card.
      */
     fun open(incognito: Boolean, page: Rect? = null) {
+        placeBars()
         showingIncognito = incognito
         closing = false
         mode = Mode.GRID
@@ -222,6 +223,39 @@ class TabSwitcherView @JvmOverloads constructor(
         }
         val tab = TabManager.current
         if (page != null && tab != null) post { zoom(tab, page, intoCard = true) }
+    }
+
+    /** 3.0.12: the grid's own bars are at the bottom, near the thumb, when the address bar is (see [placeBars]). */
+    private var barsAtBottom = false
+
+    /**
+     * 3.0.12: with the address bar at the bottom, the grid's bar (new tab, search, tabs or incognito)
+     * and a group's or the search's bar go under the grid too; the grid's spare room moves to its top.
+     */
+    private fun placeBars() {
+        val bottom = SwiftApp.prefs.toolbarAtBottom
+        if (bottom == barsAtBottom) return
+        barsAtBottom = bottom
+        val column = header.parent as ViewGroup
+        column.removeView(header)
+        column.removeView(subheader)
+        if (bottom) {
+            column.addView(subheader)
+            column.addView(header)
+        } else {
+            column.addView(header, 0)
+            column.addView(subheader, 1)
+        }
+        val d = resources.displayMetrics.density
+        grid.setPadding(grid.paddingLeft, ((if (bottom) 12 else 2) * d).toInt(), grid.paddingRight, ((if (bottom) 8 else 24) * d).toInt())
+        setBottomShift(0f)
+    }
+
+    /** 3.0.12: the keyboard moved the bottom of the screen (MainActivity's BottomGlide): bars at the bottom ride with it. */
+    fun setBottomShift(y: Float) {
+        val t = if (barsAtBottom) y else 0f
+        header.translationY = t
+        subheader.translationY = t
     }
 
     /** Closes the grid; with [page], the chosen tab's picture grows from its card to there. */

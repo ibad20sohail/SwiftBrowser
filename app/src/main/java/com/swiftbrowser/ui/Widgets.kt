@@ -4,6 +4,7 @@ import android.animation.ValueAnimator
 import android.app.Activity
 import android.content.Context
 import android.graphics.Canvas
+import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.RectF
 import android.view.View
@@ -119,10 +120,22 @@ object SystemBars {
         // for a moment as Settings or Files opened.
         if (SwiftApp.prefs.fullScreen && wanted()) apply(a)
         val check = object : Runnable {
+            /** The keyboard was up at the last look. */
+            private var typing = false
+
             override fun run() {
                 if (!SwiftApp.prefs.fullScreen || a.isFinishing || !a.hasWindowFocus() || !wanted()) return
                 if (ViewCompat.getRootWindowInsets(decor)?.isVisible(WindowInsetsCompat.Type.ime()) == true) {
-                    decor.postDelayed(this, RECHECK_MS)
+                    // 3.0.12: looked at often while typing, so the bars go as soon as the keyboard has
+                    // (they stayed up to 2 s after it, then the screen moved).
+                    typing = true
+                    decor.postDelayed(this, TYPING_RECHECK_MS)
+                    return
+                }
+                if (typing) {
+                    // The keyboard has just gone: a moment for it to slide away first.
+                    typing = false
+                    decor.postDelayed(this, KEYBOARD_GONE_MS)
                     return
                 }
                 apply(a)
@@ -176,8 +189,12 @@ object SystemBars {
         }
     }
 
-    /** How soon the bars go again once nothing needs them (and how often that is checked while typing). */
+    /** How soon the bars go again once nothing needs them (a dialog brought them back, say). */
     private const val RECHECK_MS = 900L
+
+    /** 3.0.12: how often the keyboard is looked at while it is up, and how long after it went the bars go. */
+    private const val TYPING_RECHECK_MS = 150L
+    private const val KEYBOARD_GONE_MS = 200L
 
     /** 3.0.11: the most the screen glides when the bars come or go (the status bar's height and some); more is something else. */
     private const val GLIDE_MAX_DP = 80
@@ -299,6 +316,72 @@ class TopCropImageView @JvmOverloads constructor(
     }
 }
 
+/**
+ * 3.0.12: predictive back (Android 14 and later show where a back swipe leads while the finger
+ * moves: the screen below, or the home screen). Android can only show that when no Back of Swift's
+ * own is waiting, so a screen's own Back ([callback]) is on only while [hasOwn] says it has something
+ * of its own to close or step back through; otherwise Android leaves the screen itself, with that
+ * preview. Looked at before each frame (a few cheap checks), so it is right whenever the screen
+ * changes. Below Android 13 nothing changes: the callback stays on, as it always was.
+ */
+object PredictiveBack {
+    fun follow(a: Activity, callback: androidx.activity.OnBackPressedCallback, hasOwn: () -> Boolean) {
+        if (android.os.Build.VERSION.SDK_INT < 33) return
+        a.window.decorView.viewTreeObserver.addOnPreDrawListener {
+            val own = hasOwn()
+            if (callback.isEnabled != own) callback.isEnabled = own
+            true
+        }
+    }
+}
+
+/**
+ * 3.0.12: what sits at the bottom of a screen rides with the keyboard instead of jumping. When [root]
+ * gets shorter or taller (the keyboard opening or closing, Android's bars coming back in full screen),
+ * [shift] is given how far its bottom moved, eased back to 0 over the next moments, to add to the
+ * place of whatever is at the bottom (the address bar, the find bar): it is drawn where it was and
+ * glides to where it now belongs. Only where it is drawn changes (nothing is laid out again). Not for a
+ * turn of the phone (the width changes) nor with Android's animations off. SystemBars.glide does the
+ * same for the top of the screen.
+ */
+class BottomGlide(private val root: View, private val shift: (Float) -> Unit) {
+    private var lastHeight = 0
+    private var lastWidth = 0
+    private var slide: ValueAnimator? = null
+
+    /** How far from its place the bottom is drawn now (0 when settled). */
+    var offset = 0f
+        private set
+
+    init {
+        root.viewTreeObserver.addOnPreDrawListener {
+            val h = root.height
+            val w = root.width
+            val moved = h - lastHeight
+            if (lastHeight != 0 && moved != 0 && w == lastWidth && Motion.enabled(root.context)) {
+                slide?.cancel()
+                // Taller (the keyboard went): the bottom moved down, so it is drawn that much higher.
+                val from = offset - moved
+                set(from)
+                slide = ValueAnimator.ofFloat(from, 0f).apply {
+                    duration = Motion.NORMAL
+                    interpolator = Motion.standard
+                    addUpdateListener { set(it.animatedValue as Float) }
+                    start()
+                }
+            }
+            lastHeight = h
+            lastWidth = w
+            true
+        }
+    }
+
+    private fun set(y: Float) {
+        offset = y
+        shift(y)
+    }
+}
+
 /** The light vibration (Settings → Look & screen → Light vibration), whatever the phone's touch-vibration setting. */
 /**
  * 3.0.3: a thin ring around a toolbar button (the menu's) while downloads run: filled as far as they
@@ -375,6 +458,114 @@ class ProgressRing(ctx: Context) : android.graphics.drawable.Drawable() {
 
     @Suppress("OVERRIDE_DEPRECATION")
     override fun getOpacity(): Int = android.graphics.PixelFormat.TRANSLUCENT
+}
+
+/**
+ * 3.0.12: the one look of Swift's progress bars (the page's loading line, downloads, Files' jobs, the
+ * player's level): a rounded bar, a small gap, then the rest of the way as a faint rounded track, as in
+ * Material's current bars and Chrome's loading line. Drawn from the bar's level in the bar's own tint
+ * (progressTintList), so a site's colours, incognito or a paused download's grey still apply; the
+ * bar's progressBackgroundTintList, when set, colours the track. Give a bar this look with [apply].
+ */
+class ProgressLine private constructor(ctx: Context) : android.graphics.drawable.Drawable() {
+    private val gap = 4f * ctx.resources.displayMetrics.density
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val box = RectF()
+    private val fallback = Ui.accent(ctx)
+    private var tint: android.content.res.ColorStateList? = null
+    private var trackTint: android.content.res.ColorStateList? = null
+    private var alpha = 255
+
+    override fun onLevelChange(level: Int): Boolean {
+        invalidateSelf()
+        return true
+    }
+
+    override fun draw(canvas: Canvas) {
+        val b = bounds
+        if (b.width() <= 0 || b.height() <= 0) return
+        val h = b.height().toFloat()
+        val r = h / 2f
+        val f = (level / 10000f).coerceIn(0f, 1f)
+        val colour = tint?.getColorForState(state, tint!!.defaultColor) ?: fallback
+        val track = trackTint?.let { it.getColorForState(state, it.defaultColor) } ?: ColorUtils.setAlphaComponent(colour, 64)
+        val save = canvas.save()
+        if (layoutDirection == View.LAYOUT_DIRECTION_RTL) canvas.scale(-1f, 1f, b.exactCenterX(), b.exactCenterY())
+        // A sliver of a start still shows as a dot, never as a squashed oval.
+        val end = if (f > 0f) b.left + maxOf(b.width() * f, h) else b.left.toFloat()
+        if (f < 1f) {
+            val from = if (f > 0f) end + gap else b.left.toFloat()
+            if (from < b.right) {
+                paint.color = track
+                paint.alpha = Color.alpha(track) * alpha / 255
+                box.set(from, b.top.toFloat(), b.right.toFloat(), b.bottom.toFloat())
+                canvas.drawRoundRect(box, r, r, paint)
+            }
+        }
+        if (f > 0f) {
+            paint.color = colour
+            paint.alpha = Color.alpha(colour) * alpha / 255
+            box.set(b.left.toFloat(), b.top.toFloat(), minOf(end, b.right.toFloat()), b.bottom.toFloat())
+            canvas.drawRoundRect(box, r, r, paint)
+        }
+        canvas.restoreToCount(save)
+    }
+
+    override fun setTintList(tint: android.content.res.ColorStateList?) {
+        this.tint = tint
+        invalidateSelf()
+    }
+
+    override fun isStateful() = tint?.isStateful == true || trackTint?.isStateful == true
+
+    override fun onStateChange(state: IntArray): Boolean {
+        invalidateSelf()
+        return isStateful
+    }
+
+    override fun setAlpha(alpha: Int) {
+        this.alpha = alpha
+        invalidateSelf()
+    }
+
+    override fun setColorFilter(colorFilter: android.graphics.ColorFilter?) {
+        paint.colorFilter = colorFilter
+    }
+
+    @Suppress("OVERRIDE_DEPRECATION")
+    override fun getOpacity(): Int = android.graphics.PixelFormat.TRANSLUCENT
+
+    /** The track layer: draws nothing, passes the bar's background tint on to the line. */
+    private class TrackTint(private val line: ProgressLine) : android.graphics.drawable.Drawable() {
+        override fun setTintList(tint: android.content.res.ColorStateList?) {
+            line.trackTint = tint
+            line.invalidateSelf()
+        }
+
+        override fun draw(canvas: Canvas) = Unit
+        override fun setAlpha(alpha: Int) = Unit
+        override fun setColorFilter(colorFilter: android.graphics.ColorFilter?) = Unit
+
+        @Suppress("OVERRIDE_DEPRECATION")
+        override fun getOpacity(): Int = android.graphics.PixelFormat.TRANSPARENT
+    }
+
+    companion object {
+        /**
+         * Gives [bar] this look. Its three layers carry ProgressBar's ids, so the bar sets the line's
+         * level and its tints (a missing secondary layer would make the bar reset the line's level).
+         */
+        fun apply(bar: android.widget.ProgressBar) {
+            val line = ProgressLine(bar.context)
+            val layers = android.graphics.drawable.LayerDrawable(
+                arrayOf(TrackTint(line), android.graphics.drawable.ColorDrawable(Color.TRANSPARENT), line),
+            )
+            layers.setId(0, android.R.id.background)
+            layers.setId(1, android.R.id.secondaryProgress)
+            layers.setId(2, android.R.id.progress)
+            bar.progressDrawable = layers
+        }
+    }
 }
 
 object Haptics {

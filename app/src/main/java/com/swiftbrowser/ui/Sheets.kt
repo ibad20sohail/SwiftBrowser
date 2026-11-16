@@ -1194,11 +1194,11 @@ object Sheets {
             list.adapter = adapter
             col.addView(list)
             col.addView(row(a, R.drawable.ic_delete, "Clear this list", danger = true) {
-                // 3.0.10: the sheet stays behind the question, so Cancel brings you back to it.
-                Dialogs.confirm(a, "Clear recently closed tabs?", "They can't be opened again from here.", "Clear", danger = true) {
-                    dialog.dismiss()
-                    TabManager.clearRecentlyClosed(pid)
-                    a.snack("Recently closed tabs cleared")
+                // 3.0.12: no question first: cleared at once, with an Undo for as long as its message shows.
+                dialog.dismiss()
+                val at = TabManager.hideRecentlyClosed(pid)
+                a.undoSnack("Recently closed tabs cleared", undo = { TabManager.unhideRecentlyClosed(pid) }) {
+                    TabManager.clearRecentlyClosed(pid, upTo = at)
                 }
             })
             dialog = sheet(a, col)

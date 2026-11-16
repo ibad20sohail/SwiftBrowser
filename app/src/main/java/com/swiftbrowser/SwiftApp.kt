@@ -99,6 +99,8 @@ class SwiftApp : Application() {
             // 3.0.10: the screen on show, whose picture fades into its new colours (ThemeFade).
             override fun onActivityResumed(activity: Activity) {
                 com.swiftbrowser.ui.ThemeFade.shown = java.lang.ref.WeakReference(activity)
+                // 3.0.12: a message left for the next screen by one that closed itself (Messages.later).
+                com.swiftbrowser.ui.Messages.showWaiting(activity)
             }
 
             override fun onActivityPaused(activity: Activity) {

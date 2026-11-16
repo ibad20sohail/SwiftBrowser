@@ -120,9 +120,54 @@ object Looks {
     /** Every screen calls this in onCreate, before its views are made. */
     fun apply(activity: Activity) {
         activity.theme.applyStyle(accent.overlay, true)
+        val bg = Palette.color(activity, R.color.page_bg)
         // The window behind the screen in the chosen background (2.3), so nothing flashes the default.
-        activity.window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Palette.color(activity, R.color.page_bg)))
+        activity.window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(bg))
+        // 3.0.12: Swift's card in the recent apps screen in it too, and Android's own bottom bar once
+        // the screen's window is made (this comes before it), unless the screen has painted its own by then.
+        paintTaskCard(activity, bg)
+        navPainted.remove(activity)
+        android.os.Handler(android.os.Looper.getMainLooper()).post {
+            if (!activity.isDestroyed && !navPainted.containsKey(activity)) paintNavigationBar(activity, bg)
+        }
     }
+
+    /** The screens that have painted Android's bottom bar themselves (see [apply]). */
+    private val navPainted = java.util.WeakHashMap<Activity, Boolean>()
+
+    /**
+     * 3.0.12: Android's own bottom bar (back, home) in [colour] instead of always black, its buttons
+     * dark on a light colour. Before Android 8.1 its buttons are always white, so there a light colour
+     * stays black. The buttons' shade is only told to Android when it changes.
+     */
+    @Suppress("DEPRECATION")
+    fun paintNavigationBar(activity: Activity, colour: Int) {
+        navPainted[activity] = true
+        val w = activity.window
+        val light = androidx.core.graphics.ColorUtils.calculateLuminance(colour) > 0.5
+        if (android.os.Build.VERSION.SDK_INT < 27) {
+            w.navigationBarColor = if (light) Color.BLACK else colour
+            return
+        }
+        w.navigationBarColor = colour
+        val bars = androidx.core.view.WindowCompat.getInsetsController(w, w.decorView)
+        if (bars.isAppearanceLightNavigationBars != light) bars.isAppearanceLightNavigationBars = light
+    }
+
+    /**
+     * 3.0.12: Swift's card in the recent apps screen headed in [colour] (Android 7 and 8 show it as a
+     * coloured bar; it was the theme's fixed blue, also in the dark look). Told only when it changes.
+     */
+    fun paintTaskCard(activity: Activity, colour: Int) {
+        val opaque = androidx.core.graphics.ColorUtils.setAlphaComponent(colour, 255)
+        if (taskCards[activity] == opaque) return
+        taskCards[activity] = opaque
+        @Suppress("DEPRECATION")
+        activity.setTaskDescription(android.app.ActivityManager.TaskDescription(null, null as android.graphics.Bitmap?, opaque))
+    }
+
+    /** The colour each screen last gave its card (see [paintTaskCard]). */
+    private val taskCards = java.util.WeakHashMap<Activity, Int>()
 
     fun modeLabel(mode: Int) = when (mode) {
         DARK -> "Dark"

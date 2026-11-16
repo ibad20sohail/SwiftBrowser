@@ -157,11 +157,21 @@ class ToolbarEditor(private val a: Activity) : FrameLayout(a) {
         render()
     }
 
-    fun reset() {
+    /** Swift's own choice again; 3.0.12: returns what it replaced (for an Undo, [restore]), null if nothing changed. */
+    fun reset(): ToolbarButtons.Layout? {
+        val before = ToolbarButtons.Layout(layout.left.toMutableList(), layout.right.toMutableList())
         layout = ToolbarButtons.defaultLayout()
+        if (before.encode() == layout.encode()) return null
         ToolbarButtons.save(layout)
         say(null)
         render(animate = true)
+        return before
+    }
+
+    /** 3.0.12: the buttons as they were before a [reset] (its Undo). */
+    fun restore(l: ToolbarButtons.Layout) {
+        layout = ToolbarButtons.Layout(l.left.toMutableList(), l.right.toMutableList())
+        changed()
     }
 
     /** The usual hint, or a short warning in its place. */

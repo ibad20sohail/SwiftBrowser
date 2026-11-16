@@ -797,7 +797,7 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         }
         hudLevel = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
             max = 1000
-            progressDrawable = androidx.core.content.ContextCompat.getDrawable(this@PlayerActivity, R.drawable.progress_rounded)
+            ProgressLine.apply(this)
             // The dark look's accent: the box is dark also in the light look.
             progressTintList = ColorStateList.valueOf(Palette.colorFor(this@PlayerActivity, true, Looks.accent.primary))
             progressBackgroundTintList = ColorStateList.valueOf(0x55FFFFFF)
@@ -1368,7 +1368,8 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
     @Suppress("DEPRECATION")
     private fun setBarColours(colour: Int) {
         window.statusBarColor = colour
-        window.navigationBarColor = if (videoMode) Color.BLACK else colour
+        // 3.0.12: through Looks, so its buttons are dark on a light colour (and white again on black).
+        Looks.paintNavigationBar(this, if (videoMode) Color.BLACK else colour)
     }
 
     /** The cover above the titles upright; turned, side by side so both fit between the bars. */

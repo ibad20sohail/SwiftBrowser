@@ -161,6 +161,8 @@ class NetworkActivity : ListActivity() {
         list.itemAnimator = Motion.listAnimator()
         buildChrome()
         onBackPressedDispatcher.addCallback(this, back)
+        // 3.0.12: leaving from the list of computers is Android's own Back, with its preview (14+).
+        PredictiveBack.follow(this, back) { (loading && loadJob != null && shown().isEmpty()) || selected.isNotEmpty() || server != null }
         // Turned sideways: the same place, read again.
         val s = savedInstanceState?.getString(STATE_SERVER)?.let { NetServers.get(this, it) }
         if (s != null) {

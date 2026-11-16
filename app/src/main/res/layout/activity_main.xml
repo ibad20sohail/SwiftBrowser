@@ -121,7 +121,8 @@
                 android:paddingBottom="8dp"
                 android:visibility="gone" />
 
-            <ImageView
+            <!-- 3.0.12: Swift's shape loader (LoadingIndicator): still while pulled, moving while the page reloads. -->
+            <com.swiftbrowser.ui.LoadingIndicator
                 android:id="@+id/ptr_indicator"
                 android:layout_width="40dp"
                 android:layout_height="40dp"
@@ -130,10 +131,8 @@
                 android:background="@drawable/bg_ptr"
                 android:elevation="4dp"
                 android:importantForAccessibility="no"
-                android:padding="8dp"
-                android:src="@drawable/ic_refresh"
-                android:visibility="gone"
-                app:tint="?attr/colorPrimary" />
+                android:padding="7dp"
+                android:visibility="gone" />
 
             <TextView
                 android:id="@+id/hud"
@@ -347,66 +346,74 @@
             </FrameLayout>
         </FrameLayout>
 
-        <LinearLayout
-            android:id="@+id/find_bar"
+        <!-- 3.0.12: a plain frame around the find bar: it rides with the keyboard (BottomGlide)
+             while the bar itself fades in and out. -->
+        <FrameLayout
+            android:id="@+id/find_bar_box"
             android:layout_width="match_parent"
-            android:layout_height="@dimen/toolbar_height"
-            android:background="@color/toolbar_bg"
-            android:foregroundGravity="top|fill_horizontal"
-            android:gravity="center_vertical"
-            android:orientation="horizontal"
-            android:visibility="gone">
+            android:layout_height="wrap_content">
 
-            <EditText
-                android:id="@+id/find_edit"
-                android:layout_width="0dp"
-                android:layout_height="44dp"
-                android:layout_marginStart="10dp"
-                android:layout_weight="1"
-                android:background="@drawable/bg_url"
-                android:drawablePadding="10dp"
-                android:drawableTint="@color/text_secondary"
-                android:paddingStart="14dp"
-                android:paddingEnd="14dp"
-                android:hint="@string/find_hint"
-                android:imeOptions="actionSearch|flagNoExtractUi"
-                android:importantForAutofill="no"
-                android:inputType="text"
-                android:singleLine="true"
-                android:textColor="@color/text_primary"
-                android:textColorHint="@color/text_secondary"
-                android:textSize="@dimen/text_body" />
+            <LinearLayout
+                android:id="@+id/find_bar"
+                android:layout_width="match_parent"
+                android:layout_height="@dimen/toolbar_height"
+                android:background="@color/toolbar_bg"
+                android:foregroundGravity="top|fill_horizontal"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:visibility="gone">
 
-            <TextView
-                android:id="@+id/find_count"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="8dp"
-                android:layout_marginEnd="4dp"
-                android:fontFamily="sans-serif-medium"
-                android:fontFeatureSettings="tnum"
-                android:textColor="@color/text_secondary"
-                android:textSize="@dimen/text_caption" />
+                <EditText
+                    android:id="@+id/find_edit"
+                    android:layout_width="0dp"
+                    android:layout_height="44dp"
+                    android:layout_marginStart="10dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/bg_url"
+                    android:drawablePadding="10dp"
+                    android:drawableTint="@color/text_secondary"
+                    android:paddingStart="14dp"
+                    android:paddingEnd="14dp"
+                    android:hint="@string/find_hint"
+                    android:imeOptions="actionSearch|flagNoExtractUi"
+                    android:importantForAutofill="no"
+                    android:inputType="text"
+                    android:singleLine="true"
+                    android:textColor="@color/text_primary"
+                    android:textColorHint="@color/text_secondary"
+                    android:textSize="@dimen/text_body" />
 
-            <ImageButton
-                android:id="@+id/find_prev"
-                style="@style/Swift.ToolbarButton"
-                android:contentDescription="Previous"
-                android:src="@drawable/ic_up" />
+                <TextView
+                    android:id="@+id/find_count"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:layout_marginEnd="4dp"
+                    android:fontFamily="sans-serif-medium"
+                    android:fontFeatureSettings="tnum"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="@dimen/text_caption" />
 
-            <ImageButton
-                android:id="@+id/find_next"
-                style="@style/Swift.ToolbarButton"
-                android:contentDescription="Next"
-                android:src="@drawable/ic_down" />
+                <ImageButton
+                    android:id="@+id/find_prev"
+                    style="@style/Swift.ToolbarButton"
+                    android:contentDescription="Previous"
+                    android:src="@drawable/ic_up" />
 
-            <ImageButton
-                android:id="@+id/find_close"
-                style="@style/Swift.ToolbarButton"
-                android:layout_marginEnd="4dp"
-                android:contentDescription="Close"
-                android:src="@drawable/ic_close" />
-        </LinearLayout>
+                <ImageButton
+                    android:id="@+id/find_next"
+                    style="@style/Swift.ToolbarButton"
+                    android:contentDescription="Next"
+                    android:src="@drawable/ic_down" />
+
+                <ImageButton
+                    android:id="@+id/find_close"
+                    style="@style/Swift.ToolbarButton"
+                    android:layout_marginEnd="4dp"
+                    android:contentDescription="Close"
+                    android:src="@drawable/ic_close" />
+            </LinearLayout>
+        </FrameLayout>
     </LinearLayout>
 
     <!-- The tab grid, made the first time it opens (2.3). -->

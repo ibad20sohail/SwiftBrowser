@@ -53,6 +53,18 @@ class LoadingIndicator @JvmOverloads constructor(context: Context, attrs: Attrib
             invalidate()
         }
 
+    /**
+     * 3.0.12: a still shape (the cookie) instead of a moving one: pull to refresh turns it with the
+     * finger, then lets it move once the page reloads, going on from that same shape (no jump).
+     */
+    var still = false
+        set(v) {
+            if (field == v) return
+            field = v
+            if (!v) startedAt = AnimationUtils.currentAnimationTimeMillis() - LoadingShapes.STILL_MS
+            invalidate()
+        }
+
     init {
         // Read as loading, as Android's spinner was.
         if (contentDescription == null) contentDescription = "Loading"
@@ -88,7 +100,8 @@ class LoadingIndicator @JvmOverloads constructor(context: Context, attrs: Attrib
         val radius = side / 2 * if (container != 0) LoadingShapes.CONTAINED else LoadingShapes.FREE
         val now = AnimationUtils.currentAnimationTimeMillis()
         if (startedAt == 0L) startedAt = now
-        LoadingShapes.outline(if (animations) now - startedAt else LoadingShapes.STILL_MS, points)
+        val moving = animations && !still
+        LoadingShapes.outline(if (moving) now - startedAt else LoadingShapes.STILL_MS, points)
         // Smooth through the points: a curve from each point's middle to the next one's.
         path.rewind()
         val n = LoadingShapes.POINTS
@@ -107,7 +120,7 @@ class LoadingIndicator @JvmOverloads constructor(context: Context, attrs: Attrib
         }
         path.close()
         canvas.drawPath(path, shapePaint)
-        if (animations) postInvalidateOnAnimation()
+        if (moving) postInvalidateOnAnimation()
     }
 
     private companion object {

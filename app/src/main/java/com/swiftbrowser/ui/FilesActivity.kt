@@ -586,6 +586,10 @@ class FilesActivity : ListActivity() {
             Watched.isFinished(app, "", -1)
         }
         onBackPressedDispatcher.addCallback(this, back)
+        // 3.0.12: leaving Files from its start page is Android's own Back, with its preview (14+).
+        PredictiveBack.follow(this, back) {
+            archiveReading != null || query.isNotEmpty() || selected.isNotEmpty() || index != null || !home
+        }
         Volumes.refresh(this)
         needAccess = !hasAccess()
         // 2.9: things in the recycle bin past their time go for good (a quick look at its index).
@@ -1641,7 +1645,7 @@ class FilesActivity : ListActivity() {
     }
 
     /** 3.0.11: a playlist was made, changed or deleted: Music shows the playlists as they are now. */
-    private fun playlistsChanged() {
+    internal fun playlistsChanged() {
         for (p in shownPanes()) withPane(p) { if (category == FileIndex.Category.MUSIC && index == null && !loading) render() }
     }
 
@@ -5656,7 +5660,7 @@ internal object FileJobDialogs {
     /** A rounded bar with room for a thousand steps (a job's fraction, or a walk's). */
     fun bar(ctx: Context): ProgressBar = ProgressBar(ctx, null, android.R.attr.progressBarStyleHorizontal).apply {
         max = 1000
-        progressDrawable = ContextCompat.getDrawable(ctx, R.drawable.progress_rounded)
+        ProgressLine.apply(this)
         progressTintList = ColorStateList.valueOf(Ui.accent(ctx))
         indeterminateTintList = ColorStateList.valueOf(Ui.accent(ctx))
     }

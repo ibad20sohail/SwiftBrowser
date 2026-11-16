@@ -122,9 +122,12 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     private lateinit var crashView: View
     private lateinit var pageCover: View
     private lateinit var suggestionsList: RecyclerView
-    private lateinit var ptrIndicator: ImageView
+    private lateinit var ptrIndicator: LoadingIndicator
     private lateinit var hud: TextView
     private lateinit var findBar: View
+
+    /** 3.0.12: the frame around [findBar] that rides with the keyboard ([applyBottomShift]). */
+    private lateinit var findBarBox: View
     private lateinit var findEdit: EditText
     private lateinit var findCount: TextView
     /** The tab grid: made the first time it opens (2.3), so starting Swift doesn't build it. */
@@ -193,6 +196,12 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     /** Which way the finger last moved the toolbar: -1 away, +1 back. */
     private var fingerDirection = 0
     private var toolbarShown = 0f
+
+    /** 3.0.12: how far from its place the bottom of the screen is still drawn while the keyboard comes or goes. */
+    private var bottomShift = 0f
+
+    /** 3.0.12: this screen was started from the launcher (its task's first intent), see [backStaysInSwift]. */
+    private var launcherStart = false
     private var toolbarWanted = true
     private var lastScrollY = -1f
     private var lastUserScrollAt = 0L
@@ -212,7 +221,6 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     private var pullArmed = false
     private var edgeArmed = false
     private var ptrStartedAt = 0L
-    private var ptrSpin: ObjectAnimator? = null
 
     private var pendingPermission: ((Boolean) -> Unit)? = null
     private var pendingFiles: ((List<Uri>?) -> Unit)? = null
@@ -307,6 +315,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         appliedColors = Palette.signature
         super.onCreate(savedInstanceState)
         prefs = SwiftApp.prefs
+        launcherStart = intent?.action == Intent.ACTION_MAIN && intent?.hasCategory(Intent.CATEGORY_LAUNCHER) == true
+        if (android.os.Build.VERSION.SDK_INT >= 31) handOverStartScreen()
         // Rebuilt (a dark mode switch, a change of colours): at once, as before. 3.0.5: only in a Swift
         // that is already running. When Android closed it in the background it comes back with saved
         // state too, and that is a real start, with the start screen.
@@ -331,6 +341,21 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         afterNextFrame { buildNow.run() }
         // Not drawn while the screen is off, say: built anyway.
         handler.postDelayed(buildNow, 1500)
+    }
+
+    /**
+     * 3.0.12: Android 12+ shows a start screen of its own first when Swift is opened from the home
+     * screen. values-v31 makes it like Swift's (its background, and the logo in the same place and
+     * size), so Swift's start screen simply takes over. From Android 13 the next start's one is also
+     * in Swift's own look (light or dark), whatever the phone's. (Not handed over with a fade:
+     * Android waits for Swift to take it, and Swift is busy building the browser right then, so it
+     * stayed up to 2 s with nothing said, instead of Swift's "Starting the browser...".)
+     */
+    @androidx.annotation.RequiresApi(31)
+    private fun handOverStartScreen() {
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            splashScreen.setSplashScreenTheme(if (prefs.darkMode) R.style.Theme_Swift_Launch_Dark else R.style.Theme_Swift_Launch_Light)
+        }
     }
 
     /**
@@ -383,9 +408,12 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             }
             result
         }
-        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+        val back = object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() = handleBack()
-        })
+        }
+        onBackPressedDispatcher.addCallback(this, back)
+        // 3.0.12: when Back would only send Swift away, Android 14+ does it with its home-screen preview.
+        PredictiveBack.follow(this, back) { backStaysInSwift() }
 
         // 2.8: documents have a screen of their own; their tabs from before go once (the documents
         // keep their place, in Documents and Continue).
@@ -708,11 +736,27 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         } else {
             val title = tab.title
             TabManager.io.execute { SwiftApp.db.addBookmark(pid, url, title) }
-            snack("Bookmarked")
+            // 3.0.12: its name, address and folder can be changed straight away, as Chrome offers.
+            snack("Bookmarked", "Edit") { editNewBookmark(pid, url) }
             extraButtons["bookmark"]?.tag = true
         }
         bookmarkShownFor = "$pid $url"
         updateToolbarExtras()
+    }
+
+    /** 3.0.12: the "Bookmarked" message's Edit: the bookmark just made (read after its saving, on the same thread). */
+    private fun editNewBookmark(pid: Long, url: String) {
+        TabManager.io.execute {
+            val row = SwiftApp.db.bookmark(pid, url)
+            runOnUiThread {
+                if (row == null || isFinishing) return@runOnUiThread
+                BookmarkEditor.edit(this, row, pid) {
+                    // A changed address may leave this page without its star.
+                    bookmarkShownFor = null
+                    updateToolbarExtras()
+                }
+            }
+        }
     }
 
     // ------------------------------------------------------------------ QR codes (2.2)
@@ -1074,7 +1118,6 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         handler.removeCallbacks(startupPageLimit)
         handler.removeCallbacks(startupPageStopped)
         com.swiftbrowser.core.GoogleAccounts.removeListener(accountListener)
-        ptrSpin?.cancel()
         AdBlock.removeListener(adListener)
         // 3.0: a tab being left lets its page rest now (its picture's answer would come to a screen that's gone).
         leavingDone?.invoke()
@@ -1148,6 +1191,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         homeBtn = findViewById(R.id.home_btn)
         tabsBtn = findViewById(R.id.tabs_btn)
         progress = findViewById(R.id.progress)
+        // 3.0.12: rounded, with a gap before the rest of the way (ProgressLine), like Swift's other bars.
+        ProgressLine.apply(progress)
         gestureLayer = findViewById(R.id.gesture_layer)
         gecko = findViewById(R.id.gecko)
         home = findViewById(R.id.home)
@@ -1159,8 +1204,11 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         // As the player's own gesture readout.
         hud.typeface = Ui.MEDIUM
         findBar = findViewById(R.id.find_bar)
+        findBarBox = findViewById(R.id.find_bar_box)
         findEdit = findViewById(R.id.find_edit)
         findCount = findViewById(R.id.find_count)
+        // 3.0.12: the bottom of the screen rides with the keyboard (see applyBottomShift).
+        BottomGlide(root) { applyBottomShift(it) }
         // Swift's own font on every Android (it takes the phone's place by itself only below Android 9).
         Ui.size(urlEdit, Ui.Type.BODY)
         Ui.size(findEdit, Ui.Type.BODY)
@@ -1872,7 +1920,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             if (progress.visibility != View.VISIBLE || progressEnding) return
             if (finished) {
                 progressEnding = true
-                glideProgress(100, 160)
+                // 3.0.12: the whole way (1000 of 1000; it said 100, a tenth, so the line faded wherever it was).
+                glideProgress(1000, 160)
                 progress.animate().alpha(0f).setStartDelay(160).setDuration(Motion.NORMAL).withEndAction { resetProgress() }.start()
             } else {
                 resetProgress()
@@ -2051,6 +2100,11 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     }
 
     /** The status bar's colour for the bar's [bar]: over a see-through bar, as the top of the picture is (it can't show the picture itself). */
+    /** 3.0.12: the colour of Android's bottom bar under the address bar: the bar's, solid (see-through over the home picture). */
+    private fun navColour(bar: Int): Int =
+        if (android.graphics.Color.alpha(bar) == 255) bar
+        else androidx.core.graphics.ColorUtils.compositeColors(bar, color(R.color.toolbar_bg))
+
     private fun statusColour(bar: Int): Int =
         if (android.graphics.Color.alpha(bar) == 255) bar
         else androidx.core.graphics.ColorUtils.compositeColors(bar, home.pictureTopColour() ?: color(R.color.toolbar_bg))
@@ -2071,6 +2125,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         val target = barColoursFor(tab, site)
         // The status bar's icons dark or light at once (changing them redraws the system's bars).
         val status = statusColour(target.bar)
+        // 3.0.12: Swift's card in the recent apps screen in the bar's colour (told once, at the new colour).
+        Looks.paintTaskCard(this, status)
         val dark = Contrast.ratio(BarTones.BLACK, status) > Contrast.ratio(BarTones.WHITE, status)
         if (dark != statusIconsDark) {
             statusIconsDark = dark
@@ -2099,6 +2155,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         toolbar.setBackgroundColor(c.bar)
         toolbarDivider.setBackgroundColor(c.line)
         window.statusBarColor = statusColour(c.bar)
+        // 3.0.12: Android's own bottom bar: under the address bar in its colour; under a page, Swift's background.
+        Looks.paintNavigationBar(this, if (bottomBar) navColour(c.bar) else color(R.color.page_bg))
         // 3.0.5: the picture's share behind a bar that isn't solid; nothing to draw behind a solid one.
         val behind = if (android.graphics.Color.alpha(c.bar) < 255) home.barPicture else null
         if (appBar.background !== behind) appBar.background = behind
@@ -3049,7 +3107,11 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         placeGroupStrip()
         // With the bar below, the best suggestion is the one next to it.
         (suggestionsList.layoutManager as? LinearLayoutManager)?.reverseLayout = bottomBar
+        // 3.0.12: nothing at the bottom carries the keyboard's glide on to the bar's new end.
+        if (!bottomBar) suggestionsList.translationY = 0f
         applyToolbarShown(toolbarShown)
+        // 3.0.12: Android's bottom bar takes the colour of what is now above it.
+        barShown?.let { paintBar(it) }
     }
 
     /** The new tab's cover and the next tab's picture (swiping the bar) cover the page: below the bar and the strip. */
@@ -3075,7 +3137,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         val bar = barPx
         if (shown >= bar) hiddenBySwipe = false
         if (bottomBar) {
-            appBar.translationY = bar - shown
+            // 3.0.12: plus how far the keyboard's coming or going still leaves it from its place.
+            appBar.translationY = bar - shown + bottomShift
             gestureLayer.translationY = 0f
         } else {
             appBar.translationY = shown - bar
@@ -3085,6 +3148,23 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         // The engine lays pages out for a fully shown toolbar (see setDynamicToolbarMaxHeight); a
         // negative clipping moves elements fixed to the bottom of the screen down by the hidden part.
         gecko.setVerticalClipping((shown - bar).roundToInt())
+    }
+
+    /**
+     * 3.0.12: the keyboard (or Android's bars) moved the bottom of the screen ([BottomGlide]): what sits
+     * at the bottom is drawn [y] from its new place, easing to 0, so it rides up with the keyboard and
+     * down again instead of jumping: the find bar always, and with the bar at the bottom the address
+     * bar, the group strip on it and the suggestions over it; the tab grid's own bars too.
+     */
+    private fun applyBottomShift(y: Float) {
+        bottomShift = y
+        findBarBox.translationY = y
+        if (bottomBar) {
+            appBar.translationY = barPx - toolbarShown + y
+            groupStrip?.translationY = appBar.translationY
+            suggestionsList.translationY = y
+        }
+        switcherView?.setBottomShift(y)
     }
 
     private fun showToolbar() = setToolbarWanted(true)
@@ -3362,9 +3442,9 @@ class MainActivity : AppCompatActivity(), BrowserUi {
                 val scale = 0.6f + 0.4f * (offset / trigger).coerceAtMost(1f)
                 ptrIndicator.scaleX = scale
                 ptrIndicator.scaleY = scale
-                ptrIndicator.imageTintList = ColorStateList.valueOf(
-                    color(if (offset >= trigger) Looks.accent.primary else R.color.text_secondary),
-                )
+                // 3.0.12: a still shape turned by the finger, grey until a let-go would reload.
+                ptrIndicator.still = true
+                ptrIndicator.colour = color(if (offset >= trigger) Looks.accent.primary else R.color.text_secondary)
                 if (offset >= trigger && !pullArmed) Haptics.tick(ptrIndicator)
                 pullArmed = offset >= trigger
             }
@@ -3386,15 +3466,10 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         val tab = current ?: return hidePullIndicator()
         ptrRefreshing = true
         ptrStartedAt = System.currentTimeMillis()
-        ptrIndicator.imageTintList = ColorStateList.valueOf(color(Looks.accent.primary))
+        ptrIndicator.colour = color(Looks.accent.primary)
         Motion.anim(ptrIndicator, Motion.SHORT).translationY(ptrHiddenY() + dp(56f)).scaleX(1f).scaleY(1f).alpha(1f).start()
-        ptrSpin?.cancel()
-        ptrSpin = ObjectAnimator.ofFloat(ptrIndicator, View.ROTATION, ptrIndicator.rotation, ptrIndicator.rotation + 360f).apply {
-            duration = 700
-            repeatCount = ValueAnimator.INFINITE
-            interpolator = LinearInterpolator()
-            start()
-        }
+        // 3.0.12: the shape moves (changes form and turns by itself) until the reload has started.
+        ptrIndicator.still = false
         handler.removeCallbacks(ptrTimeout)
         handler.postDelayed(ptrTimeout, 6000)
         shownLoading = false
@@ -3415,8 +3490,6 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     private fun cancelPullRefresh() {
         handler.removeCallbacks(ptrTimeout)
         ptrRefreshing = false
-        ptrSpin?.cancel()
-        ptrSpin = null
         ptrIndicator.animate().cancel()
         ptrIndicator.visibility = View.GONE
     }
@@ -3425,8 +3498,6 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         if (ptrIndicator.visibility != View.VISIBLE) return
         ptrIndicator.animate().cancel()
         Motion.anim(ptrIndicator, Motion.SHORT, Motion.exit).scaleX(0.3f).scaleY(0.3f).alpha(0f).withEndAction {
-            ptrSpin?.cancel()
-            ptrSpin = null
             if (!ptrRefreshing) ptrIndicator.visibility = View.GONE
         }.start()
     }
@@ -3872,7 +3943,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     fun copy(text: String) {
         val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         cm.setPrimaryClip(ClipData.newPlainText("link", text))
-        snack("Copied")
+        if (Messages.saysCopied) snack("Copied")
     }
 
     fun share(text: String) {
@@ -4243,6 +4314,25 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     }
 
     // ------------------------------------------------------------------ back button
+
+    /**
+     * 3.0.12: whether [handleBack] has something to do in Swift (everything but its last step,
+     * leaving Swift), for [PredictiveBack]. Kept to the same order and tests as handleBack.
+     */
+    private fun backStaysInSwift(): Boolean {
+        // Android sends Swift to the background on its own only when this screen was started from the
+        // launcher; started any other way (a link from another app, a shortcut) its Back would close
+        // the browser instead, so Swift's own Back stays (it sends Swift to the background too).
+        if (!launcherStart || !isTaskRoot) return true
+        val tab = current ?: return true
+        // The menu isn't made just to ask (it is made the first time it opens).
+        return (quickMenuLazy.isInitialized() && quickMenu.isOpen) || switcherOpen || fullscreenTab != null ||
+            findBar.visibility == View.VISIBLE || editing ||
+            tab.homeShown || TabManager.isRestoring(tab) || (tab.canGoBack && tab.session != null) ||
+            (tab.leftHome && !tab.isHome) ||
+            (tab.parentId != null && !tab.pinned && TabManager.tabs.any { it.id == tab.parentId }) ||
+            (tab.backTo != null && !tab.pinned)
+    }
 
     private fun handleBack() {
         val tab = current
@@ -4932,6 +5022,15 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
     fun snack(text: String, action: String? = null, long: Boolean = false, onAction: (() -> Unit)? = null) {
         Messages.show(this, text, action.takeIf { onAction != null }, long = long, bottomOffset = messageOffset(), onAction = onAction)
+    }
+
+    /** 3.0.12: a message with Undo; [commit] runs once it has gone (however it went) unless Undo was tapped. */
+    fun undoSnack(text: String, undo: () -> Unit, commit: () -> Unit) {
+        var undone = false
+        Messages.show(this, text, "Undo", bottomOffset = messageOffset(), onDismiss = { if (!undone) commit() }) {
+            undone = true
+            undo()
+        }
     }
 
     /** Messages sit above the address bar when it is at the bottom and showing (3.0.4: and the group strip above it). */

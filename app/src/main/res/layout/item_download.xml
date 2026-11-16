@@ -62,8 +62,7 @@
                     android:layout_height="4dp"
                     android:layout_marginTop="8dp"
                     android:indeterminateTint="?attr/colorPrimary"
-                    android:max="100"
-                    android:progressDrawable="@drawable/progress_rounded" />
+                    android:max="100" />
 
                 <TextView
                     android:id="@+id/dl_status"

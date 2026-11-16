@@ -299,12 +299,13 @@ object PasswordsUi {
         if (secret) clip.description.extras = android.os.PersistableBundle().apply { putBoolean("android.content.extra.IS_SENSITIVE", true) }
         cm.setPrimaryClip(clip)
         if (!secret) {
-            Messages.show(a, "$label copied")
+            if (Messages.saysCopied) Messages.show(a, "$label copied")
             return
         }
         val app = a.applicationContext
         main.postDelayed({ clearIfStill(app, text) }, CLIP_MS)
-        Messages.show(a, "$label copied. Swift takes it off the clipboard in 45 seconds.")
+        // 3.0.12: Android 13+ says "Copied" itself; what only Swift can say stays.
+        Messages.show(a, (if (Messages.saysCopied) "$label copied. " else "") + "Swift takes it off the clipboard in 45 seconds.")
     }
 
     private fun clearIfStill(ctx: Context, text: String) {

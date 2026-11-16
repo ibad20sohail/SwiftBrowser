@@ -24,6 +24,11 @@ object WhatsNew {
     private class Item(val icon: Int, val title: String, val text: String, val version: Int = 19)
 
     private val NEW = listOf(
+        Item(R.drawable.ic_refresh, "Smoother loading", "The loading line, downloads and Swift's other bars have rounded ends. Pulling a page down to reload shows Swift's moving shape.", version = 34),
+        Item(R.drawable.ic_tab, "A bar at the bottom", "With the address bar at the bottom, it rides up with the keyboard instead of jumping, and the tab grid's buttons are at the bottom too. In full screen, Android's bars go as soon as the keyboard does.", version = 34),
+        Item(R.drawable.ic_reopen, "Undo instead of questions", "Clearing recently closed tabs, deleting a playlist and resetting the address bar buttons happen at once, with Undo. Undo in History, Downloads and Bookmarks works for as long as its message shows. \"Bookmarked\" has an Edit button.", version = 34),
+        Item(R.drawable.ic_palette, "Swift's colours all the way", "Android's own bottom bar and Swift's card in the recent apps screen take Swift's colours. Settings keeps your place when you come back from a topic.", version = 34),
+        Item(R.drawable.ic_phone, "Newer phones", "Back swipes show where they lead (Android 14 and later), Android's own start screen looks like Swift's, so starting is one smooth step (Android 12 and later), and Android's own \"Copied\" isn't said twice (Android 13 and later).", version = 34),
         Item(R.drawable.ic_visibility, "Preview a link", "Hold a link and choose Preview: its page opens in a sheet over yours, without a new tab. Open in new tab keeps it.", version = 33),
         Item(R.drawable.ic_search, "Search a picture", "Hold a picture on a page and choose Search this picture to find where else it is and what it shows (Google Lens, or Bing's if Bing is your search engine).", version = 33),
         Item(R.drawable.ic_dark, "Dark pages on every site", "Settings → Look & screen → Dark pages on every site turns every site dark, not only the ones you chose; a site's own settings can keep it light.", version = 33),

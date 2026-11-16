@@ -263,7 +263,8 @@ open class MediaViewerActivity : AppCompatActivity(), Messages.DarkScreen {
     private fun blackBars() {
         // When Swift isn't full screen, the phone's bars match the picture's background.
         window.statusBarColor = Color.BLACK
-        window.navigationBarColor = Color.BLACK
+        // 3.0.12: through Looks, so the bar's buttons are white again (Looks.apply may have made them dark).
+        Looks.paintNavigationBar(this, Color.BLACK)
     }
 
     /** 3.0: what this screen won't show: see ViewerAccess. */

@@ -288,30 +288,21 @@ abstract class ListActivity : AppCompatActivity() {
      * it once the Undo is gone, [restore] puts it back when Undo is tapped.
      */
     protected fun removeLater(key: String, message: String, hide: () -> Unit, restore: () -> Unit, commit: () -> Unit) {
-        pending.remove(key)?.let {
-            handler.removeCallbacks(it)
-            it.run()
-        }
+        pending.remove(key)?.run()
         hide()
-        val r = Runnable {
-            pending.remove(key)
-            commit()
-        }
-        pending[key] = r
-        handler.postDelayed(r, UNDO_MS)
+        // 3.0.12: really removed once its message has gone (it waits while touched), not after a fixed
+        // 5.6 s: an Undo tapped later than that did nothing although the message still showed.
+        pending[key] = Runnable { commit() }
         Haptics.tick(list)
-        Messages.show(this, message, "Undo") {
-            handler.removeCallbacks(r)
+        Messages.show(this, message, "Undo", onDismiss = { pending.remove(key)?.run() }) {
             if (pending.remove(key) != null) restore()
         }
     }
 
     private fun flushRemovals() {
-        for ((_, r) in pending.toList()) {
-            handler.removeCallbacks(r)
-            r.run()
-        }
+        val all = pending.values.toList()
         pending.clear()
+        all.forEach { it.run() }
     }
 
     private val swipePaint = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -406,10 +397,6 @@ abstract class ListActivity : AppCompatActivity() {
         }
     }
 
-    private companion object {
-        /** A little longer than the Undo shows (Messages), so it can still be tapped at the end. */
-        const val UNDO_MS = 5600L
-    }
 }
 
 class HistoryActivity : ListActivity() {
@@ -894,96 +881,6 @@ class BookmarksActivity : ListActivity() {
         )
     }
 
-    /** The bookmark's name and its address. */
-    private fun editBookmark(r: BookmarkRow) {
-        val pad = Ui.dp(this, 24)
-        val name = EditText(this).apply {
-            hint = "Name"
-            setSingleLine()
-            setText(r.title)
-        }
-        val address = EditText(this).apply {
-            hint = "Address"
-            setSingleLine()
-            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_URI
-            setText(r.url)
-        }
-        Ui.field(name)
-        Ui.field(address)
-        val box = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            // Starts where the title does.
-            setPadding(pad, pad / 3, pad, 0)
-            addView(name, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-            addView(address, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                topMargin = Ui.dp(this@BookmarksActivity, Ui.S)
-            })
-        }
-        val dialog = MaterialAlertDialogBuilder(this)
-            .setTitle("Edit bookmark")
-            .setView(box)
-            .setPositiveButton("Save", null)
-            .setNegativeButton(android.R.string.cancel, null)
-            .showImmersive()
-        // A wrong address keeps the dialog open with what was typed (2.6).
-        val save = dialog.getButton(android.content.DialogInterface.BUTTON_POSITIVE)
-        save?.setOnClickListener {
-            val url = UrlUtils.toUrlOrSearch(address.text.toString())
-            if (!UrlUtils.isHttp(url) || UrlUtils.searchQuery(url) != null && !address.text.contains('.')) {
-                address.error = "That isn't a web address"
-                address.requestFocus()
-                return@setOnClickListener
-            }
-            save.isEnabled = false
-            val title = name.text.toString().trim()
-            lifecycleScope.launch {
-                // 3.0: an address another bookmark has can't be saved twice (it crashed Swift): the
-                // dialog stays open and says so.
-                val taken = withContext(Dispatchers.IO) {
-                    val db = SwiftApp.db
-                    !db.updateBookmark(r.id, title, url) && db.bookmark(Profiles.currentId, url)?.let { it.id != r.id } == true
-                }
-                if (taken) {
-                    save.isEnabled = true
-                    address.error = "That address is already bookmarked"
-                    address.requestFocus()
-                    return@launch
-                }
-                dialog.dismiss()
-                load()
-            }
-        }
-    }
-
-    /** Into a folder, a new one, or back to the top of the list. */
-    private fun moveToFolder(r: BookmarkRow) {
-        val names = folders().filter { it != r.folder }
-        val choices = (if (r.folder.isNotEmpty()) listOf("Top of the list") else emptyList()) + names + "New folder…"
-        MaterialAlertDialogBuilder(this)
-            .setTitle("Move to folder")
-            .setItems(choices.toTypedArray()) { _, which ->
-                val pick = choices[which]
-                when {
-                    which == choices.lastIndex -> Sheets.askText(this, "New folder", "Folder name", "") { name ->
-                        val n = name.trim().take(60)
-                        if (n.isNotEmpty()) setFolder(r, n)
-                    }
-                    pick == "Top of the list" && r.folder.isNotEmpty() && which == 0 -> setFolder(r, "")
-                    else -> setFolder(r, pick)
-                }
-            }
-            .setNegativeButton(android.R.string.cancel, null)
-            .showImmersive()
-    }
-
-    private fun setFolder(r: BookmarkRow, name: String) {
-        lifecycleScope.launch {
-            withContext(Dispatchers.IO) { SwiftApp.db.setBookmarkFolder(r.id, name) }
-            load()
-            Messages.show(this@BookmarksActivity, if (name.isEmpty()) "Moved to the top of the list" else "Moved to $name")
-        }
-    }
-
     private fun folderMenu(name: String) {
         Sheets.actions(
             this, name, null,
@@ -1015,10 +912,10 @@ class BookmarksActivity : ListActivity() {
             this, UrlUtils.readableTitle(r.title, r.url), UrlUtils.siteName(r.url),
             listOf(
                 Sheets.Action(R.drawable.ic_open_new, "New tab", primary = true) { openUrl(r.url, newTab = true) },
-                Sheets.Action(R.drawable.ic_edit, "Edit", primary = true) { editBookmark(r) },
+                Sheets.Action(R.drawable.ic_edit, "Edit", primary = true) { BookmarkEditor.edit(this, r, Profiles.currentId) { load() } },
                 Sheets.Action(R.drawable.ic_share, "Share", primary = true) { share(r.url) },
                 Sheets.Action(R.drawable.ic_copy, "Copy", primary = true) { copyText(this, r.url) },
-                Sheets.Action(R.drawable.ic_folder, "Move to folder") { moveToFolder(r) },
+                Sheets.Action(R.drawable.ic_folder, "Move to folder") { BookmarkEditor.moveToFolder(this, r, Profiles.currentId) { load() } },
                 Sheets.Action(R.drawable.ic_delete, "Remove bookmark", danger = true) { delete(r) },
             ),
             com.swiftbrowser.core.Favicons.cached(r.url), fullAddress = r.url,
@@ -1506,7 +1403,7 @@ class DownloadsActivity : ListActivity() {
     private inner class DownloadHolder(v: View) : RecyclerView.ViewHolder(v) {
         val icon: ImageView = v.findViewById(R.id.dl_icon)
         val name: TextView = v.findViewById(R.id.dl_name)
-        val progress: ProgressBar = v.findViewById(R.id.dl_progress)
+        val progress: ProgressBar = v.findViewById<ProgressBar>(R.id.dl_progress).also { ProgressLine.apply(it) }
         val status: TextView = v.findViewById(R.id.dl_status)
         val action: ImageButton = v.findViewById(R.id.dl_action)
         val more: ImageButton = v.findViewById(R.id.dl_more)
@@ -1955,6 +1852,7 @@ class DownloadsActivity : ListActivity() {
 fun copyText(ctx: Context, text: String) {
     val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
     cm.setPrimaryClip(android.content.ClipData.newPlainText("link", text))
+    if (!Messages.saysCopied) return
     val activity = ctx as? android.app.Activity
     if (activity is MainActivity) activity.snack("Copied")
     else if (activity != null) Messages.show(activity, "Copied")

@@ -8,6 +8,9 @@
 
     <color name="toolbar_bg">#FFFFFFFF</color>
     <color name="page_bg">#FFFFFFFF</color>
+    <!-- 3.0.12: page_bg of the light and the dark look, fixed (Android 13+'s start screen chosen by Swift's look). -->
+    <color name="splash_light_bg">#FFFFFFFF</color>
+    <color name="splash_dark_bg">#FF15171C</color>
     <color name="surface_alt">#FFEFF2F7</color>
     <color name="sheet_bg">#FFFFFFFF</color>
     <color name="text_primary">#FF1A1C21</color>

@@ -424,50 +424,6 @@
         android:layout_height="match_parent"
         android:layout="@layout/stub_tab_switcher" />
 
-    <!-- Shown when the app starts until the engine and the ad blocker are ready. -->
-    <FrameLayout
-        android:id="@+id/startup"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:background="@color/page_bg"
-        android:clickable="true"
-        android:elevation="20dp"
-        android:focusable="true"
-        android:visibility="gone">
-
-        <!-- Kept in the middle of the whole screen, as on the start screen (StartScreen.keepCentred). -->
-        <ImageView
-            android:id="@+id/startup_logo"
-            android:layout_width="96dp"
-            android:layout_height="96dp"
-            android:layout_gravity="center"
-            android:importantForAccessibility="no"
-            android:src="@drawable/ic_logo" />
-
-        <LinearLayout
-            android:id="@+id/startup_steps"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_gravity="center"
-            android:layout_marginTop="132dp"
-            android:gravity="center_horizontal"
-            android:orientation="vertical">
-
-            <!-- 3.0.4: Swift's loading indicator (in the accent chosen). -->
-            <com.swiftbrowser.ui.LoadingIndicator
-                android:id="@+id/startup_spinner"
-                android:layout_width="32dp"
-                android:layout_height="32dp" />
-
-            <!-- 3.0.5: what's loading (MainActivity.showStartupStep). -->
-            <TextView
-                android:id="@+id/startup_text"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
-                android:text="Starting the browser…"
-                android:textColor="@color/text_secondary"
-                android:textSize="@dimen/text_body_secondary" />
-        </LinearLayout>
-    </FrameLayout>
+    <!-- 3.0.13: no start-up cover any more: a page waiting for the ad blocker as Swift starts shows
+         Swift's colour (page_cover) and Load now comes as a message (MainActivity.updateAdBlockWait). -->
 </FrameLayout>

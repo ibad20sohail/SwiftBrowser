@@ -123,4 +123,54 @@
     }
     pausedAtDown = [];
   }, true);
+
+  // Swift 3.0.13: what a page's scripts animate frame by frame (requestAnimationFrame: carousels,
+  // sliders, effects that follow the scrolling, canvas ads, animated drawings) runs at most 30 times a
+  // second at High and 15 at Extreme. Medium already takes away what is costly to draw; on a slow
+  // phone the pages' own scripts are what is left. Scrolling and videos don't go through it, so they
+  // stay smooth. The page's own function is replaced in its own world (as content.js does for
+  // document.hidden): every callback still runs, just on fewer frames.
+  (function fewerFrames() {
+    const page = window.wrappedJSObject;
+    if (!page || typeof window.requestAnimationFrame !== 'function') { return; }
+    const nativeRequest = window.requestAnimationFrame.bind(window);
+    let queue = new Map();
+    let nextId = 1;
+    let waiting = false;
+    let last = -Infinity;
+    // Frames come every 16.7 ms: one a little early counts as on time.
+    const gap = () => (extreme() ? 1000 / 15 : 1000 / 30) - 4;
+    function frame(ts) {
+      waiting = false;
+      if (queue.size === 0) { return; }
+      if (ts - last < gap()) {
+        waiting = true;
+        nativeRequest(frame);
+        return;
+      }
+      last = ts;
+      const due = queue;
+      queue = new Map();
+      for (const cb of due.values()) {
+        try { cb(ts); } catch (e) { }
+      }
+    }
+    function request(cb) {
+      if (typeof cb !== 'function') { return 0; }
+      const id = nextId++;
+      queue.set(id, cb);
+      if (!waiting) {
+        waiting = true;
+        nativeRequest(frame);
+      }
+      return id;
+    }
+    function cancel(id) {
+      queue.delete(id);
+    }
+    try {
+      page.requestAnimationFrame = exportFunction(request, window);
+      page.cancelAnimationFrame = exportFunction(cancel, window);
+    } catch (e) { }
+  })();
 })();

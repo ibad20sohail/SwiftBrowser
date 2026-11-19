@@ -68,6 +68,7 @@ object Health {
         var stuckSince = 0L
         var told = false
         var nextMemory = SystemClock.uptimeMillis() + 5000
+        var nextGuard = SystemClock.uptimeMillis() + MemoryGuard.CHECK_MS
         answered = SystemClock.uptimeMillis()
         while (watching && mine == generation) {
             val asked = SystemClock.uptimeMillis()
@@ -92,6 +93,75 @@ object Health {
                 nextMemory = now + MEMORY_EVERY_MS
                 logMemory()
             }
+            // 3.0.13: free memory, every 2 seconds (see MemoryGuard).
+            if (now >= nextGuard) {
+                nextGuard = now + MemoryGuard.CHECK_MS
+                guard()
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------ 3.0.13: the memory guard
+
+    /** When the last clean-up ran (uptime), see [MemoryGuard.decide]. */
+    @Volatile private var lastRelief = MemoryGuard.NEVER
+
+    /** Off the main thread: the phone's free memory now, and what to do about it. */
+    private fun guard() {
+        try {
+            val am = app.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+            val mi = ActivityManager.MemoryInfo().also { am.getMemoryInfo(it) }
+            val now = SystemClock.uptimeMillis()
+            when (MemoryGuard.decide(mi.availMem, mi.threshold, mi.lowMemory, now, lastRelief)) {
+                MemoryGuard.Action.NONE -> Unit
+                MemoryGuard.Action.UNLOAD -> main.post { TabManager.trimLiveSessions() }
+                MemoryGuard.Action.RELIEVE -> {
+                    lastRelief = now
+                    val text = "${mi.availMem / MB} MB free of ${mi.totalMem / MB} MB"
+                    main.post { relieve(text) }
+                }
+            }
+        } catch (e: Exception) {
+            L.w("Memory guard failed", e)
+        }
+    }
+
+    /**
+     * Main thread: memory is about to run out. Other pages go, Swift lets go of the pictures it keeps
+     * in memory (they load again when shown), the engine runs its own low-memory clean-up (the one
+     * Android's "critical" warning starts: its caches, pictures and scripts' memory, in every process
+     * of it), and Android's drawing lets go of its caches, before its next picture finds no graphics
+     * memory left.
+     */
+    private fun relieve(text: String) {
+        L.w("Memory very low ($text): freeing memory now")
+        TabManager.trimLiveSessions()
+        com.swiftbrowser.tabs.Thumbnails.trim()
+        com.swiftbrowser.docs.DocThumbs.trim()
+        com.swiftbrowser.files.FileThumbs.trim()
+        Favicons.trim()
+        com.swiftbrowser.ui.HomeBackground.trim()
+        try {
+            org.mozilla.gecko.GeckoAppShell.notifyObservers("memory-pressure", "low-memory")
+        } catch (e: Throwable) {
+            L.w("The engine's clean-up couldn't be asked for", e)
+        }
+        trimDrawingCaches()
+    }
+
+    /**
+     * Android 7 and 8: the caches of Android's own drawing (pictures already sent to the graphics chip,
+     * spare layers) go, as when an app leaves the screen; what shows is sent again with the next frame.
+     * Android 9 and later don't let apps ask for this.
+     */
+    private fun trimDrawingCaches() {
+        if (android.os.Build.VERSION.SDK_INT >= 28) return
+        try {
+            val global = Class.forName("android.view.WindowManagerGlobal")
+            val instance = global.getMethod("getInstance").invoke(null)
+            global.getMethod("trimMemory", Int::class.javaPrimitiveType).invoke(instance, android.content.ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN)
+        } catch (e: Throwable) {
+            L.w("Android's drawing caches couldn't be freed (${e.javaClass.simpleName})")
         }
     }
 
@@ -111,10 +181,22 @@ object Health {
             val used = if (mine.isEmpty()) emptyArray() else am.getProcessMemoryInfo(mine.map { it.pid }.toIntArray())
             val parts = mine.indices.joinToString(", ") { i ->
                 val name = mine[i].processName.substringAfter(':', "main")
+                val info = used.getOrNull(i)
+                fun stat(key: String) = info?.getMemoryStat(key)?.toLongOrNull()?.div(1024) ?: 0L
                 // 3.0.8: and the graphics memory it holds (as Android counts it, where the phone tells),
                 // to see which process fills it before Android's drawing runs out.
-                val graphics = used.getOrNull(i)?.getMemoryStat("summary.graphics")?.toLongOrNull()?.div(1024) ?: 0L
-                "$name ${used.getOrNull(i)?.totalPss?.div(1024) ?: 0} MB" + if (graphics > 0) " (graphics $graphics)" else ""
+                val graphics = stat("summary.graphics")
+                // 3.0.13: what Swift's own process is made of, and how much of its address space is taken
+                // (a 32-bit process has 3-4 GB of it): it grew by hundreds of MB during long videos on a
+                // phone, which the emulator didn't show.
+                val inside = if (mine[i].pid == Process.myPid()) {
+                    "; java ${stat("summary.java-heap")}, native ${stat("summary.native-heap")}, other ${stat("summary.private-other")}" +
+                        (addressSpaceMb()?.let { ", address space $it" } ?: "")
+                } else {
+                    ""
+                }
+                val extra = (if (graphics > 0) "graphics $graphics" else "") + inside
+                "$name ${info?.totalPss?.div(1024) ?: 0} MB" + if (extra.isNotEmpty()) " (${extra.removePrefix("; ")})" else ""
             }
             val text = "Memory: ${mi.availMem / MB} MB free of ${mi.totalMem / MB} MB${if (mi.lowMemory) " (low)" else ""}; Swift: $parts"
             // 3.0.11: memory that stays low (as Diagnostics.memoryLow counts it) lets background pages go
@@ -131,15 +213,31 @@ object Health {
         }
     }
 
+    /** 3.0.13: the address space Swift's own process has taken (VmSize), in MB; null if unknown. */
+    private fun addressSpaceMb(): Long? = try {
+        java.io.File("/proc/self/status").useLines { lines ->
+            lines.firstOrNull { it.startsWith("VmSize:") }?.filter { it.isDigit() }?.toLongOrNull()?.div(1024)
+        }
+    } catch (_: Exception) {
+        null
+    }
+
     // ------------------------------------------------------------------ the engine's messages
 
     private val URL = Regex("(https?://[^/\\s\"'<>]+)[^\\s\"'<>]*")
 
     private val NOISY_TAGS = setOf("Swift", "chatty", "linker", "eglCodecCommon", "GeckoLibLoad", "ResourceType", "InputMethodManager")
+    /**
+     * 3.0.13: Android's own lines that come by the thousand while videos play and say nothing new
+     * (5,700 of a report's 9,700 lines): the codec list read again, each new sound output, the
+     * graphics driver unable to read its clock speed.
+     */
+    private val VIDEO_NOISE = listOf("Unrecognized profile", "Configuration error: unknown key", "Leaving AndroidConfiguration::GetConfiguration", "get_gpu_clk")
+
     private val NOISY_TEXT = listOf(
         "JavaScript Warning", "JavaScript Error", "[JavaScript", "unused DT entry", "avc: denied", "No listener for GeckoView",
         "No history entries found", "No editable parent", "Unexpected CPU variant", "zerdatime",
-    )
+    ) + VIDEO_NOISE
 
     /** A line of a JavaScript stack ("name@file:12:3"), which follows the error it belongs to. */
     private val STACK_LINE = Regex("^\\S*@\\S+:\\d+:\\d+$")
@@ -228,7 +326,9 @@ object Health {
                     // 3.0.11: page scripts' errors stay out (they can quote pages), but not those of Swift's
                     // own add-ons (ad blocker, helper), which were missing from a problem report.
                     .filter { l ->
-                        (!l.contains("JavaScript") || l.contains("moz-extension://")) && !l.contains("eglCodecCommon") && !l.contains("/Swift(")
+                        (!l.contains("JavaScript") || l.contains("moz-extension://")) && !l.contains("eglCodecCommon") && !l.contains("/Swift(") &&
+                            // 3.0.13: nor the thousands of lines that say nothing (they hid the crash's own lines).
+                            VIDEO_NOISE.none { l.contains(it) }
                     }
                 val lines = (if (since > 0) LogLines.between(all, since, until, System.currentTimeMillis()) else all).takeLast(120)
                 if (lines.isEmpty()) return@Thread

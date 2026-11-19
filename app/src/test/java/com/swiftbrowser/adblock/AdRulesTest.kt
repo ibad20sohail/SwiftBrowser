@@ -1,6 +1,7 @@
 package com.swiftbrowser.adblock
 
 import com.swiftbrowser.core.IncognitoChoices
+import com.swiftbrowser.core.LiteLevel
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -50,6 +51,35 @@ class AdRulesTest {
         assertFalse(trusted.containsMatchIn("https://www.news.com:8080/today"))
         assertTrue(trusted.containsMatchIn("https://other.org/"))
         assertTrue(trusted.containsMatchIn("https://othernews.com/"))
+    }
+
+    @Test
+    fun liteExtremeBlocksOtherSitesScriptsButNotTheirFrames() {
+        val rules = AdRules.dynamicRules(AdLevel.BALANCED, emptyMap(), LiteLevel.EXTREME, mapOf("player.site" to LiteLevel.HIGH)).lines()
+        assertTrue(rules.contains("* * 3p-script block"))
+        assertFalse(rules.contains("* * 3p-frame block"))
+        // Signing in to Google, and a site set lower in the Lite sheet, keep their scripts.
+        assertTrue(rules.contains("google.com * 3p-script noop"))
+        assertTrue(rules.contains("player.site * 3p-script noop"))
+    }
+
+    @Test
+    fun liteBelowExtremeBlocksNothingButSitesAtExtreme() {
+        val rules = AdRules.dynamicRules(AdLevel.HIGH, emptyMap(), LiteLevel.MEDIUM, mapOf("heavy.site" to LiteLevel.EXTREME, "calm.site" to LiteLevel.LOW)).lines()
+        assertFalse(rules.contains("* * 3p-script block"))
+        assertTrue(rules.contains("heavy.site * 3p-script block"))
+        assertFalse(rules.any { it.startsWith("calm.site ") })
+    }
+
+    @Test
+    fun adBlockingExtremeDecidesOverLite() {
+        // Ad blocking's Extreme already blocks scripts and frames: Lite adds nothing.
+        val all = AdRules.dynamicRules(AdLevel.EXTREME, emptyMap(), LiteLevel.EXTREME, emptyMap()).lines()
+        assertEquals(1, all.count { it == "* * 3p-script block" })
+        // A site at ad blocking's Extreme isn't let off by Lite's exceptions.
+        val one = AdRules.dynamicRules(AdLevel.HIGH, mapOf("strict.site" to AdLevel.EXTREME), LiteLevel.EXTREME, mapOf("strict.site" to LiteLevel.LOW)).lines()
+        assertFalse(one.contains("strict.site * 3p-script noop"))
+        assertTrue(one.contains("strict.site * 3p-script block"))
     }
 
     @Test

@@ -290,6 +290,8 @@ class TabDelegates(private val tab: Tab) :
         tab.progress = 5
         tab.media.clear()
         tab.videoPlaying = false
+        // 3.0.13: a new page starts its frozen-script count again (see onSlowScript).
+        slowNotices = 0
         // 3.0.4: the last page's colour stays in the address bar until this one says its own.
         handler.removeCallbacks(dropStaleColour)
         tab.siteColourStale = true
@@ -425,14 +427,50 @@ class TabDelegates(private val tab: Tab) :
         if (tab.parentId != null && tab.session === session) TabManager.close(tab)
     }
 
+    /** 3.0.13: how many times this page's scripts were frozen (see [onSlowScript]); a new page starts at 0. */
+    private var slowNotices = 0
+
     /**
      * A page's script has been busy for a long time (the page doesn't respond). On the tab on screen
-     * Swift offers to stop it (2.7); the script waits meanwhile, as in Firefox. Other tabs go on.
+     * Swift offers to stop it (2.7); the script waits meanwhile, as in Firefox. 3.0.13: Swift stops it
+     * itself the second time (in a problem report one ran for minutes and its page took 700 MB, which
+     * a 2 GB phone hasn't got), and in a tab that isn't on screen (they used to run on), unless it is
+     * the open tab's page that is frozen: all pages share one engine process, and the engine then
+     * says it of the other tabs as well (the open tab's own message decides). The script's site tells
+     * which tab's page froze when only one loaded tab is on it.
      */
     override fun onSlowScript(session: GeckoSession, scriptFileName: String): GeckoResult<org.mozilla.geckoview.SlowScriptResponse> {
         val site = logSite()
+        val frozen = TabRules.frozenTab(scriptFileName, TabManager.tabs.filter { it.session != null }.map { it.id to it.url })
+        if (frozen != null && frozen != tab.id) {
+            // Another tab's page froze: this one says nothing (that tab stops it, or asks).
+            return GeckoResult.fromValue(org.mozilla.geckoview.SlowScriptResponse.CONTINUE)
+        }
         L.w("Tab ${tab.id}: a script of $site isn't responding")
-        if (tab !== TabManager.current || ui == null) return GeckoResult.fromValue(org.mozilla.geckoview.SlowScriptResponse.CONTINUE)
+        slowNotices++
+        if (frozen == tab.id && tab !== TabManager.current) {
+            L.w("Tab ${tab.id}: its frozen script was stopped (the tab isn't on screen)")
+            return GeckoResult.fromValue(org.mozilla.geckoview.SlowScriptResponse.STOP)
+        }
+        if (tab !== TabManager.current || ui == null) {
+            // A moment later: the open tab's own notice, for the same freeze, can come just after this one.
+            val result = GeckoResult<org.mozilla.geckoview.SlowScriptResponse>()
+            mainHandler.postDelayed({
+                if (android.os.SystemClock.elapsedRealtime() - openTabNoticeAt < SAME_FREEZE_MS) {
+                    result.complete(org.mozilla.geckoview.SlowScriptResponse.CONTINUE)
+                } else {
+                    L.w("Tab ${tab.id}: its frozen script was stopped (the tab isn't on screen)")
+                    result.complete(org.mozilla.geckoview.SlowScriptResponse.STOP)
+                }
+            }, BACKGROUND_STOP_DELAY_MS)
+            return result
+        }
+        openTabNoticeAt = android.os.SystemClock.elapsedRealtime()
+        if (slowNotices >= 2) {
+            L.w("Tab ${tab.id}: its frozen script was stopped (frozen again)")
+            ui?.showMessage("${if (tab.incognito) "This page" else site} kept freezing, so Swift stopped its script")
+            return GeckoResult.fromValue(org.mozilla.geckoview.SlowScriptResponse.STOP)
+        }
         val result = GeckoResult<org.mozilla.geckoview.SlowScriptResponse>()
         val answered = java.util.concurrent.atomic.AtomicBoolean(false)
         ui?.showMessage("${if (tab.incognito) "This page" else site} isn't responding", "Stop", long = true) {
@@ -577,6 +615,13 @@ class TabDelegates(private val tab: Tab) :
     private companion object {
         /** 3.0: answers to a site's question for its cookies inside another (see storageAccess), this run. */
         val storageAnswers = HashMap<String, Int>()
+
+        /** 3.0.13: when the open tab last said its page is frozen (elapsedRealtime), see onSlowScript. */
+        var openTabNoticeAt = 0L
+
+        /** 3.0.13: a background tab's notice this close to the open tab's is the same freeze. */
+        const val SAME_FREEZE_MS = 1_500L
+        const val BACKGROUND_STOP_DELAY_MS = 400L
     }
 
     override fun onAndroidPermissionsRequest(
@@ -652,6 +697,8 @@ class TabDelegates(private val tab: Tab) :
             // One tab plays at a time: starting something pauses what another tab was playing.
             for (t in TabManager.tabs) if (t !== tab && t.playing) t.mediaSession?.pause()
             com.swiftbrowser.media.SleepTimer.onPlaying(tab)
+            // 3.0.13: a video: on a 2 GB phone the other pages go (the open one stays).
+            if (tab.videoPlaying) TabManager.onVideoPlaying()
         }
         ui?.onPlayingChanged(tab)
         SwiftApp.instance?.let { Playback.onPlayingChanged(it, tab) }

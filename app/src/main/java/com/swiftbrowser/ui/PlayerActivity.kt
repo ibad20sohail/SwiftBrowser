@@ -69,6 +69,7 @@ import com.swiftbrowser.core.UrlUtils
 import com.swiftbrowser.docs.Docs
 import com.swiftbrowser.files.FileKind
 import com.swiftbrowser.files.FileThumbs
+import com.swiftbrowser.files.OpenList
 import com.swiftbrowser.media.Delays
 import com.swiftbrowser.media.EqualizerRules
 import com.swiftbrowser.media.LocalMedia
@@ -353,7 +354,11 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
                     refuse(kindOf(f.name) != Kind.AUDIO)
                     return true
                 }
-                playFile(f, folder = true, incognito = i.getBooleanExtra(EXTRA_INCOGNITO, false), secure = ViewerAccess.secure(this, i, f))
+                // 3.0.13: the files of the list Files showed (a category, a search…), if it handed one over.
+                val token = i.getStringExtra(OpenList.EXTRA)
+                val list = OpenList.get(token)
+                OpenList.drop(token)
+                playFile(f, folder = true, incognito = i.getBooleanExtra(EXTRA_INCOGNITO, false), secure = ViewerAccess.secure(this, i, f), list = list)
                 true
             }
             ACTION_PLAY_STREAM -> {
@@ -412,7 +417,7 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
      * 3.0: [incognito] (an incognito download) and [secure] (a file of Private): nothing about them is
      * remembered or shown on the lock screen, and the screen is kept out of screenshots.
      */
-    private fun playFile(f: File, folder: Boolean, incognito: Boolean = false, secure: Boolean = false) {
+    private fun playFile(f: File, folder: Boolean, incognito: Boolean = false, secure: Boolean = false, list: OpenList.Handed? = null) {
         val kind = kindOf(f.name) ?: Kind.VIDEO
         if (!f.canRead()) {
             applyMode(kind == Kind.VIDEO)
@@ -422,13 +427,17 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         }
         val resume = if (incognito || secure) null else LocalMedia.position(this, f)
         val token = LocalPlayback.load(this, listOf(entryFor(f, kind, incognito, secure)), 0, resume ?: C.TIME_UNSET)
+        // 3.0.13: Files' list goes by where it came from ("Music", "Search results"…), and its files
+        // that are gone by the time they come are skipped, as a playlist's are.
+        val around = list?.let { OpenList.around(it.items, f.path, LIST_SIDE) }
+        if (around != null) LocalPlayback.filesList = list?.title
         attach()
         // Once the controls are laid out, so the message sits above them.
         if (resume != null) root.post { say("Going on from ${time(resume)}", "Start over") { LocalPlayback.seekTo(0) } }
         if (!folder) return
-        // The rest of the folder is read without holding up the start, then put around it.
+        // The rest of the folder (3.0.13: or of Files' list) is read without holding up the start, then put around it.
         LocalPlayback.io.execute {
-            val (before, after) = folderAround(f, kind)
+            val (before, after) = if (around != null) around.first.map { File(it.path) } to around.second.map { File(it.path) } else folderAround(f, kind)
             mainHandler.post {
                 LocalPlayback.addAround(token, before.map { entryFor(it, kind, incognito, secure) }, after.map { entryFor(it, kind, incognito, secure) })
             }
@@ -534,7 +543,7 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
         val i = all.indexOfFirst { it.path == f.path }
         if (i < 0) return none
         // A folder of thousands: the 500 on each side are plenty.
-        return all.subList(maxOf(0, i - 500), i).toList() to all.subList(i + 1, minOf(all.size, i + 501)).toList()
+        return all.subList(maxOf(0, i - LIST_SIDE), i).toList() to all.subList(i + 1, minOf(all.size, i + 1 + LIST_SIDE)).toList()
     }
 
     // ------------------------------------------------------------------ the shared player
@@ -1456,7 +1465,7 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
             titleView.text = e.title
         } else {
             // 3.0.11: a playlist of the user's goes by its name, a folder's songs by the folder's.
-            titleView.text = LocalPlayback.listName ?: when {
+            titleView.text = LocalPlayback.listName ?: LocalPlayback.filesList ?: when {
                 e.file != null -> e.file.parentFile?.name ?: "Music"
                 e.stream && !e.incognito -> UrlUtils.host(e.uri.toString())?.removePrefix("www.") ?: "Music"
                 else -> "Music"
@@ -2784,9 +2793,18 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
             val height = minOf(entries.size * dp(64), (panel.maxHeight() - dp(96)).coerceAtLeast(dp(128)))
             (list.layoutManager as LinearLayoutManager).scrollToPositionWithOffset(now, dp(64))
             Sheets.column(ctx).apply {
-                // 3.0.11: a playlist of the user's, in their order.
+                // 3.0.11: a playlist of the user's, in their order. 3.0.13: a list of Files, in its order.
                 val own = LocalPlayback.listName
-                addView(Sheets.header(ctx, own ?: if (videoMode) "Videos in this folder" else "Songs in this folder", if (own != null) PlaylistRules.songsText(entries.size) else "${entries.size}, by name"))
+                val files = LocalPlayback.filesList
+                addView(Sheets.header(
+                    ctx,
+                    own ?: files ?: if (videoMode) "Videos in this folder" else "Songs in this folder",
+                    when {
+                        own != null -> PlaylistRules.songsText(entries.size)
+                        files != null -> "${entries.size}, as Files lists them"
+                        else -> "${entries.size}, by name"
+                    },
+                ))
                 addView(list, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, height))
             }
         }
@@ -3972,10 +3990,12 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
          * 3.0: [incognito] as for [intentFor]; [secure]: a file of Private (kept out of screenshots,
          * nothing remembered, nothing on the lock screen).
          */
-        fun open(from: Context, file: File, incognito: Boolean = false, secure: Boolean = false) {
+        fun open(from: Context, file: File, incognito: Boolean = false, secure: Boolean = false, list: String? = null) {
             val i = Intent(from, PlayerActivity::class.java).setAction(ACTION_PLAY_FILE).putExtra(EXTRA_PATH, file.path)
                 .putExtra(EXTRA_INCOGNITO, incognito)
             if (secure) i.putExtra(AppFiles.EXTRA_SECURE, true)
+            // 3.0.13: the files of the list Files showed (OpenList), played around it in that order.
+            if (list != null) i.putExtra(OpenList.EXTRA, list)
             if (from !is Activity) i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             from.startActivity(ViewerAccess.mark(i))
         }
@@ -4008,6 +4028,9 @@ class PlayerActivity : AppCompatActivity(), PlayerGestures.Host, LocalPlayback.W
             val i = Intent(from, PlayerActivity::class.java).setAction(ACTION_PLAY_TORRENT).putExtra(EXTRA_DOWNLOAD, id).putExtra(EXTRA_FILE, index)
             from.startActivity(ViewerAccess.mark(i))
         }
+
+        /** A folder's (3.0.13: or Files' list's) files kept on each side of the one opened: plenty, and ExoPlayer stays quick. */
+        private const val LIST_SIDE = 500
 
         /** 3.0.11: plays a playlist of the user's (Playlists); see [openList]. */
         private const val ACTION_PLAY_LIST = "com.swiftbrowser.player.PLAY_LIST"

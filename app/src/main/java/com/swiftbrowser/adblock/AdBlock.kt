@@ -289,6 +289,9 @@ object AdBlock {
         }
     }
 
+    /** 3.0.13: Lite mode's level (for all sites or a site) changed: its Extreme blocks other sites' scripts. */
+    fun applyLite() = push()
+
     /** Sends the full desired configuration. The bridge only changes what differs. */
     private fun push() {
         val p = port ?: return
@@ -300,13 +303,15 @@ object AdBlock {
         }
         val lists = if (prefs.hideCookieNotices) (levelLists + COOKIE_LISTS).distinct() else levelLists
         val inUse = inUse()
+        // 3.0.13: Lite mode's Extreme blocks other sites' scripts too (AdRules.liteScripts).
+        val lite = prefs.liteLevel
         val msg = JSONObject()
             .put("type", "apply")
             .put("lists", JSONArray(lists))
-            .put("rules", AdRules.dynamicRules(g, inUse))
+            .put("rules", AdRules.dynamicRules(g, inUse, lite, com.swiftbrowser.core.SiteSettings.liteLevels()))
             .put("trusted", JSONArray(AdRules.trusted(g, inUse)))
             // 3.0.1: what uBO may write down: the same without the levels chosen from incognito tabs.
-            .put("rulesKeep", AdRules.dynamicRules(g, overrides))
+            .put("rulesKeep", AdRules.dynamicRules(g, overrides, lite, com.swiftbrowser.core.SiteSettings.liteLevelsKept()))
             .put("trustedKeep", JSONArray(AdRules.trusted(g, overrides)))
         try {
             p.postMessage(msg)

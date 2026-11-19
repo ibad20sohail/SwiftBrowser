@@ -1,6 +1,7 @@
 /*
  * Swift Lite mode, Extreme (3.0.9): the site's silent "GIF" videos stay still until tapped
  * (lite-high.js reads this), and moving drawings (SVG animations) stand still, like GIF pictures.
+ * 3.0.13: lite-high.js also lets the page's script animations run at 15 frames a second (30 at High).
  */
 (function () {
   'use strict';

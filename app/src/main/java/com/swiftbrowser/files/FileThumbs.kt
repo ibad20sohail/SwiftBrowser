@@ -38,9 +38,10 @@ object FileThumbs {
 
     /**
      * 3.0.11: what the read that made a picture also told about its file: a video's length (ms) and
-     * a photo's own size, upright (px); 0 when not known. No more than that one read, ever.
+     * a photo's own size, upright (px); 0 when not known. No more than that one read, ever. 3.0.13: a
+     * song's own title and artist (its tags), null when it has none.
      */
-    class Facts(val lengthMs: Long, val width: Int, val height: Int)
+    class Facts(val lengthMs: Long, val width: Int, val height: Int, val title: String? = null, val artist: String? = null)
 
     /** By file and time, whatever size its picture was made at; a few bytes each, so many are kept. They go with the pictures ([trim]). */
     private val facts = LruCache<String, Facts>(1024)
@@ -60,7 +61,8 @@ object FileThumbs {
         }
     }
 
-    fun has(kind: FileKind) = kind == FileKind.IMAGE || kind == FileKind.VIDEO || kind == FileKind.APK
+    /** 3.0.13: and a song's cover (its title and artist come with it, see [Facts]). */
+    fun has(kind: FileKind) = kind == FileKind.IMAGE || kind == FileKind.VIDEO || kind == FileKind.APK || kind == FileKind.AUDIO
 
     /**
      * [onLoaded] runs on the main thread with [file]'s picture ([size] px square), straight away
@@ -115,7 +117,38 @@ object FileThumbs {
         FileKind.IMAGE -> image(file, time, size)
         FileKind.VIDEO -> video(file, time)?.let { square(it, size, 0) }
         FileKind.APK -> apkIcon(ctx, file, size)
+        FileKind.AUDIO -> song(file, time, size)
         else -> null
+    }
+
+    /**
+     * 3.0.13: a song's own cover (the picture in its tags), and from the same read its title, artist
+     * and length (kept in [facts], also for a song without a cover); null without a cover.
+     */
+    private fun song(file: File, time: Long, size: Int): Bitmap? {
+        val r = MediaMetadataRetriever()
+        try {
+            r.setDataSource(file.path)
+            fun tag(key: Int) = r.extractMetadata(key)?.trim()?.takeIf { it.isNotEmpty() }
+            val artist = tag(MediaMetadataRetriever.METADATA_KEY_ARTIST) ?: tag(MediaMetadataRetriever.METADATA_KEY_ALBUMARTIST)
+            val length = tag(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
+            facts.put(factsKey(file, time), Facts(length, 0, 0, tag(MediaMetadataRetriever.METADATA_KEY_TITLE), artist))
+            val raw = r.embeddedPicture ?: return null
+            val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeByteArray(raw, 0, raw.size, o)
+            var sample = 1
+            while (o.outWidth / (sample * 2) >= size && o.outHeight / (sample * 2) >= size) sample *= 2
+            val bmp = BitmapFactory.decodeByteArray(raw, 0, raw.size, BitmapFactory.Options().apply { inSampleSize = sample }) ?: return null
+            return square(bmp, size, 0)
+        } catch (_: RuntimeException) {
+            // A file Android can't read.
+            return null
+        } finally {
+            try {
+                r.release()
+            } catch (_: Exception) {
+            }
+        }
     }
 
     /**

@@ -141,7 +141,6 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
     /** The tab grid is open (asking doesn't make it). */
     private val switcherOpen: Boolean get() = switcherView?.isOpen == true
-    private lateinit var startup: View
     private lateinit var tabSwipe: TabSwipe
 
     /** The ⋮ menu; built once, when the app is idle after starting. */
@@ -303,6 +302,12 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     private val afterStart = ArrayList<() -> Unit>()
 
     /**
+     * 3.0.13: Swift opened on a site, without its start screen: what waits for the start screen waits
+     * for the browser's first frame instead (the windows of what's new, the menu built ahead).
+     */
+    private var waitsForFirstFrame = false
+
+    /**
      * 3.0.5: something asked for Swift while its start screen showed (a link, a shortcut, a
      * notification). Android restoring a closed Swift also has saved state, which alone would mean
      * "nothing new to open": this says there is.
@@ -324,14 +329,21 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             build(savedInstanceState)
             return
         }
+        // 3.0.13: Swift opening on a site shows the browser at once, without the start screen and its
+        // loader (the page waits for the ad blocker under Swift's own colour, see showStartupUntilReady).
+        val opening = TabManager.tabToOpen()
+        if (!StartRules.startScreen(openingLink(intent, savedInstanceState), openingNewTab(intent, savedInstanceState), tabOpening(intent, opening)?.let { !it.showsHome })) {
+            waitsForFirstFrame = true
+            build(savedInstanceState)
+            return
+        }
         // Android shows no screen of its own while Swift starts (2.7, Theme.Swift.Launch): Swift's
         // start screen is drawn first, in your colours, and the browser is built right after it is
-        // on screen.
-        val opening = TabManager.tabToOpen()
-        val start = StartScreen(this, loading = opening != null && !opening.showsHome).also { startScreen = it }
+        // on screen. 3.0.13: only when Swift opens on the home page.
+        val start = StartScreen(this).also { startScreen = it }
         setContentView(start.view)
         // 3.0.5: with the home page open, nothing would start the ad blocker until a page is asked for.
-        if (opening == null || opening.showsHome) AdBlock.wakeUp()
+        AdBlock.wakeUp()
         // The status bar (until full screen hides it) in the same colour.
         window.statusBarColor = Palette.color(this, R.color.page_bg)
         WindowCompat.getInsetsController(window, window.decorView).isAppearanceLightStatusBars =
@@ -341,6 +353,29 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         afterNextFrame { buildNow.run() }
         // Not drawn while the screen is off, say: built anyway.
         handler.postDelayed(buildNow, 1500)
+    }
+
+    /** 3.0.13: another app hands Swift a web address or a search at this start: it opens as a page. */
+    private fun openingLink(i: Intent?, saved: Bundle?): Boolean {
+        if (i == null || saved != null || i.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0) return false
+        return when (i.action) {
+            Intent.ACTION_VIEW -> i.dataString?.let { UrlUtils.isHttp(it) } == true
+            Intent.ACTION_SEND -> !i.getStringExtra(Intent.EXTRA_TEXT).isNullOrBlank()
+            Intent.ACTION_WEB_SEARCH -> !i.getStringExtra("query").isNullOrBlank()
+            else -> false
+        }
+    }
+
+    /** 3.0.13: a shortcut, the widget or a tile asks for a new tab or a search: the home page. */
+    private fun openingNewTab(i: Intent?, saved: Bundle?): Boolean =
+        i != null && saved == null && i.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY == 0 &&
+            i.action in setOf(ACTION_NEW_TAB, ACTION_INCOGNITO, ACTION_SEARCH)
+
+    /** 3.0.13: the tab this start shows: the one a notification asks for, or the one open last. */
+    private fun tabOpening(i: Intent?, opening: Tab?): Tab? {
+        val id = i?.getLongExtra(EXTRA_TAB_ID, Long.MIN_VALUE) ?: Long.MIN_VALUE
+        if (id == Long.MIN_VALUE) return opening
+        return TabManager.tabs.firstOrNull { it.id == id } ?: opening
     }
 
     /**
@@ -379,6 +414,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
     private fun build(savedInstanceState: Bundle?) {
         if (built) return
+        // 3.0.13: a real start of Swift (not this screen made again for a change of look, say).
+        val realStart = !(savedInstanceState != null && SwiftApp.browserBuilt)
         setContentView(R.layout.activity_main)
         Palette.paint(findViewById<View>(android.R.id.content))
         bindViews()
@@ -454,7 +491,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         SystemBars.keepHidden(this) { fullscreenTab == null }
         showCrashReportIfAny()
         showProblemIfAny()
-        showStartupUntilReady()
+        showStartupUntilReady(realStart)
         // The menu was open when the screen restarted for a dark mode switch: it stays open.
         if (savedInstanceState?.getBoolean(STATE_MENU_OPEN) == true) {
             root.post { if (!isFinishing) quickMenu.open(animate = false) }
@@ -528,11 +565,20 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             findViewById<android.view.ViewGroup>(android.R.id.content).addView(start.view)
             afterNextFrame {
                 if (isDestroyed) return@afterNextFrame
-                start.finish(home.logoMark.takeIf { home.visibility == View.VISIBLE }, covered = startup.visibility == View.VISIBLE) {
+                start.finish(home.logoMark.takeIf { home.visibility == View.VISIBLE }) {
                     startScreen = null
                     afterStart.forEach { it() }
                     afterStart.clear()
                 }
+            }
+        }
+        // 3.0.13: opened on a site without the start screen: what waited for it follows the first frame.
+        if (waitsForFirstFrame) {
+            afterNextFrame {
+                waitsForFirstFrame = false
+                if (isDestroyed) return@afterNextFrame
+                afterStart.forEach { it() }
+                afterStart.clear()
             }
         }
         // Started (and resumed) while the start screen showed: what those do, now.
@@ -540,9 +586,9 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         if (lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) resumed()
     }
 
-    /** [action] once the start screen has gone (at once without one). */
+    /** [action] once the start screen has gone (at once without one; 3.0.13: after the first frame when it was skipped). */
     private fun whenStarted(action: () -> Unit) {
-        if (startScreen == null) action() else afterStart += action
+        if (startScreen == null && !waitsForFirstFrame) action() else afterStart += action
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -912,8 +958,6 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         shownVpnState = state
         updateVpnBadge()
         updateToolbarExtras()
-        // 3.0.5: the start-up screen says when pages are waiting for the VPN.
-        if (startupFor != null) updateStartupCover()
         if (before == null || before == state) return
         when (state) {
             com.swiftbrowser.vpn.Vpn.State.ON -> {
@@ -1115,8 +1159,9 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             return
         }
         com.swiftbrowser.vpn.Vpn.removeListener(vpnListener)
-        handler.removeCallbacks(startupPageLimit)
-        handler.removeCallbacks(startupPageStopped)
+        // 3.0.13: the ad blocker's Load now message belongs to this screen.
+        loadNowPill?.dismiss()
+        loadNowPill = null
         com.swiftbrowser.core.GoogleAccounts.removeListener(accountListener)
         AdBlock.removeListener(adListener)
         // 3.0: a tab being left lets its page rest now (its picture's answer would come to a screen that's gone).
@@ -1230,10 +1275,6 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             setPadding(inset, inset, inset, inset)
         }
         Ui.style(findViewById<TextView>(R.id.crash_title), Ui.Type.TITLE)
-        startup = findViewById(R.id.startup)
-        findViewById<ImageView>(R.id.startup_logo).setImageDrawable(Ui.logo(this))
-        // 3.0.5: exactly where the start screen has them, which this cover takes over from.
-        StartScreen.keepCentred(this, startup, listOf(findViewById<View>(R.id.startup_logo), findViewById<View>(R.id.startup_steps)))
         // Drawn above the pull-to-refresh circle, without a shadow on the page.
         appBar.elevation = dp(8f)
         appBar.outlineProvider = null
@@ -2391,6 +2432,9 @@ class MainActivity : AppCompatActivity(), BrowserUi {
 
     private fun updateHome(tab: Tab) {
         val show = tab.showsHome && fullscreenTab == null
+        // 3.0.13: the home page shown over a page still waiting under its cover: the cover (drawn
+        // above the home page) goes, or the home page would be hidden under it.
+        if (show && coverWaitsForPaint === tab) stopCoverWait()
         if (show) {
             // 3.0.10: back on it while it was leaving: it stays.
             val wasLeaving = homeLeaving != null || home.leaving
@@ -2587,6 +2631,13 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             done()
             return
         }
+        // 3.0.13: nor a page playing a video: its picture comes out one colour and is thrown away
+        // (TabRules.looksBlank), yet it costs a whole-screen copy from the graphics chip, which on a
+        // 2 GB phone is short of memory just then, and the switch waited up to 0.4 s for it.
+        if (tab.playing && tab.videoPlaying) {
+            done()
+            return
+        }
         leavingTab = tab
         leavingDone = done
         val finish = object : Runnable {
@@ -2744,11 +2795,16 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         updateAll()
         if (isNew) {
             animateNewTab(tab)
+        } else if (!tab.showsHome && TabManager.waitsForAdBlocker(tab)) {
+            // 3.0.13: its page waits for the ad blocker (Swift is starting): Swift's colour until it is
+            // drawn, not last time's picture (it showed, then the colour, then the page).
+            tab.wokeUp = false
+            showStartCover(tab)
         } else if (tab.wokeUp) {
             tab.wokeUp = false
             tabSwipe.coverUntilDrawn(tab)
         }
-        updateStartupCover()
+        updateAdBlockWait()
     }
 
     /** Shows the tab's engine session in the page view (or nothing for the home page). */
@@ -2817,9 +2873,12 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     }
 
     override fun onTabUpdated(tab: Tab) {
-        if (tab === startupPage) {
-            handler.removeCallbacks(startupPageStopped)
-            if (!tab.loading && tab.restoreToken == 0) handler.postDelayed(startupPageStopped, START_PAGE_STOPPED_MS)
+        // 3.0.13: a page that waited for the ad blocker under Swift's colour now loads: from now on the
+        // cover gives up after a while, as a new tab's does (not while it waits, however long that is).
+        if (tab === coverWaitsForPaint && !coverLimitRunning && !TabManager.isRestoring(tab)) {
+            coverLimitRunning = true
+            handler.removeCallbacks(coverPaintTimeout)
+            handler.postDelayed(coverPaintTimeout, START_PAGE_LIMIT_MS)
         }
         if (tab !== current) {
             // 3.0.4: another tab of the open tab's group has a new title or page: its chip follows.
@@ -2865,8 +2924,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         if (resumeChipFor != null && (resumeChipFor !== tab || resumeChipPage != tab.url.substringBefore('#'))) hideResumeChip(null)
         if (pageStarted) refreshToolbarNow() else requestToolbarRefresh()
         if (switcherOpen) switcher.refreshTab(tab)
-        // 3.0: the start-up screen covers only a page still waiting for the ad blocker.
-        if (startupFor != null || !startupDone()) updateStartupCover()
+        // 3.0.13: Load now only while the open page waits for the ad blocker.
+        if (loadNowPill != null || !startupDone()) updateAdBlockWait()
         if (unfilteredUntil != 0L && tab.badge == "!") checkUnfiltered()
     }
 
@@ -3530,8 +3589,32 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             // background); one that loaded behind, opened in the background, is there with its first frame.
             coverNeedsContent = tab.loading
             handler.removeCallbacks(coverPaintTimeout)
-            handler.postDelayed(coverPaintTimeout, NEW_TAB_COVER_MAX_MS)
+            // 3.0.13: a page that first waits for the ad blocker (a link from another app as Swift
+            // starts) gets its time limit once it loads (onTabUpdated): it ran out while it waited.
+            coverLimitRunning = !TabManager.isRestoring(tab)
+            if (coverLimitRunning) handler.postDelayed(coverPaintTimeout, NEW_TAB_COVER_MAX_MS)
         }
+    }
+
+    /**
+     * 3.0.13: [tab]'s page waits for the ad blocker as Swift starts (it used to be under the start-up
+     * screen with its loader): its area shows Swift's own colour, as a new tab's does, under the bar
+     * with its loading line, until the page is drawn. No time limit while it waits ([onTabUpdated]
+     * starts one once the page loads); Load now comes as a message ([updateAdBlockWait]).
+     */
+    private fun showStartCover(tab: Tab) {
+        pageCover.setBackgroundColor(color(if (tab.incognito) R.color.incognito_bg else R.color.page_bg))
+        pageCover.animate().cancel()
+        pageCover.alpha = 1f
+        pageCover.translationY = 0f
+        pageCover.visibility = View.VISIBLE
+        coverWaitsForLeaving = false
+        coverWaitsForPaint = tab
+        coverPaintSeen = false
+        coverNeedsContent = true
+        handler.removeCallbacks(coverPaintTimeout)
+        coverLimitRunning = !TabManager.isRestoring(tab)
+        if (coverLimitRunning) handler.postDelayed(coverPaintTimeout, START_PAGE_LIMIT_MS)
     }
 
     /** 3.0.11: the new tab whose page the cover waits for (see [animateNewTab]); null when it doesn't wait. */
@@ -3539,6 +3622,9 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     private var coverPaintSeen = false
     private var coverNeedsContent = true
     private val coverPaintTimeout = Runnable { stopCoverWait() }
+
+    /** 3.0.13: the cover's time limit runs (a start's cover gets one only once its page loads). */
+    private var coverLimitRunning = false
 
     /**
      * 3.0.11: the waited-for tab's page drew something. The engine says so before the picture reaches
@@ -3565,6 +3651,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         handler.removeCallbacks(coverPaintTimeout)
         if (coverWaitsForPaint == null) return
         coverWaitsForPaint = null
+        coverLimitRunning = false
         if (!coverWaitsForLeaving && !isDestroyed) fadePageCover()
     }
 
@@ -4398,8 +4485,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
     private val adListener: () -> Unit = { handler.post { if (!isDestroyed) onAdBlockerChanged() } }
 
     private fun onAdBlockerChanged() {
-        // 3.0.5: says what's loading now; the screen goes when the page is drawn, not at this moment.
-        updateStartupCover()
+        // 3.0.13: Load now goes once the ad blocker is ready; the page's cover goes when it is drawn.
+        updateAdBlockWait()
         if (!startupDone()) return
         AdBlock.removeListener(adListener)
         if (!AdBlock.ready) return
@@ -4428,227 +4515,73 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         snack("Ads weren't blocked on this page", "Reload", long = true) { if (tab in TabManager.tabs) TabManager.reload(tab) }
     }
 
-    /** When the start-up screen first showed (uptime; 0: not yet). "Load now" comes 8 s after. */
-    private var startupShownAt = 0L
+    // 3.0.13: the start-up screen with its loader is gone. A site's page that waits for the ad blocker
+    // as Swift starts shows Swift's own colour under the bar and its loading line (showStartCover),
+    // and after 8 s a message offers to load it at once.
 
-    /** The tab whose page the start-up screen covers; null while it doesn't show. */
-    private var startupFor: Tab? = null
-
-    /** 3.0.5: the tab whose page this start of Swift waits for until it is drawn (null: none, or it came). */
-    private var startupPage: Tab? = null
-
-    /** 3.0.5: the time limit for the page is running. */
-    private var startupLimitSet = false
-    private val startupPageLimit = Runnable {
-        startupPage = null
-        updateStartupCover()
-    }
-    private val startupText by lazy { findViewById<TextView>(R.id.startup_text) }
-
-    /**
-     * 3.0.5: the page finished loading but was never drawn (a page with nothing on it): the screen
-     * lets go a moment later. Only a moment later: a new tab's first, empty page finishes too, just
-     * before the real one starts.
-     */
-    private val startupPageStopped = Runnable {
-        startupPage?.let { if (!it.loading && it.restoreToken == 0) liftStartupCover(it) }
-    }
-
-    /** 3.0.5: the cover is on its way off ([liftStartupCover]). */
-    private var startupLifting = false
-
-    /**
-     * 3.0.5: the page the start-up screen waited for has been painted (or finished with nothing to
-     * paint). The engine says so a moment before the page reaches the screen, and lifting then showed
-     * an empty page: the cover goes once the screen really has it, which asking for a picture of the
-     * page waits for. One picture, once per start, and it can't hold anything up (the limit).
-     */
-    private fun liftStartupCover(tab: Tab) {
-        if (startupLifting) return
-        startupLifting = true
-        handler.removeCallbacks(startupPageStopped)
-        val lift = Runnable {
-            if (startupPage === tab && !isDestroyed) {
-                startupPage = null
-                updateStartupCover()
-            }
-        }
-        handler.postDelayed(lift, START_PAGE_DRAW_MS)
-        val drawn = {
-            handler.removeCallbacks(lift)
-            lift.run()
-        }
-        if (tab.session?.isOpen == true && gecko.session === tab.session) {
-            gecko.capturePixels().accept({ picture ->
-                picture?.recycle()
-                drawn()
-            }, { _ -> drawn() })
-        } else {
-            drawn()
-        }
-    }
-
-    /** What was put on the start-up screen (Load now): taken off when it goes. */
-    private val startupExtras = ArrayList<View>()
-    private var startupBottom: LinearLayout? = null
-    private var loadNowButton: View? = null
+    /** 3.0.13: "The ad blocker is still starting · Load now", while it shows. */
+    private var loadNowPill: Messages.Handle? = null
     private val showLoadNow = Runnable { addLoadNow() }
 
     /**
      * When the app starts, the open page waits for the engine and the ad blocker, so that no ads
-     * slip through before its filters are loaded. Meanwhile the logo and a spinner are shown instead
-     * of an empty page. The home page needs neither, so it shows straight away.
+     * slip through before its filters are loaded. 3.0.13: the browser shows meanwhile (no start-up
+     * screen any more): the page's area in Swift's colour until the page is drawn ([showStartCover];
+     * at a real start also for a page that no longer waits but hasn't been drawn yet), the bar with its
+     * loading line, and Load now after 8 s ([updateAdBlockWait]). The home page needs none of it.
      */
-    private fun showStartupUntilReady() {
-        // 3.0.5: at a real start with a site open, the screen also stays until that page is drawn.
-        if (startScreen != null) startupPage = current?.takeUnless { it.showsHome || pageAlreadyThere(it) }
-        if (!startupDone()) AdBlock.addListener(adListener)
-        updateStartupCover()
-    }
-
-    /**
-     * 3.0: the page waits however long the ad blocker takes (8 s at most before, then it loaded
-     * unfiltered); the screen covers it meanwhile and, 8 s on, offers to load it now without ad
-     * blocking. It follows the open tab: a tab chosen meanwhile whose page waits too is covered, and a
-     * page the user opened, or one that doesn't wait, isn't. 3.0.5: it says what's loading, step by
-     * step, and at a real start it stays until the page is drawn ([startupPage]), so no empty screen
-     * shows between the ad blocker being ready and the page.
-     */
-    private fun updateStartupCover() {
+    private fun showStartupUntilReady(realStart: Boolean) {
         val tab = current
-        val waits = tab != null && TabManager.waitsForAdBlocker(tab) && !startupDone()
-        if (tab == null || tab.showsHome || !(waits || tab === startupPage)) {
-            if (startupFor != null) hideStartup()
-            return
-        }
-        if (startupFor !== tab) showStartupCover(tab)
-        showStartupStep(tab, waits)
+        if (realStart && tab != null && !tab.showsHome && !pageAlreadyThere(tab) && coverWaitsForPaint !== tab) showStartCover(tab)
+        if (!startupDone()) AdBlock.addListener(adListener)
+        updateAdBlockWait()
     }
 
     /** 3.0.5: its page is still there from before (Swift's screen was closed, not Swift): nothing to wait for. */
     private fun pageAlreadyThere(tab: Tab) = tab.session?.isOpen == true && tab.restoreToken == 0 && !tab.loading
 
-    /** 3.0.5: what's loading, on the line under the loader. */
-    private fun showStartupStep(tab: Tab, waits: Boolean) {
-        val step = StartupSteps.now(waits, AdBlock.extension != null, Engine.networkBlocked, com.swiftbrowser.vpn.Vpn.state == com.swiftbrowser.vpn.Vpn.State.CONNECTING)
-        Motion.swapText(startupText, StartupSteps.text(step, if (UrlUtils.isHttp(tab.url)) UrlUtils.siteName(tab.url) else ""))
-        // Only the ad blocker's wait can be skipped.
-        if (!waits && loadNowButton != null) removeLoadNow()
-        // Never stuck: a page that takes this long shows its own progress instead.
-        if (step == StartupSteps.Step.PAGE && !startupLimitSet) {
-            startupLimitSet = true
-            handler.postDelayed(startupPageLimit, START_PAGE_LIMIT_MS)
+    /**
+     * 3.0.13: while the open page waits for the ad blocker (Swift is starting), 8 s after Swift started
+     * a message offers to load it at once, without ad blocking; it goes once the wait is over. Counted
+     * from the start of Swift's process, so a screen made again or a tab chosen later keeps the clock.
+     * Another message can take its place for a while: it comes back 4 s later if the page still waits.
+     */
+    private fun updateAdBlockWait() {
+        val tab = current
+        val waits = tab != null && !tab.showsHome && TabManager.waitsForAdBlocker(tab) && !startupDone()
+        if (!waits) {
+            handler.removeCallbacks(showLoadNow)
+            loadNowPill?.dismiss()
+            loadNowPill = null
+            return
         }
-    }
-
-    private fun showStartupCover(tab: Tab) {
-        val first = startupShownAt == 0L
-        if (first) startupShownAt = SystemClock.uptimeMillis()
-        startupFor = tab
-        startup.animate().cancel()
-        clearStartupExtras()
-        startup.alpha = 1f
-        startup.visibility = View.VISIBLE
-        findViewById<android.widget.ImageView>(R.id.startup_logo)?.setImageDrawable(Ui.logo(this))
-        // In the accent chosen (2.6), your own included.
-        findViewById<LoadingIndicator>(R.id.startup_spinner)?.colour = Ui.accent(this)
-        // 3.0: a tab chosen later is covered below the toolbar, which is in use (at start the screen
-        // carries on from Swift's start screen).
-        if (!first) coverBelowToolbar()
+        if (loadNowPill?.isShowing == true) return
+        val replaced = loadNowPill != null
+        loadNowPill = null
+        val waited = SystemClock.elapsedRealtime() - android.os.Process.getStartElapsedRealtime()
+        val due = if (replaced) LOAD_NOW_AGAIN_MS else (LOAD_NOW_AFTER_MS - waited).coerceAtLeast(0L)
         handler.removeCallbacks(showLoadNow)
-        val wait = LOAD_NOW_AFTER_MS - (SystemClock.uptimeMillis() - startupShownAt)
-        if (wait <= 0) addLoadNow() else handler.postDelayed(showLoadNow, wait)
-    }
-
-    /** Below the toolbar, which stays usable meanwhile. */
-    private fun coverBelowToolbar() {
-        (startup.layoutParams as FrameLayout.LayoutParams).apply {
-            topMargin = if (bottomBar) 0 else toolbarPx
-            bottomMargin = if (bottomBar) toolbarPx else 0
-        }
-        startup.elevation = dp(4f)
-        startup.requestLayout()
-    }
-
-    /** The column at the bottom of the start-up screen: the note, then Load now. */
-    private fun startupBottom(): LinearLayout = startupBottom ?: LinearLayout(this).apply {
-        orientation = LinearLayout.VERTICAL
-        gravity = android.view.Gravity.CENTER_HORIZONTAL
-    }.also { col ->
-        startupBottom = col
-        startupExtras += col
-        (startup as FrameLayout).addView(col, FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
-            android.view.Gravity.BOTTOM or android.view.Gravity.CENTER_HORIZONTAL,
-        ).apply { bottomMargin = dp(24f).toInt() })
+        if (due == 0L) addLoadNow() else handler.postDelayed(showLoadNow, due)
     }
 
     /** 3.0: 8 s on, the waiting page can be loaded at once, without the ad blocker. */
     private fun addLoadNow() {
-        val tab = startupFor ?: return
-        if (loadNowButton != null || !TabManager.waitsForAdBlocker(tab)) return
-        val pad = dp(20f).toInt()
-        val b = TextView(this).apply {
-            text = "Load now, without blocking ads"
-            Ui.size(this, Ui.Type.BODY, keepFont = true)
-            typeface = Ui.medium(Ui.Type.BODY)
-            setTextColor(color(Looks.accent.onContainer))
-            gravity = android.view.Gravity.CENTER
-            minHeight = dp(44f).toInt()
-            setPadding(pad, 0, pad, 0)
-            background = Ui.shape(this@MainActivity, color(Looks.accent.container), 22)
-            Ui.pressable(this)
-            setOnClickListener { loadNow() }
-        }
-        startupBottom().addView(b, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-            topMargin = dp(12f).toInt()
-        })
-        loadNowButton = b
-        Motion.fadeIn(b)
+        val tab = current ?: return
+        if (isFinishing || tab.showsHome || !TabManager.waitsForAdBlocker(tab) || startupDone()) return
+        if (loadNowPill?.isShowing == true) return
+        loadNowPill = Messages.sticky(this, "The ad blocker is still starting", "Load now", messageOffset()) { loadNow() }
     }
 
     /** 3.0: the waiting pages load now (a page that let ads through says so once the ad blocker is ready). */
     private fun loadNow() {
+        handler.removeCallbacks(showLoadNow)
+        loadNowPill?.dismiss()
+        loadNowPill = null
         AdBlock.loadWaitingNow()
-        updateStartupCover()
-    }
-
-    /** The start-up screen as the layout has it: the logo and the spinner over the whole screen. */
-    private fun clearStartupExtras() {
-        val box = startup as FrameLayout
-        startupExtras.forEach { box.removeView(it) }
-        startupExtras.clear()
-        startupBottom = null
-        loadNowButton = null
-        for (i in 0 until box.childCount) box.getChildAt(i).visibility = View.VISIBLE
-        (startup.layoutParams as FrameLayout.LayoutParams).apply {
-            topMargin = 0
-            bottomMargin = 0
-        }
-        startup.elevation = dp(20f)
-        startup.requestLayout()
+        updateAdBlockWait()
     }
 
     private fun startupDone() = AdBlock.ready || AdBlock.global == AdLevel.OFF
-
-    /** 3.0.5: the wait for the ad blocker is over, so its button goes. */
-    private fun removeLoadNow() {
-        loadNowButton?.let { b -> (b.parent as? android.view.ViewGroup)?.removeView(b) }
-        loadNowButton = null
-    }
-
-    private fun hideStartup() {
-        handler.removeCallbacks(showLoadNow)
-        handler.removeCallbacks(startupPageLimit)
-        handler.removeCallbacks(startupPageStopped)
-        startupLimitSet = false
-        startupLifting = false
-        startupFor = null
-        if (startup.visibility != View.VISIBLE) return
-        Motion.fadeOut(startup, toDy = 0, duration = Motion.DIALOG) {
-            if (startupFor == null) clearStartupExtras()
-        }
-    }
 
     // ------------------------------------------------------------------ swipe the toolbar to switch tabs
 
@@ -4657,7 +4590,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
             override fun canSwipeTabs(rawX: Float, rawY: Float): Boolean {
                 val tab = current ?: return false
                 if (editing || fullscreenTab != null || switcherOpen || quickMenu.isOpen) return false
-                if (startup.visibility == View.VISIBLE || findBar.visibility == View.VISIBLE) return false
+                if (findBar.visibility == View.VISIBLE) return false
                 if (!toolbarWanted || toolbarShown < barPx || TabManager.swipeOrder(tab).size < 2) return false
                 // 3.0.4: on the bar itself.
                 val at = IntArray(2)
@@ -4740,7 +4673,7 @@ class MainActivity : AppCompatActivity(), BrowserUi {
                 val tab = current ?: return false
                 val mode = prefs.barSwipes
                 if (mode == 0 || editing || fullscreenTab != null || switcherOpen || quickMenu.isOpen || tab.showsHome ||
-                    startup.visibility == View.VISIBLE || findBar.visibility == View.VISIBLE
+                    findBar.visibility == View.VISIBLE
                 ) {
                     return false
                 }
@@ -4809,9 +4742,8 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         if (contentful && tab === homeLeaving) fadeHomeAway()
         // 3.0.10: the page reloaded in the new colours is there: the picture of the old screen fades.
         if (contentful && tab === current) releaseThemePicture()
-        // 3.0.5: the page the start-up screen waited for is really there now.
-        if (contentful && tab === startupPage) liftStartupCover(tab)
-        // 3.0.11: a new tab's page drew: its cover can go (once it is on the screen).
+        // 3.0.11: a new tab's page drew: its cover can go (once it is on the screen). 3.0.13: and the
+        // cover of a page that waited for the ad blocker as Swift started.
         if (contentful || !coverNeedsContent) coverPagePainted(tab)
     }
 
@@ -5149,16 +5081,16 @@ class MainActivity : AppCompatActivity(), BrowserUi {
         /** 3.0.4: how long the bar's colours take to change (a website's colour coming or going). */
         private const val BAR_COLOUR_MS = 200L
 
-        /** 3.0: how long the start-up screen waits for the ad blocker before it offers Load now. */
+        /** 3.0: how long (from Swift's start) a page waits for the ad blocker before Load now is offered. */
         private const val LOAD_NOW_AFTER_MS = 8000L
 
-        /** 3.0.5: how long the start-up screen waits for a page that is loading before it lets go of it. */
+        /** 3.0.13: Load now again after another message took its place, if the page still waits. */
+        private const val LOAD_NOW_AGAIN_MS = 4000L
+
+        /** 3.0.5: how long a start's page cover waits for a page that is loading before it lets go of it. */
         private const val START_PAGE_LIMIT_MS = 12_000L
 
-        /** 3.0.5: how long after a page finished without being drawn the start-up screen waits (see startupPageStopped). */
-        private const val START_PAGE_STOPPED_MS = 800L
-
-        /** 3.0.5: the longest the start-up screen waits for a painted page to reach the screen (see liftStartupCover). */
+        /** 3.0.5: the longest a cover waits for a painted page to reach the screen (see coverPagePainted). */
         private const val START_PAGE_DRAW_MS = 1500L
 
         /** "example.com/page": an address without its https:// (made once, 2.6). */

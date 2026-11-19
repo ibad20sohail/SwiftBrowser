@@ -199,6 +199,8 @@ object Helper {
             "playing" -> if (!tab.videoPlaying) {
                 tab.videoPlaying = true
                 TabManager.ui?.onPlayingChanged(tab)
+                // 3.0.13: see TabManager.trimLiveSessions.
+                if (tab.playing) TabManager.onVideoPlaying()
             }
             "video-pos" -> WatchPositions.onPosition(tab, msg)
             "reader-place" -> Unfinished.onReaderPlace(tab, msg)

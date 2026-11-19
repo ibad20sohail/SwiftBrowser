@@ -47,6 +47,7 @@ import com.swiftbrowser.files.FileKind
 import com.swiftbrowser.files.FileOpener
 import com.swiftbrowser.files.FileOps
 import com.swiftbrowser.files.FileThumbs
+import com.swiftbrowser.files.OpenList
 import com.swiftbrowser.files.Transfers
 import com.swiftbrowser.files.Volumes
 import java.io.File
@@ -180,7 +181,42 @@ open class MediaViewerActivity : AppCompatActivity(), Messages.DarkScreen {
         SystemBars.keepHidden(this)
         // 3.0.11: opened from Files, the picture grows out of its small picture there.
         if (overFiles) openOverFiles(first, savedInstanceState == null)
-        if (first.file != null) listFolder(first) else readSharedName(first)
+        // 3.0.13: the picture shown when the screen was made again (a change of look, say), not the first one.
+        restorePath = savedInstanceState?.getString(STATE_SHOWN)
+        listToken = intent.getStringExtra(OpenList.EXTRA)
+        val handed = OpenList.get(listToken)
+        when {
+            first.file == null -> readSharedName(first)
+            // 3.0.13: the pictures of the list Files showed (a category, a search…), in its order.
+            handed != null -> listHanded(first, handed)
+            else -> listFolder(first)
+        }
+    }
+
+    /** 3.0.13: the list Files handed over with the picture (OpenList), until this screen is closed. */
+    private var listToken: String? = null
+
+    /** 3.0.13: the picture to show once the pictures are listed, when the screen was made again. */
+    private var restorePath: String? = null
+
+    /** 3.0.13: Files' list rather than the folder: a copy saved by the editor goes right after its picture. */
+    private var fromList = false
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        if (::pager.isInitialized && pics.isNotEmpty()) current().file?.path?.let { outState.putString(STATE_SHOWN, it) }
+    }
+
+    /** 3.0.13: the pictures Files listed, read into the viewer's list off the main thread; [first] keeps its place and page. */
+    private fun listHanded(first: Pic, handed: OpenList.Handed) {
+        val path = first.file?.path ?: return
+        fromList = true
+        work.execute {
+            val all = handed.items.map { item ->
+                if (item.path == path) first else Pic(Pictures.Source.of(File(item.path)), item.name, item.time, item.size)
+            }
+            handler.post { if (!isDestroyed) folderListed(if (first in all) all else all + first) }
+        }
     }
 
     /**
@@ -308,7 +344,10 @@ open class MediaViewerActivity : AppCompatActivity(), Messages.DarkScreen {
         val shown = current()
         pics.clear()
         pics += all
-        index = pics.indexOf(shown).coerceAtLeast(0)
+        // 3.0.13: made again, it shows the picture it showed then.
+        val wanted = restorePath?.let { p -> pics.indexOfFirst { it.file?.path == p } }?.takeIf { it >= 0 }
+        restorePath = null
+        index = wanted ?: pics.indexOf(shown).coerceAtLeast(0)
         focus = index
         // Stable ids: the picture on screen keeps its page (no flash) as the others come round it.
         pagerAdapter.notifyDataSetChanged()
@@ -1131,8 +1170,9 @@ open class MediaViewerActivity : AppCompatActivity(), Messages.DarkScreen {
     /** The saved copy joins the folder's pictures in its place by name, and is shown. */
     private fun addCopy(f: File) {
         val p = Pic(Pictures.Source.of(f), f.name, f.lastModified(), f.length())
-        var at = pics.indexOfFirst { FileOps.naturalCompare(it.name, f.name) > 0 }
-        if (at < 0) at = pics.size
+        // 3.0.13: in Files' list (not by name) it goes right after the picture it was made from.
+        var at = if (fromList) index + 1 else pics.indexOfFirst { FileOps.naturalCompare(it.name, f.name) > 0 }
+        if (at < 0 || at > pics.size) at = pics.size
         pics.add(at, p)
         pagerAdapter.notifyItemInserted(at)
         stripAdapter.notifyItemInserted(at)
@@ -1332,11 +1372,14 @@ open class MediaViewerActivity : AppCompatActivity(), Messages.DarkScreen {
         detailer.shutdown()
         // An edit being written is finished first.
         work.shutdown()
+        // 3.0.13: Files' list is let go once this screen is really closed (made again, it is needed still).
+        if (isFinishing) OpenList.drop(listToken)
         super.onDestroy()
     }
 
     companion object {
         const val EXTRA_PATH = "path"
+        private const val STATE_SHOWN = "shown"
         private const val CANT_SHOW = "Swift can't show this picture"
         private const val MARK = "mark"
         private const val SLIDE_MS = 4000L
@@ -1364,7 +1407,7 @@ open class MediaViewerActivity : AppCompatActivity(), Messages.DarkScreen {
          * Shows picture [file] with its folder around it. 3.0: [secure] for a picture of Private (kept
          * out of screenshots); Swift's own opens are marked as such (ViewerAccess).
          */
-        fun open(from: Context, file: File, secure: Boolean = false) {
+        fun open(from: Context, file: File, secure: Boolean = false, list: String? = null) {
             if (kindOf(file.name) != Kind.IMAGE) {
                 // 2.9: not a picture (a video or a song, until callers send those to the player): another app.
                 if (from is Activity) FileOpener.openWith(from, file) else L.w("Not a picture for the picture viewer")
@@ -1372,6 +1415,8 @@ open class MediaViewerActivity : AppCompatActivity(), Messages.DarkScreen {
             }
             val i = intentFor(from, file)
             if (secure) i.putExtra(com.swiftbrowser.core.AppFiles.EXTRA_SECURE, true)
+            // 3.0.13: the pictures of the list Files showed (OpenList).
+            if (list != null) i.putExtra(OpenList.EXTRA, list)
             if (from !is Activity) i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             from.startActivity(i)
         }

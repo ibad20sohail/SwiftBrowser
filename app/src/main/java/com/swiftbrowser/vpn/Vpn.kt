@@ -483,13 +483,19 @@ object Vpn {
         return others.firstOrNull { it.country == loc?.country } ?: others.firstOrNull()
     }
 
-    /** Fastest first by the last test: measured ones, then untested ones, then ones that didn't answer. */
-    fun ranked(list: List<Location>): List<Location> = list.sortedBy {
-        when (val ms = testResults[it.id]) {
-            null -> Long.MAX_VALUE - 1
-            NO_ANSWER -> Long.MAX_VALUE
-            else -> ms
-        }
+    /**
+     * Fastest first by the last test: 3.0.13: by download speed (it was by how quickly the server
+     * answered); then untested ones, then ones that answered but passed nothing, then ones that didn't answer.
+     */
+    fun ranked(list: List<Location>): List<Location> = list.sortedWith(
+        compareBy<Location>({ group(testResults[it.id]) }, { -(testResults[it.id]?.mbps ?: 0.0) }, { testResults[it.id]?.answerMs ?: Long.MAX_VALUE }),
+    )
+
+    private fun group(r: TestResult?): Int = when {
+        r == null -> 1
+        r.answerMs == NO_ANSWER -> 3
+        r.mbps == null -> 2
+        else -> 0
     }
 
     /** Locations that didn't answer since the user last chose one (automatic switching skips them). */
@@ -565,15 +571,22 @@ object Vpn {
     var testStep: Pair<Int, Int>? = null
         private set
 
-    /** Location id → how long its server took to answer (ms), or [NO_ANSWER]. Kept until Swift closes. */
-    val testResults = HashMap<String, Long>()
+    /**
+     * 3.0.13: what the test found for a location: how long its server took to answer ([answerMs], or
+     * [NO_ANSWER]), and through it, the download speed ([mbps]) and the ping ([pingMs]) when measured.
+     */
+    class TestResult(val answerMs: Long, val mbps: Double? = null, val pingMs: Long? = null)
+
+    /** Location id → what its last test found. Kept until Swift closes. */
+    val testResults = HashMap<String, TestResult>()
 
     const val NO_ANSWER = -1L
 
     /**
      * Connects to each location in turn and times its server's answer (up to 15 seconds each),
      * then reconnects to the chosen location if the VPN was on. Turning the VPN on or off meanwhile
-     * stops the test. Android's permission must have been given (VpnUi.test asks first).
+     * stops the test. Android's permission must have been given (VpnUi.test asks first). 3.0.13: and
+     * measures its real speed through the tunnel ([measure]).
      */
     fun testAll(ctx: Context) {
         val list = locations()
@@ -612,8 +625,12 @@ object Vpn {
                     NO_ANSWER
                 }
                 if (attempt != attempts) break
+                // 3.0.13: its real speed, through the tunnel now up.
+                val result = if (ms == NO_ANSWER) TestResult(NO_ANSWER) else measure(ms, attempt)
+                if (attempt != attempts) break
+                L.d("VPN test: ${loc.server} " + VpnSpeed.text(result.answerMs != NO_ANSWER, result.mbps, result.pingMs))
                 main.post {
-                    testResults[loc.id] = ms
+                    testResults[loc.id] = result
                     changed()
                 }
             }
@@ -637,6 +654,73 @@ object Vpn {
                     changed()
                 }
             }
+        }
+    }
+
+    /**
+     * 3.0.13 (on the test's thread): the location just connected, measured through it: the ping (the
+     * quickest of 3 small requests on one connection) and the speed of a download of up to 5 seconds
+     * (VpnSpeed). Android's own connection is used: Swift's pages are held back during the test, and
+     * only Swift's traffic goes through the tunnel anyway. Stops when the test is stopped.
+     */
+    private fun measure(answerMs: Long, attempt: Int): TestResult {
+        val pings = ArrayList<Long>()
+        repeat(3) {
+            if (attempt != attempts) return TestResult(answerMs)
+            timeRequest()?.let { pings += it }
+        }
+        val mbps = if (attempt == attempts) download(if (com.swiftbrowser.engine.DataSaver.onMobileData) VpnSpeed.MOBILE_BYTES else VpnSpeed.WIFI_BYTES, attempt) else null
+        return TestResult(answerMs, mbps, pings.minOrNull())
+    }
+
+    private fun speedConnection(bytes: Long): java.net.HttpURLConnection =
+        (java.net.URL("${VpnSpeed.URL}?bytes=$bytes").openConnection() as java.net.HttpURLConnection).apply {
+            connectTimeout = 4_000
+            readTimeout = 4_000
+            useCaches = false
+        }
+
+    /** How long a request with nothing to download takes to come back (ms); null when it didn't. */
+    private fun timeRequest(): Long? = try {
+        val start = android.os.SystemClock.elapsedRealtime()
+        val c = speedConnection(0)
+        // Read to the end and closed, not disconnected: the next request reuses the connection, so it
+        // times the way there and back, not setting up a connection.
+        c.inputStream.use { input -> while (input.read() >= 0) Unit }
+        android.os.SystemClock.elapsedRealtime() - start
+    } catch (_: Exception) {
+        null
+    }
+
+    /** Downloads up to [bytes] for at most VpnSpeed.DOWNLOAD_MS and gives the speed in Mbps; null when nothing came. */
+    private fun download(bytes: Long, attempt: Int): Double? {
+        val c = try {
+            speedConnection(bytes)
+        } catch (_: Exception) {
+            return null
+        }
+        return try {
+            c.inputStream.use { input ->
+                val buf = ByteArray(64 * 1024)
+                val start = android.os.SystemClock.elapsedRealtime()
+                var total = 0L
+                var counted = 0L
+                var countFrom = 0L
+                while (attempt == attempts) {
+                    val n = input.read(buf)
+                    if (n < 0) break
+                    total += n
+                    val now = android.os.SystemClock.elapsedRealtime()
+                    if (countFrom != 0L) counted += n else if (now - start >= VpnSpeed.WARM_UP_MS) countFrom = now
+                    if (now - start >= VpnSpeed.DOWNLOAD_MS) break
+                }
+                val end = android.os.SystemClock.elapsedRealtime()
+                VpnSpeed.downloadMbps(total, end - start, counted, if (countFrom == 0L) 0L else end - countFrom)
+            }
+        } catch (_: Exception) {
+            null
+        } finally {
+            c.disconnect()
         }
     }
 

@@ -28,9 +28,10 @@ import java.io.File
 object FileOpener {
     /**
      * Opens [f]. True when Swift's browser now shows it (the Files screen closes then; Back in
-     * that tab brings it back). 3.0: [secure] for a file of Private's.
+     * that tab brings it back). 3.0: [secure] for a file of Private's. 3.0.13: [list], the token of
+     * the files Files listed around it (OpenList), for the picture viewer and the player.
      */
-    fun open(a: Activity, f: File, name: String = f.name, secure: Boolean = false): Boolean {
+    fun open(a: Activity, f: File, name: String = f.name, secure: Boolean = false, list: String? = null): Boolean {
         val ext = FileKind.extension(name)
         return when {
             ext == "apk" -> {
@@ -46,8 +47,8 @@ object FileOpener {
                 false
             }
             com.swiftbrowser.ui.PlayerActivity.kindOf(name) != null -> {
-                if (secure) a.startActivity(com.swiftbrowser.ui.PlayerActivity.intentFor(a, f).putExtra(AppFiles.EXTRA_SECURE, true))
-                else com.swiftbrowser.ui.PlayerActivity.open(a, f)
+                if (secure) a.startActivity(com.swiftbrowser.ui.PlayerActivity.intentFor(a, f).putExtra(AppFiles.EXTRA_SECURE, true).putExtra(OpenList.EXTRA, list))
+                else com.swiftbrowser.ui.PlayerActivity.open(a, f, list = list)
                 false
             }
             com.swiftbrowser.ui.MediaViewerActivity.kindOf(name) == com.swiftbrowser.ui.MediaViewerActivity.Kind.IMAGE -> {
@@ -55,10 +56,11 @@ object FileOpener {
                     a.startActivity(
                         Intent(a, com.swiftbrowser.ui.MediaViewerActivity::class.java)
                             .putExtra(com.swiftbrowser.ui.MediaViewerActivity.EXTRA_PATH, f.path)
-                            .putExtra(AppFiles.EXTRA_SECURE, true),
+                            .putExtra(AppFiles.EXTRA_SECURE, true)
+                            .putExtra(OpenList.EXTRA, list),
                     )
                 } else {
-                    com.swiftbrowser.ui.MediaViewerActivity.open(a, f)
+                    com.swiftbrowser.ui.MediaViewerActivity.open(a, f, list = list)
                 }
                 false
             }

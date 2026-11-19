@@ -2179,7 +2179,7 @@ class SettingsActivity : AppCompatActivity() {
             Motion.swapText(country, fresh.countryName)
             Motion.swapText(server, fresh.server + if (inUse) " · in use" else "")
             Motion.swapText(state, line)
-            state.setTextColor(if (unreadable || soon || result == "No answer") Ui.danger(this@SettingsActivity) else plainState)
+            state.setTextColor(if (unreadable || soon || VpnUi.testFailed(fresh)) Ui.danger(this@SettingsActivity) else plainState)
             extended.visibility = if (soon && !unreadable) View.VISIBLE else View.GONE
             Motion.pop(check, inUse)
         }
@@ -2212,7 +2212,7 @@ class SettingsActivity : AppCompatActivity() {
         return when {
             vpn.testing -> vpn.testStep?.let { "Testing ${it.first} of ${it.second}…" } ?: "Testing…"
             vpn.testResults.isNotEmpty() -> "Done: the results are under each location"
-            else -> "Which ones answer, and how fast"
+            else -> "Each one's real speed and ping"
         }
     }
 
@@ -2224,11 +2224,15 @@ class SettingsActivity : AppCompatActivity() {
             return
         }
         val pause = vpn.wanted && vpn.pauseWhenDown
+        // 3.0.13: a real speed test: a few seconds of download through each location.
+        val mobile = com.swiftbrowser.engine.DataSaver.onMobileData
+        val most = (if (mobile) com.swiftbrowser.vpn.VpnSpeed.MOBILE_BYTES else com.swiftbrowser.vpn.VpnSpeed.WIFI_BYTES) / 1_000_000
         Dialogs.confirm(
             this, "Test the locations?",
-            "Swift connects to each location in turn to see which ones answer and how fast (up to 15 seconds each). " +
+            "Swift connects to each location in turn and measures its speed and ping: up to 5 seconds of download " +
+                "through it (at most $most MB each" + (if (mobile) ", as you're on mobile data" else "") + "). " +
                 "The VPN is off meanwhile" + (if (pause) ", so pages wait" else "") +
-                (if (vpn.wanted) ", and it reconnects when it's done." else "."),
+                (if (vpn.wanted) ", and it reconnects to the chosen location when it's done." else "."),
             "Test",
         ) { VpnUi.test(this, vpnPermission) }
     }

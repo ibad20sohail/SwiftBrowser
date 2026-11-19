@@ -478,7 +478,10 @@ object TabManager {
         // Whatever the setting says, when the phone is close to running out of memory only the
         // open tab keeps its page: otherwise Android closes Swift altogether. Same on low battery.
         val low = prefs.maxLiveTabs > 1 && Diagnostics.memoryLow()
-        val max = if (low || com.swiftbrowser.engine.Power.saving) 1 else prefs.maxLiveTabs
+        // 3.0.13: and while a video plays on a 2 GB phone (the playing tab stays too): on one that
+        // crashed, a paused video tab and a third tab were loaded next to the playing video.
+        val video = prefs.maxLiveTabs > 1 && smallPhone && tabs.any { it.playing && it.videoPlaying }
+        val max = if (low || video || com.swiftbrowser.engine.Power.saving) 1 else prefs.maxLiveTabs
         val others = tabs.filter { it.session != null && it !== current }
         // Tabs not opened for half an hour let go of their page too (2.7), whatever the number:
         // their scripts would otherwise keep sharing the engine with the page on screen.
@@ -493,6 +496,7 @@ object TabManager {
         // 3.0.11: said only when there is something to let go (it was logged at every check, 177 times
         // in one problem report with nothing left to unload).
         if (low && unload.isNotEmpty()) L.d("Memory low (${Diagnostics.memoryText()}): keeping only the open tab loaded")
+        else if (video && unload.isNotEmpty()) L.d("A video plays: keeping only it and the open tab loaded")
         for (id in unload) {
             val t = others.firstOrNull { it.id == id } ?: continue
             val idle = t.lastUsed < idleSince
@@ -505,6 +509,7 @@ object TabManager {
             count,
             when {
                 low -> "the phone's memory was low"
+                video -> "a video played"
                 com.swiftbrowser.engine.Power.saving -> "battery saver keeps one tab loaded"
                 idleOnly -> "they weren't opened for 30 minutes"
                 else -> "more than $max tabs were loaded"
@@ -617,6 +622,16 @@ object TabManager {
             trimLiveSessions()
             main.postDelayed(this, 5 * 60_000L)
         }
+    }
+
+    /** 3.0.13: a phone with 2 GB of memory or less, where a playing video keeps other pages from staying loaded. */
+    private val smallPhone: Boolean by lazy {
+        SwiftApp.instance?.let { com.swiftbrowser.core.PhoneSize.totalMemory(it) <= com.swiftbrowser.core.PhoneSize.BIG_MEMORY } ?: true
+    }
+
+    /** 3.0.13: a page's video started playing: on a 2 GB phone the other pages go now (see [trimLiveSessions]). */
+    fun onVideoPlaying() {
+        if (smallPhone) main.post { trimLiveSessions() }
     }
 
     /** Frees a background tab's engine session; it is restored when the tab is opened again. */

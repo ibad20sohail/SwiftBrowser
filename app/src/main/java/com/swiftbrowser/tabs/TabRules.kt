@@ -73,6 +73,19 @@ object TabRules {
     /** A tab's history as saved; none when it is too long to read back. */
     fun storedState(state: String?): String? = state?.takeIf { it.length <= MAX_STORED_STATE }
 
+    /**
+     * 3.0.13: which loaded tab a frozen script belongs to, by the script's site. The engine says a
+     * script is frozen to every tab whose page shares its process (here all of them). Null when no
+     * tab's page is on the script's site or several are (a script from another server, two tabs of
+     * one site): then the open tab's message decides.
+     */
+    fun frozenTab(scriptAddress: String?, pages: List<Pair<Long, String?>>): Long? {
+        fun site(url: String?) = url?.takeIf { it.startsWith("http://") || it.startsWith("https://") }
+            ?.let { com.swiftbrowser.core.UrlUtils.plainHost(it) }?.let { com.swiftbrowser.core.UrlUtils.siteOfHost(it) }
+        val site = site(scriptAddress) ?: return null
+        return pages.filter { site(it.second) == site }.singleOrNull()?.first
+    }
+
     // ------------------------------------------------------------------ the log
 
     /**

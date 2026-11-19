@@ -71,6 +71,7 @@ import com.swiftbrowser.files.FileProblem
 import com.swiftbrowser.files.FileThumbs
 import com.swiftbrowser.files.FilesSettings
 import com.swiftbrowser.files.FolderSizes
+import com.swiftbrowser.files.OpenList
 import com.swiftbrowser.files.Parts
 import com.swiftbrowser.files.PlainAccess
 import com.swiftbrowser.files.PrivateFolder
@@ -2478,7 +2479,8 @@ class FilesActivity : ListActivity() {
         finish()
     }
 
-    private fun open(r: Row) {
+    /** [owner]: 3.0.13: the side whose row was tapped (its list goes to the viewer or the player). */
+    private fun open(r: Row, owner: Pane = pane) {
         val f = r.file
         val e = r.entry
         when {
@@ -2493,11 +2495,37 @@ class FilesActivity : ListActivity() {
             inBin -> binSheet(r)
             r.isDir -> openFolder(f)
             Archives.formatOf(r.name) != null -> openArchive(f)
-            inPrivate -> openPrivateFile(r, f)
+            inPrivate -> openPrivateFile(r, f, owner)
             // 3.0.11: a picture grows out of its small picture into the viewer.
-            growPicture(r, f) -> {}
-            FileOpener.open(this, f) -> finish()
+            growPicture(r, f, owner) -> {}
+            FileOpener.open(this, f, list = handList(owner, r)) -> finish()
         }
+    }
+
+    /**
+     * 3.0.13: the pictures (or videos, or songs) [owner]'s list shows, in its order, handed to the
+     * picture viewer or the player (OpenList): swiping and next/previous go through them, not through
+     * the file's own folder (a picture opened from Pictures showed only its folder's). Null when the
+     * list holds only that file, and for the bin, an archive and picking.
+     */
+    private fun handList(owner: Pane, r: Row): String? {
+        if (owner.inBin || owner.index != null || picking) return null
+        val path = r.file?.path ?: return null
+        val picture = MediaViewerActivity.kindOf(r.name) == MediaViewerActivity.Kind.IMAGE
+        val media = if (picture) null else PlayerActivity.kindOf(r.name) ?: return null
+        val rows = owner.adapter.items.mapNotNull { it as? Row }.filter { row ->
+            row.file != null && !row.isDir && row.entry == null &&
+                if (picture) MediaViewerActivity.kindOf(row.name) == MediaViewerActivity.Kind.IMAGE else PlayerActivity.kindOf(row.name) == media
+        }
+        if (rows.size < 2 || rows.none { it.file?.path == path }) return null
+        val cat = owner.category
+        val title = when {
+            owner.searchRows != null -> "Search results"
+            cat != null -> cat.label
+            owner.home -> "Recent files"
+            else -> folderTitle(owner.dir)
+        }
+        return OpenList.put(title, rows.map { OpenList.Item(it.file!!.path, it.name, it.time, it.size) })
     }
 
     // ------------------------------------------------------------------ 3.0.11: pictures grow out of their small pictures
@@ -2513,7 +2541,7 @@ class FilesActivity : ListActivity() {
      * that small picture is on the screen, its picture made and its size known (both from making it),
      * with animations on. False: it opens as before.
      */
-    private fun growPicture(r: Row, f: File): Boolean {
+    private fun growPicture(r: Row, f: File, owner: Pane = pane): Boolean {
         if (!animationsOn || MediaViewerActivity.kindOf(r.name) != MediaViewerActivity.Kind.IMAGE) return false
         val h = thumbHolder(r.key) ?: return false
         val spot = spotOf(h) ?: return false
@@ -2521,7 +2549,8 @@ class FilesActivity : ListActivity() {
         val size = FileThumbs.facts(f, r.time)?.takeIf { it.width > 0 && it.height > 0 } ?: return false
         PictureGrow.handOver(PictureGrow.Start(f.path, spot.rect, spot.radius, thumb, size.width, size.height, spot.barColor), growSource)
         try {
-            startActivity(MediaViewerActivity.intentOverFiles(this, f))
+            // 3.0.13: with the pictures of the list it was opened from.
+            startActivity(MediaViewerActivity.intentOverFiles(this, f).putExtra(OpenList.EXTRA, handList(owner, r)))
         } catch (e: Exception) {
             L.w("Files: the picture viewer didn't open", e)
             PictureGrow.claim(f.path)
@@ -2591,7 +2620,7 @@ class FilesActivity : ListActivity() {
      * incognito ones (not added to the recent documents), pictures, videos and music on their
      * screens, the rest in another app. Leaving Files for them gives Private a minute before it locks.
      */
-    private fun openPrivateFile(r: Row, f: File) {
+    private fun openPrivateFile(r: Row, f: File, owner: Pane = pane) {
         // 3.0.4: never once Private has locked (no side should still show it then).
         if (!PrivateFolder.isUnlocked) {
             showHome()
@@ -2609,7 +2638,7 @@ class FilesActivity : ListActivity() {
                     say("Swift can't show “$name”")
                 }
             }
-            MediaViewerActivity.kindOf(name) != null -> FileOpener.open(this, f, secure = true)
+            MediaViewerActivity.kindOf(name) != null -> FileOpener.open(this, f, secure = true, list = handList(owner, r))
             else -> FileOpener.openWith(this, f)
         }
     }
@@ -3561,6 +3590,8 @@ class FilesActivity : ListActivity() {
             // 3.0.4: and what it holds once measured ("12 items · 1.40 GB").
             sizeText(r, owner)?.let { parts += it }
         } else if (r.size >= 0) {
+            // 3.0.13: a song's artist first, from its tags.
+            songTags(r)?.artist?.let { parts += it }
             // 3.0.11: a video's length first, once making its picture told it (a row's picture is too small to carry it).
             videoLength(r)?.let { parts += it }
             parts += UrlUtils.formatBytes(r.size)
@@ -3570,10 +3601,26 @@ class FilesActivity : ListActivity() {
         return parts.joinToString(" · ")
     }
 
-    /** 3.0.11: "3:05" for a video whose picture was made (its length is read with it, FileThumbs); null otherwise. */
+    /**
+     * 3.0.11: "3:05" for a video whose picture was made (its length is read with it, FileThumbs); null
+     * otherwise. 3.0.13: a song's too (read with its cover and tags).
+     */
     private fun videoLength(r: Row): String? {
-        val f = r.file?.takeIf { r.kind == FileKind.VIDEO } ?: return null
-        return FileThumbs.facts(f, r.time)?.let { VideoLength.text(it.lengthMs) }
+        val f = r.file?.takeIf { r.kind == FileKind.VIDEO || r.kind == FileKind.AUDIO } ?: return null
+        return FileThumbs.facts(f, r.time)?.takeIf { it.lengthMs > 0 }?.let { VideoLength.text(it.lengthMs) }
+    }
+
+    /** 3.0.13: a song's own title and artist (its tags, read with its cover); null when not known (yet). */
+    private fun songTags(r: Row): FileThumbs.Facts? {
+        val f = r.file?.takeIf { r.kind == FileKind.AUDIO } ?: return null
+        return FileThumbs.facts(f, r.time)
+    }
+
+    /** 3.0.13: the row's name: a song's own title when it has one (not while searching: the marks are on the file name). */
+    private fun rowTitle(r: Row, owner: Pane): CharSequence {
+        val q = owner.query.trim()
+        if (q.isNotEmpty()) return markedText(r.name, q, Ui.accent(this))
+        return songTags(r)?.title ?: r.name
     }
 
     // 3.0.5: the same short date as Downloads.
@@ -3610,6 +3657,9 @@ class FilesActivity : ListActivity() {
         var folderIcons: Array<Drawable?>? = null
         lateinit var folderFill: Drawable
         lateinit var fileFill: Drawable
+
+        /** 3.0.13: behind (and cutting) a picture, a video's frame or an app's icon: a row's stays a rounded square, its icons sit in circles. */
+        lateinit var pictureFill: Drawable
     }
 
     private class HeaderHolder(v: View, val title: TextView, val action: TextView) : RecyclerView.ViewHolder(v)
@@ -4679,8 +4729,13 @@ class FilesActivity : ListActivity() {
         // page (rows, tiles) it is the card colour, which shows on the settings' colour behind it. A
         // tile's picture nests in the tile's own corners (the tile shows when selected or pressed).
         val radius = if (h.tile) Corners.nested(TILE_RADIUS, TILE_GAP) else Ui.R_SMALL
-        h.folderFill = Ui.shape(this, Ui.accentContainer(this), radius)
-        h.fileFill = Ui.shape(this, Palette.color(this, if (h.onCard) R.color.surface_alt else R.color.card_bg), radius)
+        val fileColour = Palette.color(this, if (h.onCard) R.color.surface_alt else R.color.card_bg)
+        // 3.0.13: a row's folder and file icons sit in circles, as everywhere else in Swift (Files' start
+        // page, Settings, History…); its pictures and video frames keep their rounded squares, and a
+        // tile stays a square box.
+        h.folderFill = if (h.tile) Ui.shape(this, Ui.accentContainer(this), radius) else Ui.circle(Ui.accentContainer(this))
+        h.fileFill = if (h.tile) Ui.shape(this, fileColour, radius) else Ui.circle(fileColour)
+        h.pictureFill = Ui.shape(this, fileColour, radius)
         // 3.0.4: a row's side is the one worked on once it is used (TalkBack's taps come without a touch).
         h.card.setOnClickListener {
             paneOf(h)?.let { setChosen(it) }
@@ -4689,7 +4744,7 @@ class FilesActivity : ListActivity() {
                 // Picking several: only files can be chosen.
                 selected.isNotEmpty() && picking && r.isDir -> {}
                 selected.isNotEmpty() -> toggle(r, h.bindingAdapterPosition)
-                else -> open(r)
+                else -> open(r, paneOf(h) ?: pane)
             }
         }
         h.card.setOnLongClickListener { v ->
@@ -4718,8 +4773,8 @@ class FilesActivity : ListActivity() {
     private fun bind(owner: Pane, h: FileHolder, r: Row) {
         h.boundKey = r.key
         // 3.0.10: the words searched for marked, as History, Bookmarks and Downloads have them.
-        val q = owner.query.trim()
-        h.title.text = if (q.isEmpty()) r.name else markedText(r.name, q, Ui.accent(this))
+        // 3.0.13: a song by its own title once its tags were read.
+        h.title.text = rowTitle(r, owner)
         h.subtitle?.let { s ->
             // The bin's rows say where things were on a second line.
             val lines = if (owner.inBin) 2 else 1
@@ -4747,10 +4802,16 @@ class FilesActivity : ListActivity() {
             // From memory it comes during this call; one made later comes in softly.
             var binding = true
             h.thumb = FileThumbs.load(this, f, r.time, r.kind, if (h.tile) tilePx else thumbPx, onNone = {
-                if (h.icon.tag == key) PictureLoading.stop(h.icon)
+                if (h.icon.tag == key) {
+                    PictureLoading.stop(h.icon)
+                    // 3.0.13: a song without a cover: its title and artist came all the same.
+                    if (r.kind == FileKind.AUDIO) showSongTags(owner, h, r)
+                }
             }) { bmp ->
                 if (h.icon.tag != key) return@load
                 PictureLoading.stop(h.icon)
+                // 3.0.13: a picture keeps the rounded square (the icon's circle would cut it round).
+                h.icon.background = h.pictureFill
                 h.icon.imageTintList = null
                 val p = if (apkOnTile) tileIconPad / 2 else 0
                 h.icon.setPadding(p, p, p, p)
@@ -4762,6 +4823,8 @@ class FilesActivity : ListActivity() {
                     markWatched(owner, h, r, videoLength(r))
                     if (!binding) h.subtitle?.let { Motion.swapText(it, subtitleText(r, owner)) }
                 }
+                // 3.0.13: a song's title, artist and length came with its cover.
+                if (r.kind == FileKind.AUDIO && !binding) showSongTags(owner, h, r)
             }
             binding = false
             // 3.0.11: a soft pulse while it is made (PictureLoading).
@@ -4770,10 +4833,23 @@ class FilesActivity : ListActivity() {
         bindSelection(owner, h, r, false)
     }
 
+    /** 3.0.13: a song's own title, artist and length, once read with its cover, cross-fade into its row. */
+    private fun showSongTags(owner: Pane, h: FileHolder, r: Row) {
+        if (h.boundKey != r.key || songTags(r) == null) return
+        Motion.swapText(h.title, rowTitle(r, owner))
+        h.subtitle?.let { Motion.swapText(it, subtitleText(r, owner)) }
+    }
+
     /** The kind's icon (a folder in the accent's soft colour, a document's own mark), until a picture comes. */
     private fun setIcon(h: FileHolder, r: Row) {
         val v = h.icon
-        v.background = if (r.isDir) h.folderFill else h.fileFill
+        // 3.0.13: pictures, videos and apps (their own picture comes) in the rounded square from the
+        // start, so the shape doesn't change when it comes; the rest in a circle.
+        v.background = when {
+            r.isDir -> h.folderFill
+            r.kind == FileKind.IMAGE || r.kind == FileKind.VIDEO || r.kind == FileKind.APK -> h.pictureFill
+            else -> h.fileFill
+        }
         val doc = if (r.kind == FileKind.DOCUMENT) Docs.kindOf(r.name, null) else null
         if (doc != null) {
             v.imageTintList = null

@@ -224,4 +224,16 @@ class TabRulesTest {
         assertEquals(listOf(1L), TabRules.toUnload(others, openCounts = true, max = 1, idleSince = idleSince))
         assertEquals(emptyList<Long>(), TabRules.toUnload(others, openCounts = false, max = 1, idleSince = idleSince))
     }
+
+    @Test
+    fun frozenScriptBelongsToTheOnlyTabOnItsSite() {
+        val pages = listOf(1L to "https://www.youtube.com/watch?v=x", 2L to "https://news.example.co.uk/a", 3L to null)
+        assertEquals(1L, TabRules.frozenTab("https://m.youtube.com/s/player/base.js", pages))
+        assertEquals(2L, TabRules.frozenTab("https://news.example.co.uk/a", pages))
+        // Another server's script, an extension's, or two tabs of one site: unknown.
+        assertNull(TabRules.frozenTab("https://cdn.jsdelivr.net/x.js", pages))
+        assertNull(TabRules.frozenTab("moz-extension://abc/content.js", pages))
+        assertNull(TabRules.frozenTab("", pages))
+        assertNull(TabRules.frozenTab("https://youtube.com/x.js", pages + (4L to "https://youtube.com/")))
+    }
 }

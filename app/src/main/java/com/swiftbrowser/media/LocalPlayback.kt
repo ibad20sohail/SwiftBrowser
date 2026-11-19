@@ -132,6 +132,12 @@ object LocalPlayback {
      */
     var listName: String? = null
 
+    /**
+     * 3.0.13: where a list of Files came from ("Music", "Search results", a folder) when the list is
+     * one Files handed over (OpenList); null otherwise. Set after [load], which forgets it.
+     */
+    var filesList: String? = null
+
     val index: Int get() = player?.currentMediaItemIndex ?: 0
     val current: Entry? get() = entries.getOrNull(index)
 
@@ -283,6 +289,7 @@ object LocalPlayback {
         clearLoop(notify = false)
         entries = list
         listName = null
+        filesList = null
         playingIndex = start
         clearInfo()
         dismissed = false
@@ -424,7 +431,7 @@ object LocalPlayback {
     private fun skipGone(): Boolean {
         val p = player ?: return false
         val f = current?.file ?: return false
-        if (listName == null || f.exists() || !p.hasNextMediaItem()) return false
+        if ((listName == null && filesList == null) || f.exists() || !p.hasNextMediaItem()) return false
         L.d("Player: a playlist's song is gone, on to the next")
         p.seekTo(p.nextMediaItemIndex, 0)
         p.prepare()
@@ -560,6 +567,7 @@ object LocalPlayback {
         night = null
         entries = emptyList()
         listName = null
+        filesList = null
         sources = null
         clearInfo()
         inBackground = false

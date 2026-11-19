@@ -365,6 +365,8 @@ object Engine {
         }, { e -> L.w("Look prefs failed", e) })
         com.swiftbrowser.media.Helper.sendLook()
         showLiteFor(shownLiteSite, force = true)
+        // 3.0.13: Extreme blocks other sites' scripts (uBlock Origin's rules).
+        AdBlock.applyLite()
     }
 
     /** The level [showLiteFor] last set the engine to, and for which site. */
@@ -392,16 +394,24 @@ object Engine {
         if (level.atLeast(com.swiftbrowser.core.LiteLevel.EXTREME)) {
             list += SetGeckoPreference.setIntPref(FONT_WAIT_PREF, 0, BRANCH)
             list += SetGeckoPreference.setIntPref(FONT_WAIT_SHORT_PREF, 0, BRANCH)
+            // 3.0.13: a page's repeating timers (polling, ad and tracking loops) run at most 20 times a
+            // second; a one-off timer still runs at once.
+            list += SetGeckoPreference.setIntPref(TIMER_MIN_PREF, EXTREME_TIMER_MS, BRANCH)
         } else {
             clear += FONT_WAIT_PREF
             clear += FONT_WAIT_SHORT_PREF
+            clear += TIMER_MIN_PREF
         }
         if (list.isNotEmpty()) GeckoPreferenceController.setGeckoPrefs(list)
         for (name in clear) GeckoPreferenceController.clearGeckoUserPref(name)
     }
 
     /** 3.0.7: a site's own level or battery saving changed: the site on screen again. */
-    fun refreshLite() = showLiteFor(shownLiteSite, force = true)
+    fun refreshLite() {
+        showLiteFor(shownLiteSite, force = true)
+        // 3.0.13: a site's own level decides whether Extreme blocks its other sites' scripts.
+        AdBlock.applyLite()
+    }
 
     /** How GIFs (and other animated pictures) play: normal, once or none. */
     private const val GIF_PREF = "image.animation_mode"
@@ -409,6 +419,13 @@ object Engine {
     /** How long text waits for a site's own font before showing in a plain one (ms). */
     private const val FONT_WAIT_PREF = "gfx.downloadable_fonts.fallback_delay"
     private const val FONT_WAIT_SHORT_PREF = "gfx.downloadable_fonts.fallback_delay_short"
+
+    /**
+     * 3.0.13: the shortest wait of a page's repeating (nested) timer, 4 ms by default; Extreme makes it
+     * [EXTREME_TIMER_MS]. One-off timers aren't held back by it.
+     */
+    private const val TIMER_MIN_PREF = "dom.min_timeout_value"
+    private const val EXTREME_TIMER_MS = 50
 
     /** Frames per second, the time each frame takes and what it was spent on. */
     private const val DRAW_SPEED_UI =

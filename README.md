@@ -5,12 +5,12 @@ ad-heavy sites on older phones, and runs on Android 7 and newer.
 
 ## Download
 
-Swift 3.0.12 for Android 7 and newer comes in two files:
+Swift 3.0.13 for Android 7 and newer comes in two files:
 
-- **[Swift-64bit-3.0.12.apk](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v3.0.12/Swift-64bit-3.0.12.apk)**
+- **[Swift-64bit-3.0.13.apk](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v3.0.13/Swift-64bit-3.0.13.apk)**
   (64-bit ARM, about 202 MB): for newer phones, and for any phone that says Swift "isn't compatible
   with the latest version of Android".
-- **[Swift-3.0.12.apk](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v3.0.12/Swift-3.0.12.apk)**
+- **[Swift-3.0.13.apk](https://github.com/ibad20sohail/SwiftBrowser/releases/download/v3.0.13/Swift-3.0.13.apk)**
   (32-bit ARM, about 165 MB): for older phones, such as those with 2 GB of memory.
 
 Either installs over an earlier Swift and keeps tabs and settings. Swift can also update itself
@@ -103,8 +103,8 @@ are attached to the releases because GitHub doesn't accept files over 100 MB in 
 - **Cookie pop-ups** answered with "Reject" on the sites Swift knows and hidden on most others.
 - **Blocked this week**: how many ads and trackers were blocked on each of the last 7 days (counts
   only, never which sites).
-- From the first page: after a restart, pages wait for the ad blocker while the start-up screen
-  says what's loading, with Load now after 8 seconds.
+- From the first page: after a restart, pages wait for the ad blocker (the browser shows at once,
+  the page in Swift's colour until it loads), with Load now after 8 seconds.
 
 ### Videos and music
 
@@ -230,8 +230,8 @@ VPN. Only Swift's traffic goes through it; other apps keep their own connection.
   locked by Android, and VPN files are never in backups.
 - **Pause pages if the VPN drops**: pages wait instead of loading without it, and load by themselves
   when it reconnects.
-- **Switch to another location** by itself when one stops working. **Test the locations** shows
-  which answer and how fast.
+- **Switch to another location** by itself when one stops working. **Test the locations** measures
+  each one's real download speed and ping ("Fast · 12.3 Mbps · 84 ms"), and the fastest is used first.
 - With no internet, or when none of the locations answers, it turns itself off and says why, so
   pages don't stay paused.
 - It comes back by itself after an update or a restart, and can turn on every time Swift starts.
@@ -247,8 +247,8 @@ VPN. Only Swift's traffic goes through it; other apps keep their own connection.
 - **Colours**: 12 accent colours or your own, the main colour of each mode, ready-made mixes, and
   colours taken from your home page's picture or your wallpaper.
 - **Night light**: a warm layer over Swift, pages and videos too.
-- **Start-up screen** in your colours, with the logo and, when something has to load, what's
-  loading, step by step.
+- **Start-up screen** in your colours, with the logo, when Swift opens on the home page; on a site
+  the browser shows at once.
 - Short, light animations (lists stretch softly at their ends) and a light vibration on long
   presses (which can be turned off).
 
@@ -258,15 +258,19 @@ VPN. Only Swift's traffic goes through it; other apps keep their own connection.
   the one before: **Off** (sites exactly as designed; where phones with 4 GB of memory or more
   start), **Low** (no frosted glass, less motion, lighter YouTube and TheFlixer; where other phones
   start), **Medium** (no animations, shadows, blur or filters), **High** (GIFs and sites' silent
-  "GIF" videos play once, other videos start only when you touch them, fewer graphics layers) and
-  **Extreme** (GIFs, silent videos and moving drawings stay still until you touch them, and text
-  shows at once while a site's font loads).
+  "GIF" videos play once, other videos start only when you touch them, fewer graphics layers, page
+  animations at 30 frames a second) and **Extreme** (other sites' scripts blocked, page animations at
+  15 frames a second and fewer page timers, GIFs, silent videos and moving drawings still until you
+  touch them, and text shows at once while a site's font loads).
 - **Battery saver**: below a level you choose, or with your phone's battery saver, Swift uses Lite
   mode Medium or higher, keeps only the open tab loaded and loads no pictures on mobile data.
 - **Data saver**: on mobile data, pages load without pictures. **Data used** shows each day.
 - **Memory**: one engine process for all tabs, decoded pictures capped at 48 MB, and when memory
   runs low, or a minute after Swift goes to the background, only the open or playing tab and those
-  you keep loaded stay. **Right now** shows free memory, Swift's own, loaded tabs and recent crashes.
+  you keep loaded stay. Swift checks the phone's memory every 2 seconds and frees some (other pages,
+  its own pictures, the engine's caches) before it runs out; on 2 GB phones a playing video keeps
+  only itself and the open tab loaded, and a page frozen by its script is stopped. **Right now**
+  shows free memory, Swift's own, loaded tabs and recent crashes.
 - The cache stays under 100 MB (or 50 or 200, in Settings → Storage & data → Cache size), no
   single file over 10 MB, and Swift empties it by itself when the phone is low on space.
 - Pages that stop responding offer Stop, and a crashed page loads again by itself once.

@@ -16,6 +16,7 @@ import androidx.activity.result.ActivityResultLauncher
 import com.swiftbrowser.R
 import com.swiftbrowser.download.Downloads
 import com.swiftbrowser.vpn.Vpn
+import com.swiftbrowser.vpn.VpnSpeed
 import java.io.File
 
 /**
@@ -197,16 +198,19 @@ object VpnUi {
         }
     }
 
-    /** "Fast · 0.3 s", "Slow · 4.2 s", "No answer", or null when it wasn't tested. */
+    /**
+     * 3.0.13: "Fast · 12.3 Mbps · 84 ms" (its real speed, VpnSpeed), "No answer", "Answers, but nothing
+     * came through", or null when it wasn't tested. It said how long the handshake took before.
+     */
     fun testResult(loc: Vpn.Location): String? {
-        val ms = Vpn.testResults[loc.id] ?: return null
-        if (ms == Vpn.NO_ANSWER) return "No answer"
-        val s = String.format(java.util.Locale.US, "%.1f s", ms / 1000.0)
-        return when {
-            ms < 1000 -> "Fast · $s"
-            ms < 3000 -> "Good · $s"
-            else -> "Slow · $s"
-        }
+        val r = Vpn.testResults[loc.id] ?: return null
+        return VpnSpeed.text(r.answerMs != Vpn.NO_ANSWER, r.mbps, r.pingMs)
+    }
+
+    /** 3.0.13: the last test found [loc] not working (no answer, or nothing came through it). */
+    fun testFailed(loc: Vpn.Location): Boolean {
+        val r = Vpn.testResults[loc.id] ?: return false
+        return r.answerMs == Vpn.NO_ANSWER || r.mbps == null
     }
 
     /** "Renew by 26 Oct 2027", from two weeks before: "Stops working in 5 days". */

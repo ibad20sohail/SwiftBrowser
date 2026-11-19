@@ -24,6 +24,11 @@ object WhatsNew {
     private class Item(val icon: Int, val title: String, val text: String, val version: Int = 19)
 
     private val NEW = listOf(
+        Item(R.drawable.ic_memory, "Long videos without crashes", "Swift now checks the phone's memory every 2 seconds and frees some before it runs out, which used to close Swift during long videos. While a video plays, other tabs let go of their pages, and a page frozen by its script is stopped.", version = 35),
+        Item(R.drawable.ic_tab, "Straight to your site", "Opening Swift on a site shows the browser at once instead of a loading screen. The page loads as soon as the ad blocker is ready, and after 8 seconds you can load it at once.", version = 35),
+        Item(R.drawable.ic_image, "Pictures, videos and songs in order", "A picture opened from Pictures, a search or any list in Files swipes through that list, not only its folder. Next and previous in the player do the same. Folders and file icons are round, and songs show their cover, title and artist.", version = 35),
+        Item(R.drawable.ic_lite, "Lighter High and Extreme", "Lite mode's High lets page animations run at 30 frames a second; Extreme at 15, with fewer page timers, and blocks other sites' scripts. A site that breaks: set it lower in the Lite sheet.", version = 35),
+        Item(R.drawable.ic_vpn, "Real VPN speeds", "Testing the VPN's locations measures each one's download speed and ping, and the fastest is used first.", version = 35),
         Item(R.drawable.ic_refresh, "Smoother loading", "The loading line, downloads and Swift's other bars have rounded ends. Pulling a page down to reload shows Swift's moving shape.", version = 34),
         Item(R.drawable.ic_tab, "A bar at the bottom", "With the address bar at the bottom, it rides up with the keyboard instead of jumping, and the tab grid's buttons are at the bottom too. In full screen, Android's bars go as soon as the keyboard does.", version = 34),
         Item(R.drawable.ic_reopen, "Undo instead of questions", "Clearing recently closed tabs, deleting a playlist and resetting the address bar buttons happen at once, with Undo. Undo in History, Downloads and Bookmarks works for as long as its message shows. \"Bookmarked\" has an Edit button.", version = 34),
